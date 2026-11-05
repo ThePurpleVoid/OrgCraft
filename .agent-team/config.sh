@@ -9,7 +9,7 @@ AGENT_TEAM_PROJECT="agent-team-kit"
 
 # Hardware pools for scripts/agent-team/with-lock.sh, as name:slots. Size them for the machine the threads run on:
 # a 16 GB laptop might take build:1 emulator:1; a 48 GB workstation build:3 emulator:3 simulator:3.
-AGENT_TEAM_POOLS="build:2 browser:3 backend:1"
+# Pools are in .agent-team/gates.json.
 
 # Where else reports go (optional). Unset, they go to the local event log only, which the dashboard
 # (node scripts/agent-team/dashboard.mjs) and team-board.sh read. Put tokens in ~/.agent-team/<project>/team.env, not here.
@@ -22,17 +22,8 @@ AGENT_TEAM_POOLS="build:2 browser:3 backend:1"
 #   run "<name>" locked <pool> <command...>   the same, holding a hardware slot
 # Replace these examples with your real build and test commands.
 
-# The targets "merge-gate.sh all" runs, in order. "kit" is the CLI, briefs, scripts and tools; "studio" joins it
-# when apps/ lands (see docs/product/delivery-plan.md).
-AGENT_TEAM_GATES_ALL="kit"
-
-gate_kit() {
-  run "kit: shellcheck" shellcheck -S warning scripts/*.sh templates/*.sh tests/*.sh examples/*/.agent-team/config.sh .agent-team/config.sh
-  run "kit: briefs" node tools/roster.mjs --check
-  run "kit: node tests" node --test tests/*.test.mjs
-  run "kit: script and installer tests" bash tests/scripts.test.sh
-  run "kit: this team is in sync" scripts/agent-team/sync.sh check
-}
+# The kit gate is in .agent-team/gates.json (sync generates scripts/agent-team/gates.sh from it). Gates that need
+# real bash stay here; "studio" joins when apps/ lands (see docs/product/delivery-plan.md).
 
 # gate_studio() {
 #   run "studio: install" bash -c "npm ci"

@@ -1,0 +1,38 @@
+{
+  "all": [
+    "kit"
+  ],
+  "pools": {
+    "build": 2,
+    "browser": 3,
+    "backend": 1
+  },
+  "targets": {
+    "kit": [
+      {
+        "name": "shellcheck",
+        "run": "shellcheck -S warning scripts/*.sh templates/*.sh tests/*.sh examples/*/.agent-team/config.sh .agent-team/config.sh"
+      },
+      {
+        "name": "briefs",
+        "run": "node tools/roster.mjs --check team/roles"
+      },
+      {
+        "name": "node tests",
+        "run": "node --test tests/*.test.mjs"
+      },
+      {
+        "name": "script and installer tests",
+        "run": "bash tests/scripts.test.sh"
+      },
+      {
+        "name": "this team is valid",
+        "run": "node bin/agent-team.mjs validate"
+      },
+      {
+        "name": "this team is in sync",
+        "run": "scripts/agent-team/sync.sh check"
+      }
+    ]
+  }
+}

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- This repository's own team is on 0.5.0 and uses the new data files: its ownership is `.agent-team/ownership.json` and its kit gate is `.agent-team/gates.json`.
+
 ## 0.5.0
 
 The team as data: everything the visual team builder (Agent Team Studio) will edit, available today from the CLI. Existing teams see no change on sync unless they add one of the new files.
