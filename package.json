@@ -1,6 +1,6 @@
 {
   "name": "agent-team-kit",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Run a company of Claude Code agents on your repository: role briefs, protocols, a board and the scripts that hold them together.",
   "license": "MIT",
   "type": "module",
@@ -23,6 +23,6 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test tests/*.test.mjs && bash tests/scripts.test.sh"
+    "test": "env -u TEAM_REPORT_URL -u TEAM_REPORT_TOKEN -u TEAM_BOARD_URL -u TEAM_READ_TOKEN -u DASHBOARD_TOKEN node --test tests/*.test.mjs && bash tests/scripts.test.sh"
   }
 }

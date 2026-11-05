@@ -5,6 +5,8 @@ set -uo pipefail
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 export HOME="$tmp/home"; mkdir -p "$HOME"
+# Never post test reports to a real board: a thread that runs the tests often has these set for its own reports.
+unset TEAM_REPORT_URL TEAM_REPORT_TOKEN TEAM_BOARD_URL TEAM_READ_TOKEN DASHBOARD_TOKEN AGENT_TEAM_SESSION
 fails=0; passes=0
 ok() { passes=$((passes + 1)); echo "ok   $1"; }
 no() { fails=$((fails + 1)); echo "FAIL $1"; [ -n "${2:-}" ] && echo "     $2"; }

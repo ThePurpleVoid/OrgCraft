@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- Tests never post to a real board: `tests/scripts.test.sh` and `npm test` clear `TEAM_REPORT_URL`, `TEAM_REPORT_TOKEN`, `TEAM_BOARD_URL`, `TEAM_READ_TOKEN` and `DASHBOARD_TOKEN` first. Before, running the tests from a thread that reports to a hosted board posted the example reports (backend-dev "Invoices API", PR 57) to that board as if they were real.
+
 ## 0.2.2
 
 - Protocols: a **heartbeat** rule. A working thread reports at least every 15 minutes, and reports `waiting` (with what it waits on) the moment it waits on CI, a review or an answer.
