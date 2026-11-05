@@ -29,6 +29,13 @@ expect "org tree is generated from the installed roles" 'grep -q "─ cto (deep)
 expect "generated node tools run (hashbang stays first)" '(cd "$repo" && node scripts/agent-team/roster.mjs --check >/dev/null && node scripts/agent-team/dashboard.mjs --help >/dev/null)'
 expect "dashboard page is generated" '[ -f "$repo/scripts/agent-team/dashboard/index.html" ] && [ -f "$repo/scripts/agent-team/dashboard/app.js" ]'
 expect "dashboard export writes a static site" '(cd "$repo" && node scripts/agent-team/dashboard.mjs export --out "$tmp/site" --board https://b.example/team-report >/dev/null) && jq -e ".roles | length == 11" "$tmp/site/roster.json" >/dev/null && grep -q "b.example" "$tmp/site/config.js"'
+jq '.dashboard = {export: "web/src/team-board", repo: "https://github.com/acme/demo"}' "$repo/.agent-team/team.json" >"$tmp/tj" && mv "$tmp/tj" "$repo/.agent-team/team.json"
+(cd "$repo" && $AT sync >/dev/null)
+expect "sync writes the dashboard into the website when team.json asks" 'jq -e ".roles | length == 11" "$repo/web/src/team-board/roster.json" >/dev/null && [ -f "$repo/web/src/team-board/app.js" ] && grep -q "acme/demo" "$repo/web/src/team-board/roster.json"'
+expect "check covers the website copy" '(cd "$repo" && echo "// edit" >>web/src/team-board/app.js && ! $AT check >/dev/null 2>&1); (cd "$repo" && $AT sync >/dev/null)'
+jq 'del(.dashboard)' "$repo/.agent-team/team.json" >"$tmp/tj" && mv "$tmp/tj" "$repo/.agent-team/team.json"
+(cd "$repo" && $AT sync >/dev/null)
+expect "dropping dashboard.export removes the website copy" '[ ! -e "$repo/web/src/team-board/app.js" ]'
 expect "check passes right after init" '(cd "$repo" && $AT check >/dev/null)'
 (cd "$repo" && $AT init >/dev/null 2>&1)
 expect "second init refuses" '[ $? -eq 64 ]'

@@ -4,12 +4,16 @@
   --accent: #2f6fe4; --soft: #e8f0fd; --warn: #c77c02; --good: #1f9d55; --bad: #d93a2b; --r-s: 10px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--ink); background: var(--bg); font: 15px/1.45 var(--font); -webkit-font-smoothing: antialiased;
-  display: flex; flex-direction: column; gap: 16px; padding: 20px; max-width: 1600px; margin: 0 auto; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 16px; padding: 20px; max-width: 1600px; min-width: 0; margin: 0 auto; box-sizing: border-box;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .atd { --bg: #111113; --card: #1c1c1f; --ink: #f2f2f4; --ink2: #b4b4ba; --ink3: #7c7c84; --sep: #34343a; --fill: #2a2a2e; --accent: #5b93f5; --soft: #1d2a42; --warn: #e3a33a; --good: #3dbb6f; --bad: #f0645a }
 }
 :root[data-theme="dark"] .atd { --bg: #111113; --card: #1c1c1f; --ink: #f2f2f4; --ink2: #b4b4ba; --ink3: #7c7c84; --sep: #34343a; --fill: #2a2a2e; --accent: #5b93f5; --soft: #1d2a42; --warn: #e3a33a; --good: #3dbb6f; --bad: #f0645a }
+/* Inside another app: the host page supplies the padding, background and title. */
+.atd.atd-embedded { padding: 0; max-width: none; background: transparent }
+.atd.atd-embedded .atd-top > div { display: none }
+.atd.atd-embedded .atd-top { justify-content: flex-end; margin-bottom: -8px }
 html:has(> body > .atd), body:has(> .atd) { margin: 0; background: var(--bg, #f5f5f7) }
 @media (prefers-color-scheme: dark) { body:has(> .atd) { background: #111113 } }
 .atd *, .atd *::before, .atd *::after { box-sizing: border-box }
@@ -23,7 +27,8 @@ html:has(> body > .atd), body:has(> .atd) { margin: 0; background: var(--bg, #f5
 .atd .pre { white-space: pre-wrap; overflow-wrap: anywhere }
 .atd .link { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left }
 .atd .link:hover { color: var(--accent) }
-.atd-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px }
+.atd-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; min-width: 0 }
+.atd-top > div { min-width: 0 }
 .atd-live { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap }
 .atd-card { background: var(--card); border: 1px solid var(--sep); border-radius: 16px; padding: 16px; min-width: 0 }
 .atd-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 12px }
@@ -46,6 +51,8 @@ html:has(> body > .atd), body:has(> .atd) { margin: 0; background: var(--bg, #f5
 .atd .icon-btn:hover { color: var(--accent); border-color: var(--accent) }
 .atd-search { font: inherit; font-size: 14px; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--sep); background: var(--bg); color: var(--ink); min-width: 200px }
 .atd-table-wrap { overflow-x: auto }
+/* Scrolling boxes contribute no minimum width, so a host page's grid or flex column cannot be pushed wider. */
+.atd-table-wrap, .atd .team-org-wrap { width: 0; min-width: 100% }
 .atd-table { width: 100%; border-collapse: collapse; font-size: 14px }
 .atd-table th { text-align: left; font-size: 12.5px; color: var(--ink3); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--sep) }
 .atd-table td { padding: 8px 10px; border-bottom: 1px solid var(--sep); vertical-align: top }
@@ -73,7 +80,7 @@ html:has(> body > .atd), body:has(> .atd) { margin: 0; background: var(--bg, #f5
 .atd .team-tree-kids { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px 14px; padding-left: 10px; border-left: 1.5px solid var(--sep) }
 .atd .team-open { flex: none; width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--soft); color: var(--ink2); font: 600 18px/1 var(--font); cursor: pointer }
 .atd .team-open:hover { color: var(--accent) }
-.atd .team-reports { display: flex; flex-wrap: wrap; gap: 6px }
+.atd .team-reports, .atd .team-chips { display: flex; flex-wrap: wrap; gap: 6px }
 .atd .team-reports .team-light { width: 8px; height: 8px; margin-right: 6px }
 .atd .team-flow, .atd .team-org { --light: var(--ink3); font-family: var(--font) }
 .atd .team-flow { display: block; width: 100%; height: auto }

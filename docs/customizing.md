@@ -10,7 +10,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.1.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.2.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -20,6 +20,8 @@ In `.agent-team/team.json`:
 ```
 
 `include` adds kit roles outside the preset; `exclude` drops them. Reporting lines follow automatically: a role whose manager is not installed reports to the chief of staff, and direct-report lists show only installed roles.
+
+`"dashboard": { "export": "<folder>", "repo": "<url>" }` also writes the team dashboard into your website's source; see [the dashboard guide](dashboard.md#3-on-your-website-readable-from-anywhere).
 
 `values` fills `{{PROJECT_NAME}}`-style placeholders in the generated docs. You can add your own keys and use them in your own role files.
 

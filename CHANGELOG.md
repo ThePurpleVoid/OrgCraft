@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+- `team.json` can set `"dashboard": { "export": "<folder>", "repo": "<https://github.com/owner/repo>" }`: sync then writes the dashboard's page code and this team's `roster.json` into your website's source, and `check` keeps them current. Your site imports them and mounts the dashboard behind its own sign-in, so the team board on your real site is not code you maintain.
+- `AgentTeamDashboard.mount` takes `role`, `view`, `onSelect` and `embedded`, and its handle has `select(id)`, so a host app's router can own the URL (`/admin/team/<role>`).
+- `graphFrom(briefs, ownership)` builds the roster graph from parsed briefs.
+
 ## 0.1.0
 
 First public version, extracted from a production agent team and generalised.

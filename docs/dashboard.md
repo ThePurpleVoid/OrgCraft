@@ -48,6 +48,35 @@ For a dashboard you can open from your phone, keep the reports in a [hosted boar
    ```
 
    This writes `index.html`, `app.js`, `app.css`, `roster.json` and `config.js`. Running it at build time keeps the chart in step with the briefs. Do not commit the output; it is generated.
+   **Inside your own web app** (React, Vue, anything with a bundler), let sync write the page code and roster straight into your source instead, so they stay in step with the briefs without a build step:
+
+   ```json
+   "dashboard": { "export": "web/src/admin/team-board", "repo": "https://github.com/you/your-repo" }
+   ```
+
+   in `.agent-team/team.json`, then `scripts/agent-team/sync.sh`. It writes `app.js`, `app.css` and `roster.json` there (generated, committed, checked by `sync.sh check`). Import them and mount (React shown):
+
+   ```tsx
+   import roster from './team-board/roster.json';
+   import './team-board/app.css';
+   import './team-board/app.js'; // defines window.AgentTeamDashboard
+
+   export function TeamBoard({ role }: { role?: string }) {
+     const el = useRef<HTMLDivElement>(null);
+     const board = useRef<{ select(id: string): void; destroy(): void }>();
+     useEffect(() => {
+       board.current = window.AgentTeamDashboard.mount(el.current!, {
+         roster, embedded: true, urlState: false, stream: null, role,
+         fetchBoard: ({ role, days }) => api.teamBoard({ role, days }),   // your authenticated API
+         onSelect: (id) => navigate(id ? `/admin/team/${encodeURIComponent(id)}` : '/admin/team'),
+       });
+       return () => board.current?.destroy();
+     }, []);
+     useEffect(() => board.current?.select(role ?? ''), [role]);
+     return <div ref={el} />;
+   }
+   ```
+
 3. Give the page a way to read the board. The read token must not be public, so choose one:
    - **Behind your own sign-in (recommended).** Mount the dashboard inside your app and fetch the board through your own authenticated API, which holds the read token on the server:
 
@@ -83,8 +112,11 @@ The page polls every 15 seconds when it reads a hosted board.
 | `poll` | `15000` | Milliseconds between reloads without a stream |
 | `repo` | from git | `https://github.com/owner/repo` for issue, PR, branch, commit and brief links |
 | `urlState` | `true` | Keep the open role and the view in the query string, so links to a role work |
+| `role`, `view` | | The role open at the start (`cto`, `code-reviewer#57`) and the view (`org` or `flow`) |
+| `onSelect` | | `(id) => …` when a role is opened (`''` when closed), to drive your own router |
+| `embedded` | `false` | Inside another app's page: no page padding, background or title |
 
-`mount` returns `{ reload, destroy }`. Every style is scoped to `.atd`, and the colours are CSS variables (`--accent`, `--good`, `--warn`, `--bad`, `--bg`, `--card`, `--ink`, …) you can override to match your site.
+`mount` returns `{ reload, select, destroy }`; `select(id)` opens a role without calling `onSelect`. Every style is scoped to `.atd`, and the colours are CSS variables (`--accent`, `--good`, `--warn`, `--bad`, `--bg`, `--card`, `--ink`, …) you can override to match your site.
 
 ## Command reference
 

@@ -10,6 +10,9 @@ The one door. Take every request from the owner, open the issue, decide which ex
 ## Owns (writes)
 .agent-team/team.json and the project-wide extensions in .agent-team/ (with the people and team operations lead for roles), the issue board
 
+## Direct reports
+cto, cpo, cmo, cro, cco, cfo, general-counsel, coo
+
 ## Tools
 gh (issues, labels), the team board, every role's memory file
 

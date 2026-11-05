@@ -12,7 +12,11 @@
 //       stream      a server-sent events URL that says when to reload, or null to poll   (default '/api/stream')
 //       poll        milliseconds between reloads without a stream         (default 15000)
 //       repo        https://github.com/owner/repo for links (default: the roster's)
-//       urlState    keep the open role and view in the page's query string (default true)
+//       urlState    keep the open role and view in the page's query string (default true); 'view' keeps only the
+//                   view, for a host app whose router puts the role in the path
+//       role, view  the role open at the start ('cto', 'code-reviewer#57') and the view ('org' or 'flow')
+//       onSelect    (id) => …, called when a role is opened ('' when closed); use it to drive your own router
+//       embedded    true inside another app's page: no page padding, background or title
 (function () {
   'use strict';
 
@@ -328,7 +332,7 @@
       + `<button type="button" class="team-open" aria-label="Open ${esc(r.title)}" data-pick="${esc(id)}">›</button></summary>`
       + `<div class="team-tree-kids">${ks.map((k) => orgTree(T, B, k, depth + 1, state)).join('')}</div></details>`;
   }
-  const orgList = (T, B, state) => `<div class="team-list"><section class="team-list-band"><h3 class="small">Reports to you</h3>${T.kids('owner').map((k) => orgTree(T, B, k, 0, state)).join('')}</section></div>`;
+  const orgList = (T, B, state) => `<div class="team-list team-org-list"><section class="team-list-band"><h3 class="small">Reports to you</h3>${T.kids('owner').map((k) => orgTree(T, B, k, 0, state)).join('')}</section></div>`;
   function roleList(T, B, state) {
     let s = '<div class="team-list">';
     for (const g of T.groups) {
@@ -387,7 +391,7 @@
         + `<dt>Reports to</dt><dd>${pickLink(T, r.reportsTo)}${r.reportsToDeclared ? '' : ' <span class="small muted">(until the brief says otherwise)</span>'}</dd>`
         + (reports.length ? `<dt>Reports</dt><dd class="team-reports">${reports.map((k) => { const m = T.bySlug.get(k); const ml = T.kids(k).length ? rollup(T, B, m).light : B.lightOf(m); return `<button type="button" class="atd-chip plain team-chip s-${ml}" data-pick="${esc(k)}"><i class="team-light" aria-hidden="true"></i>${esc(T.nameOf(k))}</button>`; }).join('')}</dd>` : '')
         + `<dt>Owns</dt><dd>${r.paths && r.paths.length ? r.paths.map((p) => `<code>${esc(p)}</code>`).join('') : esc(r.owns)}</dd>`
-        + (r.handsTo && r.handsTo.length ? `<dt>Hands to</dt><dd class="team-reports">${r.handsTo.map((k) => (k === 'owner' ? chip('plain', 'You') : `<button type="button" class="atd-chip plain team-chip" data-pick="${esc(k)}">${esc(T.nameOf(k))}</button>`)).join('')}</dd>` : '')
+        + (r.handsTo && r.handsTo.length ? `<dt>Hands to</dt><dd class="team-chips">${r.handsTo.map((k) => (k === 'owner' ? chip('plain', 'You') : `<button type="button" class="atd-chip plain team-chip" data-pick="${esc(k)}">${esc(T.nameOf(k))}</button>`)).join('')}</dd>` : '')
         + (r.wakesOn ? `<dt>Wakes on</dt><dd>${esc(r.wakesOn)}</dd>` : '')
         + (r.tools ? `<dt>Tools</dt><dd>${esc(r.tools)}</dd>` : '')
         + '</dl>'
@@ -466,10 +470,11 @@
   function mount(root, options) {
     const o = Object.assign({ roster: '/api/roster', board: '/api/board', stream: '/api/stream', poll: 15000, urlState: true }, options || {});
     root.classList.add('atd');
+    if (o.embedded) root.classList.add('atd-embedded');
     root.innerHTML = SHELL;
     const $ = (sel) => root.querySelector(sel);
     const params = new URLSearchParams(o.urlState ? location.search : '');
-    const state = { view: params.get('view') === 'flow' ? 'flow' : 'org', role: params.get('role') || '', hover: null, q: '', T: null, data: null, live: false };
+    const state = { view: (params.get('view') || o.view) === 'flow' ? 'flow' : 'org', role: (o.urlState === true && params.get('role')) || o.role || '', hover: null, q: '', T: null, data: null, live: false };
     Object.defineProperty(state, 'sel', { get: () => (state.role ? state.role.split('#')[0] : null) });
     let destroyed = false, es = null, timer = null, loading = false, again = false;
 
@@ -513,7 +518,7 @@
       if (!o.urlState) return;
       const p = new URLSearchParams(location.search);
       if (state.view === 'flow') p.set('view', 'flow'); else p.delete('view');
-      if (state.role) p.set('role', state.role); else p.delete('role');
+      if (o.urlState === true) { if (state.role) p.set('role', state.role); else p.delete('role'); }
       const qs = p.toString();
       history.replaceState(null, '', `${location.pathname}${qs ? `?${qs}` : ''}${location.hash}`);
     }
@@ -521,6 +526,7 @@
       if (!id || id === 'owner') return;
       state.role = state.role === id ? '' : id;
       setUrl();
+      if (o.onSelect) o.onSelect(state.role);
       render();
       loadBoard();
     }
@@ -571,7 +577,7 @@
       const t = e.target.closest('[data-pick],[data-view],[data-close],[data-copy]');
       if (!t || !root.contains(t)) return;
       if (t.dataset.view) { state.view = t.dataset.view; setUrl(); render(); return; }
-      if (t.hasAttribute('data-close')) { state.role = ''; setUrl(); render(); return; }
+      if (t.hasAttribute('data-close')) { state.role = ''; setUrl(); if (o.onSelect) o.onSelect(''); render(); return; }
       if (t.hasAttribute('data-copy')) { if (navigator.clipboard) navigator.clipboard.writeText(location.href).then(() => { t.textContent = '✓'; setTimeout(() => { t.textContent = '⧉'; }, 1500); }, () => {}); return; }
       e.preventDefault();
       pick(t.dataset.pick);
@@ -603,7 +609,12 @@
       $('[data-error]').hidden = false;
       $('[data-error]').textContent = `Could not load the roster: ${e.message}`;
     });
-    return { reload: loadBoard, destroy() { destroyed = true; if (es) es.close(); clearInterval(timer); root.innerHTML = ''; } };
+    return {
+      reload: loadBoard,
+      /** Open a role (or close the panel with '') without calling onSelect, for a host router following its URL. */
+      select(id) { id = id || ''; if (id === state.role) return; state.role = id; setUrl(); render(); loadBoard(); },
+      destroy() { destroyed = true; if (es) es.close(); clearInterval(timer); root.innerHTML = ''; },
+    };
   }
 
   const api = { mount, team, boardOf, rollup, light };

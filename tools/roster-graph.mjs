@@ -2,6 +2,7 @@
 // the paths it owns (from ownership.md) and the hand-off edges between roles (from each brief's "Hands to" line).
 //
 //   import { buildGraph } from './roster-graph.mjs'; buildGraph('docs/team')
+//   graphFrom(briefs, ownershipMarkdown)   the same from parsed briefs (briefs.mjs parseBrief) and ownership.md's text
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadBriefs } from './briefs.mjs';
@@ -64,7 +65,11 @@ export function parseOwnership(md) {
 }
 
 export function buildGraph(teamDir) {
-  const briefs = loadBriefs(join(teamDir, 'roles'));
+  const ownershipFile = join(teamDir, 'ownership.md');
+  return graphFrom(loadBriefs(join(teamDir, 'roles')), existsSync(ownershipFile) ? readFileSync(ownershipFile, 'utf8') : '');
+}
+
+export function graphFrom(briefs, ownership = '') {
   const slugs = briefs.map((b) => b.slug);
   const alias = aliases(slugs);
   const byTitle = new Map();
@@ -117,11 +122,8 @@ export function buildGraph(teamDir) {
     for (const p of u) unresolved.push({ role: r.slug, phrase: p });
     delete r.handsToRaw;
   }
-  const ownershipFile = join(teamDir, 'ownership.md');
-  if (existsSync(ownershipFile)) {
-    for (const row of parseOwnership(readFileSync(ownershipFile, 'utf8'))) {
-      for (const s of resolveTargets(row.writer.split(/;|\bfrom\b/)[0], byTitle, alias).slugs) bySlug.get(s)?.paths.push(...row.paths);
-    }
+  for (const row of parseOwnership(ownership)) {
+    for (const s of resolveTargets(row.writer.split(/;|\bfrom\b/)[0], byTitle, alias).slugs) bySlug.get(s)?.paths.push(...row.paths);
   }
   const seen = [...new Set(roles.map((r) => r.group))];
   const groups = seen.sort((a, b) => {

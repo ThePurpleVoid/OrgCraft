@@ -35,7 +35,7 @@ Requirements: git, bash, `jq` and Node 18+. Claude Code with project threads (cl
 
 ```sh
 cd ~/code/my-app
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.1.0 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.2.0 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
 ```
 
 Then:
