@@ -92,3 +92,10 @@ test('the server takes reports, keeps one copy of each, and serves the board', a
     server.close();
   }
 });
+
+test('dimmed cards stay readable', () => {
+  const css = readFileSync('tools/dashboard/app.css', 'utf8');
+  const dims = [...css.matchAll(/\.tf-node\.dim \{ opacity: ([\d.]+) \}/g)].map((m) => Number(m[1]));
+  assert.ok(dims.length >= 2);
+  for (const o of dims) assert.ok(o >= 0.6, `dimmed opacity ${o} is too faint to read`);
+});

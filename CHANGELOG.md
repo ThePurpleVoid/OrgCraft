@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Dashboard: picking a role no longer rebuilds the page. The chart, tiles, legend, panel and feed are updated in place (elements keep their identity, focus and scroll), and the chart keeps the size it had before the panel opened, scrolling sideways instead of shrinking, so nothing moves under the pointer.
+- Dashboard: the panel shows no history until the picked role's history has loaded, instead of the previous role's.
+- Dashboard: cards outside the picked chain stay readable (opacity .65, at least 4.5:1 for the name in light and dark).
+- Dashboard: an embedded dashboard fills its container's width (it no longer shrinks to its content inside a flex column).
+
 ## 0.2.0
 
 - `team.json` can set `"dashboard": { "export": "<folder>", "repo": "<https://github.com/owner/repo>" }`: sync then writes the dashboard's page code and this team's `roster.json` into your website's source, and `check` keeps them current. Your site imports them and mounts the dashboard behind its own sign-in, so the team board on your real site is not code you maintain.

@@ -11,7 +11,7 @@
 }
 :root[data-theme="dark"] .atd { --bg: #111113; --card: #1c1c1f; --ink: #f2f2f4; --ink2: #b4b4ba; --ink3: #7c7c84; --sep: #34343a; --fill: #2a2a2e; --accent: #5b93f5; --soft: #1d2a42; --warn: #e3a33a; --good: #3dbb6f; --bad: #f0645a }
 /* Inside another app: the host page supplies the padding, background and title. */
-.atd.atd-embedded { padding: 0; max-width: none; background: transparent }
+.atd.atd-embedded { padding: 0; max-width: none; margin: 0; background: transparent }
 .atd.atd-embedded .atd-top > div { display: none }
 .atd.atd-embedded .atd-top { justify-content: flex-end; margin-bottom: -8px }
 html:has(> body > .atd), body:has(> .atd) { margin: 0; background: var(--bg, #f5f5f7) }
@@ -63,10 +63,12 @@ html:has(> body > .atd), body:has(> .atd) { margin: 0; background: var(--bg, #f5
 .atd .team-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start }
 .atd .team-layout.with-panel { grid-template-columns: minmax(0, 1fr) 380px }
 .atd .team-flow-wrap { overflow: hidden }
+.atd .team-flow-wrap.locked { overflow-x: auto; overflow-y: hidden }
+.atd .team-flow-wrap.locked > svg { max-width: none !important; min-width: 0 }
 .atd .team-org-wrap { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch }
 .atd .team-org { display: block; width: 100%; min-width: 1100px; height: auto; margin: 0 auto }
 .atd .org-lines path { fill: none; stroke: var(--ink3); stroke-width: 1.2; opacity: .6 }
-.atd .team-org.focused .tf-node.dim { opacity: .3 }
+.atd .team-org.focused .tf-node.dim { opacity: .65 }
 .atd .s-covered { --light: var(--sep) }
 .atd .s-covered .team-light, .atd .tf-node.s-covered .tf-light { box-shadow: inset 0 0 0 1.5px var(--ink3); stroke: var(--ink3); background: transparent; fill: transparent }
 .atd .tf-node.s-covered > rect { stroke-dasharray: 4 3 }
@@ -102,7 +104,7 @@ html:has(> body > .atd), body:has(> .atd) { margin: 0; background: var(--bg, #f5
 .atd .tf-node .tf-stack { fill: var(--card); stroke: var(--sep); opacity: .7 }
 .atd .tf-node:hover > rect, .atd .tf-node:focus-visible > rect { stroke: var(--accent); stroke-width: 1.5 }
 .atd .tf-node.selected > rect { stroke: var(--accent); stroke-width: 2 }
-.atd .tf-node.dim { opacity: .35 }
+.atd .tf-node.dim { opacity: .65 }
 .atd .tf-node.owner { cursor: default }
 .atd .tf-node.owner > rect { fill: var(--soft); stroke: var(--accent) }
 .atd .tf-node.owner .tf-title { fill: var(--accent) }

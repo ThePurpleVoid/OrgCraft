@@ -467,6 +467,26 @@
       </dl>
     </section>`;
 
+  // Update a container to new HTML in place: elements whose tag and child count match keep their identity (and their
+  // focus, hover and scroll), and only changed attributes and text are written. Anything else is replaced.
+  function patch(el, html) {
+    const t = document.createElement('template');
+    t.innerHTML = html;
+    sync(el, t.content);
+  }
+  function sync(cur, next) {
+    const a = cur.childNodes, b = next.childNodes;
+    if (a.length !== b.length) { cur.replaceChildren(...b); return; }
+    for (let i = a.length - 1; i >= 0; i--) {
+      const x = a[i], y = b[i];
+      if (x.nodeType !== y.nodeType || x.nodeName !== y.nodeName) { x.replaceWith(y); continue; }
+      if (x.nodeType !== 1) { if (x.nodeValue !== y.nodeValue) x.nodeValue = y.nodeValue; continue; }
+      for (const { name } of [...x.attributes]) if (!y.hasAttribute(name)) x.removeAttribute(name);
+      for (const { name, value } of [...y.attributes]) if (x.getAttribute(name) !== value) x.setAttribute(name, value);
+      sync(x, y);
+    }
+  }
+
   function mount(root, options) {
     const o = Object.assign({ roster: '/api/roster', board: '/api/board', stream: '/api/stream', poll: 15000, urlState: true }, options || {});
     root.classList.add('atd');
@@ -503,6 +523,7 @@
           if (state.role) u.searchParams.set('role', state.role);
           state.data = await getJSON(u.toString());
         }
+        state.dataRole = q.role;
         $('[data-error]').hidden = true;
       } catch (e) {
         $('[data-error]').hidden = false;
@@ -535,9 +556,18 @@
       const T = state.T, B = boardOf(T, (state.data && state.data.current) || []);
       const wrap = $('.team-org-wrap');
       const left = wrap ? wrap.scrollLeft : null;
-      $('[data-chart]').innerHTML = state.view === 'org'
+      patch($('[data-chart]'), state.view === 'org'
         ? `<div class="team-flow-wrap team-org-wrap">${orgSvg(T, B, state)}</div>${orgList(T, B, state)}`
-        : `<div class="team-flow-wrap">${flowSvg(T, B, (state.data && state.data.flow) || [], state)}</div>${roleList(T, B, state)}`;
+        : `<div class="team-flow-wrap">${flowSvg(T, B, (state.data && state.data.flow) || [], state)}</div>${roleList(T, B, state)}`);
+      // Opening a role's panel narrows the chart's column. Keep the chart at the size it had without the panel (the column
+      // scrolls sideways instead), so picking a role never rescales or moves the chart under the pointer.
+      const svg = $('.team-flow-wrap > svg');
+      if (svg) {
+        if (!state.role) state.fit = 0;
+        else if (!state.fit) state.fit = svg.getBoundingClientRect().width;
+        svg.style.width = state.role && state.fit ? `${state.fit}px` : '';
+        svg.parentElement.classList.toggle('locked', !!(state.role && state.fit));
+      }
       if (left !== null && $('.team-org-wrap')) $('.team-org-wrap').scrollLeft = left;
       return B;
     }
@@ -552,10 +582,10 @@
       const blocked = current.filter((c) => c.status === 'blocked' || c.stale).length;
       const last = current[0];
       const tile = (label, value, sub, t) => `<div class="atd-tile ${t || ''}"><span class="small muted">${esc(label)}</span><b>${esc(value)}</b>${sub ? `<span class="small muted">${esc(sub)}</span>` : ''}</div>`;
-      $('[data-tiles]').innerHTML = tile('Working now', working, '', working ? 'good' : '')
+      patch($('[data-tiles]'), tile('Working now', working, '', working ? 'good' : '')
         + tile('Waiting or in review', waiting, onYou ? `${onYou} on you or ${T.nameOf(T.top)}` : '', onYou ? 'warn' : '')
         + tile('Blocked or quiet', blocked, '', blocked ? 'bad' : '')
-        + tile('Last report', last ? ago(last.last_at) : '–', last ? `${T.nameOf(last.role)}${last.instance ? ` #${last.instance}` : ''}` : 'Nothing reported yet');
+        + tile('Last report', last ? ago(last.last_at) : '–', last ? `${T.nameOf(last.role)}${last.instance ? ` #${last.instance}` : ''}` : 'Nothing reported yet'));
       const banner = $('[data-banner]');
       banner.hidden = !(state.data && !current.length);
       banner.innerHTML = 'No activity yet. Roles light up as soon as a thread reports, for example <code>scripts/agent-team/team-status.sh backend-dev status working --task "Invoices API"</code>.';
@@ -564,13 +594,15 @@
       $('[data-chart-sub]').textContent = state.view === 'org' ? 'Who reports to whom, from the role briefs.' : 'Hand-offs from the briefs. Coloured edges carried a message in the last 7 days; moving ones in the last 15 minutes.';
       for (const b of root.querySelectorAll('[data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === state.view));
       const legend = ['working', 'waiting', 'blocked', 'done', 'idle', 'none', 'dormant'].concat(state.view === 'org' ? ['covered'] : []);
-      $('[data-legend]').innerHTML = legend.map((s) => `<span class="s-${s}"><i class="team-light"></i>${esc(s === 'covered' ? `Covered by ${T.nameOf(T.top)}` : STATUS_LABEL[s])}</span>`).join('');
+      patch($('[data-legend]'), legend.map((s) => `<span class="s-${s}"><i class="team-light"></i>${esc(s === 'covered' ? `Covered by ${T.nameOf(T.top)}` : STATUS_LABEL[s])}</span>`).join(''));
       const B = renderChart();
       $('[data-layout]').classList.toggle('with-panel', !!state.role);
       const scroll = $('.team-panel') ? $('.team-panel').scrollTop : 0;
-      $('[data-panel]').innerHTML = state.role ? panel(T, B, state.role, d.role || [], state.repo) : '';
+      // The role's history arrives with the board fetched for that role; until then the panel shows no history rather
+      // than the previous role's.
+      patch($('[data-panel]'), state.role ? panel(T, B, state.role, state.dataRole === state.role ? d.role || [] : [], state.repo) : '');
       if ($('.team-panel')) $('.team-panel').scrollTop = scroll;
-      $('[data-feed]').innerHTML = feedRows(T, d.recent || [], state.q, state.repo);
+      patch($('[data-feed]'), feedRows(T, d.recent || [], state.q, state.repo));
     }
 
     root.addEventListener('click', (e) => {
