@@ -54,6 +54,8 @@ For a dashboard you can open from your phone, keep the reports in a [hosted boar
    "dashboard": { "export": "web/src/admin/team-board", "repo": "https://github.com/you/your-repo" }
    ```
 
+   Add `"staleMinutes": { "working": 15, "waiting": 120, "review": 120, "blocked": 120 }` to set how long a thread in each status may stay silent before its card says it has gone quiet (default 30 each). The local dashboard reads the same setting from `team.json`; `team-board.sh` reads `STALE_MINUTES` and `STALE_WAITING_MINUTES` from `.agent-team/config.sh`.
+
    in `.agent-team/team.json`, then `scripts/agent-team/sync.sh`. It writes `app.js`, `app.css` and `roster.json` there (generated, committed, checked by `sync.sh check`). Import them and mount (React shown):
 
    ```tsx

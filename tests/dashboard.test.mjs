@@ -26,11 +26,24 @@ test('the board: latest status, quiet threads, whom a thread waits on, hand-off 
   assert.equal(by['backend-dev#'].waiting_on, 'backend-tester');
   assert.equal(by['backend-dev#'].stale, true);
   assert.equal(by['web-dev#'].stale, true);
-  assert.equal(by['code-reviewer#57'].stale, false, 'review never goes quiet');
+  assert.equal(by['code-reviewer#57'].stale, true, 'review goes quiet after its limit too');
   assert.equal(by['qa-web#'], undefined, 'a message without a status sets no status');
   assert.deepEqual(b.flow.map((f) => `${f.role}>${f.to_role}`).sort(), ['backend-dev>backend-tester', 'qa-web>web-dev']);
   assert.equal(b.role.length, 2);
   assert.equal(b.recent[0].role, 'qa-web', 'newest first');
+});
+
+test('stale limits per status: a project can flag working sooner and waiting later', () => {
+  const rows = [
+    row({ at: at(0), role: 'backend-dev', kind: 'status', status: 'working', task: 'API' }),
+    row({ at: at(0), role: 'web-dev', kind: 'status', status: 'waiting', task: 'CI' }),
+    row({ at: at(0), role: 'cto', kind: 'status', status: 'done' }),
+  ];
+  const b = summarize(rows, { now: new Date(T0 + 20 * 60_000), staleMinutes: { working: 15, waiting: 120 } });
+  const by = Object.fromEntries(b.current.map((c) => [c.role, c]));
+  assert.equal(by['backend-dev'].stale, true, 'working, silent 20 min, limit 15');
+  assert.equal(by['web-dev'].stale, false, 'waiting, silent 20 min, limit 120');
+  assert.equal(by.cto.stale, false, 'done never goes quiet');
 });
 
 test('reports are validated like the hosted board', () => {
@@ -64,6 +77,18 @@ test('the page code lays out the kit roster without a browser', () => {
   const B = api.boardOf(T, [{ role: 'cto', status: 'working', age_s: 10, stale: false }]);
   assert.equal(B.lightOf(T.bySlug.get('cto')), 'working');
   assert.equal(api.rollup(T, B, T.bySlug.get('chief-of-staff')).light, 'working');
+
+  // The page applies the roster's staleMinutes itself, whatever the board's own stale flag says.
+  const T15 = api.team({ ...buildGraph('team'), staleMinutes: { working: 15, waiting: 120 } });
+  const B15 = api.boardOf(T15, [
+    { role: 'cto', status: 'working', age_s: 16 * 60, stale: false, task: 'Audit' },
+    { role: 'web-dev', status: 'waiting', age_s: 40 * 60, stale: true, task: 'CI' },
+  ]);
+  assert.equal(B15.lightOf(T15.bySlug.get('cto')), 'quiet');
+  assert.equal(B15.lightOf(T15.bySlug.get('web-dev')), 'waiting');
+  assert.equal(B.lightOf(T.bySlug.get('cto')), 'working', 'default limit is 30 minutes');
+  assert.equal(api.isQuiet({ status: 'working', age_s: 31 * 60 }), true);
+  assert.equal(api.isQuiet({ status: 'done', age_s: 9999 * 60 }), false);
 });
 
 test('the server takes reports, keeps one copy of each, and serves the board', async () => {

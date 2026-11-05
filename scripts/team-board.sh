@@ -6,7 +6,9 @@
 #   team-board.sh --role R     every event of one role (R or R#instance)
 #   team-board.sh --json       the current table as JSON (for digests and dashboards)
 #
-# A role that is working or waiting and has reported nothing for STALE_MINUTES (default 30) is shown as "quiet".
+# A role that is working and has reported nothing for STALE_MINUTES (default 30), or is waiting, in review or blocked
+# and has reported nothing for STALE_WAITING_MINUTES (default STALE_MINUTES), is shown as "quiet". Set them in
+# .agent-team/config.sh to match team.json's dashboard.staleMinutes.
 set -uo pipefail
 # shellcheck source=lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -14,6 +16,7 @@ at_init
 
 log="${AGENT_TEAM_LOG:-$AT_HOME/events.jsonl}"
 stale="${STALE_MINUTES:-30}"
+stale_wait="${STALE_WAITING_MINUTES:-$stale}"
 command -v jq >/dev/null 2>&1 || { echo "team-board: jq is not installed" >&2; exit 1; }
 if [ ! -s "$log" ]; then
   echo "No reports yet for $AT_PROJECT. Threads report with scripts/agent-team/team-status.sh (log: $log)."
@@ -38,7 +41,8 @@ current='
           age_min: ((now - ($l.at | fromdateiso8601)) / 60 | floor),
           waiting_on: (if (($s.status // "") | test("waiting|blocked")) and $m and ($m.at >= $s.at) then $m.to else "" end)
         }
-      | .quiet = ((.status == "working" or .status == "waiting") and .age_min >= $stale)
+      | .quiet = ((.status == "working" and .age_min >= $stale)
+          or ((.status == "waiting" or .status == "review" or .status == "blocked") and .age_min >= $stale_wait))
     )
   | sort_by(.last_at) | reverse'
 
@@ -55,12 +59,12 @@ case "${1:-}" in
       (.task // ""), (.detail // ""), ((.evidence // []) | join(","))] | @tsv' "$log" | at_align
     ;;
   --json)
-    jq -s --argjson stale "$stale" "$current" "$log"
+    jq -s --argjson stale "$stale" --argjson stale_wait "$stale_wait" "$current" "$log"
     ;;
   ""|--table)
     {
       printf 'ROLE\tSTATUS\tAGE\tTASK\tWAITING ON\n'
-      jq -rs --argjson stale "$stale" "$current"' | .[] | [.role, (if .quiet then .status + " (quiet)" else .status end),
+      jq -rs --argjson stale "$stale" --argjson stale_wait "$stale_wait" "$current"' | .[] | [.role, (if .quiet then .status + " (quiet)" else .status end),
         (if .age_min < 60 then (.age_min | tostring) + "m" elif .age_min < 2880 then ((.age_min / 60 | floor) | tostring) + "h"
          else ((.age_min / 1440 | floor) | tostring) + "d" end),
         ((.task + (if .issue != "" then " #" + .issue else "" end) + (if .pr != "" then " PR " + .pr else "" end)) | .[0:60]),

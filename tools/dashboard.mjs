@@ -67,9 +67,12 @@ export function repoUrl(root) {
   return m ? `https://github.com/${m[1]}/${m[2]}` : '';
 }
 
-function projectName(root) {
-  try { return JSON.parse(readFileSync(join(root, '.agent-team', 'team.json'), 'utf8')).values?.PROJECT_NAME ?? ''; } catch { return ''; }
+function teamJson(root) {
+  try { return JSON.parse(readFileSync(join(root, '.agent-team', 'team.json'), 'utf8')); } catch { return {}; }
 }
+const projectName = (root) => teamJson(root).values?.PROJECT_NAME ?? '';
+/** team.json's dashboard.staleMinutes, as the page and the board read it. */
+const staleOf = (root) => { const m = teamJson(root).dashboard?.staleMinutes; return m ? { staleMinutes: m } : {}; };
 
 const sameToken = (a, b) => {
   const x = Buffer.from(a), y = Buffer.from(b);
@@ -116,7 +119,7 @@ export function createDashboard({ root, teamDir, home, token = process.env.DASHB
     if (!graph || stamp !== graphStamp) { graph = buildGraph(teamDir); graphStamp = stamp; }
     return graph;
   };
-  const meta = { project: projectName(root) || basename(root), repo: repoUrl(root), hosted: !!hosted, briefsPath: join(relative(root, teamDir), 'roles').split('\\').join('/') };
+  const meta = { project: projectName(root) || basename(root), repo: repoUrl(root), hosted: !!hosted, briefsPath: join(relative(root, teamDir), 'roles').split('\\').join('/'), ...staleOf(root) };
 
   // Tell every open page when the log changes. Polling the file's size is portable and cheap.
   let lastSize = -1;
@@ -141,7 +144,7 @@ export function createDashboard({ root, teamDir, home, token = process.env.DASHB
       if (!r.ok) throw new Error(`hosted board answered HTTP ${r.status}`);
       return r.json();
     }
-    return summarize(readLog(log), { days, role });
+    return summarize(readLog(log), { days, role, staleMinutes: meta.staleMinutes });
   }
 
   const send = (res, code, body, type = 'application/json; charset=utf-8') => {
@@ -200,7 +203,7 @@ export function exportSite({ root, teamDir, out, board }) {
   mkdirSync(out, { recursive: true });
   for (const f of ['index.html', 'app.js', 'app.css']) writeFileSync(join(out, f), readFileSync(join(PUBLIC, f)));
   const graph = buildGraph(teamDir);
-  const roster = { project: projectName(root) || basename(root), repo: repoUrl(root), hosted: true, briefsPath: join(relative(root, teamDir), 'roles').split('\\').join('/'), ...graph };
+  const roster = { project: projectName(root) || basename(root), repo: repoUrl(root), hosted: true, briefsPath: join(relative(root, teamDir), 'roles').split('\\').join('/'), ...staleOf(root), ...graph };
   writeFileSync(join(out, 'roster.json'), JSON.stringify(roster) + '\n');
   const settings = { roster: 'roster.json', stream: null, poll: 15000, ...(board ? { board } : {}) };
   writeFileSync(join(out, 'config.js'), `// Written by "agent-team dashboard export". Add headers (for example a read token) or a fetchBoard function here,\n`

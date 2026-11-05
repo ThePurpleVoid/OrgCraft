@@ -17,10 +17,20 @@
 //       role, view  the role open at the start ('cto', 'code-reviewer#57') and the view ('org' or 'flow')
 //       onSelect    (id) => …, called when a role is opened ('' when closed); use it to drive your own router
 //       embedded    true inside another app's page: no page padding, background or title
+//
+//   The roster may carry `staleMinutes` ({ working, waiting, review, blocked }, from team.json's dashboard.staleMinutes):
+//   how long a thread in each status may go without any report before its card says it has gone quiet.
 (function () {
   'use strict';
 
-  const STALE_S = 30 * 60;
+  // Minutes a thread in each status may go without a report before it shows as gone quiet. Idle and done never do.
+  const STALE_MIN = { working: 30, waiting: 30, review: 30, blocked: 30 };
+  const staleOf = (roster) => {
+    const out = { ...STALE_MIN };
+    for (const [k, v] of Object.entries((roster && roster.staleMinutes) || {})) if (k in out && Number(v) > 0) out[k] = Number(v);
+    return out;
+  };
+  const mins = (s) => (s < 5400 ? `${Math.max(1, Math.round(s / 60))} min` : `${Math.round(s / 360) / 10} h`);
   const STATUS_LABEL = { idle: 'Idle', working: 'Working', waiting: 'Waiting', blocked: 'Blocked', review: 'In review', done: 'Done', quiet: 'Gone quiet', none: 'No report yet', dormant: 'Dormant', covered: 'Covered' };
   const KIND_LABEL = { status: 'Status', handoff: 'HANDOFF', bug: 'BUG', signoff: 'SIGNOFF', blocked: 'BLOCKED', note: 'Note', heartbeat: 'Heartbeat' };
 
@@ -51,8 +61,12 @@
   const chip = (t, text) => `<span class="atd-chip ${t}">${esc(text)}</span>`;
   const key = (role, instance) => (instance ? `${role}#${instance}` : role);
 
+  /** True when a busy thread has gone longer than its status allows without any report. */
+  const isQuiet = (c, stale = STALE_MIN) => !!c && c.status in stale && c.age_s > stale[c.status] * 60;
   /** The light a role shows: its status, quiet when a busy thread stopped reporting, dormant or none before any report. */
-  const light = (c, r) => (!c ? (r && r.dormant ? 'dormant' : 'none') : c.stale || (c.status !== 'idle' && c.status !== 'done' && c.age_s > STALE_S) ? 'quiet' : c.status);
+  const light = (c, r, stale = STALE_MIN) => (!c ? (r && r.dormant ? 'dormant' : 'none') : isQuiet(c, stale) ? 'quiet' : c.status);
+  /** A card's line: the task, led by how long the thread has been silent when it has gone quiet. */
+  const lineOf = (c, l, text) => (l === 'quiet' && c ? `Silent ${mins(c.age_s)} · ${text}` : text);
 
   // ---------------------------------------------------------------------------------------------------------------
   // Layouts. Both are computed once per roster.
@@ -193,6 +207,7 @@
     T.kids = (id) => children.get(id) || [];
     T.top = (roster.ownerReports || [])[0] || '';
     T.nameOf = (slug) => (T.bySlug.get(slug) ? T.bySlug.get(slug).title : slug === 'owner' ? 'You' : slug.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase()));
+    T.stale = staleOf(roster);
     T.isExec = (r) => r.group === 'executive' && T.kids(r.slug).length > 0 && r.reportsTo !== 'owner';
     T.descendants = (id) => { const out = []; const walk = (x) => { for (const k of T.kids(x)) { out.push(k); walk(k); } }; walk(id); return out; };
     const edges = (roster.ownerReports || []).map((to) => ({ from: 'owner', to })).concat(roster.edges || []);
@@ -211,7 +226,7 @@
     const standing = (slug) => { const rows = byRole.get(slug) || []; return rows.find((r) => !r.instance) || rows[0]; };
     const instances = (slug) => (byRole.get(slug) || []).filter((r) => r.instance && r.status !== 'done' && r.status !== 'idle');
     const unknown = [...byRole.keys()].filter((r) => !T.bySlug.has(r));
-    const lightOf = (r) => (r.pool && instances(r.slug).length ? 'working' : light(standing(r.slug), r));
+    const lightOf = (r) => (r.pool && instances(r.slug).length ? 'working' : light(standing(r.slug), r, T.stale));
     return { byRole, standing, instances, unknown, lightOf };
   }
 
@@ -228,8 +243,8 @@
     if (counts.blocked) parts.push(`${counts.blocked} blocked`);
     if (counts.waiting || counts.review) parts.push(`${(counts.waiting || 0) + (counts.review || 0)} waiting`);
     if (counts.quiet) parts.push(`${counts.quiet} quiet`);
-    const l = own ? light(own, r) : counts.blocked ? 'blocked' : counts.working ? 'working' : counts.waiting || counts.review ? 'waiting' : counts.quiet ? 'quiet' : light(undefined, r);
-    return { light: l, text: (own && own.task) || (parts.length ? parts.join(', ') : `${team.length} roles, none reporting`) };
+    const l = own ? light(own, r, T.stale) : counts.blocked ? 'blocked' : counts.working ? 'working' : counts.waiting || counts.review ? 'waiting' : counts.quiet ? 'quiet' : light(undefined, r);
+    return { light: l, text: (own && lineOf(own, l, own.task || STATUS_LABEL[own.status])) || (parts.length ? parts.join(', ') : `${team.length} roles, none reporting`) };
   }
   const poolText = (insts) => (insts.length ? `${insts.length} live: ${insts.map((i) => i.instance).join(', ')}` : 'None live');
 
@@ -281,7 +296,7 @@
       if (n.owner) { s += ownerSvg(n.x, n.y, NW, `You, through ${T.nameOf(T.top)}`); continue; }
       const r = n.role, cur = B.standing(r.slug), inst = r.pool ? B.instances(r.slug) : [];
       const l = B.lightOf(r);
-      const text = r.pool ? poolText(inst) : (cur && cur.task) || STATUS_LABEL[l];
+      const text = r.pool ? poolText(inst) : lineOf(cur, l, (cur && cur.task) || STATUS_LABEL[l]);
       const dim = focus && focus !== r.slug && !T.touch(r.slug, focus) ? ' dim' : '';
       s += nodeSvg(T, B, r, n.x, n.y, NW, 17, state, dim, text, l);
     }
@@ -306,7 +321,7 @@
       const roll = lead ? rollup(T, B, r) : null;
       const cur = B.standing(r.slug);
       const l = roll ? roll.light : B.lightOf(r);
-      const text = roll ? roll.text : r.pool ? poolText(B.instances(r.slug)) : (cur && cur.task) || STATUS_LABEL[l];
+      const text = roll ? roll.text : r.pool ? poolText(B.instances(r.slug)) : lineOf(cur, l, (cur && cur.task) || STATUS_LABEL[l]);
       s += nodeSvg(T, B, r, n.x, n.y, OW, 15, state, `${lit && !lit.has(r.slug) ? ' dim' : ''}${lead ? ' lead' : ''}`, text, l);
     }
     return s + '</g></svg>';
@@ -318,7 +333,7 @@
   }
   function roleCard(B, r, state) {
     const cur = B.standing(r.slug), l = B.lightOf(r);
-    return card(r, l, r.pool ? poolText(B.instances(r.slug)) : (cur && cur.task) || STATUS_LABEL[l], state.sel === r.slug, r.slug);
+    return card(r, l, r.pool ? poolText(B.instances(r.slug)) : lineOf(cur, l, (cur && cur.task) || STATUS_LABEL[l]), state.sel === r.slug, r.slug);
   }
   function orgTree(T, B, id, depth, state) {
     const r = T.bySlug.get(id);
@@ -359,7 +374,7 @@
     const r = T.bySlug.get(slug);
     const rows = B.byRole.get(slug) || [];
     const cur = inst ? rows.find((c) => c.instance === inst) : B.standing(slug);
-    const l = light(cur, r);
+    const l = light(cur, r, T.stale);
     const title = r ? r.title : T.nameOf(slug);
     let s = `<aside class="team-panel atd-card" aria-label="${esc(title)}"><div class="team-panel-head"><div class="stack">`
       + `<div class="row"><h2>${esc(title)}${inst ? `<span class="muted"> #${esc(inst)}</span>` : ''}</h2>${chip(tone(l), STATUS_LABEL[l])}</div>`
@@ -369,13 +384,13 @@
     if (r && r.pool && !inst) {
       const insts = B.instances(slug);
       s += `<section><h3 class="small">${insts.length ? `${insts.length} live now` : 'None live now'}</h3>`
-        + (insts.length ? insts.map((c) => card({ title: `#${c.instance}` }, light(c), c.task || STATUS_LABEL[light(c)], false, key(slug, c.instance))).join('')
+        + (insts.length ? insts.map((c) => { const cl = light(c, null, T.stale); return card({ title: `#${c.instance}` }, cl, lineOf(c, cl, c.task || STATUS_LABEL[cl]), false, key(slug, c.instance)); }).join('')
           : '<p class="small muted">Short-lived threads appear here while they run and leave when they report done.</p>') + '</section>';
     }
     s += '<section><h3 class="small">Now</h3>';
     if (cur) {
       s += `<dl class="team-kv"><dt>Task</dt><dd>${cur.task ? esc(cur.task) : '<span class="muted">Nothing in hand</span>'}</dd>`
-        + `<dt>Status</dt><dd>${esc(STATUS_LABEL[cur.status])} since ${esc(when(cur.status_at))}${cur.stale ? ' · no report for over 30 minutes' : ''}</dd>`
+        + `<dt>Status</dt><dd>${esc(STATUS_LABEL[cur.status])} since ${esc(when(cur.status_at))}${isQuiet(cur, T.stale) ? ` · <b>gone quiet</b>: no report for ${esc(mins(cur.age_s))} (limit ${T.stale[cur.status]} min)` : ''}</dd>`
         + (cur.waiting_on ? `<dt>Waiting on</dt><dd>${pickLink(T, cur.waiting_on)}</dd>` : '')
         + (cur.issue || cur.pr || cur.branch || cur.commit ? `<dt>Links</dt><dd>${links(repo, cur)}</dd>` : '')
         + (cur.detail ? `<dt>Detail</dt><dd class="pre">${esc(cur.detail)}</dd>` : '')
@@ -461,7 +476,7 @@
         <dt>Where this comes from</dt><dd>Each thread runs <code>scripts/agent-team/team-status.sh</code> when it starts a task and whenever it sends a HANDOFF, BUG, SIGNOFF or BLOCKED. Nothing here is read from the threads themselves.</dd>
         <dt>The roster</dt><dd>Roles, models, what each owns, whom it reports to and whom it hands to come from the role briefs and ownership.md. Change a brief, run sync, and the chart redraws.</dd>
         <dt>Org chart</dt><dd>A brief's "Reports to" line places it under its lead; a lead's "Direct reports" list sets the order. A lead shows a rollup of its team, or "covered" until a role in its lane reports.</dd>
-        <dt>Gone quiet</dt><dd>A working or waiting thread that has not reported for 30 minutes. Idle and done threads never go quiet.</dd>
+        <dt>Gone quiet</dt><dd data-quiet-rule>A busy thread that has stopped reporting. Idle and done threads never go quiet.</dd>
         <dt>Pools</dt><dd>Roles with many short-lived threads (one per PR, one per direction) show as a stack; the panel lists the live ones.</dd>
         <dt>Dormant</dt><dd>A role whose brief says it is dormant has no thread until someone starts it.</dd>
       </dl>
@@ -576,10 +591,11 @@
       if (destroyed || !state.T) return;
       const T = state.T, d = state.data || { current: [], recent: [], flow: [], role: [] };
       const current = d.current || [];
-      const working = current.filter((c) => c.status === 'working' && !c.stale).length;
-      const waiting = current.filter((c) => c.status === 'waiting' || c.status === 'review').length;
+      const quiet = (c) => isQuiet(c, T.stale);
+      const working = current.filter((c) => c.status === 'working' && !quiet(c)).length;
+      const waiting = current.filter((c) => (c.status === 'waiting' || c.status === 'review') && !quiet(c)).length;
       const onYou = current.filter((c) => c.status === 'waiting' && (c.waiting_on === 'owner' || c.waiting_on === T.top)).length;
-      const blocked = current.filter((c) => c.status === 'blocked' || c.stale).length;
+      const blocked = current.filter((c) => c.status === 'blocked' || quiet(c)).length;
       const last = current[0];
       const tile = (label, value, sub, t) => `<div class="atd-tile ${t || ''}"><span class="small muted">${esc(label)}</span><b>${esc(value)}</b>${sub ? `<span class="small muted">${esc(sub)}</span>` : ''}</div>`;
       patch($('[data-tiles]'), tile('Working now', working, '', working ? 'good' : '')
@@ -594,6 +610,8 @@
       $('[data-chart-sub]').textContent = state.view === 'org' ? 'Who reports to whom, from the role briefs.' : 'Hand-offs from the briefs. Coloured edges carried a message in the last 7 days; moving ones in the last 15 minutes.';
       for (const b of root.querySelectorAll('[data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === state.view));
       const legend = ['working', 'waiting', 'blocked', 'done', 'idle', 'none', 'dormant'].concat(state.view === 'org' ? ['covered'] : []);
+      const rule = $('[data-quiet-rule]'), st = T.stale;
+      if (rule) rule.textContent = `A thread that has not reported for ${st.working} minutes while working, ${st.waiting} while waiting, ${st.review} while in review or ${st.blocked} while blocked. Its card says how long it has been silent. Idle and done threads never go quiet.`;
       patch($('[data-legend]'), legend.map((s) => `<span class="s-${s}"><i class="team-light"></i>${esc(s === 'covered' ? `Covered by ${T.nameOf(T.top)}` : STATUS_LABEL[s])}</span>`).join(''));
       const B = renderChart();
       $('[data-layout]').classList.toggle('with-panel', !!state.role);
@@ -649,7 +667,7 @@
     };
   }
 
-  const api = { mount, team, boardOf, rollup, light };
+  const api = { mount, team, boardOf, rollup, light, isQuiet };
   if (typeof window !== 'undefined') {
     window.AgentTeamDashboard = api;
     const auto = document.querySelector('[data-agent-team-dashboard]');

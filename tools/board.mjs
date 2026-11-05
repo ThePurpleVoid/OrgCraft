@@ -5,7 +5,8 @@ import { existsSync, readFileSync } from 'node:fs';
 export const KINDS = ['status', 'handoff', 'bug', 'signoff', 'blocked', 'note', 'heartbeat'];
 export const STATUSES = ['idle', 'working', 'waiting', 'blocked', 'review', 'done'];
 const MESSAGES = ['handoff', 'bug', 'signoff', 'blocked'];
-const STALE_MS = 30 * 60_000;
+// Minutes a thread in each status may go without a report before it counts as gone quiet (stale).
+export const STALE_MINUTES = { working: 30, waiting: 30, review: 30, blocked: 30 };
 const ROLE = /^[a-z0-9][a-z0-9_-]{0,59}$/;
 
 const text = (v, max) => {
@@ -73,7 +74,8 @@ export function readLog(file) {
 }
 
 /** The board: where every thread stands, the recent feed, the hand-off flow and one role's history. */
-export function summarize(rows, { now = new Date(), days = 7, role = '' } = {}) {
+export function summarize(rows, { now = new Date(), days = 7, role = '', staleMinutes = {} } = {}) {
+  const limits = { ...STALE_MINUTES, ...staleMinutes };
   const t = now.getTime();
   const key = (r) => `${r.role}#${r.instance ?? ''}`;
   const lastAny = new Map(), lastStatus = new Map(), lastMsg = new Map();
@@ -92,7 +94,7 @@ export function summarize(rows, { now = new Date(), days = 7, role = '' } = {}) 
       commit: s.commit, platform: s.platform, detail: s.detail, session: s.session,
       status_at: s.at, last_at: last,
       age_s: Math.max(0, Math.round((t - Date.parse(last)) / 1000)),
-      stale: (s.status === 'working' || s.status === 'waiting') && t - Date.parse(last) > STALE_MS,
+      stale: s.status in limits && t - Date.parse(last) > limits[s.status] * 60_000,
       waiting_on: (s.status === 'waiting' || s.status === 'blocked') && m && Date.parse(m.at) >= Date.parse(s.at) - 5000 ? m.to_role : null,
     });
   }
