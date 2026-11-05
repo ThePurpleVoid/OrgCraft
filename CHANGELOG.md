@@ -1,9 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
-- This repository now runs its own team: `.agent-team/` (21 roles, pinned to v0.3.0, with a `kit-core-dev` role of its own), generated `docs/team/` and `scripts/agent-team/`, and `sync.sh check` in CI. Nothing changes for other teams.
-- The kit package no longer picks up generated scripts: `package.json` `files` lists `scripts/*.sh` instead of `scripts/`. The package contents are the same as in 0.3.0.
+Closes the gaps against other agent kits: reports no longer depend on the roles remembering, the team runs as a Claude Code agent team, the day-to-day path needs only Node, and there is a smoke test.
+
+- **Hooks report for the roles.** `"hooks": true` in `team.json` (the default for `init`) makes sync merge the kit's hooks into `.claude/settings.json`, keeping everything else in that file; `check` fails when they are missing. `scripts/agent-team/report.mjs hook` turns Claude Code events into board reports with `"source": "hook"`: `working` on session start and on a prompt (a waiting, blocked or in-review role keeps its status), a heartbeat at most every 5 minutes while tools run, `idle` when a turn or session ends, and every subagent or teammate as its own role (`SubagentStart`/`SubagentStop`, `TeammateIdle`, `TaskCompleted`). The main session is the role in `AGENT_TEAM_ROLE`. Built-in agents such as Explore are not reported. The dashboard's feed marks hook reports "auto".
+- **Claude Code agent teams.** `"agentTeams": true` installs the roles as teammate types in `.claude/agents/`, sets `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`, and writes `docs/team/agent-teams.md` with a spawn prompt for each lead and its reports.
+- **Node only, where it is cheap.** `scripts/agent-team/report.mjs` takes `team-status.sh`'s arguments and writes the same event without bash, `jq` or `curl`; `team-status.sh` hands over to it when `jq` is missing. `scripts/agent-team/sync.mjs` is `sync.sh` for machines without bash. [docs/windows.md](docs/windows.md) lists what runs on Node alone and what needs Git Bash or WSL.
+- **`agent-team doctor`.** Checks the tools, that generated files and hooks are in sync, the roster and its hand-offs, and runs a hook event through the reporter into a scratch board. `--ping` posts a note to `TEAM_REPORT_URL`. Exits 1 on any failure.
+- Tests: smoke scenarios (a new project reporting through its hooks, `team-status.sh` without `jq`, an agent-teams project passing `doctor` and `sync.mjs check`) and evals that every preset's roster, reporting lines, hand-offs and teammate exports hold together.
+- Protocols: hooks are a safety net, not a substitute for the role's own start, wait and message reports.
+- Generated scripts with a `#!` line are now executable.
+- This repository runs its own team: `.agent-team/` (21 roles, with a `kit-core-dev` role of its own), generated `docs/team/` and `scripts/agent-team/`, and `sync.sh check` in CI. Nothing changes for other teams.
+- The kit package no longer picks up generated scripts: `package.json` `files` lists `scripts/*.sh` instead of `scripts/`.
 - CI checks the role library explicitly (`roster.mjs --check team/roles`), because `docs/team/roles` (this repository's own team) would otherwise be the default.
 - Docs: the product plan for Agent Team Studio in `docs/product/` (PRD, architecture, deployment, delivery plan, how our own team builds it) and ADRs 0001 and 0002.
 

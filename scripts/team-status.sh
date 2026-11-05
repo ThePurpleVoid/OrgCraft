@@ -17,10 +17,15 @@
 # (dashboard.mjs) read. When TEAM_REPORT_URL is set (environment, .agent-team/config.sh or ~/.agent-team/<project>/team.env)
 # the report is also posted there, with TEAM_REPORT_TOKEN as x-team-token when set: a dashboard on another machine
 # (http://<host>:4747/api/report) or a hosted board (see board/). Fills branch and commit from git. Never fails the caller: a bad call,
-# a missing tool or a refused report prints one line and exits 0.
+# a missing tool or a refused report prints one line and exits 0. Without jq it runs report.mjs, which needs only Node.
 set -uo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+# Without jq, the Node reporter (same arguments, same event) does the job.
+if ! command -v jq >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+  for r in "$here/report.mjs" "$here/../tools/report.mjs"; do [ -f "$r" ] && exec node "$r" "$@"; done
+fi
 # shellcheck source=lib.sh
-. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+. "$here/lib.sh"
 at_init
 
 if [ -f "$AT_HOME/team.env" ]; then

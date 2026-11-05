@@ -10,14 +10,18 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.2.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.4.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
   "values": { "PROJECT_NAME": "My App", "OWNER": "Sam", "TIMEZONE": "UTC", "DIGEST_TIME": "08:00" },
-  "subagents": false
+  "subagents": false,
+  "hooks": true,
+  "agentTeams": false
 }
 ```
+
+`hooks` merges the kit's reporting hooks into `.claude/settings.json`, and `agentTeams` sets the team up for Claude Code agent teams; see [hooks and agent teams](hooks-and-agent-teams.md).
 
 `include` adds kit roles outside the preset; `exclude` drops them. Reporting lines follow automatically: a role whose manager is not installed reports to the chief of staff, and direct-report lists show only installed roles.
 

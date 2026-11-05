@@ -31,11 +31,11 @@ Give one agent a big task and it does everything at once, badly. Give ten agents
 
 The kit is a dependency, not a template. Your repository keeps only what is specific to it, in `.agent-team/`; the briefs, protocols and scripts are generated from a pinned kit version. Improve the kit once and every team picks it up on the next sync.
 
-Requirements: git, bash, `jq` and Node 18+. Claude Code with project threads (claude.ai) or the CLI.
+Requirements: git and Node 18+, plus bash and `jq` for the merge gate and locks (Git Bash or WSL on Windows; see [docs/windows.md](docs/windows.md)). Claude Code with project threads (claude.ai) or the CLI.
 
 ```sh
 cd ~/code/my-app
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.2.0 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.4.0 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
 ```
 
 Then:
@@ -43,7 +43,7 @@ Then:
 1. Edit `docs/team/ownership.md` so the paths match your layout.
 2. Edit the gates and hardware pools in `.agent-team/config.sh`.
 3. Paste `docs/team/project-instructions.md` into your Claude project's instructions (or into `CLAUDE.md`).
-4. Commit `.agent-team/`, `docs/team/` and `scripts/agent-team/`, and add `scripts/agent-team/sync.sh check` to CI.
+4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI. `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.4.0 doctor` smoke-tests the whole setup.
 5. Open the chief of staff: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."*
 6. Ask for something. Watch it live with `node scripts/agent-team/dashboard.mjs` (a web dashboard at http://localhost:4747) or `scripts/agent-team/team-board.sh` in the terminal.
 
@@ -52,7 +52,7 @@ Then:
 ```
 your-repo/
   .agent-team/                  yours: the project layer
-    team.json                   kit version, preset, include/exclude, project values
+    team.json                   kit version, preset, include/exclude, project values, hooks, agent teams
     config.sh                   merge gates, hardware pools, janitor extras
     roles/<role>.extend.md      change a kit role: extra rules, another model tier, a replaced section
     roles/<role>.md             your own roles (or a full replacement of a kit role)
@@ -61,7 +61,8 @@ your-repo/
   docs/team/
     ownership.md, lanes/        yours: who writes which path, each executive's priorities
     protocols.md, roles/, ...   generated, do not edit
-  scripts/agent-team/           generated: team-status, team-board, dashboard, merge-gate, with-lock, janitor, roster, sync
+  scripts/agent-team/           generated: team-status, report, team-board, dashboard, merge-gate, with-lock, janitor, roster, sync
+  .claude/settings.json         yours, with the kit's reporting hooks merged in by sync
 ```
 
 `scripts/agent-team/sync.sh` regenerates from `.agent-team/`. To upgrade, change `"kit"` in `team.json` to a newer tag and run it. `scripts/agent-team/sync.sh roles` shows every role and whether it comes from the kit, an extension or your repository.
@@ -76,27 +77,29 @@ your-repo/
 | `engineering` (default) | 28 | The full product and engineering organisation |
 | `company` | 48 | Everything, with business roles dormant until a request needs them |
 
-## Two ways to run the team
+## Three ways to run the team
 
 **Threads (the original setup).** Each role is its own long-lived Claude Code thread in a claude.ai project, running as Remote Control or cloud sessions on your repository. The chief of staff is the project coordinator and wakes roles as the work needs them. Best for long-running products: roles work in parallel, each in its own worktree, and keep their own memory.
 
 **Subagents (one session).** Set `"subagents": true` in `team.json` (or pass `--subagents` to `init`) and sync writes every active role to `.claude/agents/`. One Claude Code session can then delegate to `architect`, `backend-dev`, `qa-web` or `code-reviewer` on demand. Best for trying the kit or for smaller projects.
 
-See [docs/running-the-team.md](docs/running-the-team.md) for both.
+**Claude Code agent teams (a lead and its reports).** Set `"agentTeams": true` and sync installs the roles as teammate types, turns on Claude Code's experimental agent teams and writes `docs/team/agent-teams.md` with a spawn prompt for each lead. A lead such as the CTO starts a team of `backend-dev`, `code-reviewer` and `qa-web` for one job, and every teammate shows on the board. See [docs/hooks-and-agent-teams.md](docs/hooks-and-agent-teams.md).
+
+See [docs/running-the-team.md](docs/running-the-team.md) for threads and subagents.
 
 ## What is in this repository
 
 ```
-bin/agent-team.mjs              the CLI: init, sync, check, roles, dashboard
+bin/agent-team.mjs              the CLI: init, sync, check, roles, dashboard, doctor
 presets/                        role lists for minimal, engineering, company
 team/                           the framework: protocols, project instructions, ownership seed, 48 role briefs
 scripts/                        runtime scripts generated into scripts/agent-team/
-tools/                          roster checker, subagent export and the dashboard (server + page), generated into scripts/agent-team/
-templates/                      config.sh, sync.sh and the roles README for new projects
+tools/                          roster checker, subagent export, the Node reporter and hooks, doctor and the dashboard (server + page)
+templates/                      config.sh, sync.sh, sync.mjs and the roles README for new projects
 examples/native-mobile/         a full project layer for native Android and iOS apps
 board/supabase/                 optional hosted board (table, views, Edge Function)
 docs/                           how it works, running the team, customising, the dashboard
-tests/                          tests for the CLI, scripts and tools
+tests/                          tests for the CLI, scripts and tools, smoke scenarios and evals of every preset
 ```
 
 ## Anatomy of a role brief
@@ -129,6 +132,8 @@ scripts/agent-team/team-status.sh web-dev status working --task "Login page" --i
 scripts/agent-team/team-status.sh web-dev handoff waiting --to qa-web --task "Login page" --pr 14
 ```
 
+With hooks on (the default), Claude Code reports for the roles too: working when a session starts or gets a prompt, a heartbeat while it uses tools, idle when its turn ends, and every subagent or teammate as its own role. A role that forgets to report no longer goes stale. Set `AGENT_TEAM_ROLE=<role>` in a thread's environment so its own session is reported; [docs/hooks-and-agent-teams.md](docs/hooks-and-agent-teams.md) has the details. No bash or `jq`? `node scripts/agent-team/report.mjs` takes the same arguments.
+
 Open the dashboard and leave it open. It draws your team from the role briefs, as an org chart and as a flow of hand-offs, and each role lights up the moment its thread reports. Click a role for its task, links, brief and history.
 
 ```sh
@@ -158,6 +163,8 @@ The briefs work on their own and get better with these: [superpowers](https://gi
 - [Running the team](docs/running-the-team.md): threads or subagents, worktrees, meetings
 - [Customising](docs/customizing.md): extend or add roles, gates and pools, upgrade the kit
 - [The dashboard](docs/dashboard.md): run it locally, report from other machines, put it on your website
+- [Hooks and agent teams](docs/hooks-and-agent-teams.md): automatic reports, Claude Code agent teams, `doctor`
+- [Windows](docs/windows.md): what runs on Node alone, and what needs Git Bash or WSL
 - [Product plan](docs/product/): the visual team builder (PRD, architecture, deployment, delivery plan)
 
 ## Where this is going

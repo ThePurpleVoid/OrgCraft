@@ -439,7 +439,7 @@
     let s = '<div class="atd-table-wrap"><table class="atd-table"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Task</th><th>To</th><th>Links</th></tr></thead><tbody>';
     for (const r of rows) {
       s += `<tr><td class="nowrap">${esc(when(r.at))}</td><td><button type="button" class="link" data-pick="${esc(key(r.role, r.instance))}"><b>${esc(T.nameOf(r.role))}</b>${r.instance ? ` #${esc(r.instance)}` : ''}</button></td>`
-        + `<td>${esc(KIND_LABEL[r.kind] || r.kind)}${r.status ? `<span class="small muted"> · ${esc(STATUS_LABEL[r.status])}</span>` : ''}</td>`
+        + `<td>${esc(KIND_LABEL[r.kind] || r.kind)}${r.status ? `<span class="small muted"> · ${esc(STATUS_LABEL[r.status])}</span>` : ''}${r.source === 'hook' ? '<span class="small muted" title="Reported by a Claude Code hook, not by the role"> · auto</span>' : ''}</td>`
         + `<td>${esc(r.task || '')}${r.detail ? `<div class="small muted one-line" style="max-width:320px">${esc(r.detail)}</div>` : ''}</td>`
         + `<td>${r.to_role ? pickLink(T, r.to_role) : ''}</td><td>${links(repo, r)}</td></tr>`;
     }
