@@ -3,6 +3,8 @@
 ## Unreleased
 
 - This repository's own team is on 0.4.0 with the reporting hooks on (`.claude/settings.json`).
+- **The team model** (`packages/team-model`, phase 1 of the [Studio plan](docs/product/delivery-plan.md)). A whole team as one JSON document, a TeamSpec ([schema](packages/team-model/schema/team-spec.v1.json)). `agent-team import` prints the project layer as a TeamSpec. `agent-team compile <spec.json>` writes one back to `.agent-team/` and syncs. Switching roles on and off produces the smallest `include`/`exclude`, and editing a kit role produces an `.extend.md`. The round trip is tested on every preset (with and without subagents), the native-mobile example and this repository's own team, and it builds byte-identical generated files. The module is pure, so the Studio editor can run it in a browser.
+- `bin/agent-team.mjs` now uses the team model's implementation of the extension and reporting-line rules, so there is only one. Existing teams see no change on sync.
 
 ## 0.4.0
 

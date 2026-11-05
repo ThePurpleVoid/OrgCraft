@@ -7,6 +7,8 @@
 //   agent-team sync          regenerate docs/team/, scripts/agent-team/ (and .claude/agents/) from .agent-team/
 //   agent-team check         exit 1 when a generated file is missing, edited by hand or out of date
 //   agent-team roles         list the roles the project layer resolves to, and where each comes from
+//   agent-team import        print the project layer as a TeamSpec (JSON; see packages/team-model)
+//   agent-team compile <spec.json>   write a TeamSpec back to .agent-team/, then sync
 //   agent-team dashboard     open the live team dashboard (--port, --demo; "dashboard export --out dir" for a website)
 //   agent-team doctor        smoke-test this setup: tools, sync, roster, hooks and the report pipeline (--ping posts a note)
 //   agent-team version
@@ -22,6 +24,8 @@ import { parseBrief } from '../tools/briefs.mjs';
 import { check as checkRoster, tree } from '../tools/roster.mjs';
 import { DEFAULT_MODELS, toSubagent } from '../tools/export-subagents.mjs';
 import { graphFrom } from '../tools/roster-graph.mjs';
+import { compileLayer, extendBriefText, fitToTeam, importLayer } from '../packages/team-model/index.mjs';
+import { loadKit, readLayer, writeLayer } from '../packages/team-model/node.mjs';
 
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8'));
@@ -73,23 +77,6 @@ export function presetRoles(name) {
 
 const kitRoleSlugs = () => readdirSync(join(KIT, 'team/roles')).filter((f) => f.endsWith('.md') && !f.startsWith('_')).map((f) => f.slice(0, -3)).sort();
 
-/** Splits a brief into its header (everything before the first "## ") and its sections, in order. */
-function splitBrief(md) {
-  const lines = md.replace(/\s+$/, '').split('\n');
-  const header = [];
-  const sections = [];
-  for (const l of lines) {
-    if (l.startsWith('## ')) sections.push({ heading: l, body: [] });
-    else if (sections.length) sections.at(-1).body.push(l);
-    else header.push(l);
-  }
-  return { header, sections };
-}
-const joinBrief = ({ header, sections }) =>
-  [...header, ...sections.flatMap((s) => [s.heading, ...trimBlank(s.body), ''])].join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
-const trimBlank = (a) => { const b = [...a]; while (b.length && !b[0].trim()) b.shift(); while (b.length && !b.at(-1).trim()) b.pop(); return b; };
-const key = (heading) => heading.replace(/^##\s+/, '').replace(/\(.*?\)/g, '').trim().toLowerCase();
-
 /**
  * Applies an extension to a brief:
  *   a "# Title" line renames the role;
@@ -98,34 +85,7 @@ const key = (heading) => heading.replace(/^##\s+/, '').replace(/\(.*?\)/g, '').t
  *   "## Section (replace)" replaces that section's body.
  */
 export function extendBrief(base, ext) {
-  const b = splitBrief(base);
-  const e = splitBrief(ext);
-  for (const line of e.header) {
-    if (/^#\s+/.test(line)) { // a title line renames the role
-      const i = b.header.findIndex((l) => /^#\s+/.test(l));
-      if (i >= 0) b.header[i] = line; else b.header.unshift(line);
-      continue;
-    }
-    const m = /^\*\*([^*]+):\*\*/.exec(line);
-    if (!m) continue;
-    const i = b.header.findIndex((l) => l.startsWith(`**${m[1]}:**`));
-    if (i >= 0) b.header[i] = line;
-    else {
-      const last = b.header.map((l, j) => (l.startsWith('**') ? j : -1)).filter((j) => j >= 0).at(-1) ?? 0;
-      b.header.splice(last + 1, 0, line);
-    }
-  }
-  for (const s of e.sections) {
-    const replace = /\(replace\)\s*$/i.test(s.heading);
-    const target = b.sections.find((x) => key(x.heading) === key(s.heading));
-    if (target) target.body = replace ? trimBlank(s.body) : [...trimBlank(target.body), ...trimBlank(s.body)];
-    else {
-      const footer = b.sections.findIndex((x) => key(x.heading).startsWith('every thread'));
-      const add = { heading: s.heading.replace(/\s*\(replace\)\s*$/i, ''), body: trimBlank(s.body) };
-      b.sections.splice(footer >= 0 ? footer : b.sections.length, 0, add);
-    }
-  }
-  return joinBrief(b);
+  return extendBriefText(base, ext);
 }
 
 /** Resolves the roles: the preset plus include, minus exclude, plus the project's own roles; then overrides and extensions. */
@@ -157,21 +117,7 @@ export function resolveRoles(root, project) {
   return { roles, warnings };
 }
 
-export function fitToTeam(md, installed) {
-  const brief = splitBrief(md);
-  const top = installed.has('chief-of-staff') ? 'chief-of-staff' : null;
-  brief.header = brief.header.map((l) => {
-    const m = /^\*\*Reports to:\*\*\s*(\S+)/.exec(l);
-    return m && m[1] !== 'owner' && !installed.has(m[1]) && top ? `**Reports to:** ${top} (${m[1]} is not part of this team)` : l;
-  });
-  const dr = brief.sections.find((x) => key(x.heading) === 'direct reports');
-  if (dr) {
-    const kept = dr.body.join(' ').split(',').map((x) => x.trim()).filter((x) => installed.has(x));
-    if (kept.length) dr.body = [kept.join(', ')];
-    else brief.sections.splice(brief.sections.indexOf(dr), 1);
-  }
-  return joinBrief(brief);
-}
+export { fitToTeam };
 
 const fill = (text, values) => text.replace(/\{\{([A-Z0-9_]+)\}\}/g, (m, k) => (k in values ? String(values[k]) : m));
 
@@ -444,6 +390,20 @@ function listRoles(root) {
   return 0;
 }
 
+function importSpec(root) {
+  if (!existsSync(join(root, LAYER, 'team.json'))) throw new UsageError(`No ${LAYER}/team.json here. Run "agent-team init" first.`);
+  console.log(JSON.stringify(importLayer(readLayer(root), loadKit(KIT)), null, 2));
+  return 0;
+}
+
+function compileSpec(root, file) {
+  if (!file) throw new UsageError('compile needs a TeamSpec file: agent-team compile team-spec.json');
+  const spec = JSON.parse(read(file));
+  if (spec.schema !== 'agent-team/team-spec@1') throw new UsageError(`${file} is not a TeamSpec (schema "${spec.schema}")`);
+  for (const line of writeLayer(root, compileLayer(spec, loadKit(KIT)))) console.log(line);
+  return sync(root);
+}
+
 function parseArgs(argv) {
   const opts = { preset: 'engineering' };
   const names = { '--preset': 'preset', '--project': 'project', '--owner': 'owner', '--timezone': 'timezone', '--digest-time': 'digestTime', '--kit': 'kit', '--dir': 'dir' };
@@ -452,6 +412,7 @@ function parseArgs(argv) {
     if (a in names) { if (argv[i + 1] === undefined) throw new UsageError(`${a} needs a value`); opts[names[a]] = argv[++i]; }
     else if (a === '--subagents') opts.subagents = true;
     else if (a === '--force') opts.force = true;
+    else if (!a.startsWith('-') && opts.file === undefined) opts.file = a;
     else throw new UsageError(`unknown option ${a}`);
   }
   return opts;
@@ -470,11 +431,13 @@ export function main(argv) {
       case 'sync': return sync(root);
       case 'check': return check(root);
       case 'roles': return listRoles(root);
+      case 'import': return importSpec(root);
+      case 'compile': return compileSpec(root, opts.file);
       case 'version': case '--version': console.log(VERSION); return 0;
       case 'help': case '--help': case '-h':
         console.log(read(fileURLToPath(import.meta.url)).split('\n').slice(1).filter((l, i, a) => a.slice(0, i + 1).every((x) => x.startsWith('//'))).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
         return 0;
-      default: throw new UsageError(`unknown command "${cmd}" (init, sync, check, roles, dashboard, doctor, version)`);
+      default: throw new UsageError(`unknown command "${cmd}" (init, sync, check, roles, import, compile, dashboard, doctor, version)`);
     }
   } catch (e) {
     if (e instanceof UsageError) { console.error(`agent-team: ${e.message}`); return 64; }

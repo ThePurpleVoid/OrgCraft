@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PurpleGiragge/Agent-Team-Kit/packages/team-model/schema/team-spec.v1.json",
+  "title": "Agent Team Kit TeamSpec, version 1",
+  "description": "A team as one document. It compiles 1:1 to a project layer (.agent-team/); see packages/team-model/index.mjs.",
+  "type": "object",
+  "required": ["schema", "preset", "roles"],
+  "properties": {
+    "schema": { "const": "agent-team/team-spec@1" },
+    "kit": { "type": "string", "description": "The pinned kit, as team.json's \"kit\" (an npx spec such as github:PurpleGiragge/Agent-Team-Kit#v0.4.0)." },
+    "preset": { "type": "string", "description": "The preset roles are switched on and off against." },
+    "values": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Placeholder values: PROJECT_NAME, OWNER, TIMEZONE, DIGEST_TIME and the project's own." },
+    "roles": {
+      "type": "object",
+      "description": "Every role the team knows about: the whole kit library plus the project's own roles.",
+      "additionalProperties": { "$ref": "#/$defs/role" }
+    },
+    "rules": {
+      "type": "object",
+      "properties": {
+        "protocols": { "type": "string", "description": "protocols.extend.md" },
+        "instructions": { "type": "string", "description": "instructions.extend.md" }
+      },
+      "additionalProperties": false
+    },
+    "options": { "type": "object", "description": "Every other team.json key (subagents, agentTeams, hooks, models, dashboard, ...), kept as it is." },
+    "layout": {
+      "type": "object",
+      "description": "Editor and ordering hints that do not change the team.",
+      "properties": {
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "role": {
+      "type": "object",
+      "required": ["source", "enabled"],
+      "properties": {
+        "source": { "enum": ["kit", "project", "project-replaces-kit", "missing"] },
+        "enabled": { "type": "boolean" },
+        "brief": { "type": "string", "description": "The full brief of a project role (roles/<slug>.md)." },
+        "extension": { "$ref": "#/$defs/extension" }
+      },
+      "additionalProperties": false
+    },
+    "extension": {
+      "type": "object",
+      "description": "roles/<slug>.extend.md as data.",
+      "properties": {
+        "title": { "type": "string" },
+        "fields": { "type": "array", "items": { "type": "object", "required": ["name", "value"], "properties": { "name": { "type": "string" }, "value": { "type": "string" } }, "additionalProperties": false } },
+        "sections": { "type": "array", "items": { "type": "object", "required": ["name", "mode", "text"], "properties": { "name": { "type": "string" }, "mode": { "enum": ["append", "replace"] }, "text": { "type": "string" } }, "additionalProperties": false } }
+      },
+      "additionalProperties": false
+    }
+  }
+}

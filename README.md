@@ -121,6 +121,8 @@ tests/                          tests for the CLI, scripts and tools, smoke scen
 ## Every thread, every task   the shared footer: memory, protocols, board reports
 ```
 
+`agent-team import` prints the whole team as one JSON document (a TeamSpec), and `agent-team compile <spec.json>` writes one back. The upcoming visual editor builds on this ([packages/team-model](packages/team-model)).
+
 `node scripts/agent-team/roster.mjs --check` validates every brief (tiers, reporting lines, loops, direct reports) and `--tree` prints the org.
 
 ## The board and the live dashboard

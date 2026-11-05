@@ -13,6 +13,7 @@
   },
   "files": [
     "bin/",
+    "packages/team-model/",
     "presets/",
     "scripts/*.sh",
     "team/",
