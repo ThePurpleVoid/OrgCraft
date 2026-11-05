@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+Rules a production team learned the hard way, now the default. Existing teams see these changes on their next sync:
+
+- Briefs (every role's shared footer): the first command of every task, and of every resume, is a `status working` board report, before reading anything; the heartbeat and `waiting` switch are restated where each thread reads them; a role never asks the owner anything in its own thread, but sends a BLOCKED with a recommendation to the chief of staff and keeps working on it unless the step cannot be undone. The chief of staff's footer says it is the one door instead.
+- Protocols: **chain of command**. The chief of staff routes every request to the lane's executive, never to an individual contributor; the executive's thread opens as soon as its lane has work, scopes, hands off, reviews before merge, reports its own status and logs decisions in `docs/team/lanes/<executive>.md`. Replaces "an executive is active when any role in its lane is active" and "or to the role directly when the lane has no active executive". The chief of staff still covers lanes whose executive is not installed.
+- Protocols: **when the owner steps in**. Engineers merge and deploy; the owner is asked only for irreversible data changes, secrets, money and anything outside the team's reach. Automatic deploys never run destructive migrations.
+- Protocols: **architect first**. The list of tasks that need an ADR before any engineer starts (new tables or subsystems, cross-client contracts, irreversible migrations, tenancy/auth/RLS design, infrastructure, more than about a week).
+- Protocols: **report on start** spelled out; an hourly stuck-role check; the chief of staff's own card, with the "board reporter" thread for a coordinator that cannot run commands.
+- Project instructions: the same rules in the standing rules and in "How work moves".
+
 ## 0.2.3
 
 - Tests never post to a real board: `tests/scripts.test.sh` and `npm test` clear `TEAM_REPORT_URL`, `TEAM_REPORT_TOKEN`, `TEAM_BOARD_URL`, `TEAM_READ_TOKEN` and `DASHBOARD_TOKEN` first. Before, running the tests from a thread that reports to a hosted board posted the example reports (backend-dev "Invoices API", PR 57) to that board as if they were real.

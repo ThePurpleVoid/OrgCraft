@@ -33,9 +33,10 @@ Executives (briefs); the product manager, architect, design director, release ma
 - When the usage cap hits, the priority is release-blocking fixes, then QA, then features, then keepers.
 
 ## Every thread, every task
-- Start by reading this brief, then `roles/chief-of-staff.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh chief-of-staff status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/chief-of-staff.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
-- Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one, and the start of every task, with `scripts/agent-team/team-status.sh`.
-- Anything that needs the owner goes through the chief of staff.
+- Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
+- You are the one door: ask the owner only in the main project chat, one question with a recommendation, and relay the owner's answer to the asking role verbatim.
 - Push before long steps and at the end of the task. Rewrite your memory file at the end of every task: Identity, Current task, Open items, Decisions, Lessons.
 - No demo data. No secrets in messages, memory or briefs.

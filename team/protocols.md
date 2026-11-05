@@ -8,10 +8,38 @@ The owner talks to one role: the **chief of staff**. It opens an issue for every
 
 The owner's message travels down the tree **verbatim**, quoted, with its issue id. Every brief starts with that quote. Interpretation goes underneath, labelled as the writer's. Nobody paraphrases the owner on the way down.
 
+**No role asks the owner directly.** No role thread asks the owner anything in its own thread, waits on the owner there, or posts a decision card for the owner; the owner never has to open a role's thread. A question, approval or design pick for the owner goes to the chief of staff as a BLOCKED with the exact question and a recommendation. The chief of staff asks in the main project chat and relays the owner's words back verbatim. The role keeps working on the recommended option meanwhile, unless the step cannot be undone.
+
+## Chain of command
+
+The chief of staff routes every request to the executive whose lane owns it (the CTO for engineering, the CPO for product and design, and so on), never straight to an individual contributor. The executive's thread opens the moment its lane has work. The executive quotes the owner verbatim, scopes the work, hands it to the right role with a HANDOFF and acceptance criteria, reviews the result before merge, reports its own status to the board like every role, and logs each decision in its lane log (`docs/team/lanes/<executive>.md`). Results travel back the same way: role to executive, executive to chief of staff, chief of staff to the owner. When a lane's executive is not installed (a small preset), the chief of staff covers that lane.
+
+## When the owner steps in
+
+The team runs without the owner. Engineers merge their own green PRs and deploy them; when the project's pipeline deploys on merge, merging is the deploy. The owner is asked only for:
+
+- data changes that cannot be undone (dropping, truncating, deleting, retyping or renaming existing data), and any other step that cannot be undone;
+- adding or changing a secret;
+- money;
+- anything outside the team's reach.
+
+Those go to the chief of staff as BLOCKED. An automatic deploy never runs a destructive migration; it stops and waits for a manual run after the owner's OK. The CTO decides what counts as destructive when it is unclear.
+
 ## Fast lane and full lane
 
-- **Fast**: a bug, a copy fix, a tweak to an existing screen. No schema change, no money, no personal data. It goes straight to the owning dev.
+- **Fast**: a bug, a copy fix, a tweak to an existing screen. No schema change, no money, no personal data. The executive hands it straight to the owning dev.
 - **Full**: everything else. Product manager story, architect spec with a mock, design fan-out (3 to 5 style threads), a design note with the copy table, a design critic review, then build.
+
+**Architect first.** The architect writes the design (an ADR in `docs/team/lanes/`) before any engineer starts when a task:
+
+- adds a new table, a new family of server functions, a new queue or job, or a new subsystem;
+- changes a sync protocol, a shared library's public API, or a contract that more than one client or service reads;
+- includes a migration that cannot be cleanly reverted (dropping or rewriting columns, data backfills, changing a key or a constraint on existing rows);
+- touches tenancy, auth or row-level security design rather than one policy;
+- changes environments or infrastructure (a production split, backups and point-in-time recovery, the deploy pipeline, the secrets layout);
+- would cost more than about a week of engineering, or the CTO is unsure.
+
+Everything else (a status value, a column on an existing table, a view or endpoint tweak, a bug fix inside one subsystem) the CTO scopes and hands straight to the engineer, and the hand-off says which path was chosen.
 
 ## Message shapes
 
@@ -28,7 +56,7 @@ A SIGNOFF without screenshot or log paths is invalid. Three BUG rounds between o
 
 ## Reporting to the team board
 
-Every task starts with a status report, and every HANDOFF, BUG, SIGNOFF or BLOCKED is reported with the same fields:
+**Report on start.** The first command of every task, before any reading or building, is a `status working` report with the task's name (and issue, when there is one). A task that changes shape gets a fresh `status working` with its new name, and a thread that resumes from its memory file reports again on resume. Work with no start report on the board has not started. After that, every HANDOFF, BUG, SIGNOFF or BLOCKED is reported with the same fields:
 
 ```sh
 scripts/agent-team/team-status.sh backend-dev status working --task "Invoices API" --issue 42
@@ -40,7 +68,9 @@ scripts/agent-team/team-status.sh code-reviewer#57 status done
 
 `scripts/agent-team/team-board.sh` shows where every role stands. The chief of staff reads the board for the daily digest instead of asking the roles.
 
-**Heartbeat.** A thread whose status is `working` reports again at least every 15 minutes, even when nothing has changed (`team-status.sh <role> heartbeat`, or a fresh `status working` when the task moved on). The moment it waits on CI, a review, another role or an answer, it reports `waiting` and names what it waits on (`--to <role>` or `--detail "CI on PR 57"`), and reports `working` again when it resumes. A thread that cannot keep this up (a long build, a long test run) says so first: `status waiting --detail "build, about 25 min"`. The dashboard shows a working thread silent for longer than `dashboard.staleMinutes.working` (and a waiting, in-review or blocked one silent for longer than its own limit) as **gone quiet**, with how long it has been silent, and the chief of staff nudges it.
+**Heartbeat.** A thread whose status is `working` reports again at least every 15 minutes, even when nothing has changed (`team-status.sh <role> heartbeat`, or a fresh `status working` when the task moved on). The moment it waits on CI, a review, another role or an answer, it reports `waiting` and names what it waits on (`--to <role>` or `--detail "CI on PR 57"`), and reports `working` again when it resumes. A thread that cannot keep this up (a long build, a long test run) says so first: `status waiting --detail "build, about 25 min"`. The dashboard shows a working thread silent for longer than `dashboard.staleMinutes.working` (and a waiting, in-review or blocked one silent for longer than its own limit) as **gone quiet**, with how long it has been silent, and the chief of staff nudges it. A scheduled check (the COO's when that role is installed, otherwise the chief of staff's) reads the board every hour and lists the quiet roles with their last task, so the nudges do not depend on someone looking.
+
+**The chief of staff's own card.** The chief of staff reports its own status (working, waiting or idle, with the task) on every owner request it handles, so the board shows the door as well as the rooms. When the chief of staff cannot run commands itself (for example, a coordinator in a chat app with no shell), a long-lived "board reporter" thread does it: the chief of staff sends it a one-line status and it runs `team-status.sh chief-of-staff ...`. Leave the chief of staff out of the working check when a digest or reporter posts for it on a schedule.
 
 ## Pull requests
 
@@ -60,7 +90,7 @@ Each role has a memory file `roles/<slug>.md` in project memory with five sectio
 
 ## Dormant roles
 
-A brief with `Status: dormant` exists on paper only. The chief of staff or the lane's executive opens it the moment a request needs that role, without asking the owner first, and says which role was opened and why in the digest. An executive is active when any role in its lane is active; until then the chief of staff covers the lane.
+A brief with `Status: dormant` exists on paper only. The chief of staff or the lane's executive opens it the moment a request needs that role, without asking the owner first, and says which role was opened and why in the digest. An executive opens as soon as its lane has work (see the chain of command); the chief of staff covers only lanes whose executive is not installed.
 
 ## Things that never happen
 

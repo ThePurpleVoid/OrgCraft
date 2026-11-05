@@ -12,7 +12,7 @@ The owner (you) is the CEO and talks to one role, the **chief of staff**. Under 
 | Customer | CCO | customer success lead, support lead, community lead |
 | Corporate | CFO, general counsel, COO | finance lead, legal and privacy owner, store and compliance owner, strategy lead, people and team ops lead |
 
-An executive is active when any role in its lane is active; until then the chief of staff covers the lane. Business roles start **dormant**: the brief exists, but nobody opens the thread until a request needs it.
+The chief of staff routes every request to the lane's executive, whose thread opens the moment its lane has work; the chief of staff covers only a lane whose executive is not installed. Business roles start **dormant**: the brief exists, but nobody opens the thread until a request needs it.
 
 **Pool roles** (code reviewer, style thread) are short-lived: one thread per PR or per design direction, reported as `code-reviewer#57` or `style-thread#calm`.
 
@@ -24,7 +24,7 @@ Every hop in a chain of agents loses a little of what you meant. So the owner's 
 
 1. **You → chief of staff.** It opens an issue and decides the lane.
 2. **Fast or full.**
-   - *Fast* (a bug, a copy fix, a tweak; no schema, money or personal data): straight to the owning dev.
+   - *Fast* (a bug, a copy fix, a tweak; no schema, money or personal data): the executive hands it straight to the owning dev.
    - *Full* (everything else): the product manager writes a story with acceptance checks, the architect writes a contract-first spec with a mock, the design director fans out 3 to 5 style threads, you and the CTO pick, the design note ships with the UX writer's copy table, and the design critic reviews it.
 3. **Build.** Devs build against the spec's mock in parallel, each in its own worktree, one branch and PR per issue. Before review they paste `merge-gate.sh` output into the PR.
 4. **Check, in parallel.** A HANDOFF goes to QA, a code reviewer thread is spawned, the security reviewer reads anything touching the backend, auth or money, and the design critic judges QA's screenshots against the design note.

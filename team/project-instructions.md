@@ -15,7 +15,7 @@ The org tree is data: every brief in `docs/team/roles/*.md` has a `Reports to` l
 
 {{ORG_TREE}}
 
-Activation: an executive is active when any role in its lane is active; until then the chief of staff covers that lane. Dormant roles (`Status: dormant`) are opened by the chief of staff or the lane's executive the moment a request needs them, without asking the owner; the digest says which and why. Each role's brief is `docs/team/roles/<role>.md`; its state is `roles/<role>.md` in project memory. A role thread is long-lived: resolve it after each task and reopen it with the same title and the first message "Resume from roles/<role>.md".
+Activation: an executive's thread opens the moment its lane has work, and every request goes through it; the chief of staff covers only a lane whose executive is not installed. Dormant roles (`Status: dormant`) are opened by the chief of staff or the lane's executive the moment a request needs them, without asking the owner; the digest says which and why. Each role's brief is `docs/team/roles/<role>.md`; its state is `roles/<role>.md` in project memory. A role thread is long-lived: resolve it after each task and reopen it with the same title and the first message "Resume from roles/<role>.md".
 
 Model tiers (each brief names one; pick the model without asking):
 - **deep**: the strongest model at high effort. Chief of staff, CTO, architect, security reviewer, strategy lead, high-risk reviews.
@@ -24,7 +24,7 @@ Model tiers (each brief names one; pick the model without asking):
 - **light**: the smallest model. Triage and reindexing.
 
 ## How work moves
-1. Owner to chief of staff. It opens an issue, tags the lane and forwards the owner's words verbatim to the lane's executive (or to the role directly when the lane has no active executive): fast (bug, copy, tweak; straight to the dev) or full (new screen, schema, money, personal data; PM story, architect spec, design fan-out, critic review).
+1. Owner to chief of staff. It opens an issue, tags the lane and forwards the owner's words verbatim to the lane's executive, never straight to an individual contributor; the executive scopes it, hands it off, reviews before merge and logs the decision in `docs/team/lanes/<executive>.md`. The work is fast (bug, copy, tweak; the executive hands it straight to the dev) or full (new screen, schema, money, personal data; PM story, architect spec, design fan-out, critic review).
 2. Devs build against the spec's mock; shared and backend PRs merge as they pass.
 3. Every PR: merge-gate output pasted in, HANDOFF to QA, a reviewer spawned, security review for backend, auth or money. QA, reviewer and design critic run in parallel.
 4. A PR merges when it has reviewer approval, a SIGNOFF with evidence, a green gate and no conflicts. The release manager resolves conflicts and asks QA to re-walk touched screens.
@@ -37,6 +37,9 @@ Model tiers (each brief names one; pick the model without asking):
 - No cap on threads: wake the roles the current stage needs and nothing else. Hardware is capped with `scripts/agent-team/with-lock.sh`. When the usage cap hits, the priority is release-blocking fixes, QA, features, keepers.
 - Push branches before long steps and at the end of every task; sync with main daily.
 - No demo or sample data. Secrets never appear in chat, memory or briefs.
+- Role threads never ask the owner anything in their own thread; questions and approvals reach the owner only through the chief of staff, in the main project chat.
+- Every role's first command in a task is a `status working` board report; a working role heartbeats every 15 minutes and switches to `waiting` (naming what it waits on) the moment it waits.
+- The owner steps in only for irreversible data changes, secrets, money and anything outside the team's reach; engineers merge and deploy the rest themselves.
 - Resolve merge conflicts after opening a PR and keep it green. The team merges its own PRs once they carry approval and SIGNOFF; never ask the owner to merge.
 - Nothing leaves the company (email, DM, post, filing, payment, contract) unless the owner sends it.
 

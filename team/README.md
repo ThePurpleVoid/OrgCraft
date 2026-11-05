@@ -22,7 +22,7 @@ The team comes from [Agent Team Kit](https://github.com/PurpleGiragge/Agent-Team
 
 | File | What it is |
 | --- | --- |
-| `protocols.md` | The shared rules: one door, fast and full lanes, message shapes, board reports, PR flow, memory files, dormant roles, changing the team. |
+| `protocols.md` | The shared rules: one door, chain of command, when the owner steps in, fast and full lanes (and when the architect goes first), message shapes, board reports and heartbeat, PR flow, memory files, dormant roles, changing the team. |
 | `ownership.md` | Which role writes which path. One writer per path. |
 | `project-instructions.md` | The text that goes into the Claude project's instructions (or `CLAUDE.md`). |
 | `roles/<role>.md` | The kickoff brief for each role. A thread starts by reading its brief, then its memory file. |
