@@ -53,7 +53,7 @@ deploy/                    Dockerfiles, Compose, Helm
 ```jsonc
 {
   "schema": "agent-team/team-spec@1",
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.4.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.5.0",
   "base": { "preset": "engineering" },             // what the roles are diffed against
   "values": { "PROJECT_NAME": "My App", "OWNER": "Sam", "TIMEZONE": "UTC", "DIGEST_TIME": "08:00" },
   "roles": {
@@ -94,10 +94,10 @@ deploy/                    Dockerfiles, Compose, Helm
 | `reporting` | `**Reports to:**` in the role's extension, and `## Direct reports (replace)` on both managers | today |
 | `rules.protocols`, `rules.instructions` | `protocols.extend.md`, `instructions.extend.md` | today |
 | `runtime.adapters` | `team.json` `subagents`, plus `agentTeams` (built-in agent teams: `.claude/agents/`, the settings flag and `docs/team/agent-teams.md` with the lead's spawn prompts) | subagents today; agent teams in kit 0.4 |
-| `ownership` | `.agent-team/ownership.json` → sync writes `docs/team/ownership.md` | **new in kit 0.4.** Without the JSON file, today's hand-written `ownership.md` stays and the Studio parses and writes its table |
-| `gates`, `pools` | `.agent-team/gates.json` → sync writes `scripts/agent-team/gates.generated.sh`, sourced after `config.sh` | **new in kit 0.4.** `config.sh` stays for anything bash-shaped; the Studio shows its gates read-only |
-| `resources`, `bindings` | `.agent-team/resources.json` → sync adds a "Systems" section to the project instructions and each bound role's Tools section; secret *names* only | **new in kit 0.4** |
-| `layout` | `.agent-team/studio.json` (ignored by sync) | new, Studio only |
+| `ownership` | `.agent-team/ownership.json` → sync writes `docs/team/ownership.md` | **kit 0.5.** Without the JSON file, today's hand-written `ownership.md` stays and the Studio parses and writes its table |
+| `gates`, `pools` | `.agent-team/gates.json` → sync writes `scripts/agent-team/gates.sh`, sourced after `config.sh` | **kit 0.5.** `config.sh` stays for anything bash-shaped; the Studio shows its gates read-only |
+| `resources`, `bindings` | `.agent-team/resources.json` → sync adds a "Systems" section to the project instructions and a "Systems" section to each bound role's brief; secret *names* only | **kit 0.5** |
+| `layout` | `.agent-team/studio.json` (ignored by sync) | kit 0.5 (reserved; sync ignores it) |
 
 The new files are optional: a layer without them behaves exactly as today. This keeps every existing team, CoachSpotter included, valid without changes.
 
@@ -105,7 +105,7 @@ The new files are optional: a layer without them behaves exactly as today. This 
 
 `packages/team-model` exposes four functions and nothing else does these jobs:
 
-- `importLayer(files) → TeamSpec`: reuses the kit's `loadProject`, `resolveRoles` and `extendBrief` (moved here from `bin/agent-team.mjs` in kit 0.4; the CLI imports them back).
+- `importLayer(files) → TeamSpec`: reuses the kit's `loadProject`, `resolveRoles` and `extendBrief` (in `packages/team-model` since kit 0.5; the CLI uses them).
 - `validate(spec) → issues[]`: the roster checks of `tools/roster.mjs` plus ownership coverage, binding sanity (a deploy binding needs a gate), and secret scanning of free text.
 - `compile(spec) → files`: writes the smallest `.agent-team/` that expresses the spec (extensions over replacements, `include`/`exclude` over a preset change).
 - `build(files, kitVersion) → generated files`: the kit's sync, run in memory, for the diff preview.

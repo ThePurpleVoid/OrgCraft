@@ -9,12 +9,13 @@
 //   agent-team roles         list the roles the project layer resolves to, and where each comes from
 //   agent-team import        print the project layer as a TeamSpec (JSON; see packages/team-model)
 //   agent-team compile <spec.json>   write a TeamSpec back to .agent-team/, then sync
+//   agent-team validate      check the team: reporting lines, tiers, ownership, systems and bindings, secrets
 //   agent-team dashboard     open the live team dashboard (--port, --demo; "dashboard export --out dir" for a website)
 //   agent-team doctor        smoke-test this setup: tools, sync, roster, hooks and the report pipeline (--ping posts a note)
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.4.0 init --preset engineering --project "My App"
+//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.5.0 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -24,7 +25,7 @@ import { parseBrief } from '../tools/briefs.mjs';
 import { check as checkRoster, tree } from '../tools/roster.mjs';
 import { DEFAULT_MODELS, toSubagent } from '../tools/export-subagents.mjs';
 import { graphFrom } from '../tools/roster-graph.mjs';
-import { compileLayer, extendBriefText, fitToTeam, importLayer } from '../packages/team-model/index.mjs';
+import { applyBindings, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
 import { loadKit, readLayer, writeLayer } from '../packages/team-model/node.mjs';
 
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -131,14 +132,24 @@ function withExtension(base, root, file, heading) {
 export function build(root) {
   const project = loadProject(root);
   const values = { PROJECT_NAME: 'the product', OWNER: 'the owner', TIMEZONE: 'local time', DIGEST_TIME: '08:00', ...project.values };
-  const { roles, warnings } = resolveRoles(root, project);
+  const data = (f) => { const p = join(root, LAYER, f); return existsSync(p) ? JSON.parse(read(p)) : undefined; };
+  const ownershipData = data('ownership.json');
+  const gatesData = data('gates.json');
+  const resources = data('resources.json');
+  const resolved = resolveRoles(root, project);
+  const roles = applyBindings(resolved.roles, resources);
+  const { warnings } = resolved;
   values.ORG_TREE = '```\n' + tree(roles.map((r) => parseBrief(r.slug, fill(r.md, values)))) + '\n```';
   const out = new Map();
   const md = (path, text) => out.set(path, fill(text, values).trimEnd() + '\n' + mdMarker());
 
   md(`${DOCS}/README.md`, read(join(KIT, 'team/README.md')));
   md(`${DOCS}/protocols.md`, withExtension(read(join(KIT, 'team/protocols.md')), root, 'protocols.extend.md', `## ${values.PROJECT_NAME} rules`));
-  md(`${DOCS}/project-instructions.md`, withExtension(read(join(KIT, 'team/project-instructions.md')), root, 'instructions.extend.md', `## ${values.PROJECT_NAME} rules`));
+  const systems = resources ? renderSystems(resources) : '';
+  md(`${DOCS}/project-instructions.md`, withExtension(read(join(KIT, 'team/project-instructions.md')), root, 'instructions.extend.md', `## ${values.PROJECT_NAME} rules`) + (systems ? `\n${systems}` : ''));
+  // With .agent-team/ownership.json, ownership.md is generated from it; without, it stays the repository's own file.
+  if (ownershipData) md(`${DOCS}/ownership.md`, renderOwnership(ownershipData, roles));
+  if (gatesData) { const g = renderGates(gatesData).split('\n'); g.splice(1, 0, shMarker()); out.set(`${SCRIPTS}/gates.sh`, g.join('\n')); }
   md(`${DOCS}/role-template.md`, read(join(KIT, 'team/roles/_template.md')));
   for (const r of roles) md(`${DOCS}/roles/${r.slug}.md`, r.md);
 
@@ -164,7 +175,8 @@ export function build(root) {
     const dir = project.dashboard.export.replace(/\/+$/, '');
     if (dir.startsWith('/') || dir.split('/').includes('..')) throw new UsageError('dashboard.export must be a folder inside the repository');
     const ownership = join(root, DOCS, 'ownership.md');
-    const graph = graphFrom(roles.map((r) => parseBrief(r.slug, fill(r.md, values))), existsSync(ownership) ? read(ownership) : '');
+    const ownershipText = out.get(`${DOCS}/ownership.md`) ?? (existsSync(ownership) ? read(ownership) : '');
+    const graph = graphFrom(roles.map((r) => parseBrief(r.slug, fill(r.md, values))), ownershipText);
     const roster = { project: values.PROJECT_NAME, repo: project.dashboard.repo ?? '', hosted: true, briefsPath: `${DOCS}/roles`,
       ...(project.dashboard.staleMinutes ? { staleMinutes: project.dashboard.staleMinutes } : {}), ...graph };
     out.set(`${dir}/roster.json`, JSON.stringify(roster, null, 1) + '\n');
@@ -396,6 +408,15 @@ function importSpec(root) {
   return 0;
 }
 
+function validateLayer(root) {
+  if (!existsSync(join(root, LAYER, 'team.json'))) throw new UsageError(`No ${LAYER}/team.json here. Run "agent-team init" first.`);
+  const issues = validateSpec(importLayer(readLayer(root), loadKit(KIT)), loadKit(KIT));
+  for (const i of issues) console.log(`${i.level}: ${i.where}: ${i.message}`);
+  const errors = issues.filter((i) => i.level === 'error').length;
+  console.log(`${errors} errors, ${issues.length - errors} warnings`);
+  return errors ? 1 : 0;
+}
+
 function compileSpec(root, file) {
   if (!file) throw new UsageError('compile needs a TeamSpec file: agent-team compile team-spec.json');
   const spec = JSON.parse(read(file));
@@ -433,11 +454,12 @@ export function main(argv) {
       case 'roles': return listRoles(root);
       case 'import': return importSpec(root);
       case 'compile': return compileSpec(root, opts.file);
+      case 'validate': return validateLayer(root);
       case 'version': case '--version': console.log(VERSION); return 0;
       case 'help': case '--help': case '-h':
         console.log(read(fileURLToPath(import.meta.url)).split('\n').slice(1).filter((l, i, a) => a.slice(0, i + 1).every((x) => x.startsWith('//'))).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
         return 0;
-      default: throw new UsageError(`unknown command "${cmd}" (init, sync, check, roles, import, compile, dashboard, doctor, version)`);
+      default: throw new UsageError(`unknown command "${cmd}" (init, sync, check, roles, import, compile, validate, dashboard, doctor, version)`);
     }
   } catch (e) {
     if (e instanceof UsageError) { console.error(`agent-team: ${e.message}`); return 64; }

@@ -96,6 +96,7 @@ export function importLayer(files, kit) {
   for (const [k, f] of Object.entries(RULE_FILES)) if (files[f] !== undefined) rules[k] = files[f];
   const options = Object.fromEntries(Object.entries(team).filter(([k]) => !MODELLED.includes(k)));
   const spec = { schema: SCHEMA, preset, values: team.values ?? {}, roles, rules, options };
+  for (const [k, f] of Object.entries(DATA_FILES)) if (files[f] !== undefined) spec[k] = JSON.parse(files[f]);
   if (team.kit !== undefined) spec.kit = team.kit;
   // Remember what the file said about include/exclude, so a spec with no changes compiles back to the same team.json.
   spec.layout = { include: team.include ?? [], exclude: team.exclude ?? [] };
@@ -134,11 +135,12 @@ export function compileLayer(spec, kit) {
     if (!emptyExtension(r.extension)) files[`roles/${slug}.extend.md`] = formatExtension(r.extension);
   }
   for (const [k, f] of Object.entries(RULE_FILES)) if (spec.rules?.[k] !== undefined) files[f] = spec.rules[k];
+  for (const [k, f] of Object.entries(DATA_FILES)) if (spec[k] !== undefined) files[f] = JSON.stringify(spec[k], null, 2) + '\n';
   return files;
 }
 
 /** The paths compileLayer owns: a writer deletes files under these that the new layer no longer has. */
-export const isLayerPath = (p) => p === 'team.json' || Object.values(RULE_FILES).includes(p) || (/^roles\/[^/]+\.md$/.test(p) && !/\/(_|README\.md$)/.test(p));
+export const isLayerPath = (p) => p === 'team.json' || Object.values(RULE_FILES).includes(p) || ['ownership.json', 'gates.json', 'resources.json', 'studio.json'].includes(p) || (/^roles\/[^/]+\.md$/.test(p) && !/\/(_|README\.md$)/.test(p));
 
 // ------------------------------------------------------------------------------------------------ editing helpers
 
@@ -256,5 +258,159 @@ export function resolveSpec(spec, kit) {
   }
   const installed = new Set(roles.map((r) => r.slug));
   for (const r of roles) r.md = fitToTeam(r.md, installed);
-  return { roles, warnings };
+  return { roles: applyBindings(roles, spec.resources), warnings };
+}
+
+// ------------------------------------------------------------------------------------------------ data files (kit 0.5)
+//
+// Three optional files in .agent-team/ hold what used to be hand-written prose or bash, as data the Studio can edit:
+//   ownership.json   { "rows": [{ "path", "writer", "notes" }] }            → sync writes docs/team/ownership.md
+//   gates.json       { "all": [...], "pools": { name: slots }, "targets": { name: [{ "name", "run", "pool" }] } }
+//                                                                           → sync writes scripts/agent-team/gates.sh
+//   resources.json   { "resources": [{ "id", "type", "name", "config", "secrets" }],
+//                      "bindings": [{ "role", "resource", "permission" }] } → a Systems section in the project
+//                                                                             instructions and in each bound role's brief
+// Without them a layer behaves exactly as before.
+
+export const DATA_FILES = { ownership: 'ownership.json', gates: 'gates.json', resources: 'resources.json', canvas: 'studio.json' };
+export const PERMISSIONS = ['read', 'write', 'deploy'];
+
+/** The title a brief gives itself, without a parenthesised note: "Chief of staff (project coordinator)" → "Chief of staff". */
+const titleOf = (md, slug) => (/^#\s+(.+)$/m.exec(md ?? '')?.[1] ?? slug).replace(/\s*\(.*\)\s*$/, '').trim();
+
+/** docs/team/ownership.md from ownership.json. A writer that is a role slug is shown by its title, which the dashboard resolves back. */
+export function renderOwnership(ownership, roles) {
+  const titles = new Map(roles.map((r) => [r.slug, titleOf(r.md, r.slug)]));
+  const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  const lines = [
+    '# Ownership: one writer per path',
+    '',
+    ownership.intro ?? 'A thread edits only the paths it owns. Anything else is a request to that path\'s owner.',
+    '',
+    'Generated from `.agent-team/ownership.json`: change that file (or the Studio\'s ownership table) and run `scripts/agent-team/sync.sh`.',
+    '',
+    '| Path | Writer | Notes |',
+    '| --- | --- | --- |',
+    ...(ownership.rows ?? []).map((r) => `| \`${cell(r.path)}\` | ${cell(titles.get(r.writer) ?? r.writer)} | ${cell(r.notes)} |`),
+  ];
+  return lines.join('\n') + '\n';
+}
+
+const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+
+/** scripts/agent-team/gates.sh from gates.json: bash that merge-gate.sh sources after .agent-team/config.sh. */
+export function renderGates(gates) {
+  const out = [
+    '# shellcheck shell=bash disable=SC2034',
+    '# Merge gates from .agent-team/gates.json, sourced after .agent-team/config.sh: a target defined here replaces a',
+    '# gate_<target> function of the same name there. Change gates.json and run scripts/agent-team/sync.sh.',
+  ];
+  if (gates.all?.length) out.push(`AGENT_TEAM_GATES_ALL=${shq(gates.all.join(' '))}`);
+  if (gates.pools && Object.keys(gates.pools).length) out.push(`AGENT_TEAM_POOLS=${shq(Object.entries(gates.pools).map(([k, v]) => `${k}:${v}`).join(' '))}`);
+  for (const [target, steps] of Object.entries(gates.targets ?? {})) {
+    if (!/^[a-z0-9_]+$/i.test(target)) throw new Error(`gates.json: target "${target}" must be letters, digits and underscores`);
+    out.push('', `gate_${target}() {`);
+    for (const s of steps) {
+      const lock = s.pool ? `locked ${s.pool} ` : '';
+      if (s.pool && !/^[a-z0-9_-]+$/i.test(s.pool)) throw new Error(`gates.json: pool "${s.pool}" must be letters, digits, - and _`);
+      out.push(`  run ${shq(`${target}: ${s.name}`)} ${lock}bash -c ${shq(s.run)}`);
+    }
+    if (!steps.length) out.push('  :');
+    out.push('}');
+  }
+  return out.join('\n') + '\n';
+}
+
+/** Who may use what, as a section for the project instructions. */
+export function renderSystems(resources) {
+  const list = resources.resources ?? [];
+  if (!list.length) return '';
+  const who = (id) => (resources.bindings ?? []).filter((b) => b.resource === id).map((b) => `${b.role} (${b.permission})`).join(', ') || 'nobody';
+  const cfg = (c) => Object.entries(c ?? {}).map(([k, v]) => `${k}: ${v}`).join('; ');
+  return [
+    '## Systems',
+    '',
+    'The systems this team works with, and who may use each. A role without a binding has no access. Secrets are named here and set in the environment; never paste their values anywhere.',
+    '',
+    '| System | Type | Settings | Secrets | Who |',
+    '| --- | --- | --- | --- | --- |',
+    ...list.map((r) => `| ${r.name ?? r.id} | ${r.type} | ${cfg(r.config)} | ${(r.secrets ?? []).map((s) => `\`${s}\``).join(', ')} | ${who(r.id)} |`),
+  ].join('\n') + '\n';
+}
+
+/** Adds each bound system to a role's brief, under a Systems section before the shared footer. */
+export function applyBindings(roles, resources) {
+  const byId = new Map((resources?.resources ?? []).map((r) => [r.id, r]));
+  return roles.map((r) => {
+    const mine = (resources?.bindings ?? []).filter((b) => b.role === r.slug && byId.has(b.resource));
+    if (!mine.length) return r;
+    const lines = mine.map((b) => {
+      const res = byId.get(b.resource);
+      const secrets = (res.secrets ?? []).length ? ` Secrets from the environment: ${res.secrets.map((s) => `\`${s}\``).join(', ')}.` : '';
+      return `- ${res.name ?? res.id} (${res.type}): ${b.permission}.${secrets}`;
+    });
+    return { ...r, md: extendBriefText(r.md, `## Systems\n${lines.join('\n')}`) };
+  });
+}
+
+// ------------------------------------------------------------------------------------------------ validate
+
+const SECRET_PATTERNS = [/sk-ant-[A-Za-z0-9_-]{10,}/, /\bgh[pousr]_[A-Za-z0-9]{20,}/, /\bAKIA[0-9A-Z]{16}\b/, /-----BEGIN [A-Z ]*PRIVATE KEY-----/, /:\/\/[^/\s:@]+:[^/\s@]+@/, /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\./];
+const GENERATED = [/^docs\/team\/(?!ownership\.md$|lanes\/)/, /^scripts\/agent-team\//, /^\.claude\/agents\//];
+const field = (md, name) => (new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm').exec(md ?? '')?.[1] ?? '').trim();
+
+/**
+ * Checks a TeamSpec the way sync and the roster check would, plus the data files, without touching disk.
+ * Returns [{ level: 'error' | 'warning', where, message }], errors first.
+ */
+export function validate(spec, kit) {
+  const issues = [];
+  const add = (level, where, message) => issues.push({ level, where, message });
+  const { roles, warnings } = resolveSpec(spec, kit);
+  for (const w of warnings) add('warning', 'roles', w);
+  const installed = new Map(roles.map((r) => [r.slug, r]));
+  const manager = new Map(roles.map((r) => [r.slug, (field(r.md, 'Reports to').split(/\s/)[0] ?? '').toLowerCase()]));
+  const top = roles.filter((r) => manager.get(r.slug) === 'owner');
+  if (top.length !== 1) add('error', 'roles', `exactly one role must report to the owner (found ${top.map((r) => r.slug).join(', ') || 'none'})`);
+  for (const [slug, m] of manager) {
+    if (!m) add('error', `roles/${slug}`, 'has no "Reports to" line');
+    else if (m !== 'owner' && !installed.has(m)) add('error', `roles/${slug}`, `reports to "${m}", which is not on the team`);
+    const tier = (/^[a-z]+/i.exec(field(installed.get(slug).md, 'Model'))?.[0] ?? '').toLowerCase();
+    if (!['deep', 'standard', 'routine', 'light'].includes(tier)) add('error', `roles/${slug}`, `model tier "${tier}" is not deep, standard, routine or light`);
+  }
+  for (const slug of manager.keys()) { // loops in the reporting lines
+    const seen = new Set([slug]);
+    for (let m = manager.get(slug); m && m !== 'owner' && installed.has(m); m = manager.get(m)) {
+      if (seen.has(m)) { add('error', `roles/${slug}`, `reporting line loops back through ${m}`); break; }
+      seen.add(m);
+    }
+  }
+  const rows = spec.ownership?.rows ?? [];
+  const byPath = new Map();
+  for (const r of rows) {
+    if (byPath.has(r.path)) add('error', 'ownership', `${r.path} has two writers: ${byPath.get(r.path)} and ${r.writer}`);
+    byPath.set(r.path, r.writer);
+    if (/^[a-z0-9-]+$/.test(r.writer) && !installed.has(r.writer)) add('warning', 'ownership', `${r.path}: writer "${r.writer}" is not on the team`);
+    if (GENERATED.some((g) => g.test(r.path)) && /^[a-z0-9-]+$/.test(r.writer)) add('error', 'ownership', `${r.path} is generated by sync; no role may write it`);
+  }
+  if (spec.ownership) for (const slug of installed.keys()) if (!rows.some((r) => r.writer === slug) && field(installed.get(slug).md, 'Group') !== 'executive' && !/dormant/i.test(field(installed.get(slug).md, 'Status'))) add('warning', 'ownership', `${slug} owns no path`);
+  const ids = new Set();
+  for (const r of spec.resources?.resources ?? []) {
+    if (!r.id || ids.has(r.id)) add('error', 'resources', `resource id "${r.id}" is missing or used twice`);
+    ids.add(r.id);
+    for (const s of r.secrets ?? []) if (!/^[A-Z][A-Z0-9_]*$/.test(s)) add('error', `resources/${r.id}`, `secret "${s}" must be an environment variable name, not a value`);
+  }
+  for (const b of spec.resources?.bindings ?? []) {
+    if (!ids.has(b.resource)) add('error', 'bindings', `${b.role} is bound to "${b.resource}", which is not a resource`);
+    if (!installed.has(b.role)) add('warning', 'bindings', `${b.role} is bound to ${b.resource} but is not on the team`);
+    if (!PERMISSIONS.includes(b.permission)) add('error', 'bindings', `${b.role} → ${b.resource}: permission "${b.permission}" is not read, write or deploy`);
+  }
+  for (const [target, steps] of Object.entries(spec.gates?.targets ?? {})) {
+    for (const s of steps) if (s.pool && spec.gates.pools && !(s.pool in spec.gates.pools)) add('warning', `gates/${target}`, `"${s.name}" uses pool "${s.pool}", which gates.json does not size`);
+  }
+  // No secrets anywhere in the team's text.
+  const texts = [['values', JSON.stringify(spec.values ?? {})], ['rules', JSON.stringify(spec.rules ?? {})], ['resources', JSON.stringify(spec.resources ?? {})],
+    ['gates', JSON.stringify(spec.gates ?? {})], ...Object.entries(spec.roles).map(([s, r]) => [`roles/${s}`, JSON.stringify([r.brief ?? '', r.extension ?? {}])])];
+  for (const [where, text] of texts) if (SECRET_PATTERNS.some((p) => p.test(text))) add('error', where, 'looks like it contains a secret value; name the secret instead and set it in the environment');
+  return issues.sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
 }

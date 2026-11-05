@@ -4,44 +4,256 @@
   "title": "Agent Team Kit TeamSpec, version 1",
   "description": "A team as one document. It compiles 1:1 to a project layer (.agent-team/); see packages/team-model/index.mjs.",
   "type": "object",
-  "required": ["schema", "preset", "roles"],
+  "required": [
+    "schema",
+    "preset",
+    "roles"
+  ],
   "properties": {
-    "schema": { "const": "agent-team/team-spec@1" },
-    "kit": { "type": "string", "description": "The pinned kit, as team.json's \"kit\" (an npx spec such as github:PurpleGiragge/Agent-Team-Kit#v0.4.0)." },
-    "preset": { "type": "string", "description": "The preset roles are switched on and off against." },
-    "values": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Placeholder values: PROJECT_NAME, OWNER, TIMEZONE, DIGEST_TIME and the project's own." },
+    "schema": {
+      "const": "agent-team/team-spec@1"
+    },
+    "kit": {
+      "type": "string",
+      "description": "The pinned kit, as team.json's \"kit\" (an npx spec such as github:PurpleGiragge/Agent-Team-Kit#v0.4.0)."
+    },
+    "preset": {
+      "type": "string",
+      "description": "The preset roles are switched on and off against."
+    },
+    "values": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Placeholder values: PROJECT_NAME, OWNER, TIMEZONE, DIGEST_TIME and the project's own."
+    },
     "roles": {
       "type": "object",
       "description": "Every role the team knows about: the whole kit library plus the project's own roles.",
-      "additionalProperties": { "$ref": "#/$defs/role" }
+      "additionalProperties": {
+        "$ref": "#/$defs/role"
+      }
     },
     "rules": {
       "type": "object",
       "properties": {
-        "protocols": { "type": "string", "description": "protocols.extend.md" },
-        "instructions": { "type": "string", "description": "instructions.extend.md" }
+        "protocols": {
+          "type": "string",
+          "description": "protocols.extend.md"
+        },
+        "instructions": {
+          "type": "string",
+          "description": "instructions.extend.md"
+        }
       },
       "additionalProperties": false
     },
-    "options": { "type": "object", "description": "Every other team.json key (subagents, agentTeams, hooks, models, dashboard, ...), kept as it is." },
+    "options": {
+      "type": "object",
+      "description": "Every other team.json key (subagents, agentTeams, hooks, models, dashboard, ...), kept as it is."
+    },
     "layout": {
       "type": "object",
       "description": "Editor and ordering hints that do not change the team.",
       "properties": {
-        "include": { "type": "array", "items": { "type": "string" } },
-        "exclude": { "type": "array", "items": { "type": "string" } }
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
+    },
+    "ownership": {
+      "type": "object",
+      "description": ".agent-team/ownership.json; sync generates docs/team/ownership.md from it.",
+      "properties": {
+        "intro": {
+          "type": "string"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "writer"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "writer": {
+                "type": "string",
+                "description": "A role slug, or free text such as \"Nobody: generated\"."
+              },
+              "notes": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "gates": {
+      "type": "object",
+      "description": ".agent-team/gates.json; sync generates scripts/agent-team/gates.sh, sourced after config.sh.",
+      "properties": {
+        "all": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pools": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "targets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "run"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "run": {
+                  "type": "string"
+                },
+                "pool": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "resources": {
+      "type": "object",
+      "description": ".agent-team/resources.json: the systems the team works with and who may use each. Secret names only, never values.",
+      "properties": {
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "description": "github, supabase, postgres, vercel, mcp, ..."
+              },
+              "name": {
+                "type": "string"
+              },
+              "config": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "secrets": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Z0-9_]*$"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "role",
+              "resource",
+              "permission"
+            ],
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "resource": {
+                "type": "string"
+              },
+              "permission": {
+                "enum": [
+                  "read",
+                  "write",
+                  "deploy"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "canvas": {
+      "type": "object",
+      "description": ".agent-team/studio.json: editor layout only; sync ignores it."
     }
   },
   "$defs": {
     "role": {
       "type": "object",
-      "required": ["source", "enabled"],
+      "required": [
+        "source",
+        "enabled"
+      ],
       "properties": {
-        "source": { "enum": ["kit", "project", "project-replaces-kit", "missing"] },
-        "enabled": { "type": "boolean" },
-        "brief": { "type": "string", "description": "The full brief of a project role (roles/<slug>.md)." },
-        "extension": { "$ref": "#/$defs/extension" }
+        "source": {
+          "enum": [
+            "kit",
+            "project",
+            "project-replaces-kit",
+            "missing"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "brief": {
+          "type": "string",
+          "description": "The full brief of a project role (roles/<slug>.md)."
+        },
+        "extension": {
+          "$ref": "#/$defs/extension"
+        }
       },
       "additionalProperties": false
     },
@@ -49,9 +261,54 @@
       "type": "object",
       "description": "roles/<slug>.extend.md as data.",
       "properties": {
-        "title": { "type": "string" },
-        "fields": { "type": "array", "items": { "type": "object", "required": ["name", "value"], "properties": { "name": { "type": "string" }, "value": { "type": "string" } }, "additionalProperties": false } },
-        "sections": { "type": "array", "items": { "type": "object", "required": ["name", "mode", "text"], "properties": { "name": { "type": "string" }, "mode": { "enum": ["append", "replace"] }, "text": { "type": "string" } }, "additionalProperties": false } }
+        "title": {
+          "type": "string"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "value"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "mode",
+              "text"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "mode": {
+                "enum": [
+                  "append",
+                  "replace"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     }

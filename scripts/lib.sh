@@ -5,7 +5,7 @@
 #   AT_ROOT     the repository (or worktree) root
 #   AT_PROJECT  a slug that is the same in every worktree of one repository
 #   AT_HOME     per-project state outside the repo: ~/.agent-team/<project> (event log, team.env, locks)
-# and sources .agent-team/config.sh from the root when it exists.
+# and sources .agent-team/config.sh from the root when it exists, then gates.sh (from .agent-team/gates.json) next to this file.
 
 at_script_dir() { cd "$(dirname "${BASH_SOURCE[1]}")" && pwd; }
 
@@ -17,6 +17,13 @@ at_init() {
   if [ -f "$config" ]; then
     # shellcheck disable=SC1090
     . "$config"
+  fi
+  # Gates from .agent-team/gates.json, generated next to this file by sync; they replace same-named gates in config.sh.
+  local gates
+  gates="$(dirname "${BASH_SOURCE[0]}")/gates.sh"
+  if [ -f "$gates" ]; then
+    # shellcheck disable=SC1090
+    . "$gates"
   fi
   [ -n "$env_project" ] && AGENT_TEAM_PROJECT="$env_project"
   [ -n "$env_pools" ] && AGENT_TEAM_POOLS="$env_pools"

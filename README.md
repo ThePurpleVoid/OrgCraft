@@ -35,7 +35,7 @@ Requirements: git and Node 18+, plus bash and `jq` for the merge gate and locks 
 
 ```sh
 cd ~/code/my-app
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.4.0 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.5.0 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
 ```
 
 Then:
@@ -43,7 +43,7 @@ Then:
 1. Edit `docs/team/ownership.md` so the paths match your layout.
 2. Edit the gates and hardware pools in `.agent-team/config.sh`.
 3. Paste `docs/team/project-instructions.md` into your Claude project's instructions (or into `CLAUDE.md`).
-4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI. `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.4.0 doctor` smoke-tests the whole setup.
+4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI. `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.5.0 doctor` smoke-tests the whole setup.
 5. Open the chief of staff: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."*
 6. Ask for something. Watch it live with `node scripts/agent-team/dashboard.mjs` (a web dashboard at http://localhost:4747) or `scripts/agent-team/team-board.sh` in the terminal.
 

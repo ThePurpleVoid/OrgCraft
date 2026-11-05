@@ -24,4 +24,4 @@ agent-team compile team-spec.json               # the TeamSpec back to .agent-te
 
 **The contract:** building the team from `compileLayer(importLayer(layer))` writes the same generated files as building it from `layer`. `tests/team-model.test.mjs` checks this for every preset, every example and this repository's own team. A change that breaks it does not merge.
 
-Not yet in the model (phase 1, next): `ownership.json`, `gates.json` and `resources.json` (see the [delivery plan](../../docs/product/delivery-plan.md)). Until then `config.sh`, `ownership.md` and the lanes stay hand-written and are carried through untouched.
+The optional data files are part of the model as `spec.ownership`, `spec.gates`, `spec.resources` and `spec.canvas` (`ownership.json`, `gates.json`, `resources.json`, `studio.json`). `validate(spec, kit)` (or `agent-team validate`) checks the whole team. `config.sh`, a hand-written `ownership.md` and the lane files are not part of a TeamSpec; they are carried through untouched.

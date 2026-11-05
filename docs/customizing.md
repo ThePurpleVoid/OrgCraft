@@ -10,7 +10,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.4.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.5.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -93,3 +93,23 @@ Change `"kit"` in `team.json` to the new tag, run `scripts/agent-team/sync.sh`, 
 ## Improve the kit for everyone
 
 If a change would help every team (a better rule, a script fix, a new generic role), open a pull request on Agent Team Kit instead of keeping it in your overlay. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## Ownership, gates and systems as data (optional)
+
+Three optional files in `.agent-team/` hold, as data, what you would otherwise write by hand. The visual team builder edits these files, and you can edit them by hand too. Run `scripts/agent-team/sync.sh` after a change, and `agent-team validate` to check the team.
+
+```jsonc
+// .agent-team/ownership.json: sync generates docs/team/ownership.md from it (and owns that file from then on)
+{ "rows": [ { "path": "apps/web/", "writer": "web-dev", "notes": "" } ] }
+
+// .agent-team/gates.json: sync generates scripts/agent-team/gates.sh; a target here replaces gate_<target> in config.sh
+{ "all": ["web"], "pools": { "build": 2 }, "targets": { "web": [ { "name": "build", "run": "npm ci && npm run build", "pool": "build" } ] } }
+
+// .agent-team/resources.json: a Systems table in the project instructions, and a Systems section in each bound role's brief
+{ "resources": [ { "id": "db", "type": "postgres", "name": "Main database", "config": { "database": "app" }, "secrets": ["DATABASE_URL"] } ],
+  "bindings": [ { "role": "backend-dev", "resource": "db", "permission": "write" } ] }
+```
+
+Secrets appear only by name. Their values go in the environment (for example `~/.agent-team/<project>/team.env`), never in these files.
+
+`agent-team import` prints the whole team, these files included, as one JSON document (see [packages/team-model](../packages/team-model)). `agent-team compile <spec.json>` writes it back.

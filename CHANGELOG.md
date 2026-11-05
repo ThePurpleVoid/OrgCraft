@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
+The team as data: everything the visual team builder (Agent Team Studio) will edit, available today from the CLI. Existing teams see no change on sync unless they add one of the new files.
+
+- **Ownership, gates and systems as data**, each an optional file in `.agent-team/`:
+  - `ownership.json` (rows of path, writer, notes). Sync generates `docs/team/ownership.md` from it, showing each writer by role title, so the dashboard still maps paths to roles. Without the file, `ownership.md` stays hand-written as before.
+  - `gates.json` (`all`, `pools`, `targets` of named steps with an optional pool). Sync generates `scripts/agent-team/gates.sh`, which `lib.sh` sources after `config.sh`. A target defined there replaces a `gate_<target>` of the same name in `config.sh`, and bash-shaped gates stay in `config.sh`.
+  - `resources.json` (systems with non-secret settings and secret *names*, plus bindings of role × system × read, write or deploy). Sync adds a Systems table to the project instructions and a Systems section to each bound role's brief.
+- **`agent-team validate`** checks the team without writing anything: one role reporting to the owner, no reporting loops, valid tiers, one writer per path, no role owning a generated path, bindings that point at real systems with a known permission, secret names that are names, and no secret values anywhere in the team's text.
+- `.agent-team/studio.json` is reserved for the editor's layout; sync ignores it.
 - This repository's own team is on 0.4.0 with the reporting hooks on (`.claude/settings.json`).
 - **The team model** (`packages/team-model`, phase 1 of the [Studio plan](docs/product/delivery-plan.md)). A whole team as one JSON document, a TeamSpec ([schema](packages/team-model/schema/team-spec.v1.json)). `agent-team import` prints the project layer as a TeamSpec. `agent-team compile <spec.json>` writes one back to `.agent-team/` and syncs. Switching roles on and off produces the smallest `include`/`exclude`, and editing a kit role produces an `.extend.md`. The round trip is tested on every preset (with and without subagents), the native-mobile example and this repository's own team, and it builds byte-identical generated files. The module is pure, so the Studio editor can run it in a browser.
 - `bin/agent-team.mjs` now uses the team model's implementation of the extension and reporting-line rules, so there is only one. Existing teams see no change on sync.
