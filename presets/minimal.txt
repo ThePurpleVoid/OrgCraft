@@ -1,0 +1,12 @@
+# A small product team: one door, one engineering lead, build, review, test, ship.
+chief-of-staff
+cto
+product-manager
+architect
+backend-dev
+web-dev
+code-reviewer
+security-reviewer
+qa-web
+release-manager
+docs-keeper

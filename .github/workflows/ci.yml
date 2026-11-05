@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Shellcheck
+        run: shellcheck -S warning scripts/*.sh templates/*.sh tests/*.sh examples/*/.agent-team/config.sh
+      - name: Briefs
+        run: node tools/roster.mjs --check
+      - name: Node tests
+        run: node --test tests/*.test.mjs
+      - name: Script and installer tests
+        run: bash tests/scripts.test.sh

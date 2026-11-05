@@ -1,0 +1,90 @@
+#!/usr/bin/env node
+// The team roster, built from the role briefs.
+//
+//   node tools/roster.mjs [roles-dir]           print the roster as JSON (roles and reporting lines)
+//   node tools/roster.mjs --tree [roles-dir]    print the org tree
+//   node tools/roster.mjs --check [roles-dir]   validate every brief; exits 1 on errors
+//
+// roles-dir defaults to docs/team/roles (an installed repo) or team/roles (the kit itself).
+import { pathToFileURL } from 'node:url';
+import { loadBriefs, rolesDir, TIERS } from './briefs.mjs';
+
+export function check(roles) {
+  const errors = [];
+  const warnings = [];
+  const slugs = new Set(roles.map((r) => r.slug));
+  const top = roles.filter((r) => r.reportsTo === 'owner');
+  if (top.length !== 1) errors.push(`exactly one role must report to the owner (found ${top.map((r) => r.slug).join(', ') || 'none'})`);
+  for (const r of roles) {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(r.slug)) errors.push(`${r.slug}: file name must be a lowercase slug`);
+    if (!r.identity) errors.push(`${r.slug}: missing "## Identity"`);
+    if (!r.owns) errors.push(`${r.slug}: missing "## Owns (writes)"`);
+    if (!r.reportsTo) errors.push(`${r.slug}: missing "**Reports to:**"`);
+    if (!TIERS.includes(r.tier)) errors.push(`${r.slug}: **Model:** must start with one of ${TIERS.join(', ')} (got "${r.model}")`);
+    if (!r.group) warnings.push(`${r.slug}: no **Group:** line; boards will show it under "other"`);
+    if (r.reportsTo && r.reportsTo !== 'owner' && !slugs.has(r.reportsTo)) {
+      warnings.push(`${r.slug}: reports to "${r.reportsTo}", which is not installed; the chief of staff covers it`);
+    }
+    for (const d of r.directReports) {
+      if (!slugs.has(d)) warnings.push(`${r.slug}: direct report "${d}" is not installed`);
+      else if (roles.find((x) => x.slug === d).reportsTo !== r.slug) {
+        warnings.push(`${r.slug}: lists "${d}" as a direct report, but ${d} reports to "${roles.find((x) => x.slug === d).reportsTo}"`);
+      }
+    }
+  }
+  for (const r of roles) { // reporting lines must not loop
+    const seen = new Set([r.slug]);
+    let cur = r;
+    while (cur && cur.reportsTo !== 'owner') {
+      if (seen.has(cur.reportsTo)) { errors.push(`${r.slug}: reporting line loops through ${cur.reportsTo}`); break; }
+      seen.add(cur.reportsTo);
+      cur = roles.find((x) => x.slug === cur.reportsTo);
+    }
+  }
+  return { errors, warnings };
+}
+
+/** Parent of each role, falling back to the role that reports to the owner when the named manager is not installed. */
+export function parents(roles) {
+  const slugs = new Set(roles.map((r) => r.slug));
+  const root = roles.find((r) => r.reportsTo === 'owner')?.slug ?? null;
+  return Object.fromEntries(roles.map((r) => [r.slug,
+    r.reportsTo === 'owner' ? 'owner' : slugs.has(r.reportsTo) ? r.reportsTo : root]));
+}
+
+export function tree(roles) {
+  const parent = parents(roles);
+  const kids = (p) => roles.filter((r) => parent[r.slug] === p)
+    .sort((a, b) => (a.group === 'executive' ? 0 : 1) - (b.group === 'executive' ? 0 : 1) || a.slug.localeCompare(b.slug));
+  const out = ['owner'];
+  const walk = (p, prefix) => {
+    const k = kids(p);
+    k.forEach((r, i) => {
+      const last = i === k.length - 1;
+      const tag = [r.tier, r.status === 'dormant' ? 'dormant' : ''].filter(Boolean).join(', ');
+      out.push(`${prefix}${last ? '└─ ' : '├─ '}${r.slug} (${tag})`);
+      walk(r.slug, prefix + (last ? '   ' : '│  '));
+    });
+  };
+  walk('owner', '');
+  return out.join('\n');
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const args = process.argv.slice(2);
+  const mode = args.find((a) => a.startsWith('--')) ?? '--json';
+  const dir = rolesDir(args.find((a) => !a.startsWith('--')));
+  const roles = loadBriefs(dir);
+  if (mode === '--check') {
+    const { errors, warnings } = check(roles);
+    for (const w of warnings) console.log(`warning: ${w}`);
+    for (const e of errors) console.log(`error: ${e}`);
+    console.log(`${roles.length} roles in ${dir}: ${errors.length} errors, ${warnings.length} warnings`);
+    process.exit(errors.length ? 1 : 0);
+  } else if (mode === '--tree') {
+    console.log(tree(roles));
+  } else {
+    const parent = parents(roles);
+    console.log(JSON.stringify(roles.map(({ body, ...r }) => ({ ...r, parent: parent[r.slug] })), null, 2));
+  }
+}

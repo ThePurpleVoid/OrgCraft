@@ -1,0 +1,2 @@
+- No Android or iOS build, emulator or simulator jobs in CI; device testing happens on the team machine through `with-lock.sh`.
+- Named devices per role: "Dev", "QA" and "Auto" emulators and simulators. QA always starts from a wiped device.

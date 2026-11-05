@@ -1,0 +1,60 @@
+// Parses the role briefs (docs/team/roles/*.md) into plain objects. Shared by roster.mjs and export-subagents.mjs.
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+export const TIERS = ['deep', 'standard', 'routine', 'light'];
+
+/** The roles folder: an explicit path, else docs/team/roles (an installed repo), else team/roles (this kit). */
+export function rolesDir(arg) {
+  if (arg) return arg;
+  for (const p of ['docs/team/roles', 'team/roles']) if (existsSync(p)) return p;
+  throw new Error('No roles folder found. Pass one, for example: node tools/roster.mjs docs/team/roles');
+}
+
+const field = (md, name) => (new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm').exec(md)?.[1] ?? '').trim();
+
+export function section(md, name) {
+  const lines = md.split('\n');
+  const start = lines.findIndex((l) => l.trim().toLowerCase().startsWith(`## ${name.toLowerCase()}`));
+  if (start < 0) return '';
+  const out = [];
+  for (const l of lines.slice(start + 1)) {
+    if (l.startsWith('## ')) break;
+    out.push(l);
+  }
+  return out.join('\n').trim();
+}
+
+const list = (s) => s.split(/[,\n]/).map((x) => x.replace(/^-\s*/, '').trim()).filter(Boolean);
+
+export function parseBrief(slug, md) {
+  const model = field(md, 'Model');
+  const statusLine = field(md, 'Status');
+  return {
+    slug,
+    title: (/^#\s+(.+)$/m.exec(md)?.[1] ?? slug).replace(/\s*\(.*\)\s*$/, '').trim(),
+    heading: (/^#\s+(.+)$/m.exec(md)?.[1] ?? slug).trim(),
+    model,
+    tier: (/^[a-z]+/i.exec(model)?.[0] ?? '').toLowerCase(),
+    group: field(md, 'Group').toLowerCase(),
+    lane: field(md, 'Lane').replace(/\s*\(.*\)\s*$/, ''),
+    reportsTo: (field(md, 'Reports to').split(/\s/)[0] ?? '').toLowerCase(),
+    status: /^dormant/i.test(statusLine) ? 'dormant' : 'active',
+    statusLine,
+    identity: section(md, 'Identity'),
+    owns: section(md, 'Owns'),
+    directReports: list(section(md, 'Direct reports')),
+    tools: section(md, 'Tools'),
+    wakesOn: section(md, 'Wakes on'),
+    handsTo: section(md, 'Hands to'),
+    rules: section(md, 'Rules').split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2).trim()),
+    body: md,
+  };
+}
+
+export function loadBriefs(dir) {
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.md') && !f.startsWith('_'))
+    .sort()
+    .map((f) => parseBrief(f.slice(0, -3), readFileSync(join(dir, f), 'utf8')));
+}

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Run a command inside a hardware pool with a fixed number of slots, so parallel threads share one machine.
+#
+#   with-lock.sh build -- npm run build
+#   with-lock.sh emulator -- emulator -avd QA_Device
+#
+# Pools and slot counts come from AGENT_TEAM_POOLS in .agent-team/config.sh ("name:slots name:slots ...").
+# Slots are directories under ~/.agent-team/<project>/locks; mkdir is atomic, so no flock is needed (macOS ships
+# without it). A slot whose owner PID is gone is reclaimed. Waits up to WITH_LOCK_TIMEOUT seconds (default 1200),
+# then exits 75 so the calling thread can send BLOCKED instead of hanging.
+set -euo pipefail
+# shellcheck source=lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+at_init
+
+POOLS="${AGENT_TEAM_POOLS:-build:2 browser:3 emulator:2 simulator:2 backend:1}"
+LOCK_ROOT="${AGENT_TEAM_LOCK_ROOT:-$AT_HOME/locks}"
+TIMEOUT="${WITH_LOCK_TIMEOUT:-1200}"
+POLL="${WITH_LOCK_POLL:-15}"
+
+pool="${1:-}"
+[[ -n "$pool" && "${2:-}" == "--" && $# -ge 3 ]] || { echo "usage: with-lock.sh <pool> -- <command...>  (pools: $POOLS)" >&2; exit 64; }
+shift 2
+
+slots=""
+for entry in $POOLS; do
+  [[ "${entry%%:*}" == "$pool" ]] && slots="${entry#*:}"
+done
+[[ "$slots" =~ ^[0-9]+$ && "$slots" -ge 1 ]] || { echo "with-lock.sh: unknown pool '$pool' (pools: $POOLS)" >&2; exit 64; }
+
+dir="$LOCK_ROOT/$pool"
+mkdir -p "$dir"
+
+claim() {
+  local i slot
+  for ((i = 1; i <= slots; i++)); do
+    slot="$dir/slot-$i"
+    if mkdir "$slot" 2>/dev/null; then
+      echo $$ >"$slot/pid"; echo "$slot"; return 0
+    fi
+    # Reclaim a slot whose owner died.
+    if [[ -f "$slot/pid" ]] && ! kill -0 "$(cat "$slot/pid" 2>/dev/null)" 2>/dev/null; then
+      rm -rf "$slot"
+      if mkdir "$slot" 2>/dev/null; then
+        echo $$ >"$slot/pid"; echo "$slot"; return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+start=$(date +%s)
+until slot=$(claim); do
+  if (( $(date +%s) - start >= TIMEOUT )); then
+    echo "with-lock.sh: no free '$pool' slot after ${TIMEOUT}s (BLOCKED)" >&2
+    exit 75
+  fi
+  sleep "$POLL"
+done
+
+trap 'rm -rf "$slot"' EXIT
+echo "with-lock.sh: $pool $(basename "$slot") -> $*" >&2
+"$@"

@@ -1,0 +1,28 @@
+{
+  "name": "agent-team-kit",
+  "version": "0.1.0",
+  "description": "Run a company of Claude Code agents on your repository: role briefs, protocols, a board and the scripts that hold them together.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PurpleGiragge/Agent-Team-Kit.git"
+  },
+  "bin": {
+    "agent-team": "bin/agent-team.mjs"
+  },
+  "files": [
+    "bin/",
+    "presets/",
+    "scripts/",
+    "team/",
+    "templates/",
+    "tools/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs && bash tests/scripts.test.sh"
+  }
+}

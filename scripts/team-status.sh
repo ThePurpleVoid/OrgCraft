@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Reports what this thread is doing to the team board.
+#
+#   team-status.sh <role>[#instance] <kind> [<status>|-] [--task "..."] [--issue N] [--pr N] [--branch b]
+#                  [--commit sha] [--platform p] [--to role] [--severity 1-4] [--evidence path,path]
+#                  [--detail "..."] [--session id]
+#
+#   kind    status | handoff | bug | signoff | blocked | note | heartbeat
+#   status  idle | working | waiting | blocked | review | done   (required for kind=status; others keep the last one)
+#
+#   team-status.sh backend-dev status working --task "Invoices API" --issue 42
+#   team-status.sh backend-dev handoff waiting --to backend-tester --task "Invoices API" --pr 57
+#   team-status.sh qa-web bug - --to web-dev --severity 2 --evidence shots/a.png --detail "Save does nothing"
+#   team-status.sh code-reviewer#57 status done
+#
+# Every report is appended to ~/.agent-team/<project>/events.jsonl, which team-board.sh reads. When TEAM_REPORT_URL
+# and TEAM_REPORT_TOKEN are set (environment, .agent-team/config.sh or ~/.agent-team/<project>/team.env) the report is
+# also posted to a hosted board (see board/). Fills branch and commit from git. Never fails the caller: a bad call,
+# a missing tool or a refused report prints one line and exits 0.
+set -uo pipefail
+# shellcheck source=lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+at_init
+
+if [ -f "$AT_HOME/team.env" ]; then
+  # shellcheck disable=SC1091
+  set -a; . "$AT_HOME/team.env"; set +a
+fi
+
+usage() { sed -n '2,20p' "$0" >&2; exit 0; }
+[ $# -ge 2 ] || usage
+agent="$1"; kind="$2"; shift 2
+status=""
+case "${1:-}" in
+  ""|--*) ;;
+  -) shift ;;
+  *) status="$1"; shift ;;
+esac
+role="${agent%%#*}"
+instance=""; [ "$agent" != "$role" ] && instance="${agent#*#}"
+
+case "$kind" in status|handoff|bug|signoff|blocked|note|heartbeat) ;; *)
+  echo "team-status: not reported (kind must be status, handoff, bug, signoff, blocked, note or heartbeat)" >&2; exit 0 ;;
+esac
+case "$status" in ""|idle|working|waiting|blocked|review|done) ;; *)
+  echo "team-status: not reported (status must be idle, working, waiting, blocked, review or done)" >&2; exit 0 ;;
+esac
+if [ "$kind" = status ] && [ -z "$status" ]; then
+  echo "team-status: not reported (a status report needs a status)" >&2; exit 0
+fi
+
+task=""; issue=""; pr=""; branch=""; commit=""; platform=""; to=""; severity=""; evidence=""; detail=""
+session="${AGENT_TEAM_SESSION:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --task) task="${2:-}"; shift 2 ;;
+    --issue) issue="${2:-}"; shift 2 ;;
+    --pr) pr="${2:-}"; shift 2 ;;
+    --branch) branch="${2:-}"; shift 2 ;;
+    --commit) commit="${2:-}"; shift 2 ;;
+    --platform) platform="${2:-}"; shift 2 ;;
+    --to) to="${2:-}"; shift 2 ;;
+    --severity) severity="${2:-}"; shift 2 ;;
+    --evidence) evidence="${2:-}"; shift 2 ;;
+    --detail) detail="${2:-}"; shift 2 ;;
+    --session) session="${2:-}"; shift 2 ;;
+    -h|--help) usage ;;
+    *) echo "team-status: unknown option $1" >&2; shift ;;
+  esac
+done
+case "$kind" in handoff|bug|signoff|blocked)
+  if [ -z "$to" ]; then echo "team-status: not reported ($kind needs --to <role>)" >&2; exit 0; fi ;;
+esac
+if [ -z "$branch" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"; [ "$branch" = "HEAD" ] && branch=""
+fi
+if [ -z "$commit" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  commit="$(git rev-parse --short=12 HEAD 2>/dev/null || true)"
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "team-status: not reported (jq is not installed)" >&2
+  exit 0
+fi
+at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+payload=$(jq -nc --arg at "$at" --arg role "$role" --arg instance "$instance" --arg kind "$kind" --arg status "$status" \
+  --arg task "$task" --arg issue "$issue" --arg pr "$pr" --arg branch "$branch" --arg commit "$commit" \
+  --arg platform "$platform" --arg to "$to" --arg severity "$severity" --arg evidence "$evidence" --arg detail "$detail" \
+  --arg session "$session" \
+  '{at: $at, role: $role, instance: $instance, kind: $kind, status: $status, task: $task, issue: $issue, pr: $pr,
+    branch: $branch, commit: $commit, platform: $platform, to: $to, severity: $severity,
+    evidence: ($evidence | split(",") | map(select(. != ""))), detail: $detail, session: $session,
+    source: "team-status.sh"} | with_entries(select(.value != "" and .value != []))')
+
+mkdir -p "$AT_HOME" 2>/dev/null && printf '%s\n' "$payload" >>"$AT_HOME/events.jsonl" 2>/dev/null \
+  || echo "team-status: could not write $AT_HOME/events.jsonl" >&2
+
+if [ -n "${TEAM_REPORT_URL:-}" ] && [ -n "${TEAM_REPORT_TOKEN:-}" ]; then
+  response=$(curl -sS --max-time 15 -w '\n%{http_code}' -X POST "$TEAM_REPORT_URL" \
+    -H "Content-Type: application/json" -H "x-team-token: $TEAM_REPORT_TOKEN" --data "$payload" 2>&1) || {
+    echo "team-status: hosted board not reached (network): ${response:0:200}" >&2; response=""; }
+  if [ -n "$response" ]; then
+    code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    if [ "$code" != "200" ]; then
+      echo "team-status: hosted board refused (HTTP $code): $(jq -r '.error // .' <<<"$body" 2>/dev/null | head -c 200)" >&2
+    fi
+  fi
+fi
+echo "team-status: $agent $kind${status:+ $status}${task:+ · $task}"
+exit 0

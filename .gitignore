@@ -1,0 +1,15 @@
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Node
+node_modules/
+
+# Local state the scripts write
+.merge-gate/
+.agent-team/
+team.env
+*.env
+!*.env.example

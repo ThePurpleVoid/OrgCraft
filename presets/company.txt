@@ -1,0 +1,2 @@
+# Every role: the whole company, with the business roles dormant until a request needs them.
+*

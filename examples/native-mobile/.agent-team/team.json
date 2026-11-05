@@ -1,0 +1,13 @@
+{
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.1.0",
+  "preset": "engineering",
+  "include": [],
+  "exclude": ["mobile-dev", "qa-mobile"],
+  "values": {
+    "PROJECT_NAME": "Example App",
+    "OWNER": "the owner",
+    "TIMEZONE": "UTC",
+    "DIGEST_TIME": "08:00"
+  },
+  "subagents": false
+}
