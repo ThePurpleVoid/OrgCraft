@@ -13,9 +13,10 @@
 #   team-status.sh qa-web bug - --to web-dev --severity 2 --evidence shots/a.png --detail "Save does nothing"
 #   team-status.sh code-reviewer#57 status done
 #
-# Every report is appended to ~/.agent-team/<project>/events.jsonl, which team-board.sh reads. When TEAM_REPORT_URL
-# and TEAM_REPORT_TOKEN are set (environment, .agent-team/config.sh or ~/.agent-team/<project>/team.env) the report is
-# also posted to a hosted board (see board/). Fills branch and commit from git. Never fails the caller: a bad call,
+# Every report is appended to ~/.agent-team/<project>/events.jsonl, which team-board.sh and the dashboard
+# (dashboard.mjs) read. When TEAM_REPORT_URL is set (environment, .agent-team/config.sh or ~/.agent-team/<project>/team.env)
+# the report is also posted there, with TEAM_REPORT_TOKEN as x-team-token when set: a dashboard on another machine
+# (http://<host>:4747/api/report) or a hosted board (see board/). Fills branch and commit from git. Never fails the caller: a bad call,
 # a missing tool or a refused report prints one line and exits 0.
 set -uo pipefail
 # shellcheck source=lib.sh
@@ -83,11 +84,12 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-payload=$(jq -nc --arg at "$at" --arg role "$role" --arg instance "$instance" --arg kind "$kind" --arg status "$status" \
+id="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}${RANDOM}"
+payload=$(jq -nc --arg id "$id" --arg at "$at" --arg role "$role" --arg instance "$instance" --arg kind "$kind" --arg status "$status" \
   --arg task "$task" --arg issue "$issue" --arg pr "$pr" --arg branch "$branch" --arg commit "$commit" \
   --arg platform "$platform" --arg to "$to" --arg severity "$severity" --arg evidence "$evidence" --arg detail "$detail" \
   --arg session "$session" \
-  '{at: $at, role: $role, instance: $instance, kind: $kind, status: $status, task: $task, issue: $issue, pr: $pr,
+  '{id: $id, at: $at, role: $role, instance: $instance, kind: $kind, status: $status, task: $task, issue: $issue, pr: $pr,
     branch: $branch, commit: $commit, platform: $platform, to: $to, severity: $severity,
     evidence: ($evidence | split(",") | map(select(. != ""))), detail: $detail, session: $session,
     source: "team-status.sh"} | with_entries(select(.value != "" and .value != []))')
@@ -95,9 +97,10 @@ payload=$(jq -nc --arg at "$at" --arg role "$role" --arg instance "$instance" --
 mkdir -p "$AT_HOME" 2>/dev/null && printf '%s\n' "$payload" >>"$AT_HOME/events.jsonl" 2>/dev/null \
   || echo "team-status: could not write $AT_HOME/events.jsonl" >&2
 
-if [ -n "${TEAM_REPORT_URL:-}" ] && [ -n "${TEAM_REPORT_TOKEN:-}" ]; then
+if [ -n "${TEAM_REPORT_URL:-}" ]; then
+  auth=(); [ -n "${TEAM_REPORT_TOKEN:-}" ] && auth=(-H "x-team-token: $TEAM_REPORT_TOKEN")
   response=$(curl -sS --max-time 15 -w '\n%{http_code}' -X POST "$TEAM_REPORT_URL" \
-    -H "Content-Type: application/json" -H "x-team-token: $TEAM_REPORT_TOKEN" --data "$payload" 2>&1) || {
+    -H "Content-Type: application/json" ${auth[@]+"${auth[@]}"} --data "$payload" 2>&1) || {
     echo "team-status: hosted board not reached (network): ${response:0:200}" >&2; response=""; }
   if [ -n "$response" ]; then
     code="${response##*$'\n'}"

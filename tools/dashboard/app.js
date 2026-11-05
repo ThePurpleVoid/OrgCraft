@@ -1,0 +1,616 @@
+// Agent Team Kit dashboard. Draws the team from the role briefs (org chart and hand-off flow) and colours each role by
+// what its thread last reported. Plain browser JavaScript, no build step, no dependencies.
+//
+// Two ways to run it:
+//   - Locally: `agent-team dashboard` serves this page with /api/roster, /api/board and a live /api/stream.
+//   - On your own site: `agent-team dashboard export --out <dir>` writes this page with roster.json, then either set
+//     window.AGENT_TEAM in config.js or call AgentTeamDashboard.mount(element, options) from your app:
+//       roster      the roster object, or a URL to roster.json            (default '/api/roster')
+//       board       a URL that answers like the hosted board's GET         (default '/api/board')
+//       fetchBoard  async ({ role, days }) => board JSON; use it to call your own authenticated API instead of `board`
+//       headers     extra request headers for `board`, or an async function returning them
+//       stream      a server-sent events URL that says when to reload, or null to poll   (default '/api/stream')
+//       poll        milliseconds between reloads without a stream         (default 15000)
+//       repo        https://github.com/owner/repo for links (default: the roster's)
+//       urlState    keep the open role and view in the page's query string (default true)
+(function () {
+  'use strict';
+
+  const STALE_S = 30 * 60;
+  const STATUS_LABEL = { idle: 'Idle', working: 'Working', waiting: 'Waiting', blocked: 'Blocked', review: 'In review', done: 'Done', quiet: 'Gone quiet', none: 'No report yet', dormant: 'Dormant', covered: 'Covered' };
+  const KIND_LABEL = { status: 'Status', handoff: 'HANDOFF', bug: 'BUG', signoff: 'SIGNOFF', blocked: 'BLOCKED', note: 'Note', heartbeat: 'Heartbeat' };
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const fit = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+  function wrap(s, n) {
+    if (s.length <= n) return [s];
+    const words = s.split(' ');
+    let first = '';
+    while (words.length && (first + (first ? ' ' : '') + words[0]).length <= n) first += (first ? ' ' : '') + words.shift();
+    if (!first) first = words.shift();
+    return [first, fit(words.join(' '), n)];
+  }
+  function ago(iso) {
+    if (!iso) return '–';
+    const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+    if (s < 45) return 'just now';
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+    return `${Math.round(s / 86400)} d ago`;
+  }
+  const when = (iso) => {
+    const d = new Date(iso);
+    const today = new Date().toDateString() === d.toDateString();
+    return d.toLocaleString(undefined, today ? { hour: 'numeric', minute: '2-digit' } : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  };
+  const tone = (l) => (l === 'working' ? 'accent' : l === 'waiting' || l === 'review' ? 'warn' : l === 'blocked' || l === 'quiet' ? 'bad' : l === 'done' ? 'good' : 'plain');
+  const chip = (t, text) => `<span class="atd-chip ${t}">${esc(text)}</span>`;
+  const key = (role, instance) => (instance ? `${role}#${instance}` : role);
+
+  /** The light a role shows: its status, quiet when a busy thread stopped reporting, dormant or none before any report. */
+  const light = (c, r) => (!c ? (r && r.dormant ? 'dormant' : 'none') : c.stale || (c.status !== 'idle' && c.status !== 'done' && c.age_s > STALE_S) ? 'quiet' : c.status);
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Layouts. Both are computed once per roster.
+
+  const NW = 150, NH = 74, GX = 12, GY = 54, PAD = 16, LABEL = 22, WIDTH = 1180;
+  function flowLayout(T) {
+    const nodes = [], bands = [];
+    const perRow = Math.floor((WIDTH - PAD * 2 + GX) / (NW + GX));
+    const ownerBand = T.groups[0] && T.groups[0].key;
+    const groups = T.groups.map((g) => ({ ...g, members: T.roles.filter((r) => r.group === g.key), extra: g.key === ownerBand ? 1 : 0 }))
+      .filter((g) => g.members.length + g.extra > 0);
+    const rows = [];
+    for (const g of groups) {
+      const n = g.members.length + g.extra;
+      const row = rows[rows.length - 1];
+      const used = row ? row.reduce((a, b) => a + b.members.length + b.extra, 0) : 0;
+      if (row && used + n <= perRow) row.push(g); else rows.push([g]);
+    }
+    let y = PAD;
+    for (const row of rows) {
+      const cols = row.map((g) => Math.min(perRow, g.members.length + g.extra));
+      const inner = (c) => c * (NW + GX) - GX;
+      const fixed = row.length * PAD * 2 + (row.length - 1) * GX;
+      const free = WIDTH - 8 - fixed - cols.reduce((a, c) => a + inner(c), 0);
+      let x = 4, rowH = 0;
+      row.forEach((g, bi) => {
+        const n = g.members.length + g.extra;
+        const perLine = cols[bi];
+        const lines = Math.ceil(n / perLine);
+        const h = LABEL + 8 + lines * NH + (lines - 1) * GX + 12;
+        const w = PAD * 2 + inner(perLine) + Math.floor(free / row.length) + (bi === row.length - 1 ? free % row.length : 0);
+        bands.push({ key: g.key, label: g.label, x, y, w, h });
+        let i = 0;
+        const place = (node) => { nodes.push({ ...node, x: x + PAD + (i % perLine) * (NW + GX), y: y + LABEL + 8 + Math.floor(i / perLine) * (NH + GX) }); i++; };
+        if (g.extra) place({ id: 'owner', owner: true });
+        for (const r of g.members) place({ id: r.slug, role: r });
+        rowH = Math.max(rowH, h);
+        x += w + GX;
+      });
+      for (const b of bands) if (b.y === y) b.h = rowH;
+      y += rowH + GY;
+    }
+    return { nodes, bands, height: y - GY + PAD, at: new Map(nodes.map((n) => [n.id, n])) };
+  }
+  function curve(a, b) {
+    const ax = a.x + NW / 2, bx = b.x + NW / 2;
+    if (Math.abs(a.y - b.y) < 1) {
+      const lift = 18 + Math.min(40, Math.abs(ax - bx) / 12);
+      return `M${ax} ${a.y} C${ax} ${a.y - lift}, ${bx} ${b.y - lift}, ${bx} ${b.y}`;
+    }
+    const down = b.y > a.y;
+    const y1 = down ? a.y + NH : a.y, y2 = down ? b.y : b.y + NH;
+    const bend = Math.max(24, Math.abs(y2 - y1) / 2);
+    return `M${ax} ${y1} C${ax} ${y1 + (down ? bend : -bend)}, ${bx} ${y2 - (down ? bend : -bend)}, ${bx} ${y2}`;
+  }
+
+  const OW = 136, OH = 74, OGX = 12, OGY = 44, OIND = 16, OSTACK = 8, ROW_DEPTH = 3;
+  const MAXH = 11 * (OH + OSTACK);
+  function orgLayout(T) {
+    const nodes = [], lines = [];
+    const sizes = new Map(), lanesOf = new Map();
+    const kids = T.kids;
+    const measure = (id, depth) => {
+      const ks = kids(id);
+      let out;
+      if (!ks.length) out = { w: OW, h: OH };
+      else if (depth < ROW_DEPTH - 1) {
+        const cs = ks.map((k) => measure(k, depth + 1));
+        out = { w: Math.max(OW, cs.reduce((a, c) => a + c.w, 0) + (ks.length - 1) * OGX), h: OH + OGY + Math.max(...cs.map((c) => c.h)) };
+      } else {
+        const lanes = [[]];
+        let h = 0;
+        for (const k of ks) {
+          const c = measure(k, depth + 1);
+          if (h && h + c.h + OSTACK > MAXH) { lanes.push([]); h = 0; }
+          lanes[lanes.length - 1].push(k);
+          h += c.h + OSTACK;
+        }
+        lanesOf.set(id, lanes);
+        const laneW = (l) => OIND + Math.max(...l.map((k) => sizes.get(k).w));
+        const laneH = (l) => l.reduce((a, k) => a + sizes.get(k).h + OSTACK, 0);
+        out = { w: Math.max(OW, lanes.reduce((a, l) => a + laneW(l), 0) + (lanes.length - 1) * OGX), h: OH + Math.max(...lanes.map(laneH)) };
+      }
+      sizes.set(id, out);
+      return out;
+    };
+    const boxX = (id, x, depth) => (depth < ROW_DEPTH - 1 ? x + (sizes.get(id).w - OW) / 2 : x);
+    const place = (id, x, y, depth) => {
+      const ks = kids(id);
+      const nx = boxX(id, x, depth);
+      nodes.push({ id, x: nx, y, role: T.bySlug.get(id), owner: id === 'owner', depth });
+      if (!ks.length) return;
+      if (depth < ROW_DEPTH - 1) {
+        const total = ks.reduce((a, k) => a + sizes.get(k).w, 0) + (ks.length - 1) * OGX;
+        let cx = x + (sizes.get(id).w - total) / 2;
+        const busY = y + OH + OGY / 2;
+        const centres = [];
+        for (const k of ks) {
+          const mid = boxX(k, cx, depth + 1) + OW / 2;
+          centres.push(mid);
+          lines.push(`M${mid} ${busY} V${y + OH + OGY}`);
+          place(k, cx, y + OH + OGY, depth + 1);
+          cx += sizes.get(k).w + OGX;
+        }
+        lines.push(`M${nx + OW / 2} ${y + OH} V${busY}`, `M${Math.min(...centres)} ${busY} H${Math.max(...centres)}`);
+        return;
+      }
+      const busY = y + OH + OSTACK / 2;
+      let lx = nx;
+      const spines = [];
+      for (const lane of lanesOf.get(id)) {
+        const spine = lx + OIND / 2;
+        spines.push(spine);
+        let cy = y + OH + OSTACK, last = cy;
+        for (const k of lane) {
+          last = cy + OH / 2;
+          lines.push(`M${spine} ${last} H${lx + OIND}`);
+          place(k, lx + OIND, cy, depth + 1);
+          cy += sizes.get(k).h + OSTACK;
+        }
+        lines.push(`M${spine} ${busY} V${last}`);
+        lx += OIND + Math.max(...lane.map((k) => sizes.get(k).w)) + OGX;
+      }
+      lines.push(`M${spines[0]} ${y + OH} V${busY}`);
+      if (spines.length > 1) lines.push(`M${spines[0]} ${busY} H${spines[spines.length - 1]}`);
+    };
+    const root = measure('owner', 0);
+    place('owner', 0, 0, 0);
+    return { nodes, lines, width: root.w, height: root.h };
+  }
+
+  /** The roster with the lookups every view needs. */
+  function team(roster) {
+    const T = { ...roster };
+    T.bySlug = new Map(roster.roles.map((r) => [r.slug, r]));
+    const children = new Map([['owner', roster.ownerReports || []]]);
+    for (const r of roster.roles) children.set(r.slug, r.reports || []);
+    T.kids = (id) => children.get(id) || [];
+    T.top = (roster.ownerReports || [])[0] || '';
+    T.nameOf = (slug) => (T.bySlug.get(slug) ? T.bySlug.get(slug).title : slug === 'owner' ? 'You' : slug.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase()));
+    T.isExec = (r) => r.group === 'executive' && T.kids(r.slug).length > 0 && r.reportsTo !== 'owner';
+    T.descendants = (id) => { const out = []; const walk = (x) => { for (const k of T.kids(x)) { out.push(k); walk(k); } }; walk(id); return out; };
+    const edges = (roster.ownerReports || []).map((to) => ({ from: 'owner', to })).concat(roster.edges || []);
+    T.allEdges = edges;
+    const set = new Set(edges.map((e) => `${e.from}>${e.to}`));
+    T.touch = (a, b) => set.has(`${a}>${b}`) || set.has(`${b}>${a}`);
+    T.flow = flowLayout(T);
+    T.org = orgLayout(T);
+    return T;
+  }
+
+  /** Where each role stands, with pool instances kept apart. */
+  function boardOf(T, current) {
+    const byRole = new Map();
+    for (const c of current) byRole.set(c.role, (byRole.get(c.role) || []).concat(c));
+    const standing = (slug) => { const rows = byRole.get(slug) || []; return rows.find((r) => !r.instance) || rows[0]; };
+    const instances = (slug) => (byRole.get(slug) || []).filter((r) => r.instance && r.status !== 'done' && r.status !== 'idle');
+    const unknown = [...byRole.keys()].filter((r) => !T.bySlug.has(r));
+    const lightOf = (r) => (r.pool && instances(r.slug).length ? 'working' : light(standing(r.slug), r));
+    return { byRole, standing, instances, unknown, lightOf };
+  }
+
+  /** A lead's box: its own report, else a rollup of its team, else "covered" by the role at the top. */
+  function rollup(T, B, r) {
+    const team = T.descendants(r.slug).map((s) => T.bySlug.get(s)).filter(Boolean);
+    const counts = {};
+    for (const m of team) { const l = B.lightOf(m); counts[l] = (counts[l] || 0) + 1; }
+    const own = B.standing(r.slug);
+    const active = ['working', 'waiting', 'review', 'blocked', 'quiet', 'done', 'idle'].reduce((a, k) => a + (counts[k] || 0), 0);
+    if (!own && !active && T.isExec(r)) return { light: 'covered', text: `${T.nameOf(T.top)} covers` };
+    const parts = [];
+    if (counts.working) parts.push(`${counts.working} working`);
+    if (counts.blocked) parts.push(`${counts.blocked} blocked`);
+    if (counts.waiting || counts.review) parts.push(`${(counts.waiting || 0) + (counts.review || 0)} waiting`);
+    if (counts.quiet) parts.push(`${counts.quiet} quiet`);
+    const l = own ? light(own, r) : counts.blocked ? 'blocked' : counts.working ? 'working' : counts.waiting || counts.review ? 'waiting' : counts.quiet ? 'quiet' : light(undefined, r);
+    return { light: l, text: (own && own.task) || (parts.length ? parts.join(', ') : `${team.length} roles, none reporting`) };
+  }
+  const poolText = (insts) => (insts.length ? `${insts.length} live: ${insts.map((i) => i.instance).join(', ')}` : 'None live');
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Views, as HTML strings.
+
+  function nodeSvg(T, B, r, x, y, w, chars, state, extraClass, statusText, l) {
+    const lines = wrap(r.title, chars);
+    const cls = `tf-node s-${l}${state.sel === r.slug ? ' selected' : ''}${extraClass}${r.pool ? ' pool' : ''}`;
+    const label = l === 'covered' ? `Covered by ${T.nameOf(T.top)}` : STATUS_LABEL[l];
+    return `<g class="${cls}" transform="translate(${x} ${y})" tabindex="0" role="button" data-pick="${esc(r.slug)}" data-hover="${esc(r.slug)}" aria-label="${esc(`${r.title}: ${label}${statusText ? `, ${statusText}` : ''}`)}">`
+      + (r.pool ? `<rect class="tf-stack" x="6" y="-6" width="${w}" height="${NH}" rx="12"/><rect class="tf-stack" x="3" y="-3" width="${w}" height="${NH}" rx="12"/>` : '')
+      + `<rect width="${w}" height="${NH}" rx="12"/><circle class="tf-light" cx="14" cy="20" r="5"/>`
+      + `<text class="tf-title" x="26" y="24">${esc(lines[0])}</text>${lines[1] ? `<text class="tf-title" x="26" y="40">${esc(lines[1])}</text>` : ''}`
+      + `<text class="tf-task" x="14" y="${lines[1] ? 60 : 44}">${esc(fit(statusText, w === NW ? 24 : 22))}</text></g>`;
+  }
+  const ownerSvg = (x, y, w, sub) => `<g class="tf-node owner" transform="translate(${x} ${y})"><rect width="${w}" height="${NH}" rx="12"/><text class="tf-title" x="14" y="25">Owner</text><text class="tf-task" x="14" y="44">${esc(sub)}</text></g>`;
+
+  function flowSvg(T, B, flow, state) {
+    const focus = state.hover || state.sel;
+    const L = T.flow;
+    const live = new Map();
+    for (const f of flow) live.set(`${f.role}>${f.to_role.split('#')[0]}`, f);
+    const seen = new Set();
+    const edges = [];
+    const add = (from, to, f) => {
+      const id = `${from}>${to}`;
+      if (seen.has(id)) return;
+      const a = L.at.get(from), b = L.at.get(to);
+      if (!a || !b) return;
+      seen.add(id);
+      edges.push({ from, to, d: curve(a, b), live: f || live.get(id), focused: focus === from || focus === to, dir: focus === from ? 'out' : focus === to ? 'in' : '' });
+    };
+    for (const e of T.allEdges) add(e.from, e.to);
+    for (const f of flow) add(f.role, f.to_role.split('#')[0], f);
+    edges.sort((x, y) => Number(!!x.live || x.focused) - Number(!!y.live || y.focused));
+    const fresh = (f) => f && Date.now() - Date.parse(f.last_at) < 15 * 60000;
+    let s = `<svg class="team-flow${focus ? ' focused' : ''}" viewBox="0 0 ${WIDTH} ${L.height}" role="img" aria-label="The team as a flow: who hands work to whom, coloured by what each thread is doing now">`
+      + '<defs><marker id="tf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z"/></marker></defs>';
+    for (const b of L.bands) s += `<g class="tf-band"><rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="14"/><text x="${b.x + PAD - 4}" y="${b.y + 17}">${esc(b.label)}</text></g>`;
+    s += '<g class="tf-edges">';
+    for (const e of edges) {
+      const cls = `tf-edge${e.live ? ' live' : ''}${fresh(e.live) ? ' fresh' : ''}${e.focused ? ` on ${e.dir}` : ''}`;
+      const title = e.live ? `<title>${esc(`${T.nameOf(e.from)} → ${T.nameOf(e.to)}: ${e.live.n} in the window, last ${KIND_LABEL[e.live.last_kind] || e.live.last_kind} ${ago(e.live.last_at)}`)}</title>` : '';
+      s += `<path d="${e.d}" marker-end="url(#tf-arrow)" class="${cls}">${title}</path>`;
+    }
+    s += '</g>';
+    for (const n of L.nodes) {
+      if (n.owner) { s += ownerSvg(n.x, n.y, NW, `You, through ${T.nameOf(T.top)}`); continue; }
+      const r = n.role, cur = B.standing(r.slug), inst = r.pool ? B.instances(r.slug) : [];
+      const l = B.lightOf(r);
+      const text = r.pool ? poolText(inst) : (cur && cur.task) || STATUS_LABEL[l];
+      const dim = focus && focus !== r.slug && !T.touch(r.slug, focus) ? ' dim' : '';
+      s += nodeSvg(T, B, r, n.x, n.y, NW, 17, state, dim, text, l);
+    }
+    return s + '</svg>';
+  }
+
+  function orgSvg(T, B, state) {
+    const sel = state.sel;
+    let lit = null;
+    if (sel) {
+      lit = new Set([sel, ...T.descendants(sel)]);
+      let c = sel;
+      while (c && c !== 'owner') { lit.add(c); c = T.bySlug.get(c) && T.bySlug.get(c).reportsTo; }
+    }
+    const P = 12, w = T.org.width + P * 2, h = T.org.height + P * 2;
+    let s = `<svg class="team-org${sel ? ' focused' : ''}" viewBox="0 0 ${w} ${h}" style="max-width:${w}px" role="img" aria-label="The team as an org chart: who reports to whom, coloured by what each thread is doing now"><g transform="translate(${P} ${P})"><g class="org-lines">`;
+    for (const d of T.org.lines) s += `<path d="${d}"/>`;
+    s += '</g>';
+    for (const n of T.org.nodes) {
+      if (n.owner) { s += ownerSvg(n.x, n.y, OW, 'You'); continue; }
+      const r = n.role, lead = T.kids(r.slug).length > 0;
+      const roll = lead ? rollup(T, B, r) : null;
+      const cur = B.standing(r.slug);
+      const l = roll ? roll.light : B.lightOf(r);
+      const text = roll ? roll.text : r.pool ? poolText(B.instances(r.slug)) : (cur && cur.task) || STATUS_LABEL[l];
+      s += nodeSvg(T, B, r, n.x, n.y, OW, 15, state, `${lit && !lit.has(r.slug) ? ' dim' : ''}${lead ? ' lead' : ''}`, text, l);
+    }
+    return s + '</g></svg>';
+  }
+
+  function card(r, l, text, selected, pickId) {
+    return `<button type="button" class="team-card s-${l}${selected ? ' selected' : ''}" data-pick="${esc(pickId)}"><span class="team-light" aria-hidden="true"></span>`
+      + `<span class="team-card-body"><b>${esc(r.title)}</b><span class="small muted one-line">${esc(text)}</span></span>${chip(tone(l), STATUS_LABEL[l])}</button>`;
+  }
+  function roleCard(B, r, state) {
+    const cur = B.standing(r.slug), l = B.lightOf(r);
+    return card(r, l, r.pool ? poolText(B.instances(r.slug)) : (cur && cur.task) || STATUS_LABEL[l], state.sel === r.slug, r.slug);
+  }
+  function orgTree(T, B, id, depth, state) {
+    const r = T.bySlug.get(id);
+    if (!r) return '';
+    const ks = T.kids(id);
+    if (!ks.length) return roleCard(B, r, state);
+    const roll = rollup(T, B, r);
+    const label = roll.light === 'covered' ? 'Covered' : STATUS_LABEL[roll.light];
+    return `<details class="team-tree"${depth < 1 ? ' open' : ''}><summary class="team-card s-${roll.light}${state.sel === id ? ' selected' : ''}"><span class="team-light" aria-hidden="true"></span>`
+      + `<span class="team-card-body"><b>${esc(r.title)}</b><span class="small muted one-line">${esc(roll.text)}</span></span>${chip(roll.light === 'covered' ? 'plain' : tone(roll.light), label)}`
+      + `<button type="button" class="team-open" aria-label="Open ${esc(r.title)}" data-pick="${esc(id)}">›</button></summary>`
+      + `<div class="team-tree-kids">${ks.map((k) => orgTree(T, B, k, depth + 1, state)).join('')}</div></details>`;
+  }
+  const orgList = (T, B, state) => `<div class="team-list"><section class="team-list-band"><h3 class="small">Reports to you</h3>${T.kids('owner').map((k) => orgTree(T, B, k, 0, state)).join('')}</section></div>`;
+  function roleList(T, B, state) {
+    let s = '<div class="team-list">';
+    for (const g of T.groups) {
+      const members = T.roles.filter((r) => r.group === g.key);
+      if (members.length) s += `<section class="team-list-band"><h3 class="small">${esc(g.label)}</h3>${members.map((r) => roleCard(B, r, state)).join('')}</section>`;
+    }
+    if (B.unknown.length) s += `<section class="team-list-band"><h3 class="small">Not in the briefs</h3>${B.unknown.map((slug) => roleCard(B, { slug, title: slug, pool: null }, state)).join('')}</section>`;
+    return s + '</div>';
+  }
+
+  function links(repo, c) {
+    const a = (href, text, cls = '') => (repo ? `<a href="${esc(href)}" target="_blank" rel="noreferrer"${cls}>${esc(text)}</a>` : `<span${cls}>${esc(text)}</span>`);
+    const out = [];
+    if (c.issue) out.push(a(`${repo}/issues/${c.issue}`, `#${c.issue}`));
+    if (c.pr) out.push(a(`${repo}/pull/${c.pr}`, `PR ${c.pr}`));
+    if (c.branch) out.push(a(`${repo}/tree/${encodeURIComponent(c.branch)}`, c.branch, ' class="one-line" style="max-width:220px"'));
+    if (c.commit) out.push(a(`${repo}/commit/${c.commit}`, String(c.commit).slice(0, 7)));
+    return `<span class="team-links">${out.join('')}</span>`;
+  }
+  const pickLink = (T, id) => (id === 'owner' ? 'You' : `<button type="button" class="link" data-pick="${esc(id)}">${esc(T.nameOf(id.split('#')[0]))}${id.includes('#') ? ` #${esc(id.split('#')[1])}` : ''}</button>`);
+
+  function panel(T, B, id, history, repo) {
+    const [slug, inst] = id.split('#');
+    const r = T.bySlug.get(slug);
+    const rows = B.byRole.get(slug) || [];
+    const cur = inst ? rows.find((c) => c.instance === inst) : B.standing(slug);
+    const l = light(cur, r);
+    const title = r ? r.title : T.nameOf(slug);
+    let s = `<aside class="team-panel atd-card" aria-label="${esc(title)}"><div class="team-panel-head"><div class="stack">`
+      + `<div class="row"><h2>${esc(title)}${inst ? `<span class="muted"> #${esc(inst)}</span>` : ''}</h2>${chip(tone(l), STATUS_LABEL[l])}</div>`
+      + `<p class="small muted">${esc((r && r.model) || 'Not in the briefs')}${r && r.titleNote ? ` · ${esc(r.titleNote)}` : ''}</p>`
+      + (r && r.dormant ? `<p class="small">${esc(r.statusNote)}</p>` : '')
+      + `</div><div class="row"><button type="button" class="icon-btn" data-copy aria-label="Copy link to this role" title="Copy link">⧉</button><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div></div>`;
+    if (r && r.pool && !inst) {
+      const insts = B.instances(slug);
+      s += `<section><h3 class="small">${insts.length ? `${insts.length} live now` : 'None live now'}</h3>`
+        + (insts.length ? insts.map((c) => card({ title: `#${c.instance}` }, light(c), c.task || STATUS_LABEL[light(c)], false, key(slug, c.instance))).join('')
+          : '<p class="small muted">Short-lived threads appear here while they run and leave when they report done.</p>') + '</section>';
+    }
+    s += '<section><h3 class="small">Now</h3>';
+    if (cur) {
+      s += `<dl class="team-kv"><dt>Task</dt><dd>${cur.task ? esc(cur.task) : '<span class="muted">Nothing in hand</span>'}</dd>`
+        + `<dt>Status</dt><dd>${esc(STATUS_LABEL[cur.status])} since ${esc(when(cur.status_at))}${cur.stale ? ' · no report for over 30 minutes' : ''}</dd>`
+        + (cur.waiting_on ? `<dt>Waiting on</dt><dd>${pickLink(T, cur.waiting_on)}</dd>` : '')
+        + (cur.issue || cur.pr || cur.branch || cur.commit ? `<dt>Links</dt><dd>${links(repo, cur)}</dd>` : '')
+        + (cur.detail ? `<dt>Detail</dt><dd class="pre">${esc(cur.detail)}</dd>` : '')
+        + (cur.session ? `<dt>Session</dt><dd>${/^https?:/.test(cur.session) ? `<a href="${esc(cur.session)}" target="_blank" rel="noreferrer">Open the thread</a>` : esc(cur.session)}</dd>` : '')
+        + `<dt>Last report</dt><dd>${esc(ago(cur.last_at))}</dd></dl>`;
+    } else {
+      s += `<p class="small muted">${r && r.dormant ? 'Nothing yet: this role has no thread until you start it.' : 'No report yet.'} It lights up when its thread runs <code>scripts/agent-team/team-status.sh ${esc(slug)} status working --task "…"</code>.</p>`;
+    }
+    s += '</section>';
+    if (r) {
+      const reports = T.kids(r.slug);
+      s += `<section><h3 class="small">From the brief</h3><p class="small">${esc(r.identity)}</p><dl class="team-kv">`
+        + `<dt>Reports to</dt><dd>${pickLink(T, r.reportsTo)}${r.reportsToDeclared ? '' : ' <span class="small muted">(until the brief says otherwise)</span>'}</dd>`
+        + (reports.length ? `<dt>Reports</dt><dd class="team-reports">${reports.map((k) => { const m = T.bySlug.get(k); const ml = T.kids(k).length ? rollup(T, B, m).light : B.lightOf(m); return `<button type="button" class="atd-chip plain team-chip s-${ml}" data-pick="${esc(k)}"><i class="team-light" aria-hidden="true"></i>${esc(T.nameOf(k))}</button>`; }).join('')}</dd>` : '')
+        + `<dt>Owns</dt><dd>${r.paths && r.paths.length ? r.paths.map((p) => `<code>${esc(p)}</code>`).join('') : esc(r.owns)}</dd>`
+        + (r.handsTo && r.handsTo.length ? `<dt>Hands to</dt><dd class="team-reports">${r.handsTo.map((k) => (k === 'owner' ? chip('plain', 'You') : `<button type="button" class="atd-chip plain team-chip" data-pick="${esc(k)}">${esc(T.nameOf(k))}</button>`)).join('')}</dd>` : '')
+        + (r.wakesOn ? `<dt>Wakes on</dt><dd>${esc(r.wakesOn)}</dd>` : '')
+        + (r.tools ? `<dt>Tools</dt><dd>${esc(r.tools)}</dd>` : '')
+        + '</dl>'
+        + (repo ? `<p class="small"><a href="${esc(repo)}/blob/HEAD/${esc(T.briefsPath || 'docs/team/roles')}/${esc(r.slug)}.md" target="_blank" rel="noreferrer">Read the full brief</a></p>` : '')
+        + '</section>';
+    }
+    s += '<section><h3 class="small">History</h3>';
+    if (history && history.length) {
+      s += '<ol class="team-history">';
+      for (const e of history) {
+        const t = e.kind === 'bug' || e.kind === 'blocked' ? 'bad' : e.kind === 'signoff' ? 'good' : e.kind === 'handoff' ? 'warn' : 'plain';
+        s += `<li><span class="small muted">${esc(when(e.at))}</span><div><div>${chip(t, KIND_LABEL[e.kind] || e.kind)}`
+          + (e.status && e.kind !== 'status' ? `<span class="small muted"> · ${esc(STATUS_LABEL[e.status])}</span>` : e.status ? `<b> ${esc(STATUS_LABEL[e.status])}</b>` : '')
+          + (e.to_role ? `<span class="small"> → ${pickLink(T, e.to_role)}</span>` : '') + '</div>'
+          + (e.task ? `<div>${esc(e.task)}</div>` : '')
+          + (e.detail ? `<div class="small muted pre">${esc(e.detail)}</div>` : '')
+          + (e.issue || e.pr || e.branch || e.commit ? `<div class="small">${links(repo, e)}</div>` : '')
+          + (e.evidence && e.evidence.length ? `<div class="small team-evidence">${e.evidence.map((p) => (/^https?:/.test(p) ? `<a href="${esc(p)}" target="_blank" rel="noreferrer">${esc(p)}</a>` : `<code>${esc(p)}</code>`)).join('')}</div>` : '')
+          + '</div></li>';
+      }
+      s += '</ol>';
+    } else s += '<p class="small muted">Nothing reported yet.</p>';
+    return s + '</section></aside>';
+  }
+
+  function feedRows(T, recent, q, repo) {
+    const needle = q.trim().toLowerCase();
+    const rows = needle ? recent.filter((r) => `${r.role} ${T.nameOf(r.role)} ${r.instance || ''} ${r.kind} ${r.status || ''} ${r.task || ''} ${r.to_role || ''} ${r.detail || ''}`.toLowerCase().includes(needle)) : recent;
+    if (!rows.length) return `<p class="small muted">${needle ? 'Nothing matches.' : 'No report yet.'}</p>`;
+    let s = '<div class="atd-table-wrap"><table class="atd-table"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Task</th><th>To</th><th>Links</th></tr></thead><tbody>';
+    for (const r of rows) {
+      s += `<tr><td class="nowrap">${esc(when(r.at))}</td><td><button type="button" class="link" data-pick="${esc(key(r.role, r.instance))}"><b>${esc(T.nameOf(r.role))}</b>${r.instance ? ` #${esc(r.instance)}` : ''}</button></td>`
+        + `<td>${esc(KIND_LABEL[r.kind] || r.kind)}${r.status ? `<span class="small muted"> · ${esc(STATUS_LABEL[r.status])}</span>` : ''}</td>`
+        + `<td>${esc(r.task || '')}${r.detail ? `<div class="small muted one-line" style="max-width:320px">${esc(r.detail)}</div>` : ''}</td>`
+        + `<td>${r.to_role ? pickLink(T, r.to_role) : ''}</td><td>${links(repo, r)}</td></tr>`;
+    }
+    return s + '</tbody></table></div>';
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+
+  const SHELL = `
+    <header class="atd-top"><div><h1 data-title>Agent team</h1><p class="small muted" data-sub></p></div><span class="atd-live small muted" data-live></span></header>
+    <div class="atd-tiles" data-tiles></div>
+    <p class="atd-banner" data-banner hidden></p>
+    <p class="atd-banner bad" data-error hidden></p>
+    <div class="team-layout" data-layout>
+      <section class="atd-card">
+        <div class="atd-card-head">
+          <div><h2 data-chart-title></h2><p class="small muted" data-chart-sub></p></div>
+          <div class="row wrap">
+            <div class="atd-seg" role="group" aria-label="View"><button type="button" data-view="org">Org chart</button><button type="button" data-view="flow">Flow</button></div>
+            <span class="team-legend small muted" data-legend></span>
+          </div>
+        </div>
+        <div data-chart></div>
+      </section>
+      <div data-panel></div>
+    </div>
+    <section class="atd-card">
+      <div class="atd-card-head"><div><h2>Feed</h2><p class="small muted">Every report in the last 7 days, newest first</p></div><input type="search" class="atd-search" placeholder="Search" aria-label="Search the feed" data-search></div>
+      <div data-feed></div>
+    </section>
+    <section class="atd-card atd-defs">
+      <h2>How to read this</h2>
+      <dl>
+        <dt>Where this comes from</dt><dd>Each thread runs <code>scripts/agent-team/team-status.sh</code> when it starts a task and whenever it sends a HANDOFF, BUG, SIGNOFF or BLOCKED. Nothing here is read from the threads themselves.</dd>
+        <dt>The roster</dt><dd>Roles, models, what each owns, whom it reports to and whom it hands to come from the role briefs and ownership.md. Change a brief, run sync, and the chart redraws.</dd>
+        <dt>Org chart</dt><dd>A brief's "Reports to" line places it under its lead; a lead's "Direct reports" list sets the order. A lead shows a rollup of its team, or "covered" until a role in its lane reports.</dd>
+        <dt>Gone quiet</dt><dd>A working or waiting thread that has not reported for 30 minutes. Idle and done threads never go quiet.</dd>
+        <dt>Pools</dt><dd>Roles with many short-lived threads (one per PR, one per direction) show as a stack; the panel lists the live ones.</dd>
+        <dt>Dormant</dt><dd>A role whose brief says it is dormant has no thread until someone starts it.</dd>
+      </dl>
+    </section>`;
+
+  function mount(root, options) {
+    const o = Object.assign({ roster: '/api/roster', board: '/api/board', stream: '/api/stream', poll: 15000, urlState: true }, options || {});
+    root.classList.add('atd');
+    root.innerHTML = SHELL;
+    const $ = (sel) => root.querySelector(sel);
+    const params = new URLSearchParams(o.urlState ? location.search : '');
+    const state = { view: params.get('view') === 'flow' ? 'flow' : 'org', role: params.get('role') || '', hover: null, q: '', T: null, data: null, live: false };
+    Object.defineProperty(state, 'sel', { get: () => (state.role ? state.role.split('#')[0] : null) });
+    let destroyed = false, es = null, timer = null, loading = false, again = false;
+
+    const headers = async () => (typeof o.headers === 'function' ? o.headers() : o.headers || {});
+    const getJSON = async (url) => {
+      const r = await fetch(url, { headers: await headers(), cache: 'no-store' });
+      if (!r.ok) throw new Error(`${url} answered HTTP ${r.status}`);
+      return r.json();
+    };
+    async function loadRoster() {
+      const raw = typeof o.roster === 'string' ? await getJSON(o.roster) : typeof o.roster === 'function' ? await o.roster() : o.roster;
+      state.T = team(raw);
+      state.repo = o.repo || raw.repo || '';
+      $('[data-title]').textContent = raw.project ? `${raw.project} agent team` : 'Agent team';
+      document.title = $('[data-title]').textContent;
+    }
+    async function loadBoard() {
+      if (loading) { again = true; return; }
+      loading = true;
+      try {
+        const q = { role: state.role, days: 7 };
+        if (o.fetchBoard) state.data = await o.fetchBoard(q);
+        else {
+          const u = new URL(o.board, location.href);
+          u.searchParams.set('days', '7');
+          if (state.role) u.searchParams.set('role', state.role);
+          state.data = await getJSON(u.toString());
+        }
+        $('[data-error]').hidden = true;
+      } catch (e) {
+        $('[data-error]').hidden = false;
+        $('[data-error]').textContent = `Could not load the board: ${e.message}`;
+      } finally {
+        loading = false;
+      }
+      render();
+      if (again) { again = false; loadBoard(); }
+    }
+
+    function setUrl() {
+      if (!o.urlState) return;
+      const p = new URLSearchParams(location.search);
+      if (state.view === 'flow') p.set('view', 'flow'); else p.delete('view');
+      if (state.role) p.set('role', state.role); else p.delete('role');
+      const qs = p.toString();
+      history.replaceState(null, '', `${location.pathname}${qs ? `?${qs}` : ''}${location.hash}`);
+    }
+    function pick(id) {
+      if (!id || id === 'owner') return;
+      state.role = state.role === id ? '' : id;
+      setUrl();
+      render();
+      loadBoard();
+    }
+
+    function renderChart() {
+      const T = state.T, B = boardOf(T, (state.data && state.data.current) || []);
+      const wrap = $('.team-org-wrap');
+      const left = wrap ? wrap.scrollLeft : null;
+      $('[data-chart]').innerHTML = state.view === 'org'
+        ? `<div class="team-flow-wrap team-org-wrap">${orgSvg(T, B, state)}</div>${orgList(T, B, state)}`
+        : `<div class="team-flow-wrap">${flowSvg(T, B, (state.data && state.data.flow) || [], state)}</div>${roleList(T, B, state)}`;
+      if (left !== null && $('.team-org-wrap')) $('.team-org-wrap').scrollLeft = left;
+      return B;
+    }
+
+    function render() {
+      if (destroyed || !state.T) return;
+      const T = state.T, d = state.data || { current: [], recent: [], flow: [], role: [] };
+      const current = d.current || [];
+      const working = current.filter((c) => c.status === 'working' && !c.stale).length;
+      const waiting = current.filter((c) => c.status === 'waiting' || c.status === 'review').length;
+      const onYou = current.filter((c) => c.status === 'waiting' && (c.waiting_on === 'owner' || c.waiting_on === T.top)).length;
+      const blocked = current.filter((c) => c.status === 'blocked' || c.stale).length;
+      const last = current[0];
+      const tile = (label, value, sub, t) => `<div class="atd-tile ${t || ''}"><span class="small muted">${esc(label)}</span><b>${esc(value)}</b>${sub ? `<span class="small muted">${esc(sub)}</span>` : ''}</div>`;
+      $('[data-tiles]').innerHTML = tile('Working now', working, '', working ? 'good' : '')
+        + tile('Waiting or in review', waiting, onYou ? `${onYou} on you or ${T.nameOf(T.top)}` : '', onYou ? 'warn' : '')
+        + tile('Blocked or quiet', blocked, '', blocked ? 'bad' : '')
+        + tile('Last report', last ? ago(last.last_at) : '–', last ? `${T.nameOf(last.role)}${last.instance ? ` #${last.instance}` : ''}` : 'Nothing reported yet');
+      const banner = $('[data-banner]');
+      banner.hidden = !(state.data && !current.length);
+      banner.innerHTML = 'No activity yet. Roles light up as soon as a thread reports, for example <code>scripts/agent-team/team-status.sh backend-dev status working --task "Invoices API"</code>.';
+      $('[data-sub]').textContent = `${T.roles.length} roles. Click a role to see what it is doing; colour is its last report.${d.as_of ? ` As of ${ago(d.as_of)}.` : ''}`;
+      $('[data-chart-title]').textContent = state.view === 'org' ? 'The team' : 'How work moves';
+      $('[data-chart-sub]').textContent = state.view === 'org' ? 'Who reports to whom, from the role briefs.' : 'Hand-offs from the briefs. Coloured edges carried a message in the last 7 days; moving ones in the last 15 minutes.';
+      for (const b of root.querySelectorAll('[data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === state.view));
+      const legend = ['working', 'waiting', 'blocked', 'done', 'idle', 'none', 'dormant'].concat(state.view === 'org' ? ['covered'] : []);
+      $('[data-legend]').innerHTML = legend.map((s) => `<span class="s-${s}"><i class="team-light"></i>${esc(s === 'covered' ? `Covered by ${T.nameOf(T.top)}` : STATUS_LABEL[s])}</span>`).join('');
+      const B = renderChart();
+      $('[data-layout]').classList.toggle('with-panel', !!state.role);
+      const scroll = $('.team-panel') ? $('.team-panel').scrollTop : 0;
+      $('[data-panel]').innerHTML = state.role ? panel(T, B, state.role, d.role || [], state.repo) : '';
+      if ($('.team-panel')) $('.team-panel').scrollTop = scroll;
+      $('[data-feed]').innerHTML = feedRows(T, d.recent || [], state.q, state.repo);
+    }
+
+    root.addEventListener('click', (e) => {
+      const t = e.target.closest('[data-pick],[data-view],[data-close],[data-copy]');
+      if (!t || !root.contains(t)) return;
+      if (t.dataset.view) { state.view = t.dataset.view; setUrl(); render(); return; }
+      if (t.hasAttribute('data-close')) { state.role = ''; setUrl(); render(); return; }
+      if (t.hasAttribute('data-copy')) { if (navigator.clipboard) navigator.clipboard.writeText(location.href).then(() => { t.textContent = '✓'; setTimeout(() => { t.textContent = '⧉'; }, 1500); }, () => {}); return; }
+      e.preventDefault();
+      pick(t.dataset.pick);
+    });
+    root.addEventListener('keydown', (e) => {
+      const t = e.target.closest && e.target.closest('g[data-pick]');
+      if (t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); pick(t.dataset.pick); }
+    });
+    const hover = (id) => { if (state.view === 'flow' && state.hover !== id) { state.hover = id; renderChart(); } };
+    root.addEventListener('mouseover', (e) => { const t = e.target.closest && e.target.closest('[data-hover]'); hover(t ? t.dataset.hover : null); });
+    root.addEventListener('focusin', (e) => { const t = e.target.closest && e.target.closest('[data-hover]'); if (t) hover(t.dataset.hover); });
+    root.addEventListener('input', (e) => { if (e.target.matches('[data-search]')) { state.q = e.target.value; $('[data-feed]').innerHTML = feedRows(state.T, (state.data && state.data.recent) || [], state.q, state.repo); } });
+
+    function connect() {
+      const live = $('[data-live]');
+      if (o.stream && typeof EventSource !== 'undefined') {
+        es = new EventSource(o.stream);
+        es.addEventListener('open', () => { live.innerHTML = '<i class="team-light s-working"></i> Live'; });
+        es.addEventListener('board', () => loadBoard());
+        es.addEventListener('error', () => { live.innerHTML = '<i class="team-light s-quiet"></i> Reconnecting'; });
+      } else {
+        live.textContent = `Updates every ${Math.round(o.poll / 1000)} s`;
+      }
+      // Also reload on a timer: it refreshes "gone quiet" and the times, and covers a lost stream.
+      timer = setInterval(() => { if (document.visibilityState === 'visible') loadBoard(); }, o.stream ? Math.max(o.poll, 30000) : o.poll);
+    }
+
+    loadRoster().then(() => { render(); connect(); return loadBoard(); }).catch((e) => {
+      $('[data-error]').hidden = false;
+      $('[data-error]').textContent = `Could not load the roster: ${e.message}`;
+    });
+    return { reload: loadBoard, destroy() { destroyed = true; if (es) es.close(); clearInterval(timer); root.innerHTML = ''; } };
+  }
+
+  const api = { mount, team, boardOf, rollup, light };
+  if (typeof window !== 'undefined') {
+    window.AgentTeamDashboard = api;
+    const auto = document.querySelector('[data-agent-team-dashboard]');
+    if (auto) mount(auto, window.AGENT_TEAM || {});
+  }
+  if (typeof module !== 'undefined') module.exports = api;
+})();

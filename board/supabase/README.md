@@ -1,8 +1,8 @@
 # Hosted team board (optional)
 
-Out of the box, `scripts/agent-team/team-status.sh` appends every report to `~/.agent-team/<project>/events.jsonl` and `scripts/agent-team/team-board.sh` reads it. That is enough when every thread runs on one machine.
+Out of the box, `scripts/agent-team/team-status.sh` appends every report to `~/.agent-team/<project>/events.jsonl`, and the dashboard (`node scripts/agent-team/dashboard.mjs`) and `team-board.sh` read it. That is enough when every thread runs on one machine, and the dashboard can also take reports from other machines (see [docs/dashboard.md](../../docs/dashboard.md)).
 
-When threads run on several machines or in the cloud, or you want a dashboard you can open from your phone, point them at a hosted board. This folder is one on [Supabase](https://supabase.com): one append-only table, two views and one Edge Function.
+When you want reports kept in one place you can reach from anywhere, for example a dashboard on your website that you open from your phone, point the threads at a hosted board. This folder is one on [Supabase](https://supabase.com): one append-only table, two views and one Edge Function.
 
 ## Set it up
 
@@ -34,7 +34,9 @@ curl -s -H "x-team-read-token: $TEAM_READ_TOKEN" "https://<project-ref>.supabase
 curl -s -H "x-team-read-token: $TEAM_READ_TOKEN" "https://<project-ref>.supabase.co/functions/v1/team-report?role=backend-dev" | jq .role
 ```
 
-The response has `current` (where every role stands, with `stale` and `waiting_on`), `recent` (the last 200 events), `flow` (hand-off edges over 7 days, for a diagram) and `role` (one role's last 100 events). Build your dashboard on it, or let the chief of staff read it for the daily digest.
+To read it from a dashboard on your website, allow your site's origin: `supabase secrets set TEAM_DASHBOARD_ORIGINS=https://your.site` (comma-separated, or `*`). See [docs/dashboard.md](../../docs/dashboard.md).
+
+The response has `current` (where every role stands, with `stale` and `waiting_on`), `recent` (the last 200 events), `flow` (hand-off edges over 7 days, for a diagram) and `role` (one role's last 100 events). The kit's dashboard reads it directly; or let the chief of staff read it for the daily digest.
 
 ## Security
 

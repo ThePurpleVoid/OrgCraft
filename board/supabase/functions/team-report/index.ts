@@ -77,15 +77,34 @@ function limited(key: string): boolean {
   return recent.length > 30;
 }
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+/**
+ * CORS for dashboards on a website: TEAM_DASHBOARD_ORIGINS is a comma-separated list of origins allowed to read
+ * (for example https://example.com), or * for any. Unset, browsers on other origins cannot read the board.
+ */
+export function cors(origin: string | null, allowed = Deno.env.get("TEAM_DASHBOARD_ORIGINS") ?? ""): Record<string, string> {
+  const list = allowed.split(",").map((o) => o.trim()).filter(Boolean);
+  if (!origin || !list.length || (!list.includes("*") && !list.includes(origin))) return {};
+  return {
+    "access-control-allow-origin": list.includes("*") ? "*" : origin,
+    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-headers": "x-team-read-token, authorization, apikey, content-type",
+    "access-control-max-age": "86400",
+    vary: "origin",
+  };
+}
+
+const reply = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...extra } });
 
 const db = () => createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
 });
 
 export async function handle(req: Request): Promise<Response> {
+  const corsHeaders = cors(req.headers.get("origin"));
+  const json = (b: unknown, status = 200) => reply(b, status, corsHeaders);
   try {
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
     if (req.method === "POST") {
       const expected = Deno.env.get("TEAM_REPORT_TOKEN");
       if (!expected) return json({ error: "TEAM_REPORT_TOKEN is not set on this project" }, 403);

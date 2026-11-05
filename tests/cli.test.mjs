@@ -34,6 +34,12 @@ test('"(replace)" replaces a section and new sections go before the footer', () 
   assert.doesNotMatch(out, /\(replace\)/);
 });
 
+test('a title line renames the role', () => {
+  const out = extendBrief(BASE, '# Better role\n**Model:** deep\n');
+  assert.match(out, /^# Better role\n/);
+  assert.equal(out.match(/^# /gm).length, 1);
+});
+
 test('new header fields are added after the existing ones', () => {
   const out = extendBrief(BASE, '**Status:** dormant until needed\n');
   assert.match(out, /\*\*Reports to:\*\* cto\n\*\*Status:\*\* dormant until needed/);

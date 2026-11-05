@@ -14,7 +14,7 @@ The team comes from [Agent Team Kit](https://github.com/PurpleGiragge/Agent-Team
 | `.agent-team/protocols.extend.md`, `instructions.extend.md` | us | Project rules added to the kit's protocols and project instructions |
 | `docs/team/ownership.md`, `docs/team/lanes/` | us | Who writes which path; each executive's priorities |
 | `docs/team/protocols.md`, `project-instructions.md`, `roles/`, this README | generated | Do not edit; change `.agent-team/` and run `scripts/agent-team/sync.sh` |
-| `scripts/agent-team/` | generated | `team-status.sh`, `team-board.sh`, `merge-gate.sh`, `with-lock.sh`, `janitor.sh`, `roster.mjs`, `export-subagents.mjs`, `sync.sh` |
+| `scripts/agent-team/` | generated | `team-status.sh`, `team-board.sh`, `dashboard.mjs` and `dashboard/`, `merge-gate.sh`, `with-lock.sh`, `janitor.sh`, `roster.mjs`, `export-subagents.mjs`, `sync.sh` |
 
 `scripts/agent-team/sync.sh` regenerates everything from the pinned kit. `scripts/agent-team/sync.sh check` fails when a generated file was edited by hand or is out of date; run it in CI.
 
@@ -26,7 +26,9 @@ The team comes from [Agent Team Kit](https://github.com/PurpleGiragge/Agent-Team
 | `ownership.md` | Which role writes which path. One writer per path. |
 | `project-instructions.md` | The text that goes into the Claude project's instructions (or `CLAUDE.md`). |
 | `roles/<role>.md` | The kickoff brief for each role. A thread starts by reading its brief, then its memory file. |
-| `roles/_template.md` | The shape of a brief; copy it into `.agent-team/roles/` to add a role. |
+| `role-template.md` | The shape of a brief; copy it into `.agent-team/roles/` to add a role. |
 | `lanes/<executive>.md` | Each executive's priorities and decisions. |
+
+Watch the team live with `node scripts/agent-team/dashboard.mjs` (http://localhost:4747); see the kit's [dashboard guide](https://github.com/PurpleGiragge/Agent-Team-Kit/blob/main/docs/dashboard.md) for reports from other machines and a copy on your website.
 
 Print the org tree with `node scripts/agent-team/roster.mjs --tree` and check the briefs with `node scripts/agent-team/roster.mjs --check`.

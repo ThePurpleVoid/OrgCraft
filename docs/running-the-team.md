@@ -13,7 +13,7 @@ This is how the kit was born, and it scales best.
 Where threads run:
 
 - **Remote Control on your own machine** gives threads your devices, emulators, simulators and signed-in tools. Size `AGENT_TEAM_POOLS` in `.agent-team/config.sh` for that machine.
-- **Cloud sessions** are fine for roles that only read and write files (executives, writers, reviewers, business roles). Point them at the [hosted board](../board/README.md) so their reports land in one place.
+- **Cloud sessions** are fine for roles that only read and write files (executives, writers, reviewers, business roles). Point them at the [hosted board](../board/supabase/README.md) or at your local [dashboard](dashboard.md) so their reports land in one place.
 
 ### Routines
 

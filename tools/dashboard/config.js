@@ -1,0 +1,6 @@
+// Settings for this page. The local server needs none. A hosted copy sets where the roster and the board come from,
+// for example:
+//   window.AGENT_TEAM = { roster: 'roster.json', board: 'https://<project>.supabase.co/functions/v1/team-report',
+//                         headers: { 'x-team-read-token': '…' }, stream: null, poll: 15000 };
+// See the "Put the dashboard on your website" section of the kit's docs/dashboard.md.
+window.AGENT_TEAM = window.AGENT_TEAM || {};

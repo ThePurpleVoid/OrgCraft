@@ -40,13 +40,14 @@ Our feature-flag CLI
 api/, migrations/
 ```
 
+- A `# Title` line renames the role.
 - A `**Field:** value` line replaces that header field (or adds it).
 - `## Section` appends to the kit section of the same name; a new section goes before the shared footer.
 - `## Section (replace)` replaces the kit section.
 
 ## Add a role: `<new-role>.md`
 
-Copy `docs/team/roles/_template.md` into `.agent-team/roles/<new-role>.md`, fill it in, add its paths to `docs/team/ownership.md` and add it to its executive with a `## Direct reports` extension. Split a generic role this way, for example `mobile-dev` into `android-dev` and `ios-dev` (see [examples/native-mobile](../examples/native-mobile)).
+Copy `docs/team/role-template.md` into `.agent-team/roles/<new-role>.md`, fill it in, add its paths to `docs/team/ownership.md` and add it to its executive with a `## Direct reports` extension. Split a generic role this way, for example `mobile-dev` into `android-dev` and `ios-dev` (see [examples/native-mobile](../examples/native-mobile)).
 
 ## Replace a kit role: `<role>.md`
 

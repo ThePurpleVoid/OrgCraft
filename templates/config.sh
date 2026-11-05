@@ -11,8 +11,10 @@ AGENT_TEAM_PROJECT="my-project"
 # a 16 GB laptop might take build:1 emulator:1; a 48 GB workstation build:3 emulator:3 simulator:3.
 AGENT_TEAM_POOLS="build:2 browser:3 emulator:2 simulator:2 backend:1"
 
-# Hosted team board (optional, see board/README.md). Leave unset to use the local event log only.
-# TEAM_REPORT_URL="https://<project-ref>.supabase.co/functions/v1/team-report"
+# Where else reports go (optional). Unset, they go to the local event log only, which the dashboard
+# (node scripts/agent-team/dashboard.mjs) and team-board.sh read. Put tokens in ~/.agent-team/<project>/team.env, not here.
+# A dashboard on another machine:   TEAM_REPORT_URL="http://<host>:4747/api/report"
+# A hosted board (board/supabase):  TEAM_REPORT_URL="https://<project-ref>.supabase.co/functions/v1/team-report"
 
 # ---------------------------------------------------------------------------------------------------------------
 # Merge gates. scripts/agent-team/merge-gate.sh <target> calls gate_<target>. Inside a gate:

@@ -1,0 +1,30 @@
+# Tags every new version: when package.json on main has a version with no v<version> tag yet, this creates the tag
+# and a GitHub release. Projects pin to these tags in .agent-team/team.json ("kit": "github:...#v<version>").
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag and release the version in package.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          tag="v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "$tag already exists; nothing to release."
+            exit 0
+          fi
+          notes="$(awk -v v="$version" '$0 ~ "^## "v {f=1; next} f && /^## / {exit} f' CHANGELOG.md)"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "Agent Team Kit $tag" --notes "${notes:-Release $tag}"

@@ -1,0 +1,151 @@
+/* Agent Team Kit dashboard. Every rule is scoped to .atd so the dashboard can be mounted inside another site. */
+.atd {
+  --bg: #f5f5f7; --card: #fff; --ink: #1d1d1f; --ink2: #515154; --ink3: #8e8e93; --sep: #d9d9de; --fill: #eeeef0;
+  --accent: #2f6fe4; --soft: #e8f0fd; --warn: #c77c02; --good: #1f9d55; --bad: #d93a2b; --r-s: 10px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink); background: var(--bg); font: 15px/1.45 var(--font); -webkit-font-smoothing: antialiased;
+  display: flex; flex-direction: column; gap: 16px; padding: 20px; max-width: 1600px; margin: 0 auto; box-sizing: border-box;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .atd { --bg: #111113; --card: #1c1c1f; --ink: #f2f2f4; --ink2: #b4b4ba; --ink3: #7c7c84; --sep: #34343a; --fill: #2a2a2e; --accent: #5b93f5; --soft: #1d2a42; --warn: #e3a33a; --good: #3dbb6f; --bad: #f0645a }
+}
+:root[data-theme="dark"] .atd { --bg: #111113; --card: #1c1c1f; --ink: #f2f2f4; --ink2: #b4b4ba; --ink3: #7c7c84; --sep: #34343a; --fill: #2a2a2e; --accent: #5b93f5; --soft: #1d2a42; --warn: #e3a33a; --good: #3dbb6f; --bad: #f0645a }
+html:has(> body > .atd), body:has(> .atd) { margin: 0; background: var(--bg, #f5f5f7) }
+@media (prefers-color-scheme: dark) { body:has(> .atd) { background: #111113 } }
+.atd *, .atd *::before, .atd *::after { box-sizing: border-box }
+.atd h1 { font-size: 24px; margin: 0 } .atd h2 { font-size: 17px; margin: 0 }
+.atd p { margin: 0 }
+.atd code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--fill); border-radius: 6px; padding: 1px 6px }
+.atd a { color: var(--accent); text-decoration: none } .atd a:hover { text-decoration: underline }
+.atd .small { font-size: 13px } .atd .muted { color: var(--ink2) } .atd .nowrap { white-space: nowrap }
+.atd .one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block }
+.atd .row { display: flex; align-items: center; gap: 8px } .atd .wrap { flex-wrap: wrap } .atd .stack { display: flex; flex-direction: column; gap: 4px }
+.atd .pre { white-space: pre-wrap; overflow-wrap: anywhere }
+.atd .link { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left }
+.atd .link:hover { color: var(--accent) }
+.atd-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px }
+.atd-live { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap }
+.atd-card { background: var(--card); border: 1px solid var(--sep); border-radius: 16px; padding: 16px; min-width: 0 }
+.atd-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 12px }
+.atd-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px }
+.atd-tile { background: var(--card); border: 1px solid var(--sep); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0 }
+.atd-tile b { font-size: 26px; font-variant-numeric: tabular-nums; line-height: 1.2 }
+.atd-tile.good b { color: var(--good) } .atd-tile.warn b { color: var(--warn) } .atd-tile.bad b { color: var(--bad) }
+.atd-banner { background: var(--soft); border-radius: 12px; padding: 10px 14px }
+.atd-banner.bad { background: color-mix(in srgb, var(--bad) 14%, var(--card)) }
+.atd-banner[hidden] { display: none }
+.atd-chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 9px; font-size: 12.5px; font-weight: 600; background: var(--fill); color: var(--ink2); white-space: nowrap; flex: none }
+.atd-chip.accent { background: var(--soft); color: var(--accent) }
+.atd-chip.warn { background: color-mix(in srgb, var(--warn) 16%, var(--card)); color: var(--warn) }
+.atd-chip.bad { background: color-mix(in srgb, var(--bad) 14%, var(--card)); color: var(--bad) }
+.atd-chip.good { background: color-mix(in srgb, var(--good) 14%, var(--card)); color: var(--good) }
+.atd-seg { display: inline-flex; background: var(--fill); border-radius: 10px; padding: 2px }
+.atd-seg button { border: 0; background: none; font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 8px; color: var(--ink2); cursor: pointer }
+.atd-seg button[aria-pressed="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .12) }
+.atd .icon-btn { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--sep); background: var(--card); color: var(--ink2); cursor: pointer; font-size: 14px }
+.atd .icon-btn:hover { color: var(--accent); border-color: var(--accent) }
+.atd-search { font: inherit; font-size: 14px; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--sep); background: var(--bg); color: var(--ink); min-width: 200px }
+.atd-table-wrap { overflow-x: auto }
+.atd-table { width: 100%; border-collapse: collapse; font-size: 14px }
+.atd-table th { text-align: left; font-size: 12.5px; color: var(--ink3); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--sep) }
+.atd-table td { padding: 8px 10px; border-bottom: 1px solid var(--sep); vertical-align: top }
+.atd-defs dl { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 8px 16px; margin: 12px 0 0; font-size: 14px }
+.atd-defs dt { font-weight: 600 } .atd-defs dd { margin: 0; color: var(--ink2) }
+
+/* The team views (ported from the CoachSpotter board). */
+.atd .team-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start }
+.atd .team-layout.with-panel { grid-template-columns: minmax(0, 1fr) 380px }
+.atd .team-flow-wrap { overflow: hidden }
+.atd .team-org-wrap { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch }
+.atd .team-org { display: block; width: 100%; min-width: 1100px; height: auto; margin: 0 auto }
+.atd .org-lines path { fill: none; stroke: var(--ink3); stroke-width: 1.2; opacity: .6 }
+.atd .team-org.focused .tf-node.dim { opacity: .3 }
+.atd .s-covered { --light: var(--sep) }
+.atd .s-covered .team-light, .atd .tf-node.s-covered .tf-light { box-shadow: inset 0 0 0 1.5px var(--ink3); stroke: var(--ink3); background: transparent; fill: transparent }
+.atd .tf-node.s-covered > rect { stroke-dasharray: 4 3 }
+.atd .tf-node.s-covered .tf-title, .atd .tf-node.s-covered .tf-task { fill: var(--ink2) }
+.atd .tf-node.lead > rect { stroke-width: 1.5 }
+.atd .team-tree { margin: 0 }
+.atd .team-tree > summary { list-style: none }
+.atd .team-tree > summary::-webkit-details-marker { display: none }
+.atd .team-tree > summary::before { content: ''; width: 7px; height: 7px; border-right: 1.5px solid var(--ink3); border-bottom: 1.5px solid var(--ink3); transform: rotate(-45deg); flex: none; transition: transform .15s }
+.atd .team-tree[open] > summary::before { transform: rotate(45deg) }
+.atd .team-tree-kids { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px 14px; padding-left: 10px; border-left: 1.5px solid var(--sep) }
+.atd .team-open { flex: none; width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--soft); color: var(--ink2); font: 600 18px/1 var(--font); cursor: pointer }
+.atd .team-open:hover { color: var(--accent) }
+.atd .team-reports { display: flex; flex-wrap: wrap; gap: 6px }
+.atd .team-reports .team-light { width: 8px; height: 8px; margin-right: 6px }
+.atd .team-flow, .atd .team-org { --light: var(--ink3); font-family: var(--font) }
+.atd .team-flow { display: block; width: 100%; height: auto }
+.atd .team-list { display: none }
+.atd .tf-band rect { fill: var(--bg); stroke: var(--sep) }
+.atd .tf-band text { font-size: 12.5px; font-weight: 600; fill: var(--ink2) }
+.atd .tf-edge { fill: none; stroke: var(--ink3); stroke-width: 1.2; opacity: .18; transition: opacity .15s, stroke .15s }
+.atd .tf-edge.live { stroke: var(--accent); stroke-width: 1.8; opacity: .75 }
+.atd .tf-edge.fresh { stroke-dasharray: 6 5; animation: tf-run 1.2s linear infinite }
+.atd .team-flow.focused .tf-edge { opacity: .06 }
+.atd .team-flow.focused .tf-edge.live { opacity: .25 }
+.atd .team-flow.focused .tf-edge.on { opacity: 1; stroke-width: 2 }
+.atd .team-flow.focused .tf-edge.on.out { stroke: var(--accent) }
+.atd .team-flow.focused .tf-edge.on.in { stroke: var(--ink) }
+.atd #tf-arrow path { fill: context-stroke }
+@supports not (fill: context-stroke) { .atd #tf-arrow path { fill: var(--ink3) } }
+.atd .tf-node { cursor: pointer; outline: none }
+.atd .tf-node > rect { fill: var(--card); stroke: var(--sep); stroke-width: 1; filter: drop-shadow(0 1px 2px rgb(0 0 0 / .06)); transition: stroke .12s, opacity .15s }
+.atd .tf-node .tf-stack { fill: var(--card); stroke: var(--sep); opacity: .7 }
+.atd .tf-node:hover > rect, .atd .tf-node:focus-visible > rect { stroke: var(--accent); stroke-width: 1.5 }
+.atd .tf-node.selected > rect { stroke: var(--accent); stroke-width: 2 }
+.atd .tf-node.dim { opacity: .35 }
+.atd .tf-node.owner { cursor: default }
+.atd .tf-node.owner > rect { fill: var(--soft); stroke: var(--accent) }
+.atd .tf-node.owner .tf-title { fill: var(--accent) }
+.atd .tf-title { font-size: 13px; font-weight: 700; fill: var(--ink) }
+.atd .tf-task { font-size: 11.5px; fill: var(--ink2) }
+.atd .tf-light { fill: var(--light); stroke: var(--card); stroke-width: 1.5 }
+.atd .s-working { --light: var(--accent) }
+.atd .s-waiting, .atd .s-review { --light: var(--warn) }
+.atd .s-blocked, .atd .s-quiet { --light: var(--bad) }
+.atd .s-done { --light: var(--good) }
+.atd .s-idle { --light: var(--ink3) }
+.atd .s-none { --light: var(--sep) }
+.atd .s-dormant { --light: transparent }
+.atd .s-dormant .team-light, .atd .tf-node.s-dormant .tf-light { box-shadow: inset 0 0 0 1.5px var(--ink3); stroke: var(--ink3); stroke-dasharray: 2 2 }
+.atd .tf-node.s-dormant > rect { stroke-dasharray: 4 3 }
+.atd .tf-node.s-dormant .tf-title { fill: var(--ink2) }
+@keyframes tf-run { to { stroke-dashoffset: -22 } }
+@media (prefers-reduced-motion: reduce) { .atd .tf-edge.fresh { animation: none } }
+.atd .team-legend { display: flex; gap: 12px; flex-wrap: wrap }
+.atd .team-legend span { display: inline-flex; align-items: center; gap: 5px }
+.atd .team-light { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--light, var(--ink3)); flex: none }
+.atd .s-dormant .team-light { background: transparent }
+.atd .team-card { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 1px solid var(--sep); background: var(--card); color: var(--ink); border-radius: var(--r-s); padding: 10px 12px; font: inherit; cursor: pointer }
+.atd .team-card:hover, .atd .team-card.selected { border-color: var(--accent) }
+.atd .team-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px }
+.atd .team-list-band { display: flex; flex-direction: column; gap: 8px; margin-top: 12px }
+.atd .team-list-band h3.small { margin: 0 0 2px }
+.atd .team-chip { border: 0; cursor: pointer; font: inherit; font-size: 12.5px } .atd .team-chip:hover { color: var(--accent) }
+.atd .team-panel { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 18px; max-height: calc(100vh - 32px); overflow-y: auto }
+.atd .team-panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start }
+.atd .team-panel h3.small { margin: 0 0 8px; color: var(--ink2) }
+.atd .team-panel section { display: flex; flex-direction: column; gap: 8px }
+.atd .team-kv { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 14px }
+.atd .team-kv dt { color: var(--ink3); font-size: 13px } .atd .team-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere }
+.atd .team-kv code, .atd .team-evidence code { margin: 0 4px 4px 0; display: inline-block }
+.atd .team-links { display: inline-flex; gap: 8px; flex-wrap: wrap }
+.atd .team-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: 14px }
+.atd .team-history li { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px }
+.atd .team-history li > div { display: flex; flex-direction: column; gap: 3px; min-width: 0 }
+@media (max-width: 1100px) { .atd .team-layout.with-panel { grid-template-columns: minmax(0, 1fr) 320px } }
+@media (max-width: 900px) {
+  .atd .team-layout.with-panel { grid-template-columns: minmax(0, 1fr) }
+  .atd .team-panel { position: fixed; inset: 0; z-index: 30; max-height: none; border-radius: 0 }
+  .atd-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+}
+@media (max-width: 720px) {
+  .atd { padding: 16px }
+  .atd .team-flow-wrap, .atd .team-org-wrap { display: none }
+  .atd .team-list { display: block }
+  .atd .team-history li { grid-template-columns: 1fr }
+  .atd-defs dl { grid-template-columns: 1fr }
+  .atd-search { min-width: 0; width: 100% }
+}

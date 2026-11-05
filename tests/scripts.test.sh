@@ -24,6 +24,11 @@ expect "kit pinned in team.json" 'jq -e ".kit | test(\"Agent-Team-Kit#v\")" "$re
 expect ".merge-gate ignored" 'grep -qx ".merge-gate/" "$repo/.gitignore"'
 expect "minimal team has no roster warnings" '! grep -q "warning" <<<"$out"'
 expect "subagents exported for every active role" '[ "$(ls "$repo/.claude/agents" | wc -l)" -eq 11 ] && grep -q "^model: opus" "$repo/.claude/agents/cto.md"'
+expect "role template sits outside roles/" '[ -f "$repo/docs/team/role-template.md" ] && [ ! -e "$repo/docs/team/roles/_template.md" ]'
+expect "org tree is generated from the installed roles" 'grep -q "─ cto (deep)" "$repo/docs/team/project-instructions.md" && ! grep -q "mobile-dev" "$repo/docs/team/project-instructions.md"'
+expect "generated node tools run (hashbang stays first)" '(cd "$repo" && node scripts/agent-team/roster.mjs --check >/dev/null && node scripts/agent-team/dashboard.mjs --help >/dev/null)'
+expect "dashboard page is generated" '[ -f "$repo/scripts/agent-team/dashboard/index.html" ] && [ -f "$repo/scripts/agent-team/dashboard/app.js" ]'
+expect "dashboard export writes a static site" '(cd "$repo" && node scripts/agent-team/dashboard.mjs export --out "$tmp/site" --board https://b.example/team-report >/dev/null) && jq -e ".roles | length == 11" "$tmp/site/roster.json" >/dev/null && grep -q "b.example" "$tmp/site/config.js"'
 expect "check passes right after init" '(cd "$repo" && $AT check >/dev/null)'
 (cd "$repo" && $AT init >/dev/null 2>&1)
 expect "second init refuses" '[ $? -eq 64 ]'

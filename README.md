@@ -45,7 +45,7 @@ Then:
 3. Paste `docs/team/project-instructions.md` into your Claude project's instructions (or into `CLAUDE.md`).
 4. Commit `.agent-team/`, `docs/team/` and `scripts/agent-team/`, and add `scripts/agent-team/sync.sh check` to CI.
 5. Open the chief of staff: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."*
-6. Ask for something. Watch with `scripts/agent-team/team-board.sh`.
+6. Ask for something. Watch it live with `node scripts/agent-team/dashboard.mjs` (a web dashboard at http://localhost:4747) or `scripts/agent-team/team-board.sh` in the terminal.
 
 ### What lives where
 
@@ -61,7 +61,7 @@ your-repo/
   docs/team/
     ownership.md, lanes/        yours: who writes which path, each executive's priorities
     protocols.md, roles/, ...   generated, do not edit
-  scripts/agent-team/           generated: team-status, team-board, merge-gate, with-lock, janitor, roster, sync
+  scripts/agent-team/           generated: team-status, team-board, dashboard, merge-gate, with-lock, janitor, roster, sync
 ```
 
 `scripts/agent-team/sync.sh` regenerates from `.agent-team/`. To upgrade, change `"kit"` in `team.json` to a newer tag and run it. `scripts/agent-team/sync.sh roles` shows every role and whether it comes from the kit, an extension or your repository.
@@ -87,15 +87,15 @@ See [docs/running-the-team.md](docs/running-the-team.md) for both.
 ## What is in this repository
 
 ```
-bin/agent-team.mjs              the CLI: init, sync, check, roles
+bin/agent-team.mjs              the CLI: init, sync, check, roles, dashboard
 presets/                        role lists for minimal, engineering, company
 team/                           the framework: protocols, project instructions, ownership seed, 48 role briefs
 scripts/                        runtime scripts generated into scripts/agent-team/
-tools/                          roster checker and subagent export, generated into scripts/agent-team/
+tools/                          roster checker, subagent export and the dashboard (server + page), generated into scripts/agent-team/
 templates/                      config.sh, sync.sh and the roles README for new projects
 examples/native-mobile/         a full project layer for native Android and iOS apps
 board/supabase/                 optional hosted board (table, views, Edge Function)
-docs/                           how it works, running the team, customising
+docs/                           how it works, running the team, customising, the dashboard
 tests/                          tests for the CLI, scripts and tools
 ```
 
@@ -120,23 +120,33 @@ tests/                          tests for the CLI, scripts and tools
 
 `node scripts/agent-team/roster.mjs --check` validates every brief (tiers, reporting lines, loops, direct reports) and `--tree` prints the org.
 
-## The board
+## The board and the live dashboard
 
 Every task starts with a report and every message is reported with the same fields:
 
 ```sh
 scripts/agent-team/team-status.sh web-dev status working --task "Login page" --issue 12
 scripts/agent-team/team-status.sh web-dev handoff waiting --to qa-web --task "Login page" --pr 14
-scripts/agent-team/team-board.sh
 ```
+
+Open the dashboard and leave it open. It draws your team from the role briefs, as an org chart and as a flow of hand-offs, and each role lights up the moment its thread reports. Click a role for its task, links, brief and history.
+
+```sh
+node scripts/agent-team/dashboard.mjs            # http://localhost:4747
+npx --yes github:PurpleGiragge/Agent-Team-Kit dashboard --demo   # see it work with made-up reports first
+```
+
+![The team dashboard: org chart coloured by each thread's last report](docs/images/dashboard-org.png)
+
+No setup: the threads write to `~/.agent-team/<project>/events.jsonl` and the dashboard watches that file. Threads on other machines or in the cloud set `TEAM_REPORT_URL=http://<your machine>:4747/api/report` and report straight to it. To see the team from anywhere, put the same dashboard on your website, reading a [hosted board](board/supabase/README.md). [docs/dashboard.md](docs/dashboard.md) covers all three.
+
+In a terminal, `scripts/agent-team/team-board.sh` shows the same thing:
 
 ```
 ROLE     STATUS   AGE  TASK              WAITING ON
 web-dev  waiting  0m   Login page PR 14  qa-web
 cto      working  3m   Plan Q1
 ```
-
-Reports go to a local log (`~/.agent-team/<project>/events.jsonl`) by default. For threads on several machines, deploy the [hosted board](board/README.md).
 
 ## Recommended plugins
 
@@ -147,6 +157,7 @@ The briefs work on their own and get better with these: [superpowers](https://gi
 - [How it works](docs/how-it-works.md): the org, the lanes, how a request becomes a merged PR
 - [Running the team](docs/running-the-team.md): threads or subagents, worktrees, meetings
 - [Customising](docs/customizing.md): extend or add roles, gates and pools, upgrade the kit
+- [The dashboard](docs/dashboard.md): run it locally, report from other machines, put it on your website
 
 ## Contributing
 
