@@ -93,7 +93,7 @@ deploy/                    Dockerfiles, Compose, Helm
 | `source: project` | `<role>.md` | today |
 | `reporting` | `**Reports to:**` in the role's extension, and `## Direct reports (replace)` on both managers | today |
 | `rules.protocols`, `rules.instructions` | `protocols.extend.md`, `instructions.extend.md` | today |
-| `runtime.adapters` | `team.json` `subagents`, plus `agentTeams` (built-in agent teams export) | subagents today; agent teams in kit 0.4 |
+| `runtime.adapters` | `team.json` `subagents`, plus `agentTeams` (built-in agent teams: `.claude/agents/`, the settings flag and `docs/team/agent-teams.md` with the lead's spawn prompts) | subagents today; agent teams in kit 0.4 |
 | `ownership` | `.agent-team/ownership.json` → sync writes `docs/team/ownership.md` | **new in kit 0.4.** Without the JSON file, today's hand-written `ownership.md` stays and the Studio parses and writes its table |
 | `gates`, `pools` | `.agent-team/gates.json` → sync writes `scripts/agent-team/gates.generated.sh`, sourced after `config.sh` | **new in kit 0.4.** `config.sh` stays for anything bash-shaped; the Studio shows its gates read-only |
 | `resources`, `bindings` | `.agent-team/resources.json` → sync adds a "Systems" section to the project instructions and each bound role's Tools section; secret *names* only | **new in kit 0.4** |
@@ -174,8 +174,8 @@ An MCP server the runner gives every session. Each tool is a protocol the briefs
 
 Two sources, one event stream:
 
-- **Liveness from hooks.** The kit (0.4, in progress) ships Claude Code hooks that map `SessionStart`, `PreToolUse`/`PostToolUse` (throttled to a heartbeat), `Notification`, `SubagentStop` and `Stop` to board events with `source: "hook"`. They work in every mode: claude.ai threads, a local CLI, built-in agent teams and the runner. In the runner the session supervisor emits the same events itself, so liveness never depends on hook configuration.
-- **Meaning from roles.** `report`, HANDOFF, BLOCKED and SIGNOFF stay role-written (`source: "role"`), because only the role knows the task name and who it waits on.
+- **Liveness from hooks.** The kit (0.4, PR #10) ships Claude Code hooks (`scripts/agent-team/report.mjs hook`, merged into `.claude/settings.json` by sync) that map `SessionStart`, `PreToolUse`/`PostToolUse` (throttled to a heartbeat), `Notification`, `SubagentStop` and `Stop` to board events with `source: "hook"`. The role is the session's agent or teammate name when it matches a role slug, else `AGENT_TEAM_ROLE`. They work in every mode: claude.ai threads, a local CLI, built-in agent teams and the runner. In the runner the session supervisor emits the same events itself, so liveness never depends on hook configuration.
+- **Meaning from roles.** `report`, HANDOFF, BLOCKED and SIGNOFF stay role-written (`source: "team-status.sh"`, kept for existing boards; anything that is not `"hook"` counts as role-written), because only the role knows the task name and who it waits on.
 - **The board joins them:** a card is live if hooks say so, and it shows the last role-written task. When a role works for a long time without saying what it is doing, the card is flagged "working, unreported", not "silent".
 
 ### 6.6 Sandboxes
