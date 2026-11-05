@@ -158,6 +158,11 @@ The briefs work on their own and get better with these: [superpowers](https://gi
 - [Running the team](docs/running-the-team.md): threads or subagents, worktrees, meetings
 - [Customising](docs/customizing.md): extend or add roles, gates and pools, upgrade the kit
 - [The dashboard](docs/dashboard.md): run it locally, report from other machines, put it on your website
+- [Product plan](docs/product/): the visual team builder (PRD, architecture, deployment, delivery plan)
+
+## Where this is going
+
+We are turning the kit into **Agent Team Studio**: you lay out your team on a canvas, connect your repositories, backends, databases and frontends, publish to your repository, then talk to your chief of staff and let the team run. The plan is in [docs/product/](docs/product/). This repository is built by its own kit-defined team ([how](docs/product/team.md)).
 
 ## Contributing
 

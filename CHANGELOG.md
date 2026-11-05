@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- This repository now runs its own team: `.agent-team/` (21 roles, pinned to v0.3.0, with a `kit-core-dev` role of its own), generated `docs/team/` and `scripts/agent-team/`, and `sync.sh check` in CI. Nothing changes for other teams.
+- The kit package no longer picks up generated scripts: `package.json` `files` lists `scripts/*.sh` instead of `scripts/`. The package contents are the same as in 0.3.0.
+- CI checks the role library explicitly (`roster.mjs --check team/roles`), because `docs/team/roles` (this repository's own team) would otherwise be the default.
+- Docs: the product plan for Agent Team Studio in `docs/product/` (PRD, architecture, deployment, delivery plan, how our own team builds it) and ADRs 0001 and 0002.
+
 ## 0.3.0
 
 Rules a production team learned the hard way, now the default. Existing teams see these changes on their next sync:

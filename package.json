@@ -14,7 +14,7 @@
   "files": [
     "bin/",
     "presets/",
-    "scripts/",
+    "scripts/*.sh",
     "team/",
     "templates/",
     "tools/"

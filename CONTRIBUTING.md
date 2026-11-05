@@ -10,6 +10,10 @@ Thanks for helping. The kit is small on purpose: briefs, protocols, a few script
 - A dashboard for the hosted board's read endpoint.
 - Clearer wording anywhere. The briefs are read by agents and humans; plain words win.
 
+## This repository has its own team
+
+Agent Team Kit is built by a team defined with Agent Team Kit. `team/` is the kit's source, the role library every team gets. `.agent-team/` is this repository's own project layer and `docs/team/` is the team generated from it, pinned to the last kit release. Fix a brief for everyone in `team/`; change this repository's team in `.agent-team/`. [docs/product/team.md](docs/product/team.md) explains how that team works.
+
 ## Rules for briefs
 
 - Keep the fields in the same order as `_template.md`, and keep the shared "Every thread, every task" footer word for word (only the slug changes).
@@ -22,10 +26,13 @@ Thanks for helping. The kit is small on purpose: briefs, protocols, a few script
 ## Before you open a pull request
 
 ```sh
-node tools/roster.mjs --check          # 0 errors, 0 warnings
+node tools/roster.mjs --check team/roles   # the role library: 0 errors, 0 warnings
 npm test                               # node tests, then the CLI and script tests
-shellcheck -S warning scripts/*.sh templates/*.sh tests/*.sh examples/*/.agent-team/config.sh
+shellcheck -S warning scripts/*.sh templates/*.sh tests/*.sh examples/*/.agent-team/config.sh .agent-team/config.sh
+scripts/agent-team/sync.sh check      # this repository's own team still matches its pinned kit release
 ```
+
+Or run all of it at once: `scripts/agent-team/merge-gate.sh kit`.
 
 Scripts must run on macOS's bash 3.2 as well as Linux bash: no `mapfile`, no associative arrays, no GNU-only flags. They must never fail the thread that calls them for a reporting problem; print one line and exit 0.
 

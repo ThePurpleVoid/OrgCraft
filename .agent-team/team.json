@@ -1,0 +1,23 @@
+{
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.3.0",
+  "preset": "minimal",
+  "include": [
+    "cpo",
+    "design-director",
+    "design-critic",
+    "ux-writer",
+    "ai-engineer",
+    "infra-secrets-oncall",
+    "head-of-quality",
+    "test-automation-engineer",
+    "community-lead"
+  ],
+  "exclude": [],
+  "values": {
+    "PROJECT_NAME": "Agent Team Kit",
+    "OWNER": "the owner",
+    "TIMEZONE": "UTC",
+    "DIGEST_TIME": "08:00"
+  },
+  "subagents": false
+}
