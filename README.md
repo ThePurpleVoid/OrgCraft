@@ -153,6 +153,24 @@ web-dev  waiting  0m   Login page PR 14  qa-web
 cto      working  3m   Plan Q1
 ```
 
+## How this compares
+
+There are many projects for running teams of agents. Most of them overlap with one part of the kit, and some are much bigger. Pick by what you need.
+
+| If you want | Look at | What the kit adds or leaves out |
+| --- | --- | --- |
+| A big library of single-purpose subagents | [wshobson/agents](https://github.com/wshobson/agents), [VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents) | Those have more roles. The kit's roles report to each other in one org, hand work over in fixed shapes and cannot approve their own work. |
+| A planning method with persona agents (analyst, PM, architect, dev, QA) | [BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD) | BMAD is the closer, more mature match for the spec-to-story flow. The kit is about running the team after that: ownership, merge gates, sign-off evidence, a board. |
+| Role-shaped slash commands for one developer | [gstack](https://github.com/garrytan/gstack) | gstack is one person switching hats. The kit is many long-lived threads with their own memory and lanes. |
+| Swarm orchestration with routing and shared memory | [Ruflo (claude-flow)](https://github.com/ruvnet/ruflo) | Ruflo spawns and routes agents through an MCP server. The kit has no runtime of its own: it is briefs, protocols and scripts that Claude Code threads follow. |
+| Claude Code's own agent teams (lead, teammates, task list) | [Claude Code docs](https://code.claude.com/docs) | The kit builds on it: `"agentTeams": true` installs the roles as teammate types with a spawn prompt for each lead. The built-in feature handles spawning and task claiming; the kit adds the org, the rules and a board across sessions and machines. |
+| Agent teams in Python, any model | [CrewAI](https://github.com/crewAIInc/crewAI), [AutoGen](https://github.com/microsoft/autogen), [MetaGPT](https://github.com/FoundationAgents/MetaGPT), [ChatDev](https://github.com/OpenBMB/ChatDev) | Those are SDKs you program against. The kit is for Claude Code working on a real repository. |
+| A live view of Claude Code sessions | Hook-based monitors such as Claude Code Agent Monitor or claude-team-dashboard | Those show raw tool calls. The kit's hooks report too, but its board is organised by role: what each one is doing, who it is waiting on, and its hand-offs, and it can be mounted on your own site. |
+
+What the kit has that we have not found together elsewhere: a whole company org (48 briefs, with model tiers and reporting lines checked by `roster.mjs`), presets, a pinned-version sync into your repository with a CI drift check, one writer per path, merge gates and hardware locks, hook-based reports with a `doctor` smoke test, and a dashboard that runs locally or on a hosted site.
+
+Limits today: a thread's own session is reported by the hooks only when it is started with `AGENT_TEAM_ROLE` set, so a cloud thread without it still reports by hand (subagents and teammates are always reported); the merge gate and locks still need bash and `jq` (Git Bash or WSL on Windows); and it works with Claude Code only.
+
 ## Recommended plugins
 
 The briefs work on their own and get better with these: [superpowers](https://github.com/obra/superpowers) (the method: brainstorm, plan, TDD, verify), [karpathy-guidelines](https://github.com/multica-ai/andrej-karpathy-skills) (code style), [i-have-adhd](https://github.com/ayghri/i-have-adhd) (messages to the owner lead with the next action), and [Octopus](https://github.com/nyldn/claude-octopus) (`/octo:council` second opinions on hard-to-undo decisions).
