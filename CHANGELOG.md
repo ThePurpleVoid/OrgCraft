@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- This repository's own team is on 0.4.0 with the reporting hooks on (`.claude/settings.json`).
+
 ## 0.4.0
 
 Closes the gaps against other agent kits: reports no longer depend on the roles remembering, the team runs as a Claude Code agent team, the day-to-day path needs only Node, and there is a smoke test.
