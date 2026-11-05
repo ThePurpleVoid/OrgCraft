@@ -17,4 +17,4 @@ Owner of this file: cto. Last updated 2026-11-05.
 
 1. **Repository is the source of truth** (2026-11-05): ADR 0001.
 2. **This team runs on the last kit release** (2026-11-05): pinned in `.agent-team/team.json`, bumped by the release manager after each release.
-3. **Runtime** (2026-11-05, proposed): our runner on the Claude Agent SDK, with subagents and built-in agent teams as zero-infrastructure modes (ADR 0002). Waiting on the owner.
+3. **Runtime** (2026-11-05, the owner chose "Our own runner (Agent SDK)"): our runner on the Claude Agent SDK, with subagents and built-in agent teams as zero-infrastructure modes (ADR 0002).

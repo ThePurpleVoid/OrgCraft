@@ -1,6 +1,6 @@
 # ADR 0002: run published teams on our own runner, built on the Claude Agent SDK
 
-Status: proposed, 2026-11-05 (the owner is asked, see the PRD's open questions). Owner: architect.
+Status: accepted, 2026-11-05 (the owner chose "our own runner"). Owner: architect.
 
 ## Context
 
@@ -15,7 +15,7 @@ The demo ends with "talk to the chief of staff and let it run". Today the kit ru
 | C. Subagents in one Agent SDK session | High | No (one session) | Runner-enforced | Small |
 | D. **Our runner on the Agent SDK: chief of staff plus a session per role, woken by messages** | High | Yes, each in a worktree | Runner-enforced (ownership hook, approvals, budgets) | The runner |
 
-## Decision (proposed)
+## Decision
 
 D is the main run mode, with B and C as zero-infrastructure modes from the same published team, and A kept as an export (the project instructions) for teams that already use claude.ai projects. The MVP builds C first, because it is quick to reach the demo, then D.
 

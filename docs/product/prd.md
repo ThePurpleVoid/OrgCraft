@@ -155,6 +155,6 @@ The comparison of the kit with other agent-team projects (README "How this compa
 
 ## 10. Open questions
 
-1. **Runtime for the MVP's "let it run".** Recommendation: our own runner on the Claude Agent SDK, with built-in agent teams and subagents as zero-infrastructure modes. The other option, driving claude.ai projects and cloud sessions as today, can't be controlled from our own app. See [ADR 0002](../adr/0002-runtime-agent-sdk-runner.md). This is the one product-direction fork we are asking the owner about.
+1. ~~Runtime for the MVP's "let it run".~~ **Decided 2026-11-05: our own runner on the Claude Agent SDK.** The reasoning: our own runner on the Claude Agent SDK, with built-in agent teams and subagents as zero-infrastructure modes. The other option, driving claude.ai projects and cloud sessions as today, can't be controlled from our own app. See [ADR 0002](../adr/0002-runtime-agent-sdk-runner.md). The owner chose it.
 2. Hosted service: whether, when and how to charge. Not needed for the MVP; [deployment](deployment.md) keeps the door open.
 3. Name: "Agent Team Studio" is a working name.
