@@ -6,7 +6,7 @@
 // When the real endpoints land (issue #28, backend dev), the chat tests also run against apps/server.
 import { createServer } from 'node:http';
 
-export async function fakeControlPlane({ token = 'test-token', team = 'demo', runner = defaultRunner } = {}) {
+export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 'step-up-secret', team = 'demo', runner = defaultRunner } = {}) {
   const events = [];
   const cards = new Map(); // id -> card
   const replays = new Map(); // idempotency key -> [status, body]
@@ -30,13 +30,17 @@ export async function fakeControlPlane({ token = 'test-token', team = 'demo', ru
       const c = { team, version: 1, url: `http://studio.invalid/t/${team}/cards/${card.id}`, ...card };
       cards.set(c.id, c);
       append('card.updated', { kind: 'system', id: 'cards' }, { card: c }, `card/${c.id}`);
-      return append(c.kind === 'approval' ? 'approval.requested' : 'decision.requested', role(from), { card: c.id, ...(c.kind === 'decision' ? { question: c.title } : { why: c.body }) }, c.subject);
+      return append(c.kind === 'approval' ? 'approval.requested' : 'decision.requested', role(from), { cardId: c.id, ...(c.kind === 'decision' ? { question: c.title } : { why: c.body }) }, c.subject);
     },
-    /** Changes a card behind the page's back, as another member or an expiry would. */
-    bump(cardId, patch = {}) {
+    /**
+     * Changes a card behind the page's back, as another member or an expiry would. `silent` holds back its
+     * card.updated, as when the change lands while the person's answer is already on its way: the page cannot have
+     * seen it, so its answer must get the 409.
+     */
+    bump(cardId, patch = {}, { silent = false } = {}) {
       const c = { ...cards.get(cardId), ...patch, version: cards.get(cardId).version + 1 };
       cards.set(cardId, c);
-      append('card.updated', { kind: 'system', id: 'cards' }, { card: c }, `card/${c.id}`);
+      if (!silent) append('card.updated', { kind: 'system', id: 'cards' }, { card: c }, `card/${c.id}`);
       return c;
     },
     usage(amount) { cost.today += amount; append('usage.recorded', role('chief-of-staff'), { inputTokens: 1000, outputTokens: 200, cost: amount, currency: cost.currency }); },
@@ -86,8 +90,8 @@ export async function fakeControlPlane({ token = 'test-token', team = 'demo', ru
       }
       const answer = body.option ?? body.decision;
       const e = c.kind === 'approval'
-        ? append('approval.decided', { kind: 'person', id: 'owner', via: 'studio' }, { approval: card[1], decision: answer, by: 'owner' }, c.subject)
-        : append('decision.answered', { kind: 'person', id: 'owner', via: 'studio' }, { card: c.id, answer, by: 'owner' }, c.subject);
+        ? append('approval.decided', { kind: 'person', id: 'owner', via: 'studio' }, { approval: card[1], cardId: c.id, decision: answer, by: 'owner' }, c.subject)
+        : append('decision.answered', { kind: 'person', id: 'owner', via: 'studio' }, { cardId: c.id, answer, by: 'owner' }, c.subject);
       const answered = { ...c, version: c.version + 1, answered: { option: answer, by: 'owner' } };
       cards.set(c.id, answered);
       append('card.updated', { kind: 'system', id: 'cards' }, { card: answered }, `card/${c.id}`);
@@ -95,7 +99,7 @@ export async function fakeControlPlane({ token = 'test-token', team = 'demo', ru
     }
     if (p === '/v1/auth/step-up' && req.method === 'POST') {
       const body = await read(req);
-      if (body.secret !== token) return send(res, 401, { title: 'not accepted', status: 401 });
+      if (body.secret !== stepUpSecret) return send(res, 401, { title: 'not accepted', status: 401 });
       const su = `su_${Math.random().toString(36).slice(2)}`;
       stepUps.set(su, Date.now() + 5 * 60_000);
       return send(res, 201, { token: su, expires: new Date(Date.now() + 5 * 60_000).toISOString() });
@@ -125,7 +129,7 @@ export async function fakeControlPlane({ token = 'test-token', team = 'demo', ru
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}`;
   return {
-    url, token, team, ...api,
+    url, token, stepUpSecret, team, ...api,
     env: { AGENT_TEAM_SERVER: url, AGENT_TEAM_SERVER_TOKEN: token, AGENT_TEAM_SERVER_TEAM: team },
     close: () => { for (const s of streams) s.end(); server.closeAllConnections?.(); server.close(); },
   };

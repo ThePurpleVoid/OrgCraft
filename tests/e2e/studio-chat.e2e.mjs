@@ -61,7 +61,7 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
 
   // Someone else changes the card before the owner answers: the answer is refused and the current card shown.
   const cardId = await decision.getAttribute('data-card-id');
-  cp.bump(cardId, { title: 'What should the default be for new accounts?' });
+  cp.bump(cardId, { title: 'What should the default be for new accounts?' }, { silent: true });
   await decision.getByRole('button', { name: 'Light' }).click();
   await page.getByText('This card changed before your answer arrived').waitFor();
   await page.getByText('What should the default be for new accounts?').waitFor();
@@ -77,13 +77,13 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
     await page.emulateMedia({ colorScheme: 'light' });
   }
 
-  // Approvals need a recent sign-in: the page asks for the admin token, the Studio server keeps the step-up token.
+  // Approvals need a recent sign-in: the page asks for the step-up secret, the Studio server keeps the step-up token.
   const approval = page.locator('.card-msg.k-approval');
   await approval.getByRole('button', { name: 'Approve' }).click();
-  await approval.getByLabel('Admin token').fill('not it');
+  await approval.getByLabel('Step-up secret').fill('not it');
   await approval.getByRole('button', { name: 'Confirm' }).click();
   await approval.getByText('That token was not accepted').waitFor();
-  await approval.getByLabel('Admin token').fill(cp.token);
+  await approval.getByLabel('Step-up secret').fill(cp.stepUpSecret);
   await approval.getByRole('button', { name: 'Confirm' }).click();
   await approval.locator('.answer').waitFor();
   assert.match(await approval.locator('.answer').textContent(), /^Approve · owner/);

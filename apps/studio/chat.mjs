@@ -62,7 +62,7 @@ export function chatSource(env = process.env) {
       const line = (summary?.teams ?? []).find((x) => x.team === team) ?? null;
       return { summary: line, run: run && { id: run.id, state: run.state ?? run.status ?? line?.run ?? null } };
     },
-    /** Proves a recent sign-in. Until OIDC (M4) the proof is the admin token typed again; it is passed on, not kept. */
+    /** Proves a recent sign-in. Until OIDC (M4) the proof is the step-up secret the person types; it is passed on, not kept. */
     async stepUp(secret) {
       const r = await call('POST', '/auth/step-up', { secret });
       stepUp = { token: r.token, expires: r.expires ?? new Date(Date.now() + 5 * 60_000).toISOString() };

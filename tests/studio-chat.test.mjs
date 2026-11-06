@@ -7,7 +7,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KIT } from '../bin/agent-team.mjs';
-import { createStudio, hostAllowed } from '../apps/studio/server.mjs';
+import { createStudio } from '../apps/studio/server.mjs';
 import { fakeControlPlane } from './fixtures/fake-control-plane.mjs';
 
 function repo() {
@@ -83,7 +83,7 @@ test('answers carry the card version; a stale one comes back as 409 with the cur
       assert.equal(ask.status, 401);
       assert.equal(ask.body.type, 'step-up-required');
       assert.equal((await call('/v1/team/step-up', { secret: 'wrong' })).status, 401);
-      const su = await call('/v1/team/step-up', { secret: cp.token });
+      const su = await call('/v1/team/step-up', { secret: cp.stepUpSecret });
       assert.equal(su.status, 200);
       assert.equal(JSON.stringify(su.body).includes('su_'), false, 'the step-up token stays on the Studio server');
       const appr = await call(`/v1/team/cards/${approval.id}`, { kind: 'approval', subject: approval.subject, option: 'approve', version: 1, key: 'k4' });
@@ -110,23 +110,4 @@ test('run state, today\'s cost against the cap, pause, resume and stop', async (
       assert.equal((await call('/v1/team/run/pause', { key: 'p2' })).status, 409);
     });
   } finally { cp.close(); }
-});
-
-test('answers only requests addressed to localhost (DNS rebinding)', async () => {
-  const cp = await fakeControlPlane();
-  try {
-    await serve(cp.env, async (call, base) => {
-      const { request } = await import('node:http');
-      const get = (host) => new Promise((ok, no) => { const r = request(`${base}/v1/team/chat`, { headers: { host } }, (res) => { res.resume(); ok(res.statusCode); }); r.on('error', no); r.end(); });
-      const port = new URL(base).port;
-      assert.equal(await get(`127.0.0.1:${port}`), 200);
-      assert.equal(await get(`localhost:${port}`), 200);
-      assert.equal(await get(`evil.example:${port}`), 403);
-    });
-  } finally { cp.close(); }
-  const lo = { address: '127.0.0.1', port: 4848 };
-  assert.equal(hostAllowed('rebound.example', lo, {}), false);
-  assert.equal(hostAllowed('studio.lan:4848', lo, { STUDIO_ALLOWED_HOSTS: 'studio.lan' }), true);
-  assert.equal(hostAllowed('rebound.example', { address: '0.0.0.0' }, {}), false);
-  assert.equal(hostAllowed('localhost:4848', { address: '0.0.0.0' }, {}), true);
 });

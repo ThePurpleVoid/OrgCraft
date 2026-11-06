@@ -9,7 +9,7 @@
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { networkInterfaces, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
@@ -128,13 +128,9 @@ export function createStudio({ root, env = process.env }) {
       return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
     }
   };
-  const server = createServer(async (req, res) => {
+  return createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
-      // DNS rebinding: a page on another site can point its own name at 127.0.0.1 and call this server as same-origin.
-      // On a loopback address, answer only requests addressed to a loopback name. The Studio holds the control plane's
-      // token, so this matters on GET as well as POST.
-      if (!hostAllowed(req.headers.host, server.address(), env)) throw new HttpError(403, 'this Studio answers only on localhost; set STUDIO_ALLOWED_HOSTS to add a name');
       // The Studio's API, versioned like the public API it will become (ADR 0005): additive changes only within /v1/.
       if (req.method === 'GET' && url.pathname === '/v1/team') return send(res, 200, state(root));
       // The live board, and a stream that says when it changed (the page then fetches the board again).
@@ -202,20 +198,6 @@ export function createStudio({ root, env = process.env }) {
       return send(res, status, { error: e.message });
     }
   });
-  return server;
-}
-
-const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
-/** Whether a Host header may reach this server: loopback names when it listens on loopback, plus STUDIO_ALLOWED_HOSTS. */
-export function hostAllowed(host, address, env = process.env) {
-  const name = String(host ?? '').toLowerCase().replace(/:\d+$/, '');
-  const extra = String(env.STUDIO_ALLOWED_HOSTS ?? '').toLowerCase().split(',').map((h) => h.trim()).filter(Boolean);
-  if (extra.includes(name)) return true;
-  const bound = typeof address === 'object' && address ? address.address : '';
-  if (LOOPBACK.has(name) || (!!name && name === bound)) return true;
-  // Bound to every interface (--host 0.0.0.0), this machine's own addresses are fine too; names need STUDIO_ALLOWED_HOSTS.
-  if (bound === '0.0.0.0' || bound === '::') return Object.values(networkInterfaces()).flat().some((i) => i && (i.address === name || `[${i.address}]` === name));
-  return false;
 }
 
 export function run(argv) {

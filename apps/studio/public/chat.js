@@ -130,7 +130,7 @@ export function createChat({ root, onOpen } = {}) {
     return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}" data-card-id="${esc(card.id)}">
       <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtTime(card.expires))}` : ''}</div>
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
-      ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="Admin token" placeholder="Admin token" required><button type="submit" class="primary">Confirm</button></form>` : ''}
+      ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="Step-up secret" placeholder="Step-up secret" required><button type="submit" class="primary">Confirm</button></form>` : ''}
       <h3>${esc(card.title)}</h3>
       ${card.body ? `<div class="md">${md(card.body)}</div>` : ''}
       ${card.recommendation?.why && !answered ? `<p class="muted why">${esc(card.recommendation.why)}</p>` : ''}
@@ -159,7 +159,8 @@ export function createChat({ root, onOpen } = {}) {
     for (const e of st.events) {
       if (!/^(decision\.answered|approval\.decided)$/.test(e.type)) continue;
       if (e.subject) answered.set(e.subject, e);
-      if (typeof e.data?.card === 'string') answered.set(e.data.card, e);
+      const id = e.data?.cardId ?? (typeof e.data?.card === 'string' ? e.data.card : null);
+      if (id) answered.set(id, e);
     }
     const seen = new Set();
     let html = st.next ? '<p class="older"><button type="button" id="chat-older">Show earlier messages</button></p>' : '';
@@ -280,8 +281,9 @@ export function createChat({ root, onOpen } = {}) {
       st.cards.set(cardId, r.data.card);
       st.notes.set(cardId, { kind: 'changed', text: 'This card changed before your answer arrived, so nothing was sent. Here is what it says now; answer again if it still applies.' });
     } else if (r.status === 401 && /step-up-required$/.test(r.data.type ?? '')) {
-      // Until sign-in lands (M4), the proof is the admin token typed again; the Studio server keeps the step-up token.
-      st.notes.set(cardId, { kind: 'stepup', option, text: 'Confirm it is you: type the admin token to answer. It is checked by the control plane and not stored in this page.' });
+      // Until sign-in lands (M4), the proof is the deployment's step-up secret typed in; the Studio server keeps only the
+      // short-lived step-up token the control plane gives back.
+      st.notes.set(cardId, { kind: 'stepup', option, text: 'Confirm it is you: type the step-up secret to answer. The control plane checks it; neither this page nor the Studio keeps it.' });
     } else if (!r.ok) {
       st.notes.set(cardId, { kind: 'error', text: r.data.error ?? `HTTP ${r.status}` });
     } else {
