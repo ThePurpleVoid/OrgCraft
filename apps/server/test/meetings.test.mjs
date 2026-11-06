@@ -308,3 +308,67 @@ test('tools/1 checks meeting_reply and meeting_close', () => {
 });
 
 void ADMIN;
+
+test('G-15: the front door starts an ad hoc meeting from the chat; no cap given means the team default, inside the daily budget', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'Web dev and QA on the checkout errors, now' });
+    const front = await runner.next((f) => f.op === 'session.start' && f.body.role === 'chief-of-staff');
+    const fd = { session: front.body.session, token: front.body.token };
+    // A role that is not on the team: refused.
+    const r0 = await tool(p.call, fd, 'meeting_start', { title: 'Checkout errors', agenda: 'Why do payments fail?', attendees: ['web-dev', 'nobody'] });
+    assert.equal(r0.status, 422, JSON.stringify(r0.body));
+    const r = await tool(p.call, fd, 'meeting_start', { title: 'Checkout errors', agenda: 'Why do payments fail?', attendees: ['web-dev', 'qa', 'chief-of-staff'] });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual([r.body.attendees, r.body.cap, r.body.currency], [['web-dev', 'qa'], 100, 'USD'], 'the facilitator left out; a tenth of the 1000 daily cap');
+    const web = await turnFor(runner, r.body.meeting, 'web-dev');
+    assert.equal(web.wake.data.title, 'Checkout errors');
+    assert.equal((await tool(p.call, web, 'meeting_reply', { meeting: r.body.meeting, text: 'The card form times out.' })).status, 200);
+    // A busy attendee (next-pause): the turn waits in its queue and is answered after its current step.
+    const qa = await turnFor(runner, r.body.meeting, 'qa');
+    assert.equal((await tool(p.call, qa, 'meeting_reply', { meeting: r.body.meeting, text: 'Reproduced on staging.' })).status, 200);
+    const close = await turnFor(runner, r.body.meeting, 'chief-of-staff', { closing: true });
+    assert.equal(close.session, fd.session, 'the front door that started it runs it');
+    const done = await tool(p.call, close, 'meeting_close', { meeting: r.body.meeting, minutes: 'The card form times out; reproduced.', actionItems: [{ to: 'web-dev', task: 'Fix the card form timeout', doneWhen: 'checkout passes on staging' }] });
+    assert.equal(done.status, 200, JSON.stringify(done.body));
+    const page = (await p.call('GET', `/teams/shop/meetings/${r.body.meeting}`)).body;
+    assert.deepEqual([page.adhoc, page.outcome, page.facilitator], [true, 'completed', 'chief-of-staff']);
+    assert.ok((await p.call('GET', '/teams/shop/chat')).body.items.some((e) => e.type === 'chat.message' && e.data.meeting === r.body.meeting), 'minutes in the chat');
+    assert.ok((await events(p.call, 'message.handoff')).some((e) => e.data.meeting === r.body.meeting && e.data.to === 'web-dev'), 'the action as a HANDOFF');
+
+    // The team default meeting cap, and a cap in another currency refused.
+    assert.equal((await p.call('PUT', '/teams/shop/budget', { meetingCap: 40 })).status, 200, 'lowering needs no step-up');
+    const r2 = await tool(p.call, fd, 'meeting_start', { title: 'Again', attendees: ['qa'] });
+    assert.equal(r2.body.cap, 40);
+    const r3 = await tool(p.call, fd, 'meeting_start', { title: 'Euro', attendees: ['designer'], cap: { amount: 50, currency: 'EUR' } });
+    assert.equal(r3.status, 422);
+    assert.match(JSON.stringify(r3.body), /in EUR and this team's budget is in USD/);
+    const r4 = await tool(p.call, fd, 'meeting_start', { title: 'Big', attendees: ['designer'], cap: { amount: 5000, currency: 'USD' } });
+    assert.match(JSON.stringify(r4.body), /above the team's meeting cap \(40\); an owner can raise it in Budget/);
+    // An explicit cap cannot go around the step-up-protected meeting cap, from chat or from the Studio.
+    const r5 = await tool(p.call, fd, 'meeting_start', { title: 'Just over', attendees: ['designer'], cap: { amount: 41, currency: 'USD' } });
+    assert.equal(r5.status, 422);
+    assert.match(JSON.stringify(r5.body), /above the team's meeting cap \(40\)/);
+    const s5 = await p.call('POST', '/teams/shop/meetings', { adhoc: { title: 'Just over', attendees: ['designer'], cap: { amount: 41, currency: 'USD' } } });
+    assert.equal(s5.status, 409);
+    assert.match(JSON.stringify(s5.body), /above the team's meeting cap \(40\)/);
+    assert.equal((await p.call('PUT', '/teams/shop/budget', { meetingCap: 2000 })).status, 409, 'not above perDay');
+    assert.equal((await p.call('PUT', '/teams/shop/budget', { meetingCap: 500 })).status, 401, 'raising it needs step-up');
+    // Another role cannot start one.
+    const webS = { session: web.session, token: web.token };
+    assert.equal((await tool(p.call, webS, 'meeting_start', { title: 'Mine', attendees: ['qa'] })).status, 403);
+    // A person can start one too (POST /teams/{team}/meetings { adhoc }).
+    const byPerson = await p.call('POST', '/teams/shop/meetings', { adhoc: { title: 'Quick sync', attendees: ['designer'] } });
+    assert.equal(byPerson.status, 201, JSON.stringify(byPerson.body));
+    assert.deepEqual([byPerson.body.adhoc, byPerson.body.facilitator, byPerson.body.cap], [true, 'chief-of-staff', 40]);
+    // Open meetings hold what is left of their caps: two open (40 + 40) and a daily cap of 100 leave at most 20.
+    assert.equal((await p.call('PUT', '/teams/shop/budget', { perDay: 100 })).status, 200);
+    const r6 = await tool(p.call, fd, 'meeting_start', { title: 'One more', attendees: ['qa'], cap: { amount: 30, currency: 'USD' } });
+    assert.equal(r6.status, 422);
+    assert.match(JSON.stringify(r6.body), /after 80 held by open meetings, less than the meeting's cap of 30/);
+    // Lowering perDay below the meeting cap is a lowering: no step-up, and the meeting cap comes down with it.
+    const low = await p.call('PUT', '/teams/shop/budget', { perDay: 30 });
+    assert.equal(low.status, 200, JSON.stringify(low.body));
+    assert.deepEqual([low.body.perDay, low.body.meetingCap], [30, 30]);
+  }, { tickMs: 0 });
+});
