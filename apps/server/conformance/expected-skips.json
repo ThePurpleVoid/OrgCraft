@@ -1,0 +1,50 @@
+[
+  {
+    "test-name": "oidcc-idtoken-unsigned",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "comment": "Feature not offered: unsigned ID tokens (alg none). The issuer signs every ID token; the module skips itself when none is not advertised."
+  },
+  {
+    "test-name": "oidcc-scope-email",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "comment": "Feature not offered: the email, address and phone scopes. The deployment releases name and preferred_username only (data minimisation); the module skips itself when the scopes are not advertised."
+  },
+  {
+    "test-name": "oidcc-scope-address",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "comment": "Feature not offered: the email, address and phone scopes. The deployment releases name and preferred_username only (data minimisation); the module skips itself when the scopes are not advertised."
+  },
+  {
+    "test-name": "oidcc-scope-phone",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "comment": "Feature not offered: the email, address and phone scopes. The deployment releases name and preferred_username only (data minimisation); the module skips itself when the scopes are not advertised."
+  },
+  {
+    "test-name": "oidcc-scope-all",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "comment": "Feature not offered: the email, address and phone scopes. The deployment releases name and preferred_username only (data minimisation); the module skips itself when the scopes are not advertised."
+  },
+  {
+    "test-name": "oidcc-alternate-happy-flow",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "comment": "Feature not offered: the email, address and phone scopes. The deployment releases name and preferred_username only (data minimisation); the module skips itself when the scopes are not advertised."
+  },
+  {
+    "test-name": "oidcc-request-uri-unsigned-supported-correctly-or-rejected-as-unsupported",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "comment": "Feature not offered: request objects (request and request_uri). The OP answers request_not_supported / request_uri_not_supported, which the module accepts and then skips."
+  },
+  {
+    "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "comment": "Feature not offered: request objects (request and request_uri). The OP answers request_not_supported / request_uri_not_supported, which the module accepts and then skips."
+  }
+]
