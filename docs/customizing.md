@@ -52,7 +52,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.17.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.17.1",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -62,6 +62,8 @@ In `.agent-team/team.json`:
   "agentTeams": false
 }
 ```
+
+`TIMEZONE` is an IANA time zone (`America/Los_Angeles`, `Europe/London`, `UTC`): meetings and the scheduler read it. `init` turns common names such as `Pacific`, `Eastern` or `UK` into their zone and refuses one it does not know; `validate` warns about one already in `team.json` and names the zone to use.
 
 `hooks` merges the kit's reporting hooks into `.claude/settings.json`, and `agentTeams` sets the team up for Claude Code agent teams; see [hooks and agent teams](hooks-and-agent-teams.md).
 

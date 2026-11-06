@@ -66,7 +66,7 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | `proposal.opened`, `proposal.updated`, `proposal.accepted`, `proposal.failed` | `connector` (for example `github`), `ref` (for a repository, the pull request number), `url`, `branch`, `headSha`, `approval` (on accepted and failed), `result` (the merge commit, on accepted), `reason` (on failed: head-moved, checks, conflict). Emitted by the runner, which proposes and accepts for its sessions (work contract `propose` and `accept`) |
 | `usage.recorded` | `inputTokens`, `outputTokens`, `cost` (in the currency's minor unit), `currency`, `meeting` (optional: the meeting whose turn this was; the server counts it toward that meeting's cap only when the session was given one of its turns, and otherwise ignores the tag) |
 | `budget.warned` (at 80% of the day's cap), `budget.exhausted` | `scope` (day, run), `day` (UTC date), `spent`, `cap` (minor units), `currency`, `cardId` (string: the budget card's id, on exhausted) |
-| `budget.updated` | `currency`, `perDay`, `perRun` (minor units, or null), `sessions`, `by` (member): the team's caps after a change |
+| `budget.updated` | `currency`, `perDay`, `perRun` (minor units, or null), `sessions`, `meetingCap` (minor units, or null for a tenth of `perDay`; at most `perDay`, and lowering `perDay` below it lowers it too), `by` (member): the team's caps after a change |
 
 ### Owner, chat and approvals
 
@@ -84,7 +84,7 @@ A meeting runs as a written round ([team-tools.md](team-tools.md), `meeting_repl
 
 | `type` | `data` |
 | --- | --- |
-| `meeting.opened` | `title`, `agenda`, `facilitator`, `attendees` (role slugs, in turn order), `format`, `ifBusy`, `cap` (minor units), `currency`, `by` (member) |
+| `meeting.opened` | `title`, `agenda`, `facilitator`, `attendees` (role slugs, in turn order), `format`, `ifBusy`, `cap` (minor units), `currency`, `by` (member), `adhoc` (true for an unscheduled meeting, whose `definition` is `adhoc-<id>`) |
 | `meeting.turn` | `to` (a role), `turn`, `of`, `title`, `agenda`, `closing` (the facilitator's closing turn), `capped`, `replies` so far (`{ role, text }`, oldest dropped first past 40 KB, with `dropped` and `note`), `skipped` (on the closing turn). Wakes `to` |
 | `meeting.replied` | `role`, `turn`, `text` (verbatim) |
 | `meeting.skipped` | `role`, `turn`, `reason` (`busy` with `ifBusy` skip or proxy, `missed` past the turn deadline, `capped`: every turn still to come once the cap is reached, the current one first; readers accept reasons they do not know), `proxy` (true when `ifBusy` is proxy), `closing` (the facilitator missed its closing turn) |

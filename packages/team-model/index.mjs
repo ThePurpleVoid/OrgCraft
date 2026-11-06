@@ -368,6 +368,38 @@ const field = (md, name) => (new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm').e
  * Checks a TeamSpec the way sync and the roster check would, plus the data files, without touching disk.
  * Returns [{ level: 'error' | 'warning', where, message }], errors first.
  */
+// Common names people type for a time zone, and the IANA zone each means. Meetings and the scheduler need an IANA zone
+// (Intl rejects "Pacific"), so init maps these and validate names them.
+export const ZONE_ALIASES = {
+  pacific: 'America/Los_Angeles', pt: 'America/Los_Angeles', pst: 'America/Los_Angeles', pdt: 'America/Los_Angeles', 'pacific time': 'America/Los_Angeles',
+  mountain: 'America/Denver', mt: 'America/Denver', mst: 'America/Denver', mdt: 'America/Denver', 'mountain time': 'America/Denver', arizona: 'America/Phoenix',
+  central: 'America/Chicago', ct: 'America/Chicago', cst: 'America/Chicago', cdt: 'America/Chicago', 'central time': 'America/Chicago',
+  eastern: 'America/New_York', et: 'America/New_York', est: 'America/New_York', edt: 'America/New_York', 'eastern time': 'America/New_York',
+  alaska: 'America/Anchorage', hawaii: 'Pacific/Honolulu', atlantic: 'America/Halifax', newfoundland: 'America/St_Johns',
+  uk: 'Europe/London', gb: 'Europe/London', london: 'Europe/London', gmt: 'Europe/London', bst: 'Europe/London', ireland: 'Europe/Dublin',
+  cet: 'Europe/Paris', cest: 'Europe/Paris', 'central european': 'Europe/Paris', eet: 'Europe/Athens', 'eastern european': 'Europe/Athens', wet: 'Europe/Lisbon',
+  india: 'Asia/Kolkata', ist: 'Asia/Kolkata', japan: 'Asia/Tokyo', jst: 'Asia/Tokyo', china: 'Asia/Shanghai', singapore: 'Asia/Singapore', korea: 'Asia/Seoul',
+  sydney: 'Australia/Sydney', aest: 'Australia/Sydney', aedt: 'Australia/Sydney', melbourne: 'Australia/Melbourne', perth: 'Australia/Perth',
+  nz: 'Pacific/Auckland', 'new zealand': 'Pacific/Auckland', utc: 'UTC', 'z': 'UTC', zulu: 'UTC',
+};
+/** True when Intl knows `zone` as a time zone (an IANA name such as Europe/Lisbon, or UTC). */
+export function isZone(zone) {
+  if (typeof zone !== 'string' || !zone.trim()) return false;
+  try { new Intl.DateTimeFormat('en', { timeZone: zone }); return true; } catch { return false; }
+}
+/**
+ * A team's TIMEZONE as an IANA zone: { zone, from } where `from` is 'iana' (already one), 'alias' (a common name such as
+ * "Pacific" mapped to America/Los_Angeles), or null when neither (zone is then null). Abbreviations Intl happens to
+ * accept (EST, PST8PDT) still map to the city zone, which follows daylight saving.
+ */
+export function toZone(value) {
+  const v = String(value ?? '').trim();
+  const alias = ZONE_ALIASES[v.toLowerCase().replace(/\s+/g, ' ')];
+  if (alias) return { zone: alias, from: alias === v ? 'iana' : 'alias' };
+  if (/^[A-Za-z]+\/[A-Za-z0-9_+\-/]+$/.test(v) && isZone(v)) return { zone: v, from: 'iana' };
+  return { zone: null, from: null };
+}
+
 export function validate(spec, kit, { dailyCapUsd = spec.options?.budgets?.dailyUsd } = {}) {
   const issues = [];
   const add = (level, where, message) => issues.push({ level, where, message });
@@ -376,6 +408,13 @@ export function validate(spec, kit, { dailyCapUsd = spec.options?.budgets?.daily
   for (const t of teamTargets(spec.options)) if (!TARGETS.includes(t)) add('error', 'team.json', `targets lists "${t}"; the kit writes ${TARGETS.join(', ')}`);
   if (spec.options?.packs !== undefined && !Array.isArray(spec.options.packs)) add('error', 'team.json', 'packs must be a list of pack names');
   else if (kit?.packs) for (const p of teamPacks(spec.options)) if (!(p in kit.packs)) add('error', 'team.json', `packs lists "${p}", which the kit does not have (packs: ${Object.keys(kit.packs).join(', ')})`);
+  // Meetings and the scheduler read TIMEZONE with Intl; a name it rejects ("Pacific") silently becomes UTC. A warning,
+  // so a team that has one still syncs.
+  const tz = spec.values?.TIMEZONE;
+  if (tz !== undefined && toZone(tz).from !== 'iana') {
+    const z = toZone(tz).zone;
+    add('warning', 'team.json', `TIMEZONE "${tz}" is not an IANA time zone, so meetings and the scheduler would use UTC; ${z ? `set it to "${z}"` : 'use a name such as America/Los_Angeles or Europe/Lisbon'}`);
+  }
   const installed = new Map(roles.map((r) => [r.slug, r]));
   const manager = new Map(roles.map((r) => [r.slug, (field(r.md, 'Reports to').split(/\s/)[0] ?? '').toLowerCase()]));
   const top = roles.filter((r) => manager.get(r.slug) === 'owner');
