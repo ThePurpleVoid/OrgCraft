@@ -8,7 +8,7 @@ import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
 import { safeRead, safeWrite, sharedDir } from './sandbox.mjs';
-import { checkpoint as saveWork, outOfArea, prepare, release } from './worktree.mjs';
+import { checkpoint as saveWork, onBranch, outOfArea, prepare, release } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
 export const DEFAULT_TIERS = { deep: 'claude-opus-5-5', standard: 'claude-opus-5-5', routine: 'claude-sonnet-5-5', light: 'claude-haiku-5-5' };
@@ -44,6 +44,10 @@ export function wakePrompt(m, role, { resume = false } = {}) {
   if (m.type === 'chat.message') {
     const quoted = String(d.text ?? '').split('\n').map((l) => `> ${l}`).join('\n');
     return `${resume ? `${lead}, then handle this.\n\n` : ''}Message from ${from}, verbatim:\n\n${quoted}`;
+  }
+  if (m.type === 'run.resumed') {
+    // The run was paused (by the owner or the daily cap) and is going again: carry on where the checkpoint left off.
+    return `${lead}. The run was resumed${d.reason ? ` (${d.reason})` : ''}${d.by ? ` by ${d.by}` : ''} after a pause. Carry on from your last checkpoint: your branch and your memory file are as you left them.`;
   }
   if (m.type === 'decision.answered') {
     return `${lead}. The owner answered your question${d.question ? ` "${d.question}"` : ''}: ${JSON.stringify(d.answer ?? null)}${d.note ? `, with this note, verbatim:\n\n> ${d.note}` : '.'}`;
@@ -129,7 +133,15 @@ export class Session {
       this._ended();
       return;
     }
-    await this.emit('session.started', { role: this.role, instance: b.instance ?? null, worktree: this.copy.cwd, branch: this.copy.branch, model: { provider: 'anthropic', name: this.model }, reason: b.resume ? 'resumed' : 'started' });
+    // A resume names the commit its last checkpoint pushed. It must be on the branch this runner checked out;
+    // if it is not (the push never landed, or the branch was rewritten), the session still starts, from what is
+    // there, and says so: to the control plane in session.started, and to the role in its first prompt.
+    let checkpoint = null;
+    if (b.resume && b.checkpoint?.commit) {
+      checkpoint = { commit: String(b.checkpoint.commit), found: await onBranch(this.copy.cwd, b.checkpoint.commit) };
+      if (!checkpoint.found) this.resumeNote = `Note: your last checkpoint (${checkpoint.commit}) is not on ${this.copy.branch ?? 'this checkout'}; you are at ${this.copy.head}. Check what is missing before you go on.`;
+    }
+    await this.emit('session.started', { role: this.role, instance: b.instance ?? null, worktree: this.copy.cwd, branch: this.copy.branch, model: { provider: 'anthropic', name: this.model }, reason: b.resume ? 'resumed' : 'started', ...(checkpoint ? { checkpoint } : {}) });
     this.state = 'idle';
     this.deliver(b.wake ?? null, { first: true });
   }
@@ -160,6 +172,13 @@ export class Session {
 
   afterTurn = [];
 
+  /** The first prompt after a resume carries what the resume found; later ones do not. */
+  takeNote(prompt) {
+    const n = this.resumeNote;
+    this.resumeNote = null;
+    return n ? `${n}\n\n${prompt}` : prompt;
+  }
+
   async turn({ message, resume }) {
     const remaining = this.remaining;
     if (remaining !== null && remaining <= 0) { this.stopReason = 'budget'; this.state = 'stopping'; return; }
@@ -174,7 +193,7 @@ export class Session {
     try {
       out = await this.deps.adapter.turn({
         session: this.id, role: this.role, model: this.model, cwd: this.copy.cwd, env: this.env, resume: this.resume, sandbox: this.deps.sandbox ?? null,
-        systemPrompt: systemPrompt(this.body.prompt, this.role, this.memoryPath), prompt: wakePrompt(message, this.role, { resume }),
+        systemPrompt: systemPrompt(this.body.prompt, this.role, this.memoryPath), prompt: this.takeNote(wakePrompt(message, this.role, { resume })),
         signal: this.abort.signal, maxBudgetUsd: remaining === null ? undefined : remaining / 100, mcp: this.body.tools?.mcp ?? {},
         tools: Object.entries(TOOLS).map(([name, t]) => ({ name, description: t.description, shape: t.shape })),
         callTool: (name, args) => this.callTool(name, args),
@@ -259,13 +278,13 @@ export class Session {
         return { allow: false, reason: `This branch's commits change paths outside your owned areas (${o.committed.slice(0, 10).join(', ')}). Undo those changes, and send a request to the owner of each path instead.` };
       }
     }
-    const d = decide({ tool, input, cwd: this.copy.cwd, areas: this.body.areas ?? [], also: [this.memoryPath], rules: this.deps.rules ?? DEFAULT_RULES });
+    const d = decide({ tool, input, cwd: this.copy.cwd, repo: this.body.repo?.url ?? null, areas: this.body.areas ?? [], also: [this.memoryPath], rules: this.deps.rules ?? DEFAULT_RULES });
     if (d.rule === 'team-tool') return { allow: true };
     if (d.decision === 'needs-approval') {
       await this.emit('session.tool', { tool, target: String(d.target).slice(0, 500), decision: 'needs-approval', rule: d.rule });
       this.state = 'waiting';
       const call = tool === 'Bash' ? String(input.command ?? '') : JSON.stringify({ tool, input });
-      const a = await this.untilStopped(this.deps.approve({ action: d.rule, call, why: `The team policy keeps this for a person: it ${d.why}.`, ...(d.pr ? { pr: d.pr, headSha: d.headSha } : {}) }));
+      const a = await this.untilStopped(this.deps.approve({ action: d.rule, call, why: `The team policy keeps this for a person: it ${d.why}.`, ...(d.pr ? { pr: d.pr, headSha: d.headSha, ...(d.repo ? { repo: d.repo } : {}) } : {}) }));
       if (this.state === 'waiting') this.state = 'working';
       const ok = a.decision === 'approved';
       await this.emit('session.tool', { tool, target: String(d.target).slice(0, 500), decision: ok ? 'allowed' : 'refused', rule: d.rule, by: a.by });

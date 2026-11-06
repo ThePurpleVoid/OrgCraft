@@ -4,6 +4,13 @@
 
 - **M3 design fix:** `run.resumed` now restarts every session a pause stopped, from its last checkpoint, after an owner's resume or the budget's next-day resume. Pause and resume handlers act only if the run's state and version still match (found in review of #54).
 
+### Runner
+
+- **Merge approvals name the pull request and the full head commit** (#56, D1). A merge is pinned only as exactly one `gh pr merge <N> [--squash|--merge|--rebase|--delete-branch] --match-head-commit <40 or 64 hex>`, or the GitHub merge tool with `owner`, `repo`, `pullNumber` and `expectedHeadSha`. Anything else that would land on the main line is refused, including a direct push. The tool's `owner/repo` must be the session's own repository, and `approval.wait` carries `pr`, `headSha` and `repo`.
+- **Resume from a checkpoint.** A `run.resumed` wake tells the role the run was resumed, and why. `session.started` for a resume says whether the checkpoint commit is on the branch (`checkpoint: { commit, found }`), and a missing one is named in the role's first prompt.
+- **Plain http only to a local host.** `register` and `start` accept https anywhere, and http only to `localhost`, `127.0.0.1`, `::1` and `host.docker.internal`.
+- **M3 on a Mac** (apps/runner/README.md): the control plane, Studio and runner on one Mac. The deploy key and merger app key are installed into the runner's closed folder from a one-off container, and the git config pushes over ssh with a pinned GitHub host key.
+
 ### Studio (nothing changes on sync)
 
 - **Start a run from the Studio's Chat page** (milestone M3, issue #28). With no run going, the header offers **Start a run…**. The dialog says what will run: the team as last published (the commit, not the unsaved canvas), how many roles, and which one reports to you. **Start** stays off until a daily cap is set; setting or raising the cap asks for the step-up secret, lowering it never does. The Studio's server builds the run request from the repository: the commit SHA, the origin URL with any credentials stripped, a summary, and for each role its manager, the paths it writes, its model and its rendered brief (at most 20 KB). It refuses with "publish first" when the team's files have changes nobody published, and with "push first" when the published commit is not on the branch's upstream (publish commits but does not push, and the team's sessions check out from the remote); the run's `repo.ref` is that upstream branch. The control plane's 409s are shown as it words them, for example a run that is already going or today's cap being spent.

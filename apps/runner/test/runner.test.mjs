@@ -365,3 +365,45 @@ test('a HANDOFF is not sent while the branch holds a change outside the owned ar
     await cp.close();
   }
 });
+
+test('a run.resumed wake resumes each role from its checkpoint, and a checkpoint that is not on the branch is said out loud', async () => {
+  const { bare, root } = origin();
+  // What a pause left: a pushed checkpoint on the role's branch.
+  const seed = join(root, '..', 'seed');
+  sh(seed, 'checkout', '--quiet', '-b', 'web/4-login');
+  writeFileSync(join(seed, 'login.txt'), 'half a form\n');
+  sh(seed, 'add', '-A'); sh(seed, 'commit', '--quiet', '-m', 'checkpoint (web-dev): pause'); sh(seed, 'push', '--quiet', bare, 'web/4-login');
+  const commit = sh(bare, 'rev-parse', 'web/4-login');
+  const prompts = {};
+  const adapter = stubAdapter({
+    'web-dev': async (t) => { prompts[t.env.AGENT_TEAM_SESSION] = t.prompt; return {}; },
+  });
+  const cp = await fakeControlPlane();
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter, log: (m) => process.env.DBG && console.error('LOG', m) });
+  try {
+    await runner.ready;
+    const wake = (id) => ({ id, type: 'run.resumed', actor: { kind: 'system', id: 'budget' }, data: { reason: 'next-day', by: 'budget' } });
+    const a = cp.start({ role: 'web-dev', run: 'run_9', repo: { url: bare }, worktree: 'web/4-login', areas: ['login.txt'], resume: true, checkpoint: { commit, memory: 'Current task: login form' }, wake: wake('evt_r1') });
+    await cp.until(() => prompts[a.body.session] && cp.events.some((e) => e.type === 'session.started'));
+    const started = cp.events.find((e) => e.type === 'session.started');
+    assert.equal(started.data.reason, 'resumed');
+    assert.deepEqual(started.data.checkpoint, { commit, found: true });
+    assert.match(prompts[a.body.session], /^Resume from roles\/web-dev\.md\. The run was resumed \(next-day\) by budget after a pause\. Carry on from your last checkpoint/);
+    cp.send('session.stop', { session: a.body.session, mode: 'finish-step', reason: 'owner' });
+    await cp.until(() => cp.events.filter((e) => e.type === 'session.ended').length === 1);
+
+    // A checkpoint the branch does not hold (the push never landed): the session starts from what is there, and says so.
+    const lost = 'f'.repeat(40);
+    const b = cp.start({ role: 'web-dev', run: 'run_9', repo: { url: bare }, worktree: 'web/4-login', areas: ['login.txt'], resume: true, checkpoint: { commit: lost }, wake: wake('evt_r2') });
+    // Events arrive over their own connection, so wait for the event itself, not only the prompt.
+    await cp.until(() => prompts[b.body.session] && cp.events.filter((e) => e.type === 'session.started').length === 2);
+    const again = cp.events.filter((e) => e.type === 'session.started').at(-1);
+    assert.deepEqual(again.data.checkpoint, { commit: lost, found: false });
+    assert.match(prompts[b.body.session], new RegExp(`^Note: your last checkpoint \\(${lost}\\) is not on web/4-login; you are at ${commit}\\.`));
+    for (const e of cp.events) assert.deepEqual(checkEvent(e).problems ?? [], [], JSON.stringify(e));
+    noFailedTurns(cp);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});

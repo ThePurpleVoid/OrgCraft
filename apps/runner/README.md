@@ -32,6 +32,68 @@ docker run -d --name agent-team-runner --restart unless-stopped \
 volume holds the runner's folder (`/data/runner`, closed to sessions) and the sessions' (`/data/work`). CI builds this
 image and runs the sandbox tests inside it (`runner-image`).
 
+## M3 on a Mac
+
+The M3 exit test runs everything on one Mac: the control plane on `127.0.0.1:4849`, the Studio on `127.0.0.1:4848`,
+and the runner in Docker Desktop. The runner reaches the control plane as `http://host.docker.internal:4849`. Plain
+http is allowed only to `localhost`, `127.0.0.1`, `::1` and `host.docker.internal`; any other host must be https,
+since the runner key and session tokens travel on that link.
+
+Once, before the first start (the owner checklist, part A, made these):
+
+```sh
+mkdir -p ~/.agent-team/runner-secrets && chmod 700 ~/.agent-team/runner-secrets
+ssh-keygen -t ed25519 -f ~/.agent-team/runner-secrets/runner-deploy-key -N ""   # paste only the .pub as a deploy key
+# the merger app's private key, downloaded from GitHub, saved as:
+mv ~/Downloads/<app>.private-key.pem ~/.agent-team/runner-secrets/merger-app.pem
+```
+
+Then, from the repository root:
+
+```sh
+# 1. The control plane, then the Studio pointed at it (each in its own terminal; the team id is yours to pick).
+node apps/server/bin.mjs                  # http://127.0.0.1:4849, data in ~/.agent-team/server
+T=$(cat ~/.agent-team/server/admin.token)
+curl -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"id":"my-team"}' localhost:4849/v1/teams
+AGENT_TEAM_SERVER=http://127.0.0.1:4849 AGENT_TEAM_SERVER_TOKEN="$T" AGENT_TEAM_SERVER_TEAM=my-team \
+  node apps/studio/server.mjs --open      # http://127.0.0.1:4848
+
+# 2. The runner image.
+docker build -f apps/runner/Dockerfile -t agent-team-runner .
+
+# 3. Redeem a one-time code (15 minutes, once), with a step-up. The key lands in the volume, never on screen.
+SU=$(curl -s -H "authorization: Bearer $T" -H 'content-type: application/json' \
+  -d "{\"secret\":\"$(cat ~/.agent-team/server/step-up.secret)\"}" localhost:4849/v1/auth/step-up | jq -r .token)
+CODE=$(curl -s -X POST -H "authorization: Bearer $T" -H "x-step-up: $SU" localhost:4849/v1/runners/codes | jq -r .code)
+docker run --rm -v ~/.agent-team/runner-secrets:/run/agent-team:ro -v agent-team-runner:/data agent-team-runner \
+  node apps/runner/bin.mjs register --server http://host.docker.internal:4849 --code "$CODE" --name my-mac
+
+# 4. Start it. ANTHROPIC_API_KEY comes from your shell (part B of the owner checklist; not before).
+docker run -d --name agent-team-runner --restart unless-stopped \
+  -e ANTHROPIC_API_KEY -e AGENT_TEAM_MERGER_APP_ID \
+  -v agent-team-runner:/data agent-team-runner
+docker logs -f agent-team-runner          # "sandbox checked", then "connected to http://host.docker.internal:4849"
+```
+
+The keys are mounted only into the one-off `register` container (step 3), never into the runner that runs sessions:
+Docker Desktop does not keep a Mac file's owner and mode inside the container, so a session could read the mount. At
+start, as root and before dropping to the runner user, the entrypoint copies `runner-deploy-key` and `merger-app.pem`
+from the mount into the volume's `/data/runner` (owned by the runner, `0600`; sessions cannot read that folder) and
+writes a git config that pushes over ssh with the deploy key and checks GitHub's published host key (`known_hosts`,
+never trust on first use). To replace a key later: `docker run --rm -v ~/.agent-team/runner-secrets:/run/agent-team:ro
+-v agent-team-runner:/data agent-team-runner true`, then `docker restart agent-team-runner`. Mount only
+`runner-secrets`, never all of `~/.agent-team`: that also holds the control plane's data. Do not add
+`--security-opt no-new-privileges` (the sandbox needs its file capabilities).
+
+- `AGENT_TEAM_SERVER` is not needed after `register`: the server is kept with the key in the volume.
+- The merger app's key and `AGENT_TEAM_MERGER_APP_ID` are read by the runner's PR step (`proposal.*`), which lands
+  next; installing them now means these commands do not change.
+- If the runner cannot connect, check the control plane from inside Docker:
+  `docker run --rm agent-team-runner node -e "fetch('http://host.docker.internal:4849/v1/health').then(r=>r.text()).then(console.log)"`.
+- What is tested: CI builds this image, runs the sandbox tests in it, and checks the key copy and the git config
+  (`runner-image`); `register` and `start` against a local control plane are tested outside Docker. Docker Desktop on a
+  Mac itself is not in CI.
+
 ## What a session can reach
 
 The agent is the untrusted part: it reads repository content, issues and web pages, so the runner assumes its shell
