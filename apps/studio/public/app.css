@@ -224,8 +224,9 @@ a { color: var(--accent); }
   /* touch targets: 44px tall, and the run controls stay on one line */
   .pages button, .chat-run button, .chat-form button, .runner-code button { min-height: 44px; }
   .chat-head { flex-wrap: nowrap; }
-  .chat-run { flex-wrap: nowrap; width: 100%; justify-content: flex-end; gap: 6px; }
-  .chat-run .cost { margin-right: auto; white-space: normal; }
+  .chat-run { flex-wrap: wrap; width: 100%; justify-content: flex-end; gap: 6px; }
+  .chat-run #runner-add { flex-basis: 100%; } /* its own line, so the run state never runs off the left edge at 360px */
+  .chat-run .cost { margin-right: auto; white-space: normal; flex: 1 1 0; min-width: 0; }
   .chat-run button, .chat-run .pill { padding: 6px 12px; white-space: nowrap; }
   .brand .muted { display: none; }
   .brand { flex: 1 1 0; }
@@ -449,6 +450,7 @@ body.editing .layout, body.editing .readonly-note { display: none; }
 .meeting-row { display: grid; gap: 2px; width: 100%; text-align: left; border: 1px solid transparent; border-radius: 8px; background: none; padding: 8px 10px; margin: 0 0 4px; }
 .meeting-row.selected { border-color: var(--accent); background: var(--bg); }
 .meeting-row .muted { font-size: 12.5px; }
+.meeting-row .error-text { font-size: 12.5px; color: var(--error); }
 .m-form { display: grid; gap: 14px; max-width: 760px; }
 .m-form > label, .m-form .m-grid > label { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
 .m-form input:not([type=checkbox]):not([type=radio]), .m-form select, .m-form textarea { font: inherit; color: var(--ink); }

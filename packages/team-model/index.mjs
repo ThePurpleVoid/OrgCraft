@@ -1051,13 +1051,19 @@ export function checkMeetings(meetings, roles, { dailyCapUsd } = {}) {
     const who = meetingAttendees(m, roles);
     const others = who.roles.filter((s) => s !== m.facilitator);
     if (others.length < 2 && !who.dynamic) add('warning', id, `has ${others.length === 1 ? 'one attendee' : 'no attendees'} besides the role that runs it`);
-    if (!w.label && Array.isArray(w.days)) for (const d of w.days) {
-      const k = `${d} ${w.at}`;
-      for (const o of slots.get(k) ?? []) {
-        const both = who.roles.filter((s) => o.roles.includes(s));
-        if (both.length) add('warning', id, `meets at the same time as ${o.id} (${d} ${w.at}), and both include ${both.join(', ')}`);
+    if (!w.label && Array.isArray(w.days)) {
+      const clashes = new Map(); // one warning per other meeting, naming every shared day
+      for (const d of w.days) {
+        const k = `${d} ${w.at}`;
+        for (const o of slots.get(k) ?? []) {
+          const both = who.roles.filter((s) => o.roles.includes(s));
+          if (!both.length) continue;
+          const c = clashes.get(o.id) ?? { days: new Set(), both: new Set() };
+          c.days.add(d); both.forEach((s) => c.both.add(s)); clashes.set(o.id, c);
+        }
+        slots.set(k, [...(slots.get(k) ?? []), { id, roles: who.roles }]);
       }
-      slots.set(k, [...(slots.get(k) ?? []), { id, roles: who.roles }]);
+      for (const [other, c] of clashes) add('warning', id, `meets at the same time as ${other} (${[...c.days].join(', ')} ${w.at}), and both include ${[...c.both].join(', ')}`);
     }
   }
   return out;

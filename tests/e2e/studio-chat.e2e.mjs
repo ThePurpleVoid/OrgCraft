@@ -100,7 +100,7 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
 
   await page.getByRole('button', { name: 'Pause' }).click();
   await page.locator('#run-state', { hasText: 'Paused' }).waitFor();
-  await page.getByText('The run was paused by owner').waitFor();
+  await page.getByText('The run was paused · owner').waitFor();
   await page.getByRole('button', { name: 'Resume' }).waitFor();
   assert.equal(cp.runs[0].state, 'paused');
   assert.deepEqual(errors, []);
