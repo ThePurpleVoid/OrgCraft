@@ -72,8 +72,8 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | --- | --- |
 | `chat.message` | `from` (member or role), `text` (verbatim for the owner; the dilution rule), `replyTo`, `attachments` (links), `clientId` (the id the client made, so a resend is stored once) |
 | `decision.requested`, `decision.answered` | `question`, `options`, `recommended`, `answer`, `by`, `cardId` (string), `session` (the session that asked, which the answer wakes) |
-| `approval.requested` | `action` (a classification from the policy), `command` or `call`, `why`, `risk`, `expires`, `cardId` (string), `session` |
-| `approval.decided` | `approval`, `decision` (approved, denied, expired), `by` (member), `note`, `session` |
+| `approval.requested` | `action` (a classification from the policy), `command` or `call`, `why`, `risk`, `expires`, `cardId` (string), `session`, `pr` and `headSha` (for `accept`: the approval is for that exact head) |
+| `approval.decided` | `approval`, `decision` (approved, denied, expired, superseded: the head moved), `by` (member), `note`, `session`, `headSha` |
 | `card.updated` | `card` (object): the whole card at its new `version` ([clients.md](clients.md) section 6). Emitted on every change (created, answered, expired, superseded); a client keeps the latest per card id |
 
 ### Team and connectors

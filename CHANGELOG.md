@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **M3 security requirements** (m3-design.md section 12, D1 to D8): approvals bound to the exact call and head sha, merges done by the runner with its own credential behind a branch ruleset, a scrypt-hashed step-up secret with lockout, step-up on raising spend, budget resume, runner codes and secrets, and no card answers from session tokens. Contracts, additive: `pr` and `headSha` on approvals, `superseded` decisions, `x-step-up` on those endpoints.
 - **M3 seams** ([docs/product/m3-design.md](docs/product/m3-design.md)): the tables for runs, sessions, the message bus, cards, approvals, chat, budgets and audit; how a message wakes a role; the runner and server ops M3 builds and who may send what; chat cards built from `card.updated` events; the daily budget at 80% and 100%; and the hosting split for a Vercel and Supabase deployment. Contracts, all additive: a new [team tools](docs/contracts/team-tools.md) contract (`tools/1`), new event types (`card.updated`, `budget.warned`, `budget.exhausted`, `session.queued`), `session.renew`, `session.token` and `nack` in `runner/1`, and the tool, step-up, budget and runner-code endpoints in `/v1/`.
 
 ## 0.9.1

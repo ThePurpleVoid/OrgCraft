@@ -35,6 +35,7 @@ A **runner** is the data plane: a process that holds checkouts, sandboxes and re
 - `session.stop`: `reason` (owner, budget, error).
 - The `ack` of `session.checkpoint` carries `commit` (the pushed head) and `memory` (the role's memory file, at most 64 KiB), which the control plane stores so the session can resume on any runner.
 - The `ack` of `approval.wait` carries `approval` and `card` ids.
+- `approval.wait` carries `pr` and `headSha` for an `accept`, and `approval.result` carries the approved `headSha`. The runner merges with that sha pinned, using its own merge credential, never one a session can reach; any other held call runs only if it is byte-identical to the approved call ([M3 design](../product/m3-design.md) section 12, D1 and D2).
 
 ### What each credential may send
 
