@@ -22,6 +22,7 @@ export const KINDS = {
   budget100: { type: 'budget.exhausted', label: 'Budget at 100%', breakthrough: true },
   blocked: { type: 'message.blocked', label: 'A role is blocked', breakthrough: false },
   minutes: { type: 'meeting.minutes', label: 'Meeting minutes', breakthrough: false },
+  ready: { type: 'ready.posted', label: 'Ready to try', breakthrough: false },
 };
 /** Suggested the first time (D49); everything else starts off. */
 export const SUGGESTED = ['approval', 'budget100'];
@@ -158,6 +159,15 @@ export function compose(event, { teamName, titles = {} } = {}) {
       kind, subject: cutSubject(`${tag} ${role} is waiting on a decision`),
       lines: [`${role} is blocked on: "${question}"`, rec, 'It keeps working on the recommendation unless the step cannot be undone.'].filter(Boolean),
       link: { label: 'Answer in the Studio', path: `/teams/${at}/board?role=${encodeURIComponent(event.actor?.id ?? '')}` },
+    };
+  }
+  if (kind === 'ready') {
+    const title = outside(d.title ?? 'A change');
+    return {
+      kind, subject: cutSubject(`${tag} Ready to try: ${title}`),
+      lines: [`"${title}" is merged and ready to try.`, d.pr ? `Pull request #${d.pr}.` : null,
+        d.preview ? 'The preview is up: open it from the Studio.' : 'The preview link appears in the Studio when the deployment is up.'].filter(Boolean),
+      link: { label: 'Open in the Studio', path: `/teams/${at}/inbox${d.cardId ? `?card=${encodeURIComponent(d.cardId)}` : ''}` },
     };
   }
   // minutes

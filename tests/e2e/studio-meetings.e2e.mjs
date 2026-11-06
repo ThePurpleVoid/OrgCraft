@@ -7,7 +7,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +32,9 @@ before(async () => {
   git('config', 'user.email', 'studio-test@example.com');
   git('config', 'commit.gpgsign', 'false');
   execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
+  // Teams made before 0.17.1 say "local time" (init now saves a real zone); the view must still explain UTC.
+  const teamJson = join(root, '.agent-team/team.json');
+  writeFileSync(teamJson, readFileSync(teamJson, 'utf8').replace(/"TIMEZONE": "[^"]*"/, '"TIMEZONE": "local time"'));
   git('add', '-A');
   git('commit', '-qm', 'team');
   studio = createStudio({ root, env: { AGENT_TEAM_HOME: home } });

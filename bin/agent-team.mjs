@@ -3,7 +3,7 @@
 // the kit generates the role briefs, protocols and scripts from it, pinned to one kit version.
 //
 //   agent-team init [--preset minimal|engineering|company] [--project "Name"] [--owner "Name"]
-//                   [--timezone "UTC"] [--digest-time "08:00"] [--kit <npx spec>] [--subagents] [--force]
+//                   [--timezone "America/Los_Angeles"] [--digest-time "08:00"] [--kit <npx spec>] [--subagents] [--force]
 //   agent-team init --template <id> [--project "Name"] [--owner "Name"] [--timezone "UTC"]
 //                            start from a team template (agent-team templates lists them)
 //   agent-team templates     list the kit's team templates
@@ -20,7 +20,7 @@
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.17.0 init --preset engineering --project "My App"
+//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.17.1 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -30,7 +30,7 @@ import { parseBrief } from '../tools/briefs.mjs';
 import { check as checkRoster, tree } from '../tools/roster.mjs';
 import { DEFAULT_MODELS, toSubagent } from '../tools/export-subagents.mjs';
 import { graphFrom } from '../tools/roster-graph.mjs';
-import { AGENTS_END, TARGETS, neutralInstructions, spliceBlock, teamTargets, withoutBlock, applyBindings, applyMeetings, checkTemplate, fitToPacks, roleTemplateFor, teamDoc, teamPacks, renderMeetings, templateCard, templateLayer, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
+import { AGENTS_END, TARGETS, neutralInstructions, spliceBlock, teamTargets, withoutBlock, applyBindings, applyMeetings, checkTemplate, fitToPacks, roleTemplateFor, teamDoc, teamPacks, renderMeetings, templateCard, templateLayer, toZone, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
 import { loadKit, loadTemplates, readLayer, readTemplateDir, writeLayer } from '../packages/team-model/node.mjs';
 
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -426,6 +426,7 @@ export function init(root, opts) {
   if (existsSync(teamFile) && !opts.force) throw new UsageError(`${LAYER}/team.json already exists. Use "agent-team sync", or --force to start over.`);
   const project = opts.project ?? root.split('/').filter(Boolean).at(-1);
   const slug = project.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  opts = { ...opts, timezone: initZone(opts.timezone) };
   if (opts.template) return initFromTemplate(root, opts, project, slug);
   presetRoles(opts.preset); // validates the preset name
   mkdirSync(join(root, LAYER, 'roles'), { recursive: true });
@@ -434,7 +435,7 @@ export function init(root, opts) {
     preset: opts.preset,
     include: [],
     exclude: [],
-    values: { PROJECT_NAME: project, OWNER: opts.owner ?? 'the owner', TIMEZONE: opts.timezone ?? 'local time', DIGEST_TIME: opts.digestTime ?? '08:00' },
+    values: { PROJECT_NAME: project, OWNER: opts.owner ?? 'the owner', TIMEZONE: opts.timezone, DIGEST_TIME: opts.digestTime ?? '08:00' },
     subagents: opts.subagents ?? false,
     hooks: true,
   };
@@ -470,6 +471,21 @@ export function initExtras(root, slug, values, { ownership, quiet = false }) {
   if (!/^\.merge-gate\/$/m.test(ignore)) writeFileSync(gi, `${ignore}${ignore && !ignore.endsWith('\n') ? '\n' : ''}\n# Agent Team Kit merge gate logs\n.merge-gate/\n`);
 }
 
+/**
+ * init's --timezone as an IANA zone: a common name ("Pacific", "UK") becomes its zone, an unknown one is refused, and
+ * none given is this machine's zone (else UTC). Meetings and the scheduler need a zone Intl knows.
+ */
+function initZone(given) {
+  if (given === undefined) {
+    let here = ''; try { here = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* none */ }
+    return toZone(here).from === 'iana' ? here : 'UTC';
+  }
+  const { zone, from } = toZone(given);
+  if (!zone) throw new UsageError(`--timezone "${given}" is not a time zone: use an IANA name such as America/Los_Angeles, Europe/London or Asia/Kolkata`);
+  if (from === 'alias') console.log(`Time zone "${given}" saved as ${zone}.`);
+  return zone;
+}
+
 /** A template folder by id (the kit's) or by path. */
 function templateFiles(idOrDir) {
   const kitOnes = loadTemplates(KIT);
@@ -482,7 +498,7 @@ function templateFiles(idOrDir) {
 function initFromTemplate(root, opts, project, slug) {
   const files = templateFiles(opts.template);
   const kit = loadKit(KIT);
-  const layer = templateLayer(files, kit, { project, owner: opts.owner ?? 'the owner', timezone: opts.timezone ?? 'UTC', kitVersion: VERSION, kitSpec: opts.kit ?? DEFAULT_KIT_SPEC });
+  const layer = templateLayer(files, kit, { project, owner: opts.owner ?? 'the owner', timezone: opts.timezone, kitVersion: VERSION, kitSpec: opts.kit ?? DEFAULT_KIT_SPEC });
   for (const line of writeLayer(root, layer)) console.log(line);
   initExtras(root, slug, JSON.parse(layer['team.json']).values, { ownership: !layer['ownership.json'] });
   const code = sync(root);
