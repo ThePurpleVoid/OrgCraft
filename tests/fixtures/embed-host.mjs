@@ -1,27 +1,25 @@
 // A host site with the Studio mounted in its own admin page, for tests (docs/specs/studio-embed.md section 4): a
 // strict CSP (script-src 'self', style-src 'self', no 'unsafe-inline'), the host's own header and ids that the
-// Studio's could clash with (#publish, #canvas, #project), its own sign-in as a bearer token, and the Studio's files
-// served from one directory as the handler serves /assets/<kit version>/.
+// Studio's could clash with (#publish, #canvas, #project), and its own sign-in as a bearer token.
 //
-// The API under /api/agent-team/studio is a local Studio server behind a small proxy that refuses what the handler
-// refuses (no x-agent-team-studio header, no bearer token, a body that is not JSON) and records every request, and
-// that reports the step 1 features. It stands in for createStudioHandler (kit #134) so this proves the page's side.
-import { createServer, request as httpRequest } from 'node:http';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+// Everything under /api/agent-team/studio is the real handler (createStudioHandler, kit #134) over the fake GitHub
+// (tests/fake-github.mjs): the Studio's files from /assets/<kit version>/, and the API, whose authorize() accepts only
+// the host's bearer token. Every API request is recorded.
+import { createServer } from 'node:http';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { KIT } from '../../bin/agent-team.mjs';
+import { createStudioHandler, toNodeListener } from '../../apps/studio/handler.mjs';
+import { VERSION } from '../../apps/studio/core.mjs';
+import { fakeGitHub } from '../fake-github.mjs';
 
-const KIT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const PUBLIC = join(KIT, 'apps/studio/public');
-const ASSETS = {
-  'team-model.mjs': join(KIT, 'packages/team-model/index.mjs'),
-  'model-prices.json': join(KIT, 'packages/model-prices/prices.json'),
-};
-const TYPES = { js: 'text/javascript; charset=utf-8', mjs: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', json: 'application/json; charset=utf-8' };
 export const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 export const TOKEN = 'host-session-token';
 export const BASE_PATH = '/api/agent-team/studio';
 export const FEATURES = { publish: true, chat: false, runs: false, live: false };
+const ASSETS = `${BASE_PATH}/assets/${VERSION}`;
 
 const PAGE = `<!doctype html>
 <html lang="en">
@@ -30,7 +28,7 @@ const PAGE = `<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Admin · Team</title>
   <link rel="stylesheet" href="/host.css">
-  <link rel="stylesheet" href="/assets/test/app.css">
+  <link rel="stylesheet" href="${ASSETS}/app.css">
 </head>
 <body>
   <header class="host-header"><span id="project">Host admin</span> <button id="publish" type="button">Host button</button> <a href="/admin">Admin home</a></header>
@@ -46,7 +44,7 @@ const HOST_CSS = `body { margin: 0; background: rgb(250, 240, 230); font-family:
 #team { --ats-vh: calc(100vh - 100px); }
 `;
 
-const HOST_JS = `import { mount } from '/assets/test/studio.js';
+const HOST_JS = `import { mount } from '${ASSETS}/studio.js';
 const el = document.getElementById('team');
 window.navs = [];
 const opts = {
@@ -59,43 +57,50 @@ window.studio = mount(el, opts);
 window.remount = () => { window.studio = mount(el, opts); };
 `;
 
-/** The host. `studio` is a listening local Studio server (apps/studio/server.mjs) and its launch token. */
-export async function embedHost({ studio, launchToken }) {
-  const upstream = `http://127.0.0.1:${studio.address().port}`;
-  // The local Studio's own sign-in, once: its session cookie goes on every proxied request.
-  const cookie = await new Promise((done, fail) => {
-    httpRequest(`${upstream}/?t=${launchToken}`, (res) => { res.resume(); done(String(res.headers['set-cookie'] ?? '').split(';')[0]); }).on('error', fail).end();
-  });
+const git = (root, ...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+/** A repository with a minimal team, as the bare "GitHub" copy the fake serves. */
+function repository() {
+  const seed = mkdtempSync(join(tmpdir(), 'embed-seed-'));
+  git(seed, 'init', '-q', '-b', 'main');
+  git(seed, 'config', 'user.email', 's@example.com'); git(seed, 'config', 'user.name', 'Seed'); git(seed, 'config', 'commit.gpgsign', 'false');
+  writeFileSync(join(seed, 'README.md'), '# Sample app\n');
+  execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--owner', 'Sam', '--timezone', 'UTC', '--dir', seed], { stdio: 'ignore' });
+  git(seed, 'add', '-A'); git(seed, 'commit', '-q', '-m', 'start');
+  const bare = mkdtempSync(join(tmpdir(), 'embed-bare-'));
+  execFileSync('git', ['clone', '-q', '--bare', seed, bare]);
+  return bare;
+}
+
+/** The host. Returns { origin, seen, refused, gh, close }. */
+export async function embedHost() {
+  const gh = await fakeGitHub({ bare: repository() });
   const seen = []; // every API request: { method, path, studioHeader, auth, type }
-  const refused = [];
-  const server = createServer(async (req, res) => {
+  const refused = []; // what authorize() turned away
+  let api = null;
+  const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://host');
     const send = (status, type, body, extra = {}) => { res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...extra }); res.end(body); };
     if (url.pathname === '/admin/team') return send(200, 'text/html; charset=utf-8', PAGE, { 'content-security-policy': CSP });
-    if (url.pathname === '/host.css') return send(200, TYPES.css, HOST_CSS);
-    if (url.pathname === '/host.js') return send(200, TYPES.js, HOST_JS);
-    const a = /^\/assets\/test\/([a-z0-9-]+\.(?:js|mjs|css|json))$/.exec(url.pathname);
-    if (a) {
-      const file = ASSETS[a[1]] ?? join(PUBLIC, a[1]);
-      if (!existsSync(file)) return send(404, 'text/plain', 'not found');
-      return send(200, TYPES[a[1].split('.').pop()], readFileSync(file));
-    }
-    if (url.pathname.startsWith(`${BASE_PATH}/v1/`)) {
-      const path = url.pathname.slice(BASE_PATH.length);
-      const entry = { method: req.method, path, studioHeader: req.headers['x-agent-team-studio'] ?? null, auth: req.headers.authorization ?? null, type: req.headers['content-type'] ?? null };
-      seen.push(entry);
-      const no = entry.studioHeader !== '1' ? 'the x-agent-team-studio header is missing' : entry.auth !== `Bearer ${TOKEN}` ? 'not signed in' : req.method === 'POST' && !String(entry.type).startsWith('application/json') ? 'send JSON' : null;
-      if (no) { refused.push({ ...entry, why: no }); return send(no === 'not signed in' ? 401 : 400, TYPES.json, JSON.stringify({ error: no })); }
-      const chunks = [];
-      for await (const c of req) chunks.push(c);
-      const body = Buffer.concat(chunks);
-      const up = await fetch(`${upstream}${path}${url.search}`, { method: req.method, headers: { cookie, ...(body.length ? { 'content-type': 'application/json' } : {}) }, body: body.length ? body : undefined });
-      let text = await up.text();
-      if (req.method === 'GET' && path === '/v1/team' && up.ok) text = JSON.stringify({ ...JSON.parse(text), features: FEATURES });
-      return send(up.status, up.headers.get('content-type') ?? TYPES.json, text);
+    if (url.pathname === '/host.css') return send(200, 'text/css; charset=utf-8', HOST_CSS);
+    if (url.pathname === '/host.js') return send(200, 'text/javascript; charset=utf-8', HOST_JS);
+    if (url.pathname.startsWith(`${BASE_PATH}/`)) {
+      if (url.pathname.startsWith(`${BASE_PATH}/v1/`)) seen.push({ method: req.method, path: url.pathname.slice(BASE_PATH.length), studioHeader: req.headers['x-agent-team-studio'] ?? null, auth: req.headers.authorization ?? null, type: req.headers['content-type'] ?? null });
+      return api(req, res);
     }
     return send(404, 'text/plain', 'not found');
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  return { origin: `http://127.0.0.1:${server.address().port}`, seen, refused, close: () => { server.closeAllConnections?.(); server.close(); } };
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  api = toNodeListener(createStudioHandler({
+    repo: 'acme/shop', basePath: BASE_PATH, allowedOrigins: [origin], api: gh.url,
+    authorize: async (request, action) => {
+      if (request.headers.get('authorization') === `Bearer ${TOKEN}`) return { id: 'u_host', name: 'Host admin' };
+      refused.push({ path: new URL(request.url).pathname, action });
+      return null;
+    },
+    getInstallationToken: async () => ({ token: 'ghs_fake', permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' }, repositories: ['acme/shop'] }),
+    limiter: async () => true, logger: () => {},
+  }));
+  return { origin, seen, refused, gh, close: () => { server.closeAllConnections?.(); server.close(); gh.close(); } };
 }

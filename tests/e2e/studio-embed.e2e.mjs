@@ -8,14 +8,10 @@
 //   SCREENSHOTS=docs/product/screenshots/studio-embed node --test tests/e2e/studio-embed.e2e.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { KIT } from '../../bin/agent-team.mjs';
-import { createStudio } from '../../apps/studio/server.mjs';
-import { embedHost } from '../fixtures/embed-host.mjs';
+import { embedHost, TOKEN } from '../fixtures/embed-host.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -24,23 +20,14 @@ if (!chromium && process.env.CI) throw new Error('CI is set but the playwright p
 const skip = !chromium && 'the playwright package is not installed';
 const SHOTS = process.env.SCREENSHOTS;
 
-let root, studio, host, browser;
+let host, browser;
 before(async () => {
   if (skip) return;
-  root = mkdtempSync(join(tmpdir(), 'studio-embed-'));
-  execFileSync('git', ['-C', root, 'init', '-q']);
-  execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
-  execFileSync('git', ['-C', root, 'config', 'user.name', 'Studio test']);
-  execFileSync('git', ['-C', root, 'config', 'user.email', 'studio-test@example.com']);
-  execFileSync('git', ['-C', root, 'add', '-A']);
-  execFileSync('git', ['-C', root, 'commit', '-qm', 'team']);
-  studio = createStudio({ root, env: {} });
-  await new Promise((r) => studio.listen(0, '127.0.0.1', r));
-  host = await embedHost({ studio, launchToken: studio.launchToken });
+  host = await embedHost();
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 });
-after(async () => { await browser?.close(); host?.close(); studio?.closeAllConnections?.(); studio?.close(); });
+after(async () => { await browser?.close(); host?.close(); });
 
 /** A page that records CSP violations, page errors and console errors from the first byte. */
 async function open(ctx) {
@@ -117,12 +104,21 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   assert.equal(await go.isVisible(), true);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'embedded-publish-light.png') });
   await go.click();
-  await dlg.locator('#publish-result', { hasText: /Committed [0-9a-f]+ on agent-team\// }).waitFor();
+  // The handler opened a pull request on (fake) GitHub; the page links to it, in a new tab with no opener.
+  const result = dlg.locator('#publish-result', { hasText: /Opened a pull request for \d+ files? on agent-team\// });
+  await result.waitFor();
+  const link = result.getByRole('link', { name: '#1' });
+  assert.equal(await link.getAttribute('href'), 'https://github.com/acme/shop/pull/1');
+  assert.equal(await link.getAttribute('target'), '_blank');
+  assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
+  assert.equal(host.gh.pulls.length, 1);
+  assert.match(host.gh.pulls[0].head, /^agent-team\//);
   assert.equal(page.url(), url);
 
   // Every request: the host's base, its bearer token, the Studio header; a POST is JSON with the commit it read.
   assert.ok(host.seen.length >= 4, `requests seen: ${host.seen.length}`);
   assert.deepEqual(host.refused, []);
+  for (const r of host.seen) { assert.equal(r.studioHeader, '1', r.path); assert.equal(r.auth, `Bearer ${TOKEN}`, r.path); if (r.method === 'POST') assert.match(r.type, /^application\/json/, r.path); }
   const paths = new Set(host.seen.map((r) => `${r.method} ${r.path}`));
   for (const p of ['GET /v1/team', 'POST /v1/team/preview', 'POST /v1/team/publish']) assert.ok(paths.has(p), p);
   assert.ok(![...paths].some((p) => p.includes('/board')), 'no board reads or streams with live off');
@@ -137,8 +133,8 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   await page.keyboard.press('Control+z'); // no Studio listener answers any more
   await page.evaluate(() => window.remount());
   await ats.locator('.lib-role').first().waitFor();
-  // A fresh read of the repository, which the local Studio left on the branch it published.
-  assert.equal(await ats.locator('.lib-role', { hasText: 'Release manager' }).locator('input[type="checkbox"]').isChecked(), false);
+  // A fresh read of the default branch, where the change waits in its pull request.
+  assert.equal(await ats.locator('.lib-role', { hasText: 'Release manager' }).locator('input[type="checkbox"]').isChecked(), true);
   assert.equal(await ats.getByRole('button', { name: 'Undo' }).isDisabled(), true, 'no undo history survives destroy()');
 
   assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
