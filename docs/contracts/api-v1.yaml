@@ -383,6 +383,14 @@ components:
           required: [roles]
           properties:
             version: { type: string, description: The team version (commit SHA); it becomes the run's teamVersion }
+            repo:
+              type: object
+              description: "The repository sessions work in. No credentials in the URL (400): the run reaches it through a connector"
+              required: [url]
+              properties:
+                url: { type: string, description: An https:// or ssh:// URL }
+                ref: { type: string, default: main, description: The branch worktrees start from }
+            summary: { type: string, maxLength: 2000, description: What the team is for, from the team file }
             roles:
               type: array
               items:
@@ -394,6 +402,7 @@ components:
                   areas: { type: array, items: { type: string }, description: Owned paths, sent to the runner in session.start }
                   pool: { type: integer, description: "Most instances, so to: role#instance can be checked" }
                   model: { type: string }
+                  brief: { type: string, description: "The role's brief as text, at most 20 KB; sent to the runner as session.start prompt.brief" }
     Card:
       type: object
       description: Anything a person answers, the same on every client and channel (clients.md section 6)

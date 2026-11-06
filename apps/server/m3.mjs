@@ -53,6 +53,7 @@ const isInt = (v) => Number.isSafeInteger(v);
 export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   now ??= () => new Date();
   const checking = new Set();
+  const listeners = [];
   const base = String(publicUrl || '').replace(/\/+$/, '');
 
   async function tx(tenant, fn) {
@@ -73,6 +74,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       };
       return fn(ctx);
     });
+    // Committed: tell the live hub and sinks, then run what waits for commit (sends to runners).
+    if (stored.length) for (const fn of listeners) { try { fn(stored); } catch { /* a listener never fails a write */ } }
     for (const f of after) await Promise.resolve(f()).catch(() => {});
     return { result, stored };
   }
@@ -80,6 +83,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   /** Projections that run for every stored event, whatever path appended it (the API, a runner, the tick). */
   async function project(ctx, { event }) {
     if (event.type === 'usage.recorded' && event.team) await recordUsage(ctx, event);
+    if (hooks.project) await hooks.project(ctx, { event });
     return [];
   }
 
@@ -214,13 +218,26 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       const areas = r.areas ?? [];
       if (!Array.isArray(areas) || areas.some((a) => typeof a !== 'string' || a.length > 500) || areas.length > 200) throw new Problem(400, `role ${r.slug}: areas is a list of paths`);
       if (r.pool !== undefined && !(isInt(r.pool) && r.pool >= 1 && r.pool <= 100)) throw new Problem(400, `role ${r.slug}: pool is 1 to 100`);
-      return { slug: r.slug, reportsTo: r.reportsTo, areas, ...(r.pool ? { pool: r.pool } : {}), ...(typeof r.model === 'string' ? { model: r.model.slice(0, 100) } : {}) };
+      if (r.brief !== undefined && r.brief !== null && (typeof r.brief !== 'string' || Buffer.byteLength(r.brief) > 20 * 1024)) throw new Problem(400, `role ${r.slug}: brief is the brief's text, at most 20 KB`);
+      return { slug: r.slug, reportsTo: r.reportsTo, areas, ...(r.pool ? { pool: r.pool } : {}), ...(typeof r.model === 'string' ? { model: r.model.slice(0, 100) } : {}), ...(r.brief ? { brief: r.brief } : {}) };
     });
     const doors = roles.filter((r) => r.reportsTo === 'owner');
     if (doors.length !== 1) throw new Problem(409, `exactly one role reports to the owner (the front door); this team has ${doors.length}`);
     for (const r of roles) if (r.reportsTo !== 'owner' && !seen.has(r.reportsTo)) throw new Problem(400, `role ${r.slug} reports to ${r.reportsTo}, which is not in the team`);
     const version = typeof team.version === 'string' && team.version ? team.version.slice(0, 100) : null;
-    return { version, roles, frontDoor: doors[0].slug };
+    let repo = null;
+    if (team.repo !== undefined && team.repo !== null) {
+      const r = team.repo;
+      if (!r || typeof r !== 'object' || typeof r.url !== 'string' || r.url.length > 500) throw new Problem(400, 'team.repo is { url, ref }');
+      let u;
+      try { u = new URL(r.url); } catch { throw new Problem(400, 'team.repo.url is a URL'); }
+      if (u.protocol !== 'https:' && u.protocol !== 'ssh:') throw new Problem(400, 'team.repo.url is an https:// or ssh:// URL');
+      if (u.password || (u.protocol === 'https:' && u.username)) throw new Problem(400, 'team.repo.url must not carry credentials: the run reaches the repo through a connector');
+      if (r.ref !== undefined && (typeof r.ref !== 'string' || !/^[A-Za-z0-9._/-]{1,200}$/.test(r.ref) || r.ref.includes('..'))) throw new Problem(400, 'team.repo.ref is a branch name');
+      repo = { url: r.url, ref: r.ref ?? 'main' };
+    }
+    if (team.summary !== undefined && team.summary !== null && (typeof team.summary !== 'string' || team.summary.length > 2000)) throw new Problem(400, 'team.summary is text of at most 2,000 characters');
+    return { version, roles, frontDoor: doors[0].slug, ...(repo ? { repo } : {}), ...(team.summary ? { summary: team.summary } : {}) };
   }
 
   async function startRun(tenant, team, body, by) {
@@ -645,7 +662,15 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     return result;
   }
 
+  /** Appends envelopes inside a transaction of this module, with the projections; for the bus. */
+  async function appendInTx(ctx, team, events) {
+    const s = await appendIn(ctx.q, ctx.tenant, team, events, { project: (qq, x) => project(ctx, x) });
+    ctx.stored.push(...s);
+    return s;
+  }
+
   return {
+    appendIn: appendInTx, onStored: (fn) => listeners.push(fn), hooks,
     requireStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
     createCard, changeCard, getCard, answerCard, requestApproval, decideApproval,

@@ -163,6 +163,8 @@ export function attachRunners(server, { db, ops = {}, welcome = async () => ({})
     /** Live, greeted runners of a tenant. */
     connected: (tenant) => [...live.values()].filter((c) => c.tenant === tenant && c.hello && !c.closed),
     get: (runner) => live.get(runner) ?? null,
+    /** Every live connection on this instance, for the tick's revoke sweep. */
+    all: () => [...live.values()].filter((c) => !c.closed),
     /** Ends a runner's connection, for example when its key is revoked. */
     close(runner, why = 'revoked') { const c = live.get(runner); if (c) c.ws.close(4003, why); },
     closeAll() { for (const c of live.values()) c.ws.terminate(); wss.close(); },
