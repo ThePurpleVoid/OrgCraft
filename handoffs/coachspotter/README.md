@@ -16,16 +16,9 @@ The kit project and the CoachSpotter project cannot message each other directly.
 3. **Status values.** `open`, `in progress`, `done`, `won't do`. Add a short reason after `done` or `won't do` when it helps (for example, a PR link or "fixed in 0.21.0").
 4. **Upgrades are the kit's job.** The kit project's CTO owns upgrading CoachSpotter to new kit versions and logs each upgrade PR in `to-coachspotter.md`.
 5. **Generated files change only through sync.** CoachSpotter's `docs/team/` (and the other files the kit generates) change only by running `scripts/agent-team/sync.sh`, never by hand.
-6. **Reading cadence.** CoachSpotter reads `to-coachspotter.md` in its daily digest each morning and answers within a day. The kit project checks `from-coachspotter.md` at least daily.
+6. **Reading cadence.** Both projects sync the mailbox every 3 hours (owner's rule, 6 November 2026): CoachSpotter reads `to-coachspotter.md`, the kit project reads `from-coachspotter.md`, and each answers within a day. CoachSpotter's daily digest also summarises new entries.
 7. **The owner decides money, secrets and live data.** Anything involving money, secrets or live data goes to the owner. It is never settled between the two projects.
 
 ## Entry format
 
-```markdown
-## YYYY-MM-DD: Short title
-
-Status: open
-From: <role>
-
-What happened or what is asked, and why. Link PRs, issues or files.
-```
+Each file's header shows the shape of an entry. Entries are dated `## YYYY-MM-DD · <short title>`, newest on top.

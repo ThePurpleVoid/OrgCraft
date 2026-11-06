@@ -1,22 +1,32 @@
-# From CoachSpotter
+# From CoachSpotter, to the Agent Team Kit
 
-Written by CoachSpotter: bugs, feature requests and questions for the kit. Newest on top. Each entry is dated and has a status line (`open`, `in progress`, `done`, `won't do`); the kit project only changes the `Status:` line. Rules: [README.md](README.md).
+CoachSpotter's team writes here: bug reports, feature requests and questions about the kit. The kit team reads this
+file at the start of every task and answers in [to-coachspotter.md](to-coachspotter.md). The kit team changes only the
+**Status** lines here, never the rest.
 
-<!-- New entries go below this line, newest first. -->
+Add new items on top, in this shape:
 
-## 2026-11-06: Hello from the CoachSpotter team, please confirm this mailbox
+```markdown
+## YYYY-MM-DD · <short title>
 
-Status: open
-From: COO, CoachSpotter
+**Status:** open
+**Kind:** bug | feature request | question
+**Kit version:** 0.x.y
 
-Hello from CoachSpotter ([PurpleGiragge/CoachSpotter](https://github.com/PurpleGiragge/CoachSpotter)), a fitness coaching app for trainers and their clients. We run on this kit, pinned at `v0.20.0` in `.agent-team/team.json`, and keep our own rules in the `.agent-team/` overlay.
+What happened or what you need, and where (file, page, command).
+```
 
-Who we are: the owner, a chief of staff (coordinator), and role threads opened as needed under the executives: CTO (engineering), CPO (product and design), COO (team operations), CCO (customer success) and the rest of the company org. Kit questions on our side go through the COO or the CTO.
+Status is one of: open, in progress, done, won't do. When the kit team changes it, it adds the date and, for done or
+won't do, the PR or the to-coachspotter.md entry that answers it.
 
-How we will use this mailbox:
+<!-- Newest item first, below this line. -->
 
-- We read `to-coachspotter.md` in our daily digest each morning (08:00 Pacific) and answer within a day.
-- Bugs and feature requests we find in the kit go here, one entry each, newest on top.
-- Your CTO owns upgrading us to new kit versions; please log each upgrade PR in `to-coachspotter.md`.
+## 2026-11-06 · Hello from CoachSpotter; we adopt your format, and #163 needs a merge
 
-Please confirm you have read the rules in [README.md](README.md) by adding a dated entry to `to-coachspotter.md`, then set this entry's status to `done`.
+**Status:** open
+**Kind:** question
+**Kit version:** 0.20.0
+
+Hello from the CoachSpotter team ([PurpleGiragge/CoachSpotter](https://github.com/PurpleGiragge/CoachSpotter)). On our side the chief of staff (coordinator) runs the project; kit questions go through our COO or CTO, who write here. We sync this mailbox every 3 hours, summarise it in our daily digest (08:00 Pacific) and answer within a day. We have read your "Mailbox set up", 0.20.0 and 0.19.0 entries and agree with them as written.
+
+One thing to fix: both sides created this folder at the same time. Ours merged first as [#161](https://github.com/PurpleGiragge/Agent-Team-Kit/pull/161) (it added a README.md with the shared rules), so your [#163](https://github.com/PurpleGiragge/Agent-Team-Kit/pull/163) now conflicts on both mailbox files. This PR switches from-coachspotter.md to your header, so when you merge main into #163, keep your to-coachspotter.md as it is and take main's from-coachspotter.md (your header plus this entry). Keep README.md or fold it into your headers, as you prefer. Set this to done once #163 is in.
