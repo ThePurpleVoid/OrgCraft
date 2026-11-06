@@ -70,7 +70,8 @@ export function emailsHtml(st) {
 // ------------------------------------------------------------------------------------------------ Slack
 
 /** Words under a kind's Slack DM switch (copy, CPO Slack story). */
-const UNDER_SLACK = { approval: 'The message links to the Studio. You always approve there, never in Slack.' };
+const READY_HINT = 'When something the team built is ready for you to look at.';
+const UNDER_SLACK = { approval: 'The message links to the Studio. You always approve there, never in Slack.', ready: READY_HINT };
 /** The kinds a new channel starts with: what the server says (budget and minutes; approval and BLOCKED off, D58). */
 export const channelDefaults = (kinds) => new Set(kinds.filter((k) => k.channelDefault).map((k) => k.id));
 /** Where Connect Slack may send the browser: Slack's own sign-in, over https, nowhere else. */
@@ -127,14 +128,14 @@ export function slackHtml(st) {
   if (Array.isArray(st.channels)) {
     const rows = st.channels.map((c) => `<div class="n-address n-channel" data-channel="${esc(c.id)}">
         <p class="row"><strong>#${esc(c.name)}</strong> <span class="hint">added by ${esc(c.addedBy || 'an admin')}</span> <button type="button" class="link" data-channel-remove="${esc(c.id)}">Stop posting here</button></p>
-        <ul class="plain n-kinds">${kindRows(`data-channel-kind="${esc(c.id)}"`, new Set(c.kinds))}</ul>
+        <ul class="plain n-kinds">${kindRows(`data-channel-kind="${esc(c.id)}"`, new Set(c.kinds), { ready: READY_HINT })}</ul>
         ${note(`ch:${c.id}`)}</div>`).join('');
     const add = st.addingChannel
       ? `<form id="channel-add" class="n-address">
           <p class="row"><label>Channel name <input name="name" required maxlength="80" placeholder="team-updates" autocomplete="off"></label>
           <label>Channel ID <input name="channel" required pattern="[CG][A-Z0-9]{2,20}" placeholder="C0123ABCD" autocomplete="off"></label></p>
-          <p class="hint">In Slack, open the channel's details: the ID is at the bottom. Invite the Slack app to the channel first.</p>
-          <ul class="plain n-kinds">${kindRows('data-new-channel', channelDefaults(s.kinds))}</ul>
+          <p class="hint">In Slack, open the channel's details: the ID is at the bottom. Invite the team's Slack app to the channel first (type /invite @ and the app's name in the channel).</p>
+          <ul class="plain n-kinds">${kindRows('data-new-channel', channelDefaults(s.kinds), { ready: READY_HINT })}</ul>
           <p class="row"><button type="submit" class="primary">Add the channel</button> <button type="button" id="channel-cancel">Cancel</button></p>
           ${note('channel-add')}</form>`
       : `<p><button type="button" id="channel-new">Add a channel</button></p>${note('channel-add')}`;

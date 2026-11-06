@@ -193,6 +193,9 @@ test('Slack: connect by signing in to Slack, save the suggested DMs, pick a chan
   const box = (label) => slack.locator('.n-slack-me').getByLabel(label, { exact: true });
   for (const [label, on] of [['Approval needed', true], ['Budget at 80%', false], ['Budget at 100%', true], ['A role is blocked', false], ['Meeting minutes', false]]) assert.equal(await box(label).isChecked(), on, label);
   await slack.getByText('The message links to the Studio. You always approve there, never in Slack.').waitFor();
+  // Ready to try (CPO, #143): its hint, and off to start with.
+  await slack.locator('.n-slack-me').getByText('When something the team built is ready for you to look at.').waitFor();
+  assert.equal(await box('Ready to try').isChecked(), false);
   const link = () => iss.slack.links.get('sample-app:per_octo');
   assert.deepEqual(link().kinds, []);
   await slack.getByRole('button', { name: 'Save' }).click();
@@ -209,7 +212,7 @@ test('Slack: connect by signing in to Slack, save the suggested DMs, pick a chan
   const add = slack.locator('#channel-add');
   await add.getByLabel('Channel name').fill('#Team-Updates');
   await add.getByLabel('Channel ID').fill('C0123ABCD');
-  for (const [label, on] of [['Approval needed', false], ['Budget at 80%', true], ['Budget at 100%', true], ['A role is blocked', false], ['Meeting minutes', true]]) assert.equal(await add.getByLabel(label, { exact: true }).isChecked(), on, label);
+  for (const [label, on] of [['Approval needed', false], ['Budget at 80%', true], ['Budget at 100%', true], ['A role is blocked', false], ['Meeting minutes', true], ['Ready to try', false]]) assert.equal(await add.getByLabel(label, { exact: true }).isChecked(), on, label);
   await add.getByRole('button', { name: 'Add the channel' }).click();
   await slack.getByText('Added. A first post in #team-updates says who chose it.').waitFor();
   assert.deepEqual(iss.slack.channels.map((c) => [c.channel, c.name, c.kinds]), [['C0123ABCD', 'team-updates', ['budget80', 'budget100', 'minutes']]]);
