@@ -7,6 +7,7 @@ VERCEL_TOKEN=             # Vercel account token (Account Settings → Tokens)
 DATABASE_URL=             # see deploy/env/server.env.example
 AGENT_TEAM_MASTER_KEY=    # see deploy/env/server.env.example
 AGENT_TEAM_ADMIN_TOKEN=   # see deploy/env/server.env.example
+AGENT_TEAM_EDGE_SECRET=   # openssl rand -base64 32; the workflow stages it on Fly and in the Vercel project. see deploy/env/server.env.example
 AGENT_TEAM_STEP_UP_SECRET_HASH=   # M3 exit; optional before. see deploy/env/server.env.example
 ANTHROPIC_API_KEY=        # runner only, after the M3 exit; set a daily spend cap in the Anthropic console first
 AGENT_TEAM_RUNNER_KEY=    # runner only; from `node deploy/fly/register-runner.mjs --server https://<FLY_APP>.fly.dev`

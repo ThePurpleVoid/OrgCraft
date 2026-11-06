@@ -32,7 +32,7 @@ deploy/
 
 ### Vercel, Supabase and one container host
 
-A ready target for teams already on these providers, and the one this repository's own instance runs on: the static Studio on Vercel, rewriting `/v1/*` and discovery to one always-on `apps/server` container (Fly.io), with runners beside it and Postgres on Supabase in a dedicated schema. No functions or crons on Vercel. Setup, the owner's checklist, costs and rollback: [docs/deploy/vercel-supabase.md](../deploy/vercel-supabase.md). The same image (`deploy/server/Dockerfile`) and migrator (`deploy/server/migrate.mjs`) serve every other host.
+A ready target for teams already on these providers, and the one this repository's own instance runs on: the static Studio on Vercel, rewriting `/v1/*` and discovery to one always-on `apps/server` container (Fly.io), with runners beside it and Postgres on Supabase in a dedicated schema. No crons on Vercel, and no functions except one middleware that marks requests from the site (`x-agent-team-edge`), so rate limits see the real caller. Setup, the owner's checklist, costs and rollback: [docs/deploy/vercel-supabase.md](../deploy/vercel-supabase.md). The same image (`deploy/server/Dockerfile`) and migrator (`deploy/server/migrate.mjs`) serve every other host.
 
 ## 2. Hosted by us
 
