@@ -73,11 +73,11 @@ paths:
     post:
       tags: [events]
       summary: Accept one report in the kit's shape (team-status.sh, report.mjs, the hooks), byte for byte
-      description: Mapped to a `report.*` or `message.*` event (events.md). This is what TEAM_REPORT_URL points at.
+      description: Mapped to a `report.*` or `message.*` event (events.md). This is what TEAM_REPORT_URL points at. A body with `kind` `published` (report.mjs published, from the team's CI on main) is a `team.published` event with id `published-<version>`, stored once per commit; `duplicate` is true when it was already there.
       security: [ { reportToken: [] } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KitReport" } } } }
+      requestBody: { required: true, content: { application/json: { schema: { oneOf: [ { $ref: "#/components/schemas/KitReport" }, { $ref: "#/components/schemas/KitPublished" } ] } } } }
       responses:
-        "200": { description: Stored, content: { application/json: { schema: { type: object, properties: { ok: { const: true }, id: { type: string } } } } } }
+        "200": { description: Stored, content: { application/json: { schema: { type: object, properties: { ok: { const: true }, id: { type: string }, duplicate: { type: boolean } } } } } }
         "400": { $ref: "#/components/responses/Problem" }
         "429": { description: More than 30 reports a minute from one role }
   /teams/{team}/events:
@@ -553,6 +553,21 @@ components:
         - type: object
           properties: { mode: { enum: [pull-request, commit], default: pull-request }, branch: { type: string }, message: { type: string } }
     PublishResult: { type: object, properties: { branch: { type: string }, commit: { type: string }, pr: { type: integer }, url: { type: string } } }
+    KitPublished:
+      type: object
+      description: A team version that reached the main branch (tools/report.mjs publishedBody). Becomes team.published.
+      required: [kind, version]
+      properties:
+        kind: { const: published }
+        version: { type: string, pattern: "^[0-9a-f]{40}$" }
+        publishedAt: { type: string, format: date-time }
+        pr: { type: [integer, "null"], minimum: 1 }
+        roles: { type: array, maxItems: 500, items: { type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,59}$" } }
+        off: { type: array, maxItems: 500, items: { type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,59}$" } }
+        plan: { type: object, additionalProperties: { type: object, required: [choice], properties: { choice: { enum: [finish, handoff, pause, move-after-merge, move-and-handover] }, to: { type: string } } } }
+        changes: { type: array, maxItems: 200, items: { type: string, maxLength: 300 } }
+        by: { type: string, maxLength: 120 }
+        source: { type: string }
     KitReport:
       type: object
       description: Exactly the report team-status.sh and report.mjs send (tools/board.mjs toRow).

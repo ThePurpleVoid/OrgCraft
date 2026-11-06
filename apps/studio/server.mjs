@@ -14,7 +14,7 @@ import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build, DEFAULT_KIT_SPEC, initExtras, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
-import { compileLayer, importLayer, resolveSpec, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
+import { compileLayer, importLayer, resolveSpec, teamTargets, withoutBlock, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
 import { hostGuard } from '../../tools/hosts.mjs';
@@ -31,16 +31,27 @@ const MODEL = join(KIT, 'packages/team-model/index.mjs');
 const PRICES = join(KIT, 'packages/model-prices/prices.json');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' };
 /** What a publish commits: the layer and everything sync generates from it. */
-const PUBLISHED = ['.agent-team', 'docs/team', 'scripts/agent-team', '.claude'];
+const PUBLISHED = ['.agent-team', 'docs/team', 'scripts/agent-team', '.claude', 'AGENTS.md'];
 
 const git = (root, ...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const tryGit = (root, ...args) => { try { return git(root, ...args); } catch { return ''; } };
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 
-export function gitState(root) {
+/** Whether the team on disk writes AGENTS.md (team.json "targets"). */
+function writesAgentsMd(root) {
+  try { return teamTargets(JSON.parse(readFileSync(join(root, '.agent-team/team.json'), 'utf8'))).includes('agents-md'); } catch { return false; }
+}
+
+/** The paths a publish writes. AGENTS.md is the repository's own file until the team writes it (on disk or in `spec`). */
+function publishedPaths(root, spec) {
+  const agentsMd = writesAgentsMd(root) || (spec && teamTargets(spec.options).includes('agents-md'));
+  return agentsMd ? PUBLISHED : PUBLISHED.filter((p) => p !== 'AGENTS.md');
+}
+
+export function gitState(root, spec) {
   const branch = tryGit(root, 'branch', '--show-current');
-  const dirty = tryGit(root, 'status', '--porcelain', '--', ...PUBLISHED).split('\n').filter(Boolean);
+  const dirty = tryGit(root, 'status', '--porcelain', '--', ...publishedPaths(root, spec)).split('\n').filter(Boolean);
   // The live version: the last commit that changed the team (change safety names versions by commit, D16).
   const [sha, at] = tryGit(root, 'log', '-1', '--format=%H%n%cI', '--', '.agent-team').split('\n');
   return { repo: !!tryGit(root, 'rev-parse', '--git-dir'), branch, dirty, head: sha ? { sha, at: at ?? null } : null };
@@ -83,20 +94,23 @@ export function fromTemplate(root, { id, project, owner, timezone } = {}) {
   return { spec, card: id === ALMOST_EMPTY.id ? null : templateCard(files, kit) };
 }
 
-/** What a first publish may touch, as it was before: which paths existed, and .gitignore's text. */
-function snapshot(root) {
+/**
+ * What a first publish may touch, as it was before: which of `paths` (publishedPaths) existed, and .gitignore's
+ * text. Only the paths the dirty check guarded, so a repository's own AGENTS.md is never part of it.
+ */
+function snapshot(root, paths) {
   const gi = join(root, '.gitignore');
-  const parents = [...new Set(PUBLISHED.filter((p) => p.includes('/')).map((p) => dirname(p)))];
-  return { existed: PUBLISHED.filter((p) => existsSync(join(root, p))), parents: parents.filter((d) => !existsSync(join(root, d))), gitignore: existsSync(gi) ? readFileSync(gi, 'utf8') : null };
+  const parents = [...new Set(paths.filter((p) => p.includes('/')).map((p) => dirname(p)))];
+  return { paths, existed: paths.filter((p) => existsSync(join(root, p))), parents: parents.filter((d) => !existsSync(join(root, d))), gitignore: existsSync(gi) ? readFileSync(gi, 'utf8') : null };
 }
 
 /**
  * Undoes a failed first publish. The publish starts only when the team's paths have no changes, so a path that
  * existed goes back to what git has, and one that did not is removed.
  */
-function restore(root, { existed, parents, gitignore }) {
-  tryGit(root, 'reset', '-q', '--', ...PUBLISHED, '.gitignore');
-  for (const p of PUBLISHED) {
+function restore(root, { paths, existed, parents, gitignore }) {
+  tryGit(root, 'reset', '-q', '--', ...paths, '.gitignore');
+  for (const p of paths) {
     if (existed.includes(p)) { tryGit(root, 'checkout', '-q', '--', p); tryGit(root, 'clean', '-fdq', '--', p); }
     else rmSync(join(root, p), { recursive: true, force: true });
   }
@@ -120,7 +134,8 @@ export function preview(root, spec) {
   const scratch = mkdtempSync(join(tmpdir(), 'agent-team-studio-'));
   try {
     if (existsSync(join(root, '.agent-team'))) cpSync(join(root, '.agent-team'), join(scratch, '.agent-team'), { recursive: true });
-    for (const keep of ['docs/team/ownership.md', 'docs/team/lanes']) if (existsSync(join(root, keep))) cpSync(join(root, keep), join(scratch, keep), { recursive: true });
+    // AGENTS.md may hold the repository's own text, which the kit's block is spliced into (QA of #119).
+    for (const keep of ['docs/team/ownership.md', 'docs/team/lanes', 'AGENTS.md']) if (existsSync(join(root, keep))) cpSync(join(root, keep), join(scratch, keep), { recursive: true });
     writeLayer(scratch, layer);
     if (!hasTeam(root)) extras(scratch, layer);
     const before = hasTeam(root) ? build(root).files : new Map();
@@ -133,7 +148,8 @@ export function preview(root, spec) {
     }
     for (const p of new Set([...before.keys(), ...after.keys()])) {
       const now = read(p);
-      const next = after.get(p) ?? null;
+      // Switched off, AGENTS.md loses only the kit's block, as sync does.
+      const next = after.get(p) ?? (p === 'AGENTS.md' ? withoutBlock(now) : null);
       if (now !== next) changes.push({ path: p, status: now === null ? 'added' : next === null ? 'removed' : 'changed', before: now, after: next });
     }
     if (!hasTeam(root)) for (const p of INIT_FILES) {
@@ -156,7 +172,8 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
   const kit = loadKit(KIT);
   const errors = validate(spec, kit).filter((i) => i.level === 'error');
   if (errors.length) throw new HttpError(422, `fix ${errors.length} error${errors.length > 1 ? 's' : ''} first: ${errors[0].where}: ${errors[0].message}`);
-  const g = gitState(root);
+  const g = gitState(root, spec);
+  const paths = publishedPaths(root, spec);
   if (!g.repo) throw new HttpError(409, `${root} is not a git repository`);
   if (g.dirty.length) throw new HttpError(409, `the team's files have uncommitted changes (${g.dirty.slice(0, 3).join(', ')}); commit or stash them first`);
   if (branch && !/^[A-Za-z0-9._/-]+$/.test(branch)) throw new HttpError(400, 'a branch name may use letters, digits, ".", "_", "/" and "-"');
@@ -168,7 +185,12 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
   // The first publish of a team: team.json is not in git yet (decided from git, not the disk, so a retry after a
   // failed first publish is still the first).
   const fresh = !tryGit(root, 'ls-files', '--', '.agent-team/team.json');
-  const before = fresh ? snapshot(root) : null;
+  const before = fresh ? snapshot(root, paths) : null;
+  // sync may add lines to .gitignore (a first team, or AGENTS.md's memory folder): commit them, unless the owner
+  // already had their own uncommitted changes there.
+  // An untracked .gitignore counts as clean on a first publish, so the first team commit has the local.env line.
+  const ignoreStatus = tryGit(root, 'status', '--porcelain', '--', '.gitignore');
+  const ignoreClean = !ignoreStatus || (fresh && ignoreStatus.startsWith('??'));
   const text = message?.trim() || 'Update the agent team (Agent Team Studio)';
   let written, staged;
   try {
@@ -178,7 +200,7 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
     if (fresh) extras(root, layer);
     const code = sync(root, { quiet: true });
     if (code !== 0) throw new HttpError(500, 'sync reported roster errors; nothing was committed');
-    git(root, 'add', '-A', '--', ...PUBLISHED.filter((p) => existsSync(join(root, p))), ...(fresh && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
+    git(root, 'add', '-A', '--', ...paths.filter((p) => existsSync(join(root, p)) || tryGit(root, 'ls-files', '--', p)), ...(ignoreClean && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
     staged = tryGit(root, 'diff', '--cached', '--name-only').split('\n').filter(Boolean);
     if (staged.length) git(root, 'commit', '-q', '-m', text);
   } catch (e) {
