@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.9.2
+
+### Security
+
+- **DNS rebinding on the local dashboard and the Studio (severity 2). Every team should sync to 0.9.2.** A web page on a hostile domain whose DNS name resolves to 127.0.0.1 could call `scripts/agent-team/dashboard.mjs` or `agent-team studio` as if it were the same origin. It could read the board, post reports, and use the token these servers hold for a hosted board (`TEAM_READ_TOKEN`) or the control plane. Both servers now check the `Host` header on every request, static files included, before anything else runs:
+  - Bound to a loopback address, they answer only `localhost`, `127.0.0.1` and `[::1]` (any port).
+  - Bound to another address, they also answer that address. On `0.0.0.0` or `::` that means every address of the machine.
+  - Each server also answers the names in its own allowlist, `DASHBOARD_ALLOWED_HOSTS` or `STUDIO_ALLOWED_HOSTS`.
+  - Anything else gets 403. The Studio's Origin and JSON checks on POSTs stay as they were.
+- **What existing teams see on sync:**
+  - A new file, `scripts/agent-team/hosts.mjs`.
+  - Threads on other machines that report to a dashboard started with `--host 0.0.0.0` keep working when they use its IP address. If they use a name (`TEAM_REPORT_URL=http://mac-mini.local:4747/...`, a VPN or tunnel name, a reverse proxy), set that name in `DASHBOARD_ALLOWED_HOSTS` on the dashboard machine; until then those reports get 403.
+  - The hosted board, the exported dashboard and CoachSpotter-style sites are not affected. Neither are reports written to the local log.
+
+### Design and contracts (nothing changes on sync)
 
 - **Chat with the chief of staff in the Studio** (milestone M3, issue #28). A Chat page next to the team: your messages are sent and shown exactly as you type them, with a client id so a retry lands once; the team's replies appear as they arrive, in a small Markdown subset; decision and approval cards are built from their fields (never HTML) and every answer sends the card version it saw, so a card that changed first comes back refreshed instead of being answered blind. The header shows the run's state, today's cost against the daily cap, and Pause, Resume and Stop. Like the live board, the Studio's server calls the control plane, so the token never reaches the page. It works at 360px wide; on a small screen the team itself is read-only.
 - **The Studio has its own sign-in.** It prints and opens a launch link (`/?t=<token>`); opening it sets an HttpOnly, SameSite=Strict cookie, and every other request needs that cookie. Another process or a machine on the network that reaches the port gets 401. Approvals ask for the step-up secret each time: the Studio keeps the step-up token only for the one answer it covers.

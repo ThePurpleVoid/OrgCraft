@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { KIT } from '../bin/agent-team.mjs';
 import { addAgent, draftRole, setEnabled, setField } from '../packages/team-model/index.mjs';
 import { createStudio } from '../apps/studio/server.mjs';
+import { raw } from './http-helper.mjs';
 
 const cli = join(KIT, 'bin/agent-team.mjs');
 const git = (root, ...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8' }).trim();
@@ -230,4 +231,29 @@ test('only the launch link opens the Studio: it sets an HttpOnly cookie that eve
     assert.equal((await fetch(`${base}/v1/team`, { headers: { cookie: 'studio_session=launch-123' } })).status, 401, 'the launch token is not a session');
     assert.equal((await fetch(`${base}/v1/team`, { headers: { cookie: set.split(';')[0] } })).status, 200);
   } finally { server.close(); }
+});
+
+test('DNS rebinding: the Studio answers only its own host names, on every route', async () => {
+  const root = repo();
+  const server = createStudio({ root, env: { STUDIO_ALLOWED_HOSTS: 'studio.example.com' } });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const { port } = server.address();
+  try {
+    const json = { 'content-type': 'application/json' };
+    const routes = [['/', 'GET'], ['/app.js', 'GET'], ['/team-model.mjs', 'GET'], ['/v1/team', 'GET'], ['/v1/team/board', 'GET'], ['/v1/team/board/stream', 'GET'], ['/v1/team/graph', 'POST', json, '{}']];
+    for (const [path, method, headers, body] of routes) {
+      for (const host of ['evil.example', `evil.example:${port}`, '']) {
+        assert.equal((await raw(port, path, { host, method, headers, body })).status, host ? 403 : 400, `${method} ${path} Host: ${host}`);
+      }
+      for (const host of [`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`, 'studio.example.com']) {
+        const { status } = await raw(port, path, { host, method, headers, body });
+        assert.notEqual(status, 403, `${method} ${path} Host: ${host}`);
+      }
+    }
+    // The origin check still refuses a cross-site POST from an allowed host.
+    const cookie = await signIn(`http://127.0.0.1:${port}`, server);
+    assert.equal((await raw(port, '/v1/team/graph', { host: `localhost:${port}`, method: 'POST', headers: { ...json, cookie, origin: 'https://evil.example' }, body: '{}' })).status, 403);
+  } finally {
+    server.close();
+  }
 });
