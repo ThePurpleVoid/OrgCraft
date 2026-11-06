@@ -7,10 +7,12 @@ import { seal, unseal } from './vault.mjs';
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const sha = (s) => createHash('sha256').update(s).digest('hex');
-const id = (prefix) => `${prefix}_${randomBytes(9).toString('base64url')}`;
+export const id = (prefix) => `${prefix}_${randomBytes(9).toString('base64url')}`;
+export { sha };
 
+/** An answer to the caller: an HTTP status, a plain sentence, and optionally a problem `type` (RFC 9457) and body. */
 export class Problem extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, { type = null, body = null } = {}) { super(message); this.status = status; this.type = type; this.body = body; }
 }
 
 export async function ensureTenant(db, tenant, name = tenant) {
@@ -59,25 +61,38 @@ export async function authReport(db, team, token) {
 }
 
 /** Appends envelopes. Ids already stored are skipped, so a retry is safe. Returns the stored rows' { id, seq }. */
-export async function append(db, tenant, team, events) {
-  const out = [];
-  await db.tenant(tenant, async ({ q }) => {
-    // One appender per tenant at a time, so seq is commit order: a stream reading "seq > last" never skips an event
-    // that took a lower seq but committed later.
-    await q('select pg_advisory_xact_lock(4849, hashtext($1))', [tenant]);
+export async function append(db, tenant, team, events, { project = null } = {}) {
+  return db.tenant(tenant, async ({ q }) => {
     if (!(await q('select 1 from teams where id = $1', [team])).length) throw new Problem(404, 'no such team');
-    for (const e of events) {
-      const problems = checkEvent(e);
-      if (problems.length) throw new Problem(400, `event ${e?.id ?? '?'}: ${problems.join('; ')}`);
-      if (e.tenant !== tenant || (e.team && e.team !== team) || !e.source.startsWith(`/tenants/${tenant}`)) throw new Problem(400, `event ${e.id} is for another tenant or team`);
-      const env = { ...e, team };
-      const [row] = await q(
-        `insert into events(tenant, team, id, type, version, time, actor_kind, actor_id, envelope)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict (team, id) do nothing returning seq`,
-        [tenant, team, e.id, e.type, e.version, e.time, e.actor.kind, e.actor.id, JSON.stringify(env)]);
-      if (row) out.push({ id: e.id, seq: Number(row.seq), event: env });
-    }
+    return appendIn(q, tenant, team, events, { project });
   });
+}
+
+/**
+ * Appends envelopes inside a tenant transaction that is already open, so a projection row and the event that
+ * explains it commit together (the outbox rule, m3-design section 0). `project(q, stored)` runs for each event
+ * newly stored and may return more events to append in the same transaction.
+ */
+export async function appendIn(q, tenant, team, events, { project = null } = {}) {
+  // One appender per tenant at a time, so seq is commit order: a stream reading "seq > last" never skips an event
+  // that took a lower seq but committed later.
+  await q('select pg_advisory_xact_lock(4849, hashtext($1))', [tenant]);
+  const out = [];
+  for (const e of events) {
+    const problems = checkEvent(e);
+    if (problems.length) throw new Problem(400, `event ${e?.id ?? '?'}: ${problems.join('; ')}`);
+    if (e.tenant !== tenant || (e.team && e.team !== team) || !e.source.startsWith(`/tenants/${tenant}`)) throw new Problem(400, `event ${e.id} is for another tenant or team`);
+    const env = { ...e, team };
+    const [row] = await q(
+      `insert into events(tenant, team, id, type, version, time, actor_kind, actor_id, envelope)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict (team, id) do nothing returning seq`,
+      [tenant, team, e.id, e.type, e.version, e.time, e.actor.kind, e.actor.id, JSON.stringify(env)]);
+    if (!row) continue;
+    const stored = { id: e.id, seq: Number(row.seq), event: env };
+    out.push(stored);
+    const more = project ? await project(q, stored) : null;
+    if (more?.length) out.push(...(await appendIn(q, tenant, team, more, { project })));
+  }
   return out;
 }
 

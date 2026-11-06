@@ -13,11 +13,16 @@ import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as store from './store.mjs';
 import { attachRunners } from './runners.mjs';
+import { createM3 } from './m3.mjs';
 
 const { Problem } = store;
 const REPORTS_PER_MINUTE = 30;
 
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** The JSON body for a Problem: { error }, plus RFC 9457 type, title and status when it has a type, plus any body
+ *  it carries (a 409 for a changed card carries the current card itself, as api-v1.yaml says). */
+const problemBody = (e) => ({ ...(e.body ?? {}), error: e.message, ...(e.type ? { type: e.type, title: e.message, status: e.status } : {}) });
 const MAX_BODY = 2 * 1024 * 1024;
 
 /**
@@ -76,8 +81,10 @@ export function createControlPlane(opts) {
   const server = createServer();
   // Runners connect here over a WebSocket (runner-protocol.md). The ops they may send are wired in as M3 lands.
   const runners = attachRunners(server, { db: opts.db, ...(opts.runnerOptions ?? {}) });
-  server.on('request', createHandler({ ...opts, runners }));
+  const m3 = opts.m3 ?? createM3({ db: opts.db, now: opts.now, publicUrl: opts.publicUrl });
+  server.on('request', createHandler({ ...opts, runners, m3 }));
   server.runners = runners;
+  server.m3 = m3;
   server.on('close', () => runners.closeAll());
   return server;
 }
@@ -87,8 +94,16 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null }) {
   const live = hub();
+  const m3 = given ?? createM3({ db, now, publicUrl });
+  /** Runs an m3 write and tells the hub and sinks about what it stored. */
+  const did = async (p) => { const { result, stored } = await p; const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); return result; };
+  const etagged = async (req, res, seq, body, extra = '') => {
+    const tag = `W/"${seq}-${Math.floor(now().getTime() / 60_000)}${extra ? `-${Buffer.from(extra).toString('base64url')}` : ''}"`;
+    if (req.headers['if-none-match'] === tag) { res.writeHead(304, { etag: tag }); return res.end(); }
+    return send(res, 200, body, { etag: tag });
+  };
   // A key of its own for request fingerprints, derived from the master key so nothing new needs keeping.
   if (!Buffer.isBuffer(key) || key.length !== 32) throw new Error('createHandler needs the 32-byte master key (vault.mjs masterKey)');
   const idemKey = createHmac('sha256', key).update('agent-team/idempotency/v1').digest();
@@ -180,7 +195,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       await fn();
       answer = res.answer;
     } catch (e) {
-      answer = e instanceof Problem ? { status: e.status, body: { error: e.message } } : e?.code === '23505' ? { status: 409, body: { error: 'already exists' } } : undefined;
+      answer = e instanceof Problem ? { status: e.status, body: problemBody(e) } : e?.code === '23505' ? { status: 409, body: { error: 'already exists' } } : undefined;
       if (!answer) { res.hold = false; await store.settleIdempotency(db, t, principal, String(key)); throw e; }
     }
     // A secret is never written to the idempotency table: only the answer without it, marked as shown once.
@@ -189,7 +204,9 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       kept = Object.fromEntries(Object.entries(kept).filter(([k]) => !answer.secrets.includes(k)));
       kept.shownOnce = answer.secrets;
     }
-    await store.settleIdempotency(db, t, principal, String(key), answer?.status, kept);
+    // "Sign in again" and "slow down" are not answers to the request: a retry after step-up or a pause must run.
+    const final = answer && answer.status !== 401 && answer.status !== 429;
+    await store.settleIdempotency(db, t, principal, String(key), final ? answer.status : undefined, kept);
     res.hold = false;
     if (answer) send(res, answer.status, answer.body, answer.headers);
   }
@@ -235,9 +252,32 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       const tag = `W/"${(await store.tenantHead(db, t)).seq}-${Math.floor(now().getTime() / 60_000)}"`;
       if (req.headers['if-none-match'] === tag) { res.writeHead(304, { etag: tag }); return res.end(); }
       const { seq, ...body } = await store.summary(db, t, { now: now() });
+      const extras = await m3.teamExtras(t);
+      for (const x of body.teams) {
+        const e = extras[x.team];
+        if (!e) continue;
+        x.run = e.run;
+        x.inbox = e.inbox;
+        if (e.capPerDay !== null) x.cost = { today: e.spent ?? x.cost.today, capPerDay: e.capPerDay, currency: e.currency ?? x.cost.currency };
+      }
       return send(res, 200, body, { etag: tag });
     }
     if (a === 'me' && team === 'stream' && !b && m === 'GET') return stream(req, res, t, null, url);
+    if (a === 'me' && team === 'inbox' && !b && m === 'GET') {
+      const q = Object.fromEntries(url.searchParams);
+      const { seq, ...body } = await m3.inbox(t, q);
+      return etagged(req, res, seq, body, `${q.cursor ?? ''}|${q.limit ?? ''}`);
+    }
+    const stepUp = req.headers['x-step-up'] ?? null;
+    if (a === 'auth' && team === 'step-up' && !b && m === 'POST') {
+      const body = await readJson(req, 4 * 1024);
+      const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
+      return send(res, 201, await m3.stepUp(t, 'admin', body?.secret, { verifier: stepUpVerifier, bearer }), {}, { secrets: ['token'] });
+    }
+    if (a === 'runs' && team && b && !c && m === 'POST') return send(res, 200, await did(m3.controlRun(t, team, b, 'admin', { stepUp })));
+    if (a === 'approvals' && team && !b && m === 'POST') return send(res, 200, await did(m3.decideApproval(t, team, await readJson(req, 16 * 1024), 'admin', { stepUp })));
+    if (a === 'cards' && team && !b && m === 'GET') return send(res, 200, await m3.getCard(t, team));
+    if (a === 'cards' && team && !b && m === 'POST') return send(res, 200, await did(m3.answerCard(t, team, await readJson(req, 16 * 1024), 'admin', { stepUp })));
     if (a === 'runners' && team === 'codes' && !b && m === 'POST') {
       const body = req.headers['content-type'] ? (await readJson(req, 16 * 1024)) ?? {} : {};
       return send(res, 201, await store.mintRunnerCode(db, t, 'admin', body), {}, { secrets: ['code'] });
@@ -260,11 +300,21 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         const body = await readJson(req, 2 * 1024 * 1024);
         const events = Array.isArray(body?.events) ? body.events : null;
         if (!events || events.length > 500) throw new Problem(400, 'send { events: [...] }, at most 500');
-        const stored = await store.append(db, t, team, events);
-        appended(team, stored);
-        return send(res, 200, { stored: stored.map(({ id }) => id), duplicates: events.length - stored.length });
+        const stored = await did(m3.appendEvents(t, team, events));
+        const sent = new Set(events.map((e) => e?.id));
+        const mine = stored.filter(({ id }) => sent.has(id));
+        return send(res, 200, { stored: mine.map(({ id }) => id), duplicates: events.length - mine.length });
       }
       if (b === 'events' && c === 'stream' && m === 'GET') return stream(req, res, t, team, url);
+      if (b === 'budget' && !c && m === 'GET') return send(res, 200, await m3.getBudget(t, team));
+      if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), 'admin', { stepUp })));
+      if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
+      if (b === 'runs' && !c && m === 'POST') return send(res, 201, await did(m3.startRun(t, team, (await readJson(req, 512 * 1024)) ?? {}, 'admin')));
+      if (b === 'chat' && !c && m === 'GET') return send(res, 200, await m3.getChat(t, team, Object.fromEntries(url.searchParams)));
+      if (b === 'chat' && !c && m === 'POST') {
+        const { created, event } = await did(m3.postChat(t, team, await readJson(req, 64 * 1024), 'admin'));
+        return send(res, created ? 201 : 200, event);
+      }
       if (b === 'board' && m === 'GET') {
         const days = url.searchParams.get('days') ?? '', role = url.searchParams.get('role') ?? '';
         // The ETag changes with the log and the query; ages and staleness also move with the clock, so it is weak
@@ -296,7 +346,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   return (req, res) => route(req, res).catch((e) => {
     res.hold = false;
     if (res.headersSent) { res.end(); return; }
-    if (e instanceof Problem) return send(res, e.status, { error: e.message });
+    if (e instanceof Problem) return send(res, e.status, problemBody(e), e.type ? { 'content-type': 'application/problem+json; charset=utf-8' } : {});
     if (e?.code === '23505') return send(res, 409, { error: 'already exists' });
     console.error(e);
     send(res, 500, { error: 'something went wrong on the server' });

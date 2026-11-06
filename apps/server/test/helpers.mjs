@@ -31,7 +31,7 @@ export async function plane(fn, { now, ...extra } = {}) {
     const res = await fetch(base + path, { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: res.status, body: await res.json().catch(() => null), headers: res.headers };
   };
-  try { await fn({ db, call, base, server, woke: () => woke }); } finally { server.runners?.closeAll(); server.closeAllConnections(); server.close(); await db.close(); }
+  try { await fn({ db, call, base, server, m3: server.m3, woke: () => woke }); } finally { server.runners?.closeAll(); server.closeAllConnections(); server.close(); await db.close(); }
 }
 
 /** Reads a server-sent event stream: until(n) resolves once n events with ids have arrived. */

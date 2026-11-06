@@ -79,6 +79,32 @@ Every write takes an `Idempotency-Key` header. The first answer is kept for a da
 it back with `Idempotent-Replayed: true`, so a request sent twice from a bad connection acts once. The same key on a
 different request is a `422`. Report intake needs none: the kit's report ids already make its retries safe.
 
+## Runs, chat, cards and approvals (M3)
+
+| Call | What it does |
+|---|---|
+| `GET`/`PUT /v1/teams/{team}/budget` | The daily cap (`perDay`, minor units), `perRun`, live `sessions` and today's spend. A run needs a daily cap |
+| `POST /v1/teams/{team}/runs` | Start a run, frozen on `team: { version, roles: [{ slug, reportsTo, areas }] }` with exactly one role reporting to `owner` (the front door) |
+| `POST /v1/runs/{run}/pause`, `/resume`, `/stop` | Pause and stop are always one tap |
+| `GET`/`POST /v1/teams/{team}/chat` | The chat page (items, current cards, run, cost line); a message is stored byte for byte, and a repeated `clientId` once |
+| `POST /v1/approvals/{id}`, `GET`/`POST /v1/cards/{id}` | Answer with the `version` you saw; a stale one gets `409` with the current card |
+| `GET /v1/me/inbox` | Every open card across teams, approvals first, with `asOf` and an `ETag` |
+
+At 80% of the daily cap the team gets `budget.warned`; at 100% its runs pause and one `budget` card asks the owner
+to resume tomorrow or add half the cap again.
+
+**Step-up.** Approving, raising or clearing a cap, resuming a run the budget paused, and adding to the budget need a
+fresh step-up: `POST /v1/auth/step-up` with `{ "secret": "…" }` returns a token for `x-step-up`, valid 5 minutes and
+once. Without it the answer is `401` with `"type": "step-up-required"`. The secret is not the sign-in token (that is
+refused); the server keeps only its scrypt hash, from `AGENT_TEAM_STEP_UP_SECRET_HASH`:
+
+```bash
+printf '%s' 'a secret of 12 characters or more' | node bin.mjs --hash-step-up   # → scrypt$32768$8$1$…
+```
+
+Five wrong secrets in 15 minutes lock step-up for the tenant (`429`), and every try is audited. Local mode makes a
+secret in `--data/step-up.secret`. M4's sign-in replaces the secret; the header stays.
+
 ## Host it in another server
 
 `createHandler(opts)` from `server.mjs` is the API as a plain `(req, res)` handler, for serverless functions or a
@@ -113,5 +139,9 @@ TEST_DATABASE_URL=postgres://… npm test   # a real Postgres; wipes its public 
 
 Not yet: events from other instances reach a stream within `pollMs` rather than at once (Postgres LISTEN/NOTIFY can
 come with always-on instances), and people sign in with one admin token (GitHub sign-in is milestone M4).
+
+Appends take a per-tenant advisory lock so that `seq` is commit order and a stream never skips an event. That
+puts one tenant's appends in a line: each is one short transaction (a few milliseconds), so the ceiling is a few
+hundred events a second per tenant, far above an agent team's rate. Tenants do not wait for each other.
 
 Tests on a real Postgres run one file at a time, since each test wipes the schema.
