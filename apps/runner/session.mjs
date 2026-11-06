@@ -229,6 +229,11 @@ export class Session {
   }
 
   async turn({ message, resume }) {
+    // No model turn while the control plane is away: it keeps the budget, so nothing is spent it cannot see.
+    if (this.deps.online) {
+      await this.untilStopped(this.deps.online());
+      if (this.state === 'stopping' || this.state === 'ended') return;
+    }
     const remaining = this.remaining;
     if (remaining !== null && remaining <= 0) { this.stopReason = 'budget'; this.state = 'stopping'; return; }
     this.state = 'working';
@@ -452,6 +457,10 @@ export class Session {
       const d = await this.untilStopped(this.deps.awaitApproval(approval, this.id));
       if (this.state === 'waiting') this.state = 'working';
       if (d.decision !== 'approved') return { text: JSON.stringify({ approval, decision: d.decision, note: d.note }) + ' Not approved: it was not merged.', isError: true };
+      // Never merge while the control plane is away: the run may have been stopped meanwhile. Once it is back, a
+      // session it stopped has been told so (state stopping) and does not merge.
+      if (this.deps.online) await this.untilStopped(this.deps.online());
+      if (this.state === 'stopping' || this.state === 'ended') return { text: JSON.stringify({ approval, decision: d.decision, merged: false }) + ' Approved, but not merged: the session was stopped first.', isError: true };
       // The merge lands only on the head the person approved, whatever the branch holds now.
       const approved = d.headSha ?? headSha;
       const base = { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: approved, approval };

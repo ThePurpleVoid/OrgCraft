@@ -90,7 +90,7 @@ export async function registerRunner(call, name = 'r1') {
  * A fake runner on the WebSocket: says hello, answers pings, acks what the control plane sends (`reply` picks the ack
  * body per frame, or null to stay silent), and can wait for a frame.
  */
-export async function fakeRunner(base, key, { runner, maxSessions = 4, reply = () => ({}) } = {}) {
+export async function fakeRunner(base, key, { runner, maxSessions = 4, reply = () => ({}), sessions } = {}) {
   const { default: WebSocket } = await import('ws');
   const ws = new WebSocket(base.replace(/^http/, 'ws') + '/runners/connect', { headers: { authorization: `Bearer ${key}` } });
   const frames = [];
@@ -116,7 +116,7 @@ export async function fakeRunner(base, key, { runner, maxSessions = 4, reply = (
   });
   /** Sends a request and resolves with the ack or nack that refs it. */
   const request = async (op, body) => { const id = `q${n++}`; raw({ op, id, body }); return next((f) => f.ref === id && (f.op === 'ack' || f.op === 'nack')); };
-  raw({ op: 'hello', id: 'hello', body: { runner, version: 'test', capabilities: { runtimes: ['agent-sdk'], maxSessions } } });
+  raw({ op: 'hello', id: 'hello', body: { runner, version: 'test', capabilities: { runtimes: ['agent-sdk'], maxSessions }, ...(sessions ? { sessions } : {}) } });
   const welcome = await next((f) => f.op === 'welcome');
   return { ws, frames, next, request, welcome, close: () => ws.close() };
 }

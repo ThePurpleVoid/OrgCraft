@@ -49,9 +49,12 @@ export function attachRunners(server, { db, ops = {}, welcome = async () => ({})
       send(op, body = {}, { ref, timeoutMs = 30_000 } = {}) {
         const id = frameId();
         const frame = { op, id, ...(ref ? { ref } : {}), body };
-        if (ws.readyState !== ws.OPEN) return Promise.reject(new Error('runner is not connected'));
+        const answer = ['ack', 'nack', 'pong', 'ping', 'welcome'].includes(op);
+        // An answer to a runner that has gone is dropped: it reconnects and resends what was not acknowledged.
+        // Only a request (which someone awaits) rejects, so nothing is left as an unhandled rejection.
+        if (ws.readyState !== ws.OPEN) return answer ? Promise.resolve(null) : Promise.reject(new Error('runner is not connected'));
         ws.send(JSON.stringify(frame));
-        if (['ack', 'nack', 'pong', 'ping', 'welcome'].includes(op)) return Promise.resolve(null);
+        if (answer) return Promise.resolve(null);
         return new Promise((resolve, reject) => {
           const timer = setTimeout(() => { conn.pending.delete(id); reject(new Error(`no ack for ${op} within ${timeoutMs} ms`)); }, timeoutMs);
           timer.unref?.();
@@ -129,7 +132,9 @@ export function attachRunners(server, { db, ops = {}, welcome = async () => ({})
       return out.ok ? ack(f.id, out.body) : nack(f.id, out.problem);
 
       async function onHello(b) {
-        conn.hello = { version: typeof b.version === 'string' ? b.version.slice(0, 50) : null, capabilities: b.capabilities && typeof b.capabilities === 'object' && !Array.isArray(b.capabilities) ? b.capabilities : {} };
+        conn.hello = { version: typeof b.version === 'string' ? b.version.slice(0, 50) : null, capabilities: b.capabilities && typeof b.capabilities === 'object' && !Array.isArray(b.capabilities) ? b.capabilities : {},
+          // The sessions the runner says it still runs: after a restart, none of the ones it had.
+          sessions: Array.isArray(b.sessions) ? b.sessions.filter((x) => typeof x === 'string' && x.length <= 100).slice(0, 500) : [] };
         clearTimeout(helloTimer);
         await db.tenant(conn.tenant, ({ q }) => q('update runners set last_seen = now(), version = coalesce($2, version), capabilities = $3 where id = $1',
           [conn.runner, conn.hello.version, JSON.stringify(conn.hello.capabilities).length <= 16 * 1024 ? JSON.stringify(conn.hello.capabilities) : '{}']));

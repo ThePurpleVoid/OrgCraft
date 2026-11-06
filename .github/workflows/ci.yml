@@ -152,6 +152,12 @@ jobs:
           npm ci --prefix apps/server && npm ci --prefix apps/runner
           node --test tests/e2e/m3-dry-run.e2e.mjs | tee m3-dry-run.tap
           grep -q '^# fail 0$' m3-dry-run.tap && grep -q '^# skipped 0$' m3-dry-run.tap
+      - name: The runner's resilience with the runner image (killed and restarted, control plane away, link cut, budget pause; no key)
+        if: hashFiles('apps/runner/Dockerfile') != ''
+        env: { M3_DRY_RUN_RUNNER: docker, M3_DRY_RUN_IMAGE: 'agent-team-runner:ci' }
+        run: |
+          node --test tests/e2e/m3-resilience.e2e.mjs | tee m3-resilience.tap
+          grep -q '^# fail 0$' m3-resilience.tap && grep -q '^# skipped 0$' m3-resilience.tap
 
   deploy-path:
     # The hosted deploy path on a Postgres shaped like Supabase (anon and authenticated roles with default grants on

@@ -8,7 +8,7 @@ import WebSocket from 'ws';
 /** Ops that are answers or acknowledgements themselves, so they are not acknowledged in turn. */
 const NO_ACK = new Set(['ack', 'nack', 'pong', 'welcome']);
 /** Ops whose ack carries an answer, so the handler acks once the work is done (frame.reply(body)). */
-const LATE_ACK = new Set(['session.checkpoint']);
+const LATE_ACK = new Set(['session.checkpoint', 'session.message']);
 const SEEN = 2000;
 
 let last = 0;
@@ -90,11 +90,16 @@ export function connect({ server, key, hello, backoff = [500, 1000, 2000, 5000, 
       const late = LATE_ACK.has(f.op);
       if (!NO_ACK.has(f.op) && f.id && !late) write({ op: 'ack', id: ulid(), ref: f.id, body: {} });
       if (f.id) {
-        if (seen.has(f.id)) { if (late && answers.has(f.id)) write({ op: 'ack', id: ulid(), ref: f.id, body: answers.get(f.id) }); return; } // a resend after a reconnect: already handled
+        if (seen.has(f.id)) { if (late && answers.has(f.id)) write(answers.get(f.id)(ulid())); return; } // a resend after a reconnect: already handled
         seen.add(f.id);
         if (seen.size > SEEN) seen.delete(seen.values().next().value);
       }
-      if (late) f.reply = (body = {}) => { answers.set(f.id, body); if (answers.size > 100) answers.delete(answers.keys().next().value); write({ op: 'ack', id: ulid(), ref: f.id, body }); };
+      if (late) {
+        // The answer is kept, so a resend of the same frame gets the same ack (or nack) again.
+        const answer = (frame) => { answers.set(f.id, frame); if (answers.size > 100) answers.delete(answers.keys().next().value); write(frame(ulid())); };
+        f.reply = (body = {}) => answer((id) => ({ op: 'ack', id, ref: f.id, body }));
+        f.refuse = (problem, error) => answer((id) => ({ op: 'nack', id, ref: f.id, body: { ref: f.id, problem, ...(error ? { error } : {}) } }));
+      }
       out.emit('frame', f);
     });
     ws.on('close', (code) => {

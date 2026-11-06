@@ -200,6 +200,18 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     if (event.run) {
       const [r] = await q("select id, state, caps from runs where id = $1 and team = $2", [event.run, team]);
       if (r?.state !== 'running') return;
+      const over = await runOver(ctx, team, r, day, b);
+      if (over) await exhaust(ctx, team, over);
+    }
+  }
+
+  /**
+   * Whether a run is past its own caps (costPerRun or the team's perRun over the run, costPerDay over the UTC day):
+   * the run-scope exhaust info, or null.
+   */
+  async function runOver(ctx, team, r, day, b) {
+    const { q } = ctx;
+    {
       const caps = r.caps ?? {};
       const raised = isInt(caps.raised) ? caps.raised : 0;
       const runCap = Math.min(b?.perRun ?? Infinity, isInt(caps.costPerRun) ? caps.costPerRun : Infinity);
@@ -209,14 +221,15 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       const currency = b?.currency ?? 'USD';
       if (runCap !== Infinity) {
         const spent = await usage(false);
-        if (spent >= runCap + raised) return exhaust(ctx, team, { scope: 'run', run: r.id, day, spent, cap: runCap + raised, currency });
+        if (spent >= runCap + raised) return { scope: 'run', run: r.id, day, spent, cap: runCap + raised, currency };
       }
       if (isInt(caps.costPerDay)) {
         const spent = await usage(true);
         const cap = caps.costPerDay + (caps.raisedDay?.day === day && isInt(caps.raisedDay.amount) ? caps.raisedDay.amount : 0);
-        if (spent >= cap) await exhaust(ctx, team, { scope: 'run', run: r.id, day, spent, cap, currency, perDay: true });
+        if (spent >= cap) return { scope: 'run', run: r.id, day, spent, cap, currency, perDay: true };
       }
     }
+    return null;
   }
 
   async function exhaust(ctx, team, info) {
@@ -467,8 +480,17 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
                    on conflict (team, day) do update set raised = budget_days.raised + excluded.raised, exhausted_at = null, warned_at = null`,
         [ctx.tenant, row.team, utcDay(ctx.now), Math.ceil((b?.perDay ?? 0) / 2)]);
     }
-    const runs = await ctx.q(info.scope === 'run' ? "select id from runs where id = $1 and state = 'paused' and reason = 'budget'" : "select id from runs where team = $1 and state = 'paused' and reason = 'budget'", [info.scope === 'run' ? info.run : row.team]);
-    for (const r of runs) await setRunState(ctx, row.team, r.id, 'running', 'budget', SYSTEM);
+    const runs = await ctx.q(info.scope === 'run' ? "select id, caps from runs where id = $1 and state = 'paused' and reason = 'budget'" : "select id, caps from runs where team = $1 and state = 'paused' and reason = 'budget'", [info.scope === 'run' ? info.run : row.team]);
+    for (const r of runs) {
+      // A run also past its own cap stays paused, with its own card: the day's raise does not lift the run's cap.
+      const over = await runOver(ctx, row.team, r, utcDay(ctx.now), b);
+      if (over) {
+        const [open] = await ctx.q("select 1 from cards where team = $1 and kind = 'budget' and state = 'open' and subject = $2", [row.team, `run/${r.id}`]);
+        if (!open) await exhaust(ctx, row.team, over);
+        continue;
+      }
+      await setRunState(ctx, row.team, r.id, 'running', 'budget', SYSTEM);
+    }
     return null;
   }
 

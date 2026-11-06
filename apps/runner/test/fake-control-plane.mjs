@@ -65,6 +65,7 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
 
   http.on('upgrade', (req, socket, head) => {
     if (req.url !== '/v1/runners/connect' || req.headers.authorization !== `Bearer ${key}`) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
+    if (plane.away) { socket.destroy(); return; } // gone: nothing answers
     wss.handleUpgrade(req, socket, head, (ws) => {
       sock = ws;
       ws.on('message', (raw) => {
@@ -128,6 +129,8 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
     },
     send,
     drop() { sock?.terminate(); },
+    /** While true, reconnects are not answered (the control plane is away). */
+    away: false,
     /** Resolve when `test()` holds (checked after every frame and tool call), or fail after `ms`. */
     until(test, ms = 10_000) {
       if (test()) return Promise.resolve();

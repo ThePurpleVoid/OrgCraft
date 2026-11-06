@@ -283,6 +283,22 @@ test('budget: warns once at 80%, and at 100% pauses the run and sends one card; 
   });
 });
 
+test('budget: raising the day\'s cap does not resume a run that is also past its own cap; that run gets its own card', async () => {
+  await withStepUp(async ({ call }) => {
+    const run = await running(call, 'shop', 1000);
+    assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 1000, perRun: 600, currency: 'USD' }, await stepUp(call))).status, 200);
+    // One turn crosses both lines: the day pauses the run first.
+    await call('POST', '/teams/shop/events', { events: [usage('shop', 'u1', 1100, run.id)] });
+    const [day] = (await call('GET', '/me/inbox')).body.cards;
+    assert.equal(day.data.scope, 'day');
+    assert.equal((await call('POST', `/cards/${day.id}`, { option: 'raise', version: 1 }, await stepUp(call))).status, 200);
+    const r = (await call('GET', '/teams/shop/runs')).body.runs[0];
+    assert.deepEqual([r.state, r.reason], ['paused', 'budget'], 'not resumed: its sessions would only stop again at once');
+    const cards = (await call('GET', '/me/inbox')).body.cards.filter((c) => c.kind === 'budget');
+    assert.deepEqual(cards.map((c) => [c.data.scope, c.data.run, c.data.cap]), [['run', run.id, 600]], 'the run\'s own card asks the owner');
+  });
+});
+
 test('budget: answering "tomorrow" leaves the run paused until the next UTC day', async () => {
   await withStepUp(async ({ call, db }) => {
     const run = await running(call, 'shop', 100);
