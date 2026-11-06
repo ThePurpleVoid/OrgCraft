@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { destructiveStatements } from '../deploy/server/guard.mjs';
-import { siteConfig, STATUS_PAGE } from '../deploy/vercel/build.mjs';
+import { siteConfig, STATUS_PAGE, STATUS_SCRIPT, CSP } from '../deploy/vercel/build.mjs';
 import { scryptSync } from 'node:crypto';
 import { hashStepUp } from '../deploy/server/step-up-hash.mjs';
 
@@ -41,7 +41,9 @@ test('the site rewrites the API and discovery to one https origin, and nothing e
 });
 
 test('until the Studio has a hosted mode, the site page only calls what the control plane serves', () => {
-  const calls = [...STATUS_PAGE.matchAll(/fetch\(\s*['"`](\/v1\/[^'"`?$]*)/g)].map((m) => m[1]);
+  assert.doesNotMatch(STATUS_PAGE, /<script>/, 'no inline script: the CSP forbids it');
+  assert.match(STATUS_PAGE, /<script src="\/status.js"><\/script>/);
+  const calls = [...STATUS_SCRIPT.matchAll(/fetch\(\s*['"`](\/v1\/[^'"`?$]*)/g)].map((m) => m[1]);
   assert.deepEqual(calls, ['/v1/health']);
 });
 
@@ -55,4 +57,10 @@ test('the step-up hash is scrypt with its parameters and salt, and never contain
   assert.equal(again.toString('base64url'), key);
   assert.notEqual(hashStepUp('correct horse battery staple'), h, 'a fresh salt each time');
   assert.throws(() => hashStepUp('short'), /12 characters/);
+});
+
+test('the site sends the agreed CSP', () => {
+  const h = siteConfig('https://api.example.org').headers[0].headers.find((x) => x.key === 'content-security-policy');
+  assert.equal(h.value, CSP);
+  assert.equal(CSP, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
 });

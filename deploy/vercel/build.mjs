@@ -17,6 +17,9 @@ import { parseArgs } from 'node:util';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+/** Agreed by the security reviewer and web-dev: no inline or third-party scripts, inline styles allowed. */
+export const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
+
 /** The vercel.json for a site that fronts the control plane at `api` (an https origin, no path). */
 export function siteConfig(api) {
   const u = new URL(api);
@@ -44,11 +47,20 @@ export function siteConfig(api) {
           { key: 'referrer-policy', value: 'strict-origin-when-cross-origin' },
           { key: 'x-frame-options', value: 'DENY' },
           { key: 'strict-transport-security', value: 'max-age=63072000; includeSubDomains' },
+          { key: 'content-security-policy', value: CSP },
         ],
       },
     ],
   };
 }
+
+/** The status page's only script, served as a file so the CSP can forbid inline scripts. */
+export const STATUS_SCRIPT = `  const el = document.getElementById('status');
+  fetch('/v1/health', { cache: 'no-store' }).then((r) => r.json()).then((b) => {
+    el.textContent = b.ok ? 'Control plane is up.' : 'Control plane answered, but not ok.';
+    el.className = b.ok ? 'ok' : 'bad';
+  }).catch(() => { el.textContent = 'Control plane is not reachable.'; el.className = 'bad'; });
+`;
 
 /** The status page shown until the Studio has a hosted mode. It makes one call, the one the smoke test checks. */
 export const STATUS_PAGE = `<!doctype html>
@@ -75,13 +87,7 @@ export const STATUS_PAGE = `<!doctype html>
   <p>The hosted Studio arrives in milestone M4. Until then this site fronts the API at <code>/v1</code>.</p>
   <p><a href="https://github.com/PurpleGiragge/Agent-Team-Kit/blob/main/docs/deploy/vercel-supabase.md">How this deployment works</a></p>
 </main>
-<script>
-  const el = document.getElementById('status');
-  fetch('/v1/health', { cache: 'no-store' }).then((r) => r.json()).then((b) => {
-    el.textContent = b.ok ? 'Control plane is up.' : 'Control plane answered, but not ok.';
-    el.className = b.ok ? 'ok' : 'bad';
-  }).catch(() => { el.textContent = 'Control plane is not reachable.'; el.className = 'bad'; });
-</script>
+<script src="/status.js"></script>
 </body>
 </html>
 `;
@@ -91,7 +97,10 @@ export function buildSite({ api, out, studio = false }) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(join(dir, 'public'), { recursive: true });
   if (studio) cpSync(join(ROOT, 'apps', 'studio', 'public'), join(dir, 'public'), { recursive: true });
-  else writeFileSync(join(dir, 'public', 'index.html'), STATUS_PAGE);
+  else {
+    writeFileSync(join(dir, 'public', 'index.html'), STATUS_PAGE);
+    writeFileSync(join(dir, 'public', 'status.js'), STATUS_SCRIPT);
+  }
   writeFileSync(join(dir, 'vercel.json'), `${JSON.stringify(siteConfig(api), null, 2)}\n`);
   return dir;
 }
