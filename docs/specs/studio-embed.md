@@ -68,9 +68,10 @@ export const handler = createStudioHandler({
   repo: 'owner/name',                       // the repository the team lives in
   basePath: '/api/agent-team/studio',      // where the host mounts it
   allowedOrigins: ['https://admin.example.com'], // required: the host's own page origin(s), exact
-  authorize: async (request, action) => ({ id: 'u_123', name: 'Dana' }) /* or null */, // action: 'read' | 'publish'
+  authorize: async (request, action) => ({ id: 'u_123', name: 'Dana' }) /* or null */, // action: 'read' | 'publish' | 'publish-code'
   getInstallationToken: async ({ repo, permissions }) => '<token>', // minted on the server, section 7
   branchPrefix: 'agent-team/',             // default; every Studio branch starts with it
+  limiter: async (key, { limit, windowSeconds }) => true, // optional, a shared store (KV or the DB): S6
 });
 // handler(request: Request) => Promise<Response>: the Fetch API, so it runs in Node 18+ serverless functions,
 // Next.js route handlers and plain node:http (through a small adapter the kit ships).
@@ -86,16 +87,16 @@ It needs a **Node runtime** with `node:fs` and a writable temp dir. Edge runtime
 | `POST /v1/team/preview` `{ spec, base }` | read | `readTeam(base)`, then `preview` |
 | `POST /v1/team/graph`, `/v1/team/suggestions` | read | As today. Suggestions use `listPaths(base)` |
 | `POST /v1/team/from-template` | read | As today. Refused when the repository already has a team |
-| `POST /v1/team/publish` `{ spec, base, branch?, message }` | **publish** | `validate`, then `readTeam(base)`, then `plan`, then `publish` into the default branch with a pull request. A `stale` result is a 409 ("the team changed on GitHub since you opened it; reload") |
+| `POST /v1/team/publish` `{ spec, base, branch?, message }` | **publish**, and also **publish-code** when the plan changes code (S1) | `validate`, then `readTeam(base)`, then `plan`, then `publish` into the default branch with a pull request. A `stale` result is a 409 ("the team changed on GitHub since you opened it; reload") |
 | `GET /v1/team/pr?branch=` | read | `prStatus` |
-| `GET /assets/<kit version>/*` | none | The Studio's static files and `team-model.mjs`. They are public kit code, cached as immutable |
+| `GET /assets/<kit version>/<name>` | none | The Studio's static files and `team-model.mjs`. They are public kit code, cached as immutable. Served only from a manifest built at package time (S2) |
 
 **How the `github` backend uses the GitHub API.** Everything uses an installation token.
 
 - **`info`** reads the repository and the default branch's ref: 2 calls.
-- **`readTeam`** fetches the root tree without recursion, then the tree of each read-set directory recursively. That keeps a large monorepo from hitting the truncated recursive tree. It then fetches blobs, 16 at a time, and caches them in the temp dir by blob sha across warm invocations. Limits: at most 2,000 files and 20 MB, otherwise a 413 that names the size.
+- **`readTeam`** fetches the root tree without recursion, then the tree of each read-set directory recursively. That keeps a large monorepo from hitting the truncated recursive tree. It then fetches blobs, 16 at a time, and caches them across warm invocations, keyed on `(repo id, installation id, sha)` and re-hashed on read (S3). Limits: at most 2,000 files and 20 MB, otherwise a 413 that names the size.
 - **`publish`** makes one `POST /git/trees` with `base_tree` and inline `content` for each change (`sha: null` deletes), then a commit with `base` as its parent, then `POST /git/refs`, which is create-only. It then checks that the `into` branch still points at `base`; if not, it deletes its own new ref and returns `stale`. Last comes `POST /pulls`.
-- **The commit** is authored by the app. Its message ends with `Published-by: <name> (<host user id>) via Agent Team Studio`, from `authorize`'s answer. That line is the host user's display name and id only, never an email address or a token.
+- **The commit** is authored by the app. Its message ends with `Published-by: <name> (<host user id>) via Agent Team Studio`, from `authorize`'s answer and appended last (S5). That line is the host user's display name and id only, never an email address or a token.
 
 **Time budget** (10 seconds per request):
 
@@ -133,11 +134,14 @@ studio.destroy();
 
 **What the host must provide:**
 
-- an admin-only `authorize`;
+- an admin-only `authorize`, with `publish-code` mapped to a narrower group than `publish` (S1);
 - its page origin(s) in `allowedOrigins`;
 - a session cookie set with `SameSite=Lax` or `Strict` (`Secure`, `HttpOnly`);
 - a GitHub App with the permissions in section 7, installed on that one repository;
-- the app's private key in its server's secret store, by name only (for example `AGENT_TEAM_GITHUB_APP_KEY`; never in the browser bundle or in logs).
+- the app's private key in its server's secret store, by name only (for example `AGENT_TEAM_GITHUB_APP_KEY`; never in the browser bundle or in logs);
+- **required** review of the Studio's pull requests by a person with write access, through branch protection on the default branch. **The pull request is the security boundary**: a team spec can carry shell commands (S1);
+- a **required** ruleset that lets the app create only `branchPrefix` branches (S7);
+- optionally, a `limiter` backed by a shared store (S6).
 
 Findings for review, E1 to E10:
 
@@ -154,25 +158,50 @@ Findings for review, E1 to E10:
 - **E5. Paths.** `plan` refuses any change outside the read set. That rules out `.github/**`, so the app needs no `workflows` permission and cannot change CI. Modes are only `100644` or `100755`: no symlinks and no submodules. Each file is at most 1 MB.
 - **E6. Input.** Bodies are at most 5 MB. `spec` goes through `validate` before anything else. `base` must be a 40- or 64-character hex sha.
 - **E7. Hostile repository content.** Someone who can push to the repository controls `.agent-team/`. `build` and `sync` are pure JavaScript over text: no `eval`, no child processes and no network (enforced by a test, section 8). Generated shell scripts are only ever written, never run. Each request gets its own temp dir, which is deleted afterwards. Blob-cache entries are named by sha only.
-- **E8. Abuse.** Publish is limited to 10 per user per hour, and the handler holds one publish at a time per repository (a 409 says another is running).
+- **E8. Abuse.** Publish is limited to 10 per user per hour and one at a time per repository, through the host's `limiter` (S6). Without one, the only serialisation is GitHub's create-only ref, and the handler says so in its startup warning.
 - **E9. Audit.** Each publish logs `{ user id, branch, commit, PR, files count }` to the host's logger, with no contents. The commit trailer and the PR are the durable record.
 - **E10. Responses.** Every `/v1` response has `cache-control: no-store` and `x-content-type-options: nosniff`. Assets are served as `immutable` under a versioned path.
+
+### Security review findings S1 to S9 (security-reviewer on #126)
+
+These bind the handler PR, together with E1 to E10.
+
+- **S1. Publishing a spec publishes code.** `gates.json` steps are shell: `renderGates` writes them into `scripts/agent-team/gates.sh`, which the merge gate sources. CI also runs `scripts/agent-team/sync.sh check` from the PR branch with its `.agent-team/config.sh`. So a publish can add commands that the runner and CI will run.
+  - (a) **`publish-code`** is a third `authorize` action. It is required, in addition to `publish`, whenever the plan changes `gates.json`, `resources.json`, `.agent-team/config.sh`, or any `100755` or `.sh` file.
+  - (b) The preview, in every mode, and the PR body list each added or changed command verbatim, in a fenced block under "Commands this PR adds or changes".
+  - (c) The host must require review of the PR by a person with write access. This is in the host checklist above.
+  - (d) A fuzz test feeds every spec string field `'`, `$()`, a backtick and a newline. It asserts that no generated `.sh` changes except through `shq`-quoted values and the gates `run` field.
+- **S2. Assets.** They are served only from a manifest built at package time, looked up as map keys, never by joining paths. A request is refused when it has `%2e`, `%2f`, `\`, a doubled `/` or dot segments, checked both before and after decoding. Tests: `/assets/0.16.0/..%2f..%2fpackage.json` and `/assets/0.16.0/.//x` get 404.
+- **S3. Blob cache isolation.** The cache key is `(repo id, installation id, sha)`, and content is re-hashed against its sha on read. Hosted mode uses one temp root per customer. A test proves that one customer's warm cache never answers another's read.
+- **S4. Step 2 proxy.** It forwards only an explicit allowlist of method and route pairs, matched after normalisation, with dot segments refused. It forwards only `content-type` and `accept`, plus the bearer token it adds. It never forwards `cookie`, `authorization`, `x-forwarded-*` or `x-agent-team-edge`. Routes behind step-up or `su_` tokens are never proxied.
+- **S5. Injection into the commit and the PR.**
+  - `name` is stripped of control characters and capped at 100 characters.
+  - Any user line that starts with `Published-by:` or `Co-authored-by:` is removed, and the trailer goes last.
+  - In the PR body, user text goes in a block quote, and `@` becomes `&#64;`, so it pings nobody.
+- **S6. Limits in serverless.** In-memory counters do nothing across instances, so limits go through the host's `limiter` hook (E8).
+- **S7. Token scope is checked, not trusted.** `githubAppToken` always asks for `repositories: [name]` and the three permissions. The handler reads the mint response's `permissions` and `repositories`, or calls `GET /installation/repositories` once per token, and refuses a token that reaches more. The `branchPrefix` ruleset is required.
+- **S8. Stream tickets** (step 2):
+  - bound to tenant, team and person;
+  - the stream's CORS sets no `Access-Control-Allow-Credentials`, because the ticket is the only credential;
+  - the ticket is redacted from access logs, since it travels in the query string;
+  - the stream re-checks membership and ends when the person is removed or loses the team (as in #101).
+- **S9. Step 2 publish through the M4 app** uses only an installation that the tenant has proven it owns: the same multi-customer gate as for runs (sections 6 and 7).
 
 ## 6. Step 2: chat, runs and the live board through the control plane
 
 Once M4 is up, the host registers with the deployment as a **confidential OIDC client** (ADR 0007), with its redirect URI and page origin. Then:
 
 - **Linking.** Each host user links once with "Connect Agent Team". That runs the deployment's sign-in (GitHub upstream) in a top-level window. The handler keeps the refresh token server-side, encrypted in the host's store, keyed on the host user. The browser never holds a control-plane token.
-- **Requests.** `basePath/v1/*` beyond the step 1 routes is proxied to the deployment's `/v1`, with the user's access token added. These are the same routes and the same front end as the hosted Studio.
-- **Live.** Server-sent events cannot pass through a 10-second function. Instead the handler gets a **stream ticket** from the control plane: single use, 60 seconds, read-only, for one team. The browser then opens the control plane's stream URL directly. For that one GET only, the control plane allows the origins registered for that client. A new control-plane route is needed, `POST /v1/teams/{team}/stream-tickets`, and it is additive.
+- **Requests.** `basePath/v1/*` beyond the step 1 routes is proxied to the deployment's `/v1` through an explicit route allowlist, with the user's access token added and nothing else forwarded (S4). These are the same routes and the same front end as the hosted Studio.
+- **Live** (S8). Server-sent events cannot pass through a 10-second function. Instead the handler gets a **stream ticket** from the control plane: single use, 60 seconds, read-only, for one team. The browser then opens the control plane's stream URL directly. For that one GET only, the control plane allows the origins registered for that client. A new control-plane route is needed, `POST /v1/teams/{team}/stream-tickets`, and it is additive.
 - **Step-up.** A passkey is bound to the control plane's domain, so an approval that needs step-up opens the deployment's approval page in a new window and is approved there, or on the phone. Other cards are answered inline. The control plane is never put in an iframe (`frame-ancestors 'none'` stays).
-- **Publishing.** Publishing can move to the deployment with `createStudioHandler({ controlPlane })`. Preview and publish then go to the new route `POST /v1/teams/{team}/publish`, which is additive and needs `editor`. The deployment runs the same core with the M4 app. After that the host deletes its own GitHub App and key. The handler's `publish` action still runs `authorize` first.
+- **Publishing.** Publishing can move to the deployment with `createStudioHandler({ controlPlane })`. Preview and publish then go to the new route `POST /v1/teams/{team}/publish`, which is additive and needs `editor`. The deployment runs the same core with the M4 app, on an installation the tenant has proven it owns (S9). After that the host deletes its own GitHub App and key. The handler's `publish` action still runs `authorize` first.
 
 ## 7. The GitHub App
 
 - **Step 1: the host's own app.** It is private and installed on the one repository, with Contents read and write, Pull requests read and write, and Metadata read. It has **no** Workflows, Actions, Administration, Secrets or Environments permission. The kit ships an optional `githubAppToken({ appId, privateKey, installationId })`, which signs the app JWT with `node:crypto` and asks for a scoped installation token. A host may use `@octokit/auth-app` instead.
 - **Can it be the M4 app? Not in step 1.** A GitHub App's private key mints tokens for every installation of that app. On a hosted deployment that means every customer, so a host must never hold the deployment's key. A self-hosted owner who runs both could technically reuse it, but the spec says not to: the blast radius is the reason. **In step 2, yes, by delegation:** the host keeps no key, and the deployment publishes with the M4 app (section 6).
-- **Hosted mode** uses the M4 app directly, because the deployment owns that key.
+- **Hosted mode** uses the M4 app directly, because the deployment owns that key. It uses only installations the tenant has proven it owns (S9), and keeps a blob cache per customer (S3).
 
 ## 8. Tests: one suite, both backends
 
@@ -193,6 +222,7 @@ Further proofs:
 - A token never appears in any response body or log line (a canary token).
 - `sync` and `build` run under a guard that throws on `child_process` and `net` (E7).
 - A 300-file team: `GET /v1/team` under 3 s against the fake API with 50 ms of latency per call.
+- S1 to S9: a gate change needs `publish-code` and appears verbatim in the preview and the PR. The `.sh` fuzz test passes. Asset traversal requests get 404. One customer's cache never answers another's. Proxy requests outside the allowlist, and forwarded cookies, are refused. A newline in `name` forges no trailer. A token that is too broad is refused.
 
 ## 9. Who builds what, in order
 
@@ -202,7 +232,7 @@ Further proofs:
    - `createStudioHandler`, the Node adapter, and `githubAppToken`;
    - the fake GitHub API and the shared suite.
 2. **web-dev:** `AgentTeamStudio.mount` and the `api` base, with about 42 fetch and EventSource calls moved behind it. Also the `features` switches; root-scoped state, lookups and styles (the stylesheet's body selectors); in-memory routing; inline styles moved to classes; and `<dialog>` in place of `confirm()`. Finally, a strict-CSP test page in CI.
-3. **security-reviewer:** E1 to E10 on this spec, then on the handler PR.
+3. **security-reviewer:** E1 to E10 and S1 to S9 on this spec, then on the handler PR.
 4. **kit-core-dev, in the first host's own repository:**
    - the host's function, which mounts the handler behind that host's admin check;
    - the host's GitHub App;
