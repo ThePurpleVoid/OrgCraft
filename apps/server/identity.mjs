@@ -323,7 +323,9 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
       issueRefreshToken: async (_ctx, client) => client.grantTypeAllowed('refresh_token'),
       rotateRefreshToken: true,
       ttl: { AccessToken: 900, AuthorizationCode: 60, IdToken: 900, Interaction: FLOW_SECONDS, Session: 12 * 3600, Grant: 30 * 86400, RefreshToken: 30 * 86400 },
-      interactions: { policy: firstPartyPolicy(), url: (_ctx, interaction) => `/sign-in?interaction=${interaction.uid}` },
+      // A signed-in person whose client asks again for consent (prompt=consent) is never shown a page: every client is
+      // the deployment's own, so the grant is what was asked for (consentGranted). Anyone else signs in first.
+      interactions: { policy: firstPartyPolicy(), url: (_ctx, interaction) => (interaction.prompt.name === 'consent' ? `/oauth/interaction/${interaction.uid}/consent` : `/sign-in?interaction=${interaction.uid}`) },
       loadExistingGrant,
       clientBasedCORS: () => false,
       routes: { authorization: '/oauth/authorize', token: '/oauth/token', jwks: '/oauth/jwks', userinfo: '/oauth/userinfo', revocation: '/oauth/revoke', end_session: '/oauth/session/end', introspection: '/oauth/introspect', registration: '/oauth/reg', pushed_authorization_request: '/oauth/par', code_verification: '/oauth/device', device_authorization: '/oauth/device/auth', backchannel_authentication: '/oauth/backchannel', challenge: '/oauth/challenge', credential: '/oauth/credential' },
@@ -420,6 +422,21 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     return redirect(res, upstream.authorizeUrl({ state, challenge: s256(verifier), redirectUri: githubRedirect }), [setCookie(UPSTREAM_COOKIE, state, FLOW_SECONDS)]);
   }
 
+  /** Finishes a consent prompt for the person already signed in to this interaction (see `interactions` above). */
+  async function consentGranted(req, res, uid) {
+    if (!UID.test(uid)) return toSignIn(res, 'expired');
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction || interaction.prompt.name !== 'consent' || !interaction.session?.accountId) return toSignIn(res, 'expired');
+    const { details } = interaction.prompt;
+    const grant = (interaction.grantId && await provider.Grant.find(interaction.grantId))
+      || new provider.Grant({ accountId: interaction.session.accountId, clientId: interaction.params.client_id });
+    if (details.missingOIDCScope) grant.addOIDCScope(details.missingOIDCScope.join(' '));
+    if (details.missingOIDCClaims) grant.addOIDCClaims(details.missingOIDCClaims);
+    interaction.result = { ...interaction.result, consent: { grantId: await grant.save() } };
+    await interaction.save(Math.max(1, interaction.exp - epoch()));
+    return redirect(res, interaction.returnTo);
+  }
+
   async function upstreamDone(req, res, url) {
     const clear = [setCookie(UPSTREAM_COOKIE, '', 0)];
     const state = url.searchParams.get('state') ?? '', mine = cookies(req).get(UPSTREAM_COOKIE) ?? '';
@@ -502,6 +519,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     if (authorize && req.method === 'GET' && url.searchParams.get('client_id') === WEB_CLIENT && !url.searchParams.has('response_type')) { await webStart(req, res, url); return true; }
     const inter = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
     if (inter && req.method === 'GET') { await upstreamStart(req, res, inter[1]); return true; }
+    const consent = /^\/oauth\/interaction\/([^/]+)\/consent$/.exec(p);
+    if (consent && req.method === 'GET') { await consentGranted(req, res, consent[1]); return true; }
     if (p === '/oauth/callback/github' && req.method === 'GET') { await upstreamDone(req, res, url); return true; }
     if (p === '/oauth/web/done' && req.method === 'GET') { await webDone(req, res, url); return true; }
     if (p === '/oauth/revoke' && req.method === 'POST' && /^application\/json\b/i.test(req.headers['content-type'] ?? '')) { await signOut(req, res); return true; }

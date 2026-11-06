@@ -435,3 +435,24 @@ test('a deployment from before RS256 keeps its P-256 key and gains an RSA key', 
     assert.deepEqual((await issuerKeys(db, key)).map((k) => k.kid), after.map((k) => k.kid), 'and stable from then on');
   } finally { await db.close(); }
 });
+
+// prompt=consent from a signed-in person's client: no page, no second trip to GitHub (every client is ours).
+test('prompt=consent for a signed-in person finishes without a page or GitHub', () => issuer(async ({ gh, browser }) => {
+  gh.as = owner;
+  const b = browser({ ip: 'consent' });
+  const redirect = `${ORIGIN}/app/ios/callback`;
+  const ask = (extra) => {
+    const verifier = randomBytes(32).toString('base64url');
+    return `${ORIGIN}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: 'agent-team-ios', redirect_uri: redirect, scope: 'openid offline_access', state: 's', nonce: 'n', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', ...extra })}`;
+  };
+  const first = await b.go(ask({}));
+  const uid = new URL(first.at).searchParams.get('interaction');
+  assert.ok(new URL((await b.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at).searchParams.get('code'));
+  const signIns = gh.issued.length;
+  const again = await b.go(ask({ prompt: 'consent' }));
+  assert.ok(again.at?.startsWith(redirect), again.at);
+  assert.ok(new URL(again.at).searchParams.get('code'));
+  assert.equal(gh.issued.length, signIns, 'no second GitHub sign-in');
+  // Someone else's browser cannot use the consent step: it needs that interaction's signed-in session.
+  assert.match((await browser({ ip: 'other' }).go(`${ORIGIN}/oauth/interaction/${uid}/consent`)).at ?? '', /sign-in\?error=expired/);
+}));

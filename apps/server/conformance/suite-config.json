@@ -147,6 +147,30 @@
           ]
         }
       ]
+    },
+    "oidcc-ensure-request-object-with-redirect-uri": {
+      "browser": [
+        {
+          "comment": "expect an immediate error page",
+          "match": "https://op.agent-team.test:3000/oauth/authorize*",
+          "tasks": [
+            {
+              "task": "Expect the error page",
+              "match": "https://op.agent-team.test:3000/oauth/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign-in failed",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
     }
   }
 }
