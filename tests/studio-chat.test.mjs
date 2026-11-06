@@ -32,7 +32,7 @@ const until = async (fn) => { for (let i = 0; i < 100; i++) { const v = await fn
 
 test('without a control plane the chat says so and sends nothing', async () => {
   await serve({}, async (call) => {
-    assert.deepEqual((await call('/v1/team/chat')).body, { connected: false, events: [] });
+    assert.deepEqual((await call('/v1/team/chat')).body, { connected: false, items: [] });
     assert.equal((await call('/v1/team/run')).body.connected, false);
     const r = await call('/v1/team/chat', { text: 'hello' });
     assert.equal(r.status, 503);
@@ -50,11 +50,14 @@ test('a chat round trip: verbatim text, a client id sent once, the reply and car
       assert.equal(sent.body.data.text, text, 'stored verbatim, untrimmed');
       const again = await call('/v1/team/chat', { text, clientId: 'c-1' });
       assert.equal(again.body.id, sent.body.id, 'a retried message lands once');
-      const page = await until(async () => { const r = (await call('/v1/team/chat')).body; return r.events.length >= 4 && r; });
+      const page = await until(async () => { const r = (await call('/v1/team/chat')).body; return Object.keys(r.cards ?? {}).length === 2 && r; });
       assert.equal(page.connected, true);
       assert.equal(page.team, 'demo');
-      assert.deepEqual(page.events.map((e) => e.type), ['chat.message', 'chat.message', 'decision.requested', 'approval.requested']);
-      assert.equal(page.events.filter((e) => e.data.clientId === 'c-1').length, 1);
+      assert.deepEqual(page.items.map((e) => e.type), ['chat.message', 'chat.message', 'card.updated', 'decision.requested', 'card.updated', 'approval.requested']);
+      assert.equal(page.items.filter((e) => e.data.clientId === 'c-1').length, 1);
+      assert.equal(page.run.state, 'running');
+      assert.equal(page.cost.today, 655, 'usage counts into today');
+      assert.ok(page.asOf);
       assert.equal(JSON.stringify(page).includes(cp.token), false, 'the token never reaches the page');
       assert.equal((await call('/v1/team/chat', { text: '   ' })).status, 400);
     });
@@ -76,7 +79,14 @@ test('answers carry the card version; a stale one comes back as 409 with the cur
       const ok = await call(`/v1/team/cards/${decision.id}`, { kind: 'decision', subject: decision.subject, option: 'light', version: 2, key: 'k2' });
       assert.equal(ok.status, 200);
       assert.equal(ok.body.type, 'decision.answered');
-      const appr = await call(`/v1/team/cards/${approval.id}`, { kind: 'approval', subject: approval.subject, option: 'approve', version: 1, key: 'k3' });
+      const ask = await call(`/v1/team/cards/${approval.id}`, { kind: 'approval', subject: approval.subject, option: 'approve', version: 1, key: 'k3' });
+      assert.equal(ask.status, 401);
+      assert.equal(ask.body.type, 'step-up-required');
+      assert.equal((await call('/v1/team/step-up', { secret: 'wrong' })).status, 401);
+      const su = await call('/v1/team/step-up', { secret: cp.token });
+      assert.equal(su.status, 200);
+      assert.equal(JSON.stringify(su.body).includes('su_'), false, 'the step-up token stays on the Studio server');
+      const appr = await call(`/v1/team/cards/${approval.id}`, { kind: 'approval', subject: approval.subject, option: 'approve', version: 1, key: 'k4' });
       assert.equal(appr.body.type, 'approval.decided');
       assert.equal(appr.body.data.decision, 'approved');
       assert.equal(appr.body.subject, approval.subject);
@@ -90,7 +100,8 @@ test('run state, today\'s cost against the cap, pause, resume and stop', async (
     await serve(cp.env, async (call) => {
       const r = (await call('/v1/team/run')).body;
       assert.deepEqual(r.run, { id: 'run_1', state: 'running' });
-      assert.deepEqual(r.summary.cost, { today: 620, capPerDay: 5000, currency: 'USD' });
+      assert.equal(r.summary.cost.today, 620);
+      assert.equal(r.summary.cost.capPerDay, 5000);
       assert.equal((await call('/v1/team/run/pause', { key: 'p1' })).status, 200);
       assert.equal((await call('/v1/team/run')).body.run.state, 'paused');
       assert.equal((await call('/v1/team/run/resume', { key: 'r1' })).status, 200);

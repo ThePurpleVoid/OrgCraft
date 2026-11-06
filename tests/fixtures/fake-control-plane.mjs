@@ -1,7 +1,8 @@
-// A stand-in control plane for the Studio's chat tests: the /v1/ paths the chat uses (docs/contracts/api-v1.yaml and
-// clients.md), in memory, with a stubbed runner. It answers the way the contract says the real one will: verbatim chat
-// messages with client ids, cards with versions and a 409 carrying the current card when an answer is stale,
-// Idempotency-Key replays, runs with pause and stop, /me/summary with today's cost, and the event stream.
+// A stand-in control plane for the Studio's chat tests: the /v1/ paths the chat uses, in memory, with a stubbed runner,
+// shaped as docs/product/m3-design.md section 5 and api-v1.yaml (ChatPage) say the real one answers: the chat page
+// (items, cards by id, run, cost, asOf), verbatim messages whose repeated clientId returns 200, card.updated carrying
+// the whole card, a 409 with the current card when an answer is stale, step-up for approvals, Idempotency-Key
+// replays, runs with pause and stop, usage counted into today's cost, and the event stream.
 // When the real endpoints land (issue #28, backend dev), the chat tests also run against apps/server.
 import { createServer } from 'node:http';
 
@@ -11,7 +12,8 @@ export async function fakeControlPlane({ token = 'test-token', team = 'demo', ru
   const replays = new Map(); // idempotency key -> [status, body]
   const streams = new Set();
   const runs = [{ id: 'run_1', state: 'running', started: new Date().toISOString() }];
-  const cost = { today: 620, capPerDay: 5000, currency: 'USD' };
+  const cost = { today: 620, capPerDay: 5000, currency: 'USD', state: 'ok' };
+  const stepUps = new Map(); // su_ token -> expiry (ms)
   let n = 0;
   const id = () => `ev_${String(++n).padStart(6, '0')}`;
 
@@ -27,10 +29,17 @@ export async function fakeControlPlane({ token = 'test-token', team = 'demo', ru
     card(card, from = 'chief-of-staff') {
       const c = { team, version: 1, url: `http://studio.invalid/t/${team}/cards/${card.id}`, ...card };
       cards.set(c.id, c);
-      return append(c.kind === 'approval' ? 'approval.requested' : 'decision.requested', role(from), { card: c }, c.subject);
+      append('card.updated', { kind: 'system', id: 'cards' }, { card: c }, `card/${c.id}`);
+      return append(c.kind === 'approval' ? 'approval.requested' : 'decision.requested', role(from), { card: c.id, ...(c.kind === 'decision' ? { question: c.title } : { why: c.body }) }, c.subject);
     },
     /** Changes a card behind the page's back, as another member or an expiry would. */
-    bump(cardId, patch = {}) { const c = { ...cards.get(cardId), ...patch, version: cards.get(cardId).version + 1 }; cards.set(cardId, c); return c; },
+    bump(cardId, patch = {}) {
+      const c = { ...cards.get(cardId), ...patch, version: cards.get(cardId).version + 1 };
+      cards.set(cardId, c);
+      append('card.updated', { kind: 'system', id: 'cards' }, { card: c }, `card/${c.id}`);
+      return c;
+    },
+    usage(amount) { cost.today += amount; append('usage.recorded', role('chief-of-staff'), { inputTokens: 1000, outputTokens: 200, cost: amount, currency: cost.currency }); },
     events, cards, runs, cost,
   };
 
@@ -46,16 +55,20 @@ export async function fakeControlPlane({ token = 'test-token', team = 'demo', ru
     const done = (status, body) => { if (req.method === 'POST' && key) replays.set(key, [status, body]); return send(res, status, body); };
 
     if (p === `/v1/teams/${team}/chat` && req.method === 'GET') {
-      const shown = events.filter((e) => /^(chat|decision|approval)\./.test(e.type));
+      const shown = events.filter((e) => /^(chat\.|decision\.|approval\.|card\.updated|run\.|budget\.)/.test(e.type));
       const before = url.searchParams.get('before');
       const end = before ? shown.findIndex((e) => e.id === before) : shown.length;
       const page = shown.slice(Math.max(0, end - 50), end);
-      return send(res, 200, { events: page, cards: [...cards.values()], asOf: events.at(-1)?.id ?? null, next: end > 50 ? page[0].id : null });
+      const r = runs.find((x) => x.state !== 'stopped') ?? null;
+      return send(res, 200, {
+        asOf: events.at(-1)?.id ?? null, items: page, cards: Object.fromEntries(cards), run: r && { id: r.id, state: r.state, version: 1 }, cost,
+        ...(end > 50 ? { next: page[0].id } : {}),
+      });
     }
     if (p === `/v1/teams/${team}/chat` && req.method === 'POST') {
       const body = await read(req);
       const dup = body.clientId && events.find((e) => e.data?.clientId === body.clientId);
-      if (dup) return done(201, dup);
+      if (dup) return done(200, dup);
       const e = append('chat.message', { kind: 'person', id: 'owner', via: 'studio' }, { from: { kind: 'person', id: 'owner' }, text: body.text, clientId: body.clientId });
       setTimeout(() => runner(api, body.text), 30);
       return done(201, e);
@@ -66,11 +79,26 @@ export async function fakeControlPlane({ token = 'test-token', team = 'demo', ru
       const c = cards.get(card[1]) ?? [...cards.values()].find((x) => x.subject === `approval/${card[1]}`);
       if (!c) return send(res, 404, { error: 'no such card' });
       if (body.version !== undefined && body.version !== c.version) return send(res, 409, c);
+      const option = (c.options ?? []).find((o) => o.id === (body.option ?? (body.decision === 'approved' ? 'approve' : body.decision === 'denied' ? 'deny' : '')));
+      if (c.kind === 'approval' || option?.stepUp) {
+        const su = req.headers['x-step-up'];
+        if (!su || !(stepUps.get(su) > Date.now())) return send(res, 401, { type: 'step-up-required', title: 'A recent sign-in is needed', status: 401 });
+      }
       const answer = body.option ?? body.decision;
       const e = c.kind === 'approval'
         ? append('approval.decided', { kind: 'person', id: 'owner', via: 'studio' }, { approval: card[1], decision: answer, by: 'owner' }, c.subject)
-        : append('decision.answered', { kind: 'person', id: 'owner', via: 'studio' }, { answer, by: 'owner' }, c.subject);
+        : append('decision.answered', { kind: 'person', id: 'owner', via: 'studio' }, { card: c.id, answer, by: 'owner' }, c.subject);
+      const answered = { ...c, version: c.version + 1, answered: { option: answer, by: 'owner' } };
+      cards.set(c.id, answered);
+      append('card.updated', { kind: 'system', id: 'cards' }, { card: answered }, `card/${c.id}`);
       return done(200, e);
+    }
+    if (p === '/v1/auth/step-up' && req.method === 'POST') {
+      const body = await read(req);
+      if (body.secret !== token) return send(res, 401, { title: 'not accepted', status: 401 });
+      const su = `su_${Math.random().toString(36).slice(2)}`;
+      stepUps.set(su, Date.now() + 5 * 60_000);
+      return send(res, 201, { token: su, expires: new Date(Date.now() + 5 * 60_000).toISOString() });
     }
     if (p === `/v1/teams/${team}/runs` && req.method === 'GET') return send(res, 200, { runs });
     const act = /^\/v1\/runs\/([^/]+)\/(pause|resume|stop)$/.exec(p);
@@ -105,6 +133,7 @@ export async function fakeControlPlane({ token = 'test-token', team = 'demo', ru
 
 /** The stubbed runner: the chief of staff acknowledges, then asks a decision and an approval. No model involved. */
 function defaultRunner(api, text) {
+  api.usage(35);
   api.say(`Got it. I opened an issue for **${text.split('\n')[0].slice(0, 60)}** and routed it to the CTO's lane.\n\nNext:\n- web dev builds it\n- QA checks it before anything merges`);
   api.card({ id: `card_${api.events.length}`, kind: 'decision', subject: `decision/d_${api.events.length}`, title: 'What should the default be?', body: 'Follow the device setting, or always start in light.', recommendation: { option: 'system', why: 'Matches what people already chose.' }, options: [{ id: 'system', label: 'Follow system' }, { id: 'light', label: 'Light' }] });
   api.card({ id: `card_${api.events.length}`, kind: 'approval', subject: `approval/apr_${api.events.length}`, title: 'Merge PR #12', body: 'QA signed off with evidence. The merge gate is green.', risk: 'low', options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger' }], links: [{ rel: 'pr', url: 'https://example.com/pull/12' }] });

@@ -13,6 +13,9 @@ export function chatSource(env = process.env) {
   const team = env.AGENT_TEAM_SERVER_TEAM;
   const t = encodeURIComponent(team);
   const auth = { authorization: `Bearer ${env.AGENT_TEAM_SERVER_TOKEN}` };
+  // A step-up token (5 minutes) for approvals and stepUp options. It stays on this server, never in the page.
+  let stepUp = null; // { token, expires }
+  const stepUpHeader = () => (stepUp && Date.parse(stepUp.expires) > Date.now() + 5_000 ? { 'x-step-up': stepUp.token } : {});
 
   async function call(method, path, body, headers = {}) {
     const res = await fetch(`${server}/v1${path}`, {
@@ -47,7 +50,7 @@ export function chatSource(env = process.env) {
     say: ({ text, clientId, replyTo }) => call('POST', `/teams/${t}/chat`, { text, clientId, ...(replyTo ? { replyTo } : {}) }, clientId ? { 'idempotency-key': clientId } : {}),
     /** Answers a card with the version the person saw. Approvals go to /approvals/{id}, every other card to /cards/{id}. */
     answer: ({ card, kind, subject, option, version, key }) => {
-      const headers = key ? { 'idempotency-key': key } : {};
+      const headers = { ...(key ? { 'idempotency-key': key } : {}), ...stepUpHeader() };
       const approval = kind === 'approval' && /^approval\/(.+)$/.exec(subject ?? '')?.[1];
       if (approval) return call('POST', `/approvals/${encodeURIComponent(approval)}`, { decision: option === 'deny' ? 'denied' : option === 'approve' ? 'approved' : option, version }, headers);
       return call('POST', `/cards/${encodeURIComponent(card)}`, { option, version }, headers);
@@ -58,9 +61,15 @@ export function chatSource(env = process.env) {
       const line = (summary?.teams ?? []).find((x) => x.team === team) ?? null;
       return { summary: line, run: run && { id: run.id, state: run.state ?? run.status ?? line?.run ?? null } };
     },
-    async control(action, key) {
+    /** Proves a recent sign-in. Until OIDC (M4) the proof is the admin token typed again; it is passed on, not kept. */
+    async stepUp(secret) {
+      const r = await call('POST', '/auth/step-up', { secret });
+      stepUp = { token: r.token, expires: r.expires ?? new Date(Date.now() + 5 * 60_000).toISOString() };
+      return { ok: true, expires: stepUp.expires };
+    },
+    async control(action, key, runId) {
       if (!['pause', 'resume', 'stop'].includes(action)) throw new Upstream(400, { error: 'pause, resume or stop' });
-      const run = await currentRun();
+      const run = typeof runId === 'string' && runId ? { id: runId } : await currentRun();
       if (!run) throw new Upstream(409, { error: 'no run is going' });
       return call('POST', `/runs/${encodeURIComponent(run.id)}/${action}`, {}, key ? { 'idempotency-key': key } : {});
     },

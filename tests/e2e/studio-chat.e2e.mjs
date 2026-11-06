@@ -66,6 +66,7 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
   await decision.getByRole('button', { name: 'Follow system' }).click();
   await decision.locator('.answer').waitFor();
   assert.match(await decision.locator('.answer').textContent(), /^Follow system · owner/);
+  await page.getByText('Today $6.55 of $50.00').waitFor(); // the reply's usage counted in
 
   if (SHOTS) {
     await page.screenshot({ path: join(SHOTS, 'desktop-light.png') });
@@ -74,8 +75,20 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
     await page.emulateMedia({ colorScheme: 'light' });
   }
 
+  // Approvals need a recent sign-in: the page asks for the admin token, the Studio server keeps the step-up token.
+  const approval = page.locator('.card-msg.k-approval');
+  await approval.getByRole('button', { name: 'Approve' }).click();
+  await approval.getByLabel('Admin token').fill('not it');
+  await approval.getByRole('button', { name: 'Confirm' }).click();
+  await approval.getByText('That token was not accepted').waitFor();
+  await approval.getByLabel('Admin token').fill(cp.token);
+  await approval.getByRole('button', { name: 'Confirm' }).click();
+  await approval.locator('.answer').waitFor();
+  assert.match(await approval.locator('.answer').textContent(), /^Approve · owner/);
+
   await page.getByRole('button', { name: 'Pause' }).click();
   await page.locator('#run-state', { hasText: 'Paused' }).waitFor();
+  await page.getByText('The run was paused by owner').waitFor();
   await page.getByRole('button', { name: 'Resume' }).waitFor();
   assert.equal(cp.runs[0].state, 'paused');
   assert.deepEqual(errors, []);
@@ -83,6 +96,8 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
 });
 
 test('at 360px the chat fits, the cards answer, and the team is read-only', { skip }, async () => {
+  cp.say('The settings page change is ready to try. One step needs you before it merges.');
+  cp.card({ id: 'card_phone', kind: 'approval', subject: 'approval/apr_phone', title: 'Merge PR #14', body: 'QA signed off on both themes. The merge gate is green.', risk: 'low', options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger' }], links: [{ rel: 'pr', url: 'https://example.com/pull/14' }, { rel: 'preview', url: 'https://example.com/preview/14' }] });
   for (const scheme of ['light', 'dark']) {
     const ctx = await browser.newContext({ viewport: { width: 360, height: 760 }, colorScheme: scheme, isMobile: true, hasTouch: true, deviceScaleFactor: SHOTS ? 2 : 1 });
     const page = await ctx.newPage();

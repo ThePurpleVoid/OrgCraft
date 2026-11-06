@@ -139,7 +139,7 @@ export function createStudio({ root, env = process.env }) {
       }
       // The chat with the chief of staff. The page refreshes it when the board stream says something changed.
       if (req.method === 'GET' && url.pathname === '/v1/team/chat') {
-        if (!chat.connected) return send(res, 200, { connected: false, events: [] });
+        if (!chat.connected) return send(res, 200, { connected: false, items: [] });
         return relay(res, async () => ({ connected: true, team: chat.team, ...(await chat.chat({ before: url.searchParams.get('before') ?? undefined })) }));
       }
       if (req.method === 'GET' && url.pathname === '/v1/team/run') {
@@ -173,12 +173,16 @@ export function createStudio({ root, env = process.env }) {
           if (!text.trim()) throw new HttpError(400, 'say something');
           if (text.length > 20_000) throw new HttpError(413, 'a message is at most 20,000 characters');
           // Verbatim: the text goes on exactly as typed, untrimmed (the dilution rule).
-          return relay(res, () => chat.say({ text, clientId: typeof input.clientId === 'string' ? input.clientId.slice(0, 100) : undefined, replyTo: input.replyTo }));
+          return relay(res, () => chat.say({ text, clientId: typeof input.clientId === 'string' ? input.clientId.slice(0, 80) : undefined, replyTo: input.replyTo }));
         }
         const card = /^\/v1\/team\/cards\/([^/]+)$/.exec(url.pathname);
         if (card) return relay(res, () => chat.answer({ card: decodeURIComponent(card[1]), kind: input.kind, subject: input.subject, option: input.option, version: input.version, key: input.key }));
         const action = /^\/v1\/team\/run\/(pause|resume|stop)$/.exec(url.pathname);
-        if (action) return relay(res, () => chat.control(action[1], input.key));
+        if (action) return relay(res, () => chat.control(action[1], input.key, input.run));
+        if (url.pathname === '/v1/team/step-up') {
+          if (typeof input.secret !== 'string' || !input.secret) throw new HttpError(400, 'send the secret');
+          return relay(res, () => chat.stepUp(input.secret));
+        }
         throw new HttpError(404, 'no such endpoint');
       }
       if (req.method === 'GET' || req.method === 'HEAD') {

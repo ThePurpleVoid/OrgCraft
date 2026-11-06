@@ -6,7 +6,15 @@
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const human = (slug) => { const s = String(slug ?? '').replace(/[-_]+/g, ' ').trim(); return s ? s[0].toUpperCase() + s.slice(1) : 'Someone'; };
-const newId = () => (crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+/** A ULID: what the contract asks clients to use for a message's clientId (sortable, unique without a server). */
+export function ulid(now = Date.now()) {
+  const A = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  let t = '', n = now;
+  for (let i = 0; i < 10; i++) { t = A[n % 32] + t; n = Math.floor(n / 32); }
+  const r = crypto.getRandomValues(new Uint8Array(16));
+  return t + Array.from(r, (b) => A[b % 32]).join('');
+}
+const newId = () => ulid();
 /** Names for the link relations cards use most; any other relation shows as its own words. */
 const LINKS = { pr: 'Pull request', preview: 'Preview', evidence: 'Evidence', issue: 'Issue', log: 'Log', diff: 'Changes' };
 const safeUrl = (u) => (/^https?:\/\//i.test(String(u ?? '')) ? String(u) : null);
@@ -45,12 +53,22 @@ function speaker(e) {
   return kind === 'person' || kind === 'member' ? { me: true, name: 'You' } : { me: false, name: human(id) };
 }
 
+const by = (e) => { const b = e.data?.by; const n = typeof b === 'object' ? b?.name ?? b?.id : b; return n ? ` by ${n}` : ''; };
+/** Run and budget events, as one line each in the chat. */
+const TIMELINE = {
+  'run.started': (e) => `The team started a run${by(e)}`,
+  'run.paused': (e) => `The run was paused${by(e)}${e.data?.reason ? `: ${e.data.reason}` : ''}`,
+  'run.resumed': (e) => `The run resumed${by(e)}`,
+  'run.stopped': (e) => `The run stopped${by(e)}${e.data?.reason ? `: ${e.data.reason}` : ''}`,
+  'budget.warned': () => 'Most of today\'s budget is spent',
+  'budget.exhausted': () => 'Today\'s budget is spent, so the team is paused',
+};
 const subjectId = (subject) => String(subject ?? '').split('/').slice(1).join('/');
 
 /** A card from its event. Cards the control plane sends whole (data.card, or the response's cards) win. */
 function cardFrom(e) {
   if (e.data?.card && typeof e.data.card === 'object') return e.data.card;
-  const d = e.data ?? {};
+  const d = { ...(e.data ?? {}), ...(typeof e.data?.card === 'string' ? { cardId: e.data.card } : {}) };
   if (e.type === 'approval.requested') {
     return {
       id: d.cardId || subjectId(e.subject) || e.id, kind: 'approval', subject: e.subject, version: d.version ?? 1,
@@ -68,7 +86,7 @@ export function createChat({ root, onOpen } = {}) {
   const st = {
     connected: null, error: null, events: [], next: null, cards: new Map(), answers: new Map(), pending: [],
     notes: new Map(), // card id -> note shown above it (changed, step-up)
-    run: null, summary: null, busy: false, loaded: false, es: null, team: null,
+    run: null, cost: null, summary: null, busy: false, loaded: false, es: null, team: null,
     older: [], local: new Set(), // pages fetched with 'Show earlier'; events this page posted
 
   };
@@ -112,6 +130,7 @@ export function createChat({ root, onOpen } = {}) {
     return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}" data-card-id="${esc(card.id)}">
       <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtTime(card.expires))}` : ''}</div>
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
+      ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="Admin token" placeholder="Admin token" required><button type="submit" class="primary">Confirm</button></form>` : ''}
       <h3>${esc(card.title)}</h3>
       ${card.body ? `<div class="md">${md(card.body)}</div>` : ''}
       ${card.recommendation?.why && !answered ? `<p class="muted why">${esc(card.recommendation.why)}</p>` : ''}
@@ -137,7 +156,11 @@ export function createChat({ root, onOpen } = {}) {
     }
     text.disabled = false; $('#chat-send', root).disabled = false;
     const answered = new Map(); // subject -> the answer event
-    for (const e of st.events) if (/^(decision\.answered|approval\.decided)$/.test(e.type) && e.subject) answered.set(e.subject, e);
+    for (const e of st.events) {
+      if (!/^(decision\.answered|approval\.decided)$/.test(e.type)) continue;
+      if (e.subject) answered.set(e.subject, e);
+      if (typeof e.data?.card === 'string') answered.set(e.data.card, e);
+    }
     const seen = new Set();
     let html = st.next ? '<p class="older"><button type="button" id="chat-older">Show earlier messages</button></p>' : '';
     if (!st.loaded) html += '<p class="muted chat-empty">Loading the chat…</p>';
@@ -151,9 +174,11 @@ export function createChat({ root, onOpen } = {}) {
       } else if (e.type === 'decision.requested' || e.type === 'approval.requested') {
         const base = cardFrom(e);
         const card = st.cards.get(base.id) ?? base;
-        html += `<div class="msg them"><div class="who muted">${esc(human(e.actor?.id))} · ${esc(fmtTime(e.time))}</div>${cardHtml(card, answered.has(e.subject ?? card.subject) ? answerText(answered.get(e.subject ?? card.subject), card) : st.answers.get(card.id))}</div>`;
-      } else if (/^(decision\.answered|approval\.decided)$/.test(e.type)) {
-        // shown on its card
+        html += `<div class="msg them"><div class="who muted">${esc(human(e.actor?.id))} · ${esc(fmtTime(e.time))}</div>${cardHtml(card, (() => { const a = answered.get(card.id) ?? answered.get(e.subject ?? card.subject); return a ? answerText(a, card) : st.answers.get(card.id); })())}</div>`;
+      } else if (/^(decision\.answered|approval\.decided|card\.updated|usage\.recorded)$/.test(e.type)) {
+        // shown on its card, or in the cost line
+      } else if (TIMELINE[e.type]) {
+        html += `<p class="timeline muted">${esc(TIMELINE[e.type](e))} · ${esc(fmtTime(e.time))}</p>`;
       } else {
         html += `<p class="timeline muted">${esc(human(e.actor?.id))} · ${esc(e.type)} · ${esc(fmtTime(e.time))}</p>`;
       }
@@ -171,16 +196,17 @@ export function createChat({ root, onOpen } = {}) {
 
   function renderRun() {
     const s = st.summary, state = st.run?.state ?? s?.run ?? null;
+    const c = st.cost ?? s?.cost;
     $('#chat-where', root).textContent = st.team ? `· ${st.team}` : '';
     const pill = $('#run-state', root);
     pill.textContent = state ? human(state) : st.connected === false ? 'Not connected' : 'Not running';
     pill.className = `pill ${state === 'running' ? 'ok' : state === 'paused' ? 'warn' : ''}`;
-    const c = s?.cost;
     const cost = $('#cost', root);
     if (c && typeof c.today === 'number') {
       const pct = c.capPerDay ? Math.min(100, Math.round((c.today / c.capPerDay) * 100)) : null;
       cost.innerHTML = `Today ${esc(fmtMoney(c.today, c.currency))}${c.capPerDay ? ` of ${esc(fmtMoney(c.capPerDay, c.currency))}` : ', no daily cap'}${pct !== null ? `<span class="meter${pct >= 80 ? ' high' : ''}" aria-hidden="true"><span style="width:${pct}%"></span></span>` : ''}`;
-      cost.title = c.capPerDay ? `${pct}% of today's cap` : '';
+      cost.title = c.capPerDay ? `${pct}% of today's cap${c.state === 'exhausted' ? ': the cap is reached' : ''}` : '';
+      cost.classList.toggle('over', c.state === 'exhausted');
     } else cost.textContent = '';
     const pause = $('#run-pause', root);
     pause.textContent = state === 'paused' ? 'Resume' : 'Pause';
@@ -196,21 +222,27 @@ export function createChat({ root, onOpen } = {}) {
     if (!r.ok) { st.error = r.data.error ?? `HTTP ${r.status}`; return render(); }
     st.error = null;
     st.team = r.data.team;
-    const latest = r.data.events ?? [];
+    const latest = r.data.items ?? r.data.events ?? [];
     const ids = new Set(latest.map((e) => e.id));
     // Messages sent from this page that the page has not seen in a fetch yet stay until it does.
     const mine = st.events.filter((e) => !ids.has(e.id) && !st.older.some((o) => o.id === e.id) && st.local.has(e.id));
     st.events = [...st.older.filter((e) => !ids.has(e.id)), ...latest, ...mine];
     if (!st.older.length) st.next = r.data.next ?? null;
-    for (const c of r.data.cards ?? []) if (!st.cards.has(c.id) || (st.cards.get(c.id).version ?? 0) <= (c.version ?? 0)) st.cards.set(c.id, c);
-    render();
-    loadRun();
+    takeCards(Array.isArray(r.data.cards) ? r.data.cards : Object.values(r.data.cards ?? {}));
+    takeCards(st.events.filter((e) => e.type === 'card.updated').map((e) => e.data?.card));
+    if ('run' in r.data || 'cost' in r.data) { st.run = r.data.run ?? null; st.cost = r.data.cost ?? null; render(); }
+    else { render(); loadRun(); }
+  }
+
+  /** Keeps the newest version of each card (card.updated carries the whole card). */
+  function takeCards(list) {
+    for (const c of list) if (c?.id && (!st.cards.has(c.id) || (st.cards.get(c.id).version ?? 0) <= (c.version ?? 0))) st.cards.set(c.id, c);
   }
 
   async function loadOlder() {
     const r = await api(`/v1/team/chat?before=${encodeURIComponent(st.next)}`);
     if (!r.ok) return;
-    const page = (r.data.events ?? []).filter((e) => !st.events.some((x) => x.id === e.id));
+    const page = (r.data.items ?? r.data.events ?? []).filter((e) => !st.events.some((x) => x.id === e.id));
     st.older = [...page, ...st.older];
     st.events = [...page, ...st.events];
     st.next = r.data.next ?? null;
@@ -232,19 +264,24 @@ export function createChat({ root, onOpen } = {}) {
     render();
   }
 
-  async function answer(cardId, option) {
+  async function answer(cardId, option, secret) {
     const ev = st.events.find((e) => /\.requested$/.test(e.type) && cardFrom(e).id === cardId);
     const card = st.cards.get(cardId) ?? (ev && cardFrom(ev));
     if (!card) return;
     st.notes.delete(cardId);
     for (const b of log.querySelectorAll(`[data-card="${CSS.escape(cardId)}"]`)) b.disabled = true;
+    if (secret) {
+      const su = await api('/v1/team/step-up', { secret });
+      if (!su.ok) { st.notes.set(cardId, { kind: 'stepup', option, text: su.status === 401 ? 'That token was not accepted. Try again.' : su.data.error ?? `HTTP ${su.status}` }); return render(); }
+    }
     const r = await api(`/v1/team/cards/${encodeURIComponent(cardId)}`, { kind: card.kind, subject: card.subject ?? ev?.subject, option, version: card.version, key: newId() });
     if (r.status === 409 && r.data.card) {
       // Someone or something changed the card first. Show what it says now; nobody approves what they did not see.
       st.cards.set(cardId, r.data.card);
       st.notes.set(cardId, { kind: 'changed', text: 'This card changed before your answer arrived, so nothing was sent. Here is what it says now; answer again if it still applies.' });
     } else if (r.status === 401 && r.data.type === 'step-up-required') {
-      st.notes.set(cardId, { kind: 'error', text: 'Approving needs a fresh sign-in. Sign in again, then answer.' });
+      // Until sign-in lands (M4), the proof is the admin token typed again; the Studio server keeps the step-up token.
+      st.notes.set(cardId, { kind: 'stepup', option, text: 'Confirm it is you: type the admin token to answer. It is checked by the control plane and not stored in this page.' });
     } else if (!r.ok) {
       st.notes.set(cardId, { kind: 'error', text: r.data.error ?? `HTTP ${r.status}` });
     } else {
@@ -258,11 +295,10 @@ export function createChat({ root, onOpen } = {}) {
   async function control(action) {
     if (action === 'stop' && !confirm('Stop the run? Every role session stops after its current step. You can start a new run later.')) return;
     st.busy = true; renderRun();
-    const r = await api(`/v1/team/run/${action}`, { key: newId() });
+    const r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
     st.busy = false;
     if (!r.ok) st.error = r.data.error ?? `HTTP ${r.status}`;
-    await loadRun();
-    render();
+    await load();
   }
 
   $('#chat-form', root).addEventListener('submit', (e) => {
@@ -276,6 +312,14 @@ export function createChat({ root, onOpen } = {}) {
   });
   text.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#chat-form', root).requestSubmit(); } });
   text.addEventListener('input', () => { text.style.height = ''; text.style.height = `${Math.min(text.scrollHeight, 200)}px`; });
+  log.addEventListener('submit', (e) => {
+    const f = e.target.closest('form[data-stepup]');
+    if (!f) return;
+    e.preventDefault();
+    const secret = f.querySelector('input').value;
+    f.querySelector('input').value = '';
+    answer(f.dataset.stepup, f.dataset.option, secret);
+  });
   log.addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
