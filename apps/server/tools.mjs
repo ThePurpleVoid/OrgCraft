@@ -2,7 +2,7 @@
 // first for quick feedback (apps/runner/tools.mjs); this is the authority (m3-design section 3), so it shares no
 // code with the runner and needs no dependency. Pure: no I/O. Returns { input } (cleaned) or { problems }.
 
-export const TOOL_NAMES = ['report', 'handoff', 'bug', 'signoff', 'blocked', 'ask_owner', 'request_approval', 'meeting_reply', 'meeting_close', 'meeting_start'];
+export const TOOL_NAMES = ['report', 'handoff', 'bug', 'signoff', 'blocked', 'ask_owner', 'request_approval', 'meeting_reply', 'meeting_close', 'meeting_start', 'ready_to_try'];
 const MEETING = /^mtg_[A-Za-z0-9_-]{1,60}$/;
 const MAX = 4000;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -133,6 +133,11 @@ export function checkTool(name, input, ctx) {
       }
       break;
     }
+    case 'ready_to_try':
+      // Demo step 12: only the front door tells the owner. The server checks the PR merged and adds the preview itself.
+      if (!ctx.frontDoor) return { problems: [`Only ${ctx.frontDoorRole ?? 'the front door'} tells the owner a change is ready to try: send it a handoff with the PR`], forbidden: true };
+      out = { pr: f.int('pr', { need: true }), title: f.text('title', { need: true, max: 120 }), summary: f.text('summary', { max: 2000 }), issue: f.int('issue'), task: f.text('task', { max: 200 }) };
+      break;
     case 'meeting_reply':
       out = { meeting: f.text('meeting', { need: true, max: 80 }), text: f.text('text', { need: true, max: 8000 }) };
       if (out.meeting && !MEETING.test(out.meeting)) problems.push('meeting is the meeting id from your turn, such as mtg_01…');

@@ -523,6 +523,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         const body = await readJson(req, 2 * 1024 * 1024);
         const events = Array.isArray(body?.events) ? body.events : null;
         if (!events || events.length > 500) throw new Problem(400, 'send { events: [...] }, at most 500');
+        // A merge and its preview are the runner's word only (G-12 security): a Ready to try card links nothing else.
+        if (events.some((e) => /^proposal\./.test(String(e?.type ?? '')))) throw new Problem(403, 'proposal events come only from a runner, over its WebSocket', { type: 'forbidden' });
         const stored = await did(m3.appendEvents(t, team, events));
         const sent = new Set(events.map((e) => e?.id));
         const mine = stored.filter(({ id }) => sent.has(id));

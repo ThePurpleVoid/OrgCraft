@@ -142,3 +142,19 @@ Only the team's **front door** may call it. Any other role is refused with 403: 
 | `cap` | no | `{ amount, currency }`: whole minor units in the budget's currency, **at most the team's meeting cap** (`meetingCap`, or a tenth of `perDay` when that is null). Without it the meeting cap applies |
 
 Refused with 422 when there is no run, the cap is above the meeting cap, or today's budget (less what open meetings still hold) is below the cap. Only a person raises the meeting cap, with step-up. Emits `meeting.opened` with `adhoc: true` and the first `meeting.turn`. Result: `{ "meeting": "mtg_…", "attendees": [...], "cap": <minor units>, "currency": "USD" }`.
+
+## `ready_to_try`
+
+Only the front door, after a pull request merged with an approval (demo step 12: "Dark mode is Ready to try", with the preview link). Any other role sends the front door a `handoff` with the PR instead.
+
+| Field | Required | Check |
+| --- | --- | --- |
+| `pr` | yes | the pull request number; refused (`422`) unless this team has a `proposal.accepted` for it |
+| `title` | yes | at most 120 characters, the change in the owner's words |
+| `summary` | no | at most 2,000 characters, the card's Markdown subset |
+| `issue`, `task` | no | as in the rules |
+
+The model never supplies a link. The pull request URL and the merge commit come from `proposal.accepted`, and the preview from the latest `proposal.previewed` for that PR, which the runner sends once the deployment is up (events.md). Without one yet, the card goes out at once and says the preview link follows; when it arrives the server adds it to the open card and emits `ready.previewed`. Telling the owner again about the same PR supersedes the earlier card.
+
+Emits `ready.posted`, a `chat.message` from the front door that links the card, and `card.updated` with a `ready` card: links to the PR and the preview, `data` { `pr`, `commit`, `preview`, `environment` }, one option "Got it" (no step-up), and an expiry after 7 days. Nothing waits on the answer, so it wakes nobody. Result: `{ "card": "<id>", "event": "<id>", "preview": "<url>" | null }`.
+

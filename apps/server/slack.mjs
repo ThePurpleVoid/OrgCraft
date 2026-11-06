@@ -120,6 +120,12 @@ export function composeSlack(event, { teamName, where = 'dm', titles = {} } = {}
       : [`*${mrk(role)} is waiting on a decision from the owner.*`, `"${question}"`],
     'Answer in the Studio', `/teams/${at}/board?role=${encodeURIComponent(event.actor?.id ?? '')}`);
   }
+  if (kind === 'ready') {
+    const title = mrk(outside(d.title ?? 'A change'));
+    return out(`${team}: ready to try`, [`*Ready to try:* "${title}"`, d.pr ? `Merged in pull request #${d.pr}.` : null,
+      d.preview ? 'The preview is up: open it from the Studio.' : 'The preview link appears in the Studio when the deployment is up.'],
+    'Open in the Studio', `/teams/${at}/inbox${d.cardId ? `?card=${encodeURIComponent(d.cardId)}` : ''}`);
+  }
   // minutes
   const decisions = Array.isArray(d.decisions) ? d.decisions : [], actions = Array.isArray(d.actions) ? d.actions : [];
   const date = String(d.date ?? event.time ?? '').slice(0, 10);

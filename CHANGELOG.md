@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **"Ready to try" with the preview link (demo step 12, G-12; shape agreed with ai-engineer).** The front door has a new team tool, `ready_to_try` { pr, title, summary }, only for a pull request this team merged with an approval (`proposal.accepted`). It posts a `ready` card (PR, merge commit, preview link, one "Got it" option, 7 days) to the inbox, a chat message from the front door, and `ready.posted`, which the new email and Slack kind "Ready to try" (`ready`, off until a person turns it on) follows. The preview comes only from the runner: the new `proposal.previewed` event (runner key; https, successful deployments only, stored once per deployment) is attached to the PR's open card and announced with `ready.previewed`, so the card can go out before the deployment is up. No link on the card is written by the model. "Got it" wakes nobody.
 ## 0.17.1
 
 - **Contracts: ad hoc meetings** (the architect's fold of #124). team-tools.md adds `meeting_start` (front door only, cap at most the meeting cap). events.md adds `adhoc` on `meeting.opened` and `meetingCap` on `budget.updated`. m3-design.md adds the ad hoc flow and the rule that open meetings hold their caps against today's budget. All additive.

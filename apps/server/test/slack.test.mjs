@@ -47,6 +47,7 @@ const SAMPLES = {
   budget100: ev('budget.exhausted', { scope: 'day', day: '2026-11-06', spent: 500, cap: 500, currency: 'USD', cardId: 'card_2' }),
   blocked: ev('message.blocked', { to: 'chief-of-staff', task: 'Footer', detail: 'Which name goes in the footer: <!channel> "Acme Inc." or "Acme Labs"?', recommendation: 'Acme Inc., as on the invoices' }, 'qa-web'),
   minutes: ev('meeting.minutes', { meeting: 'Weekly planning', meetingId: 'mtg_1', date: '2026-11-06', decisions: [{ text: 'Ship the footer on Friday' }, { text: 'Hold the pricing page' }], actions: [{ to: 'web-dev', task: 'a' }, { to: 'cto', task: 'b' }, { to: 'cpo', task: 'c' }], needsYou: 1 }),
+  ready: ev('ready.posted', { pr: 7, title: 'Dark mode', commit: 'abcdef1', preview: 'https://shop-git-dark.example.app', cardId: 'card_r1' }),
 };
 const again = (e, tag) => ({ ...e, id: `${e.id}_${tag}` });
 
