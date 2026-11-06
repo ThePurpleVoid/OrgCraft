@@ -113,6 +113,14 @@ test('every kind, DM and channel: fallback text, at most four lines, one link bu
   assert.equal(composeSlack(SAMPLES.budget100, { teamName: 'Shop' }).fallback, 'Shop: daily budget reached, new work paused');
   assert.deepEqual(composeSlack(SAMPLES.minutes, { teamName: 'Shop' }).lines, ['*Minutes: Weekly planning (2026-11-06)*', '2 decisions and 3 action items.', '"Ship the footer on Friday"', '1 item needs you.']);
   assert.equal(composeSlack(SAMPLES.minutes, { teamName: 'Shop' }).fallback, 'Shop: minutes from Weekly planning');
+  // The CPO's copy (docs/team/lanes/cpo.md, "Copy: Ready to try notification"), the same in a DM and a channel.
+  for (const where of ['dm', 'channel']) {
+    const r = composeSlack(SAMPLES.ready, { teamName: 'Shop', where });
+    assert.equal(r.fallback, 'Shop: Dark mode is ready to try');
+    assert.deepEqual(r.lines, ['*"Dark mode" is ready to try.*', "It's done and passed its checks."]);
+    assert.equal(r.button.label, 'See the preview in the Studio');
+  }
+  assert.equal(composeSlack({ ...SAMPLES.ready, data: { ...SAMPLES.ready.data, preview: undefined } }, { teamName: 'Shop' }).button.label, 'Try it in the Studio');
   assert.equal(composeSlack(ev('report.status', { status: 'working' })), null, 'no message for other events');
   // Outside text: quoted, cut to 120 characters, and never a mention.
   const quoted = a.lines[1];

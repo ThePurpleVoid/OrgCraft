@@ -20,6 +20,8 @@ import Provider, { interactionPolicy } from 'oidc-provider';
 import { safeReturn } from '../studio/public/auth.js';
 import { seal, unseal } from './vault.mjs';
 import { Problem } from './store.mjs';
+import { createHosts, HOST_ID } from './hosts.mjs';
+import { createInstallations } from './github.mjs';
 
 export { safeReturn };
 export const WEB_CLIENT = 'agent-team-web';
@@ -42,6 +44,13 @@ const rid = (p, n = 18) => `${p}${randomBytes(n).toString('base64url')}`;
 const same = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && timingSafeEqual(x, y); };
 const epoch = () => Math.floor(Date.now() / 1000);
 
+/** A small urlencoded form body (the host consent page), at most 4 KiB. */
+async function readForm(req) {
+  let n = 0; const chunks = [];
+  for await (const c of req) { n += c.length; if (n > 4096) throw new Problem(413, 'form too large'); chunks.push(c); }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 /** The request's cookies; the first of a repeated name wins. */
 export function cookies(req) {
   const out = new Map();
@@ -56,7 +65,7 @@ export function cookies(req) {
 const setCookie = (name, value, maxAge) => `${name}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 
 /** oidc-provider's storage: access and refresh tokens in oauth_tokens, everything else in oidc_store, all by hash. */
-function adapterFor(db) {
+function adapterFor(db, hosts = null) {
   const TOKENS = { AccessToken: 'access', RefreshToken: 'refresh' };
   return class Adapter {
     constructor(name) { this.name = name; this.kind = TOKENS[name]; }
@@ -75,6 +84,8 @@ function adapterFor(db) {
     }
 
     async find(id) {
+      // A host (studio-embed.md section 6) is a client registered in host_clients, never in the library's own store.
+      if (this.name === 'Client' && HOST_ID.test(String(id))) return hosts ? hosts.clientMetadata(id) : undefined;
       const [r] = this.kind
         ? await db.system('select payload, used_at as consumed from oauth_tokens where hash = $1 and revoked_at is null and expires_at > now()', [sha(id)])
         : await db.system('select payload, consumed_at as consumed from oidc_store where model = $1 and id_hash = $2 and (expires_at is null or expires_at > now())', [this.name, sha(id)]);
@@ -177,6 +188,28 @@ export function githubUpstream({ clientId, clientSecret, url = 'https://github.c
       } catch { /* no email permission: invitations by user id still work */ }
       return { provider: 'github', subject: String(u.id), login: u.login.slice(0, 100), name: typeof u.name === 'string' ? u.name.slice(0, 200) : null, email };
     },
+    /**
+     * The install callback's code (github.mjs): who the person is, `get(path)` as them on the API, and `drop()`, which
+     * revokes the user token. The token never leaves this object.
+     */
+    async installer({ code }) {
+      if (typeof code !== 'string' || !code || code.length > 200) throw new Error('no code');
+      const r = await fetch(`${base}/login/oauth/access_token`, { method: 'POST', signal: AbortSignal.timeout(10_000), headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code }) });
+      const tok = await r.json().catch(() => ({}));
+      if (!r.ok || typeof tok.access_token !== 'string') throw new Error('GitHub did not accept the code');
+      const token = tok.access_token;
+      const headers = { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'agent-team-server' };
+      const get = async (path) => {
+        const res = await fetch(`${api}${path}`, { headers, signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) return null;
+        return res.json().catch(() => null);
+      };
+      const u = await get('/user');
+      if (!u || !Number.isSafeInteger(u.id) || u.id <= 0 || typeof u.login !== 'string') throw new Error('GitHub did not say who installed');
+      const drop = () => fetch(`${api}/applications/${encodeURIComponent(clientId)}/token`, { method: 'DELETE', signal: AbortSignal.timeout(10_000),
+        headers: { authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'agent-team-server' }, body: JSON.stringify({ access_token: token }) });
+      return { subject: String(u.id), login: u.login.slice(0, 100), get, drop };
+    },
   };
 }
 
@@ -239,7 +272,7 @@ function limiter(now) {
  * floods are for the host's concurrency limits and the edge. `configure(config)` returns the library configuration
  * to use instead: only the OpenID conformance harness (conformance/op.mjs) passes it; the server never does.
  */
-export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), proxy = {}, clientIp = (req) => callerIp(req, proxy), configure = null }) {
+export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), proxy = {}, clientIp = (req) => callerIp(req, proxy), configure = null, githubApp = {} }) {
   const issuer = new URL(publicUrl);
   if (issuer.protocol !== 'https:') throw new Error('sign-in needs an https AGENT_TEAM_PUBLIC_URL (the cookie is Secure and __Host-)');
   if (issuer.pathname !== '/' || issuer.search || issuer.hash) throw new Error('AGENT_TEAM_PUBLIC_URL must be an origin with no path for sign-in');
@@ -248,6 +281,9 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
   const webRedirect = `${origin}/oauth/web/done`;
   const githubRedirect = `${origin}/oauth/callback/github`;
   const limited = limiter(now);
+  const hosts = createHosts({ db, key, tenant, publicUrl: origin, now });
+  // GitHub App installations (S9): proven through the install callback, which GitHub sends to the same callback URL.
+  const installations = createInstallations({ db, key, tenant, upstream, appSlug: githubApp.slug ?? null, webhookSecret: githubApp.webhookSecret ?? null, url: githubApp.url, now });
 
   async function audit(person, action, detail = {}) {
     await db.system('insert into identity_audit(person, action, detail) values ($1, $2, $3)', [person, action, detail]);
@@ -267,6 +303,9 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
 
   async function loadExistingGrant(ctx) {
     const { oidc } = ctx;
+    // A host is a customer's own site (studio-embed.md section 6): the person says yes once on a consent page, and
+    // until then there is no grant, so prompt=none answers consent_required (security review H2).
+    if (HOST_ID.test(oidc.client.clientId) && !(await hosts.linked(oidc.client.clientId, oidc.session.accountId))) return undefined;
     const grantId = oidc.result?.consent?.grantId || oidc.session.grantIdFor(oidc.client.clientId);
     if (grantId) {
       const found = await oidc.provider.Grant.find(grantId);
@@ -291,7 +330,7 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
   };
   const makeProvider = (keys) => {
     const config = {
-      adapter: adapterFor(db),
+      adapter: adapterFor(db, hosts),
       clients: [web, ...natives],
       // ES256 for our own clients (the issuer's P-256 key, section 2, step 4); RS256 is offered, never the default.
       clientDefaults: { id_token_signed_response_alg: 'ES256', grant_types: ['authorization_code'], response_types: ['code'] },
@@ -433,12 +472,62 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     req.headers.host = issuer.host;
     const interaction = await provider.interactionDetails(req, res).catch(() => null);
     if (!interaction || interaction.uid !== uid || interaction.prompt.name !== 'consent' || !interaction.session?.accountId) return toSignIn(res, 'expired');
+    if (HOST_ID.test(interaction.params.client_id)) return hostConsent(req, res, interaction);
+    if (req.method !== 'GET') return toSignIn(res, 'expired');
     const { details } = interaction.prompt;
     const grant = (interaction.grantId && await provider.Grant.find(interaction.grantId))
       || new provider.Grant({ accountId: interaction.session.accountId, clientId: interaction.params.client_id });
     if (details.missingOIDCScope) grant.addOIDCScope(details.missingOIDCScope.join(' '));
     if (details.missingOIDCClaims) grant.addOIDCClaims(details.missingOIDCClaims);
     return provider.interactionFinished(req, res, { consent: { grantId: await grant.save() } }, { mergeWithLastSubmission: true });
+  }
+
+  /**
+   * The consent page for a host (H2): GET shows who is asking and what it can do; the form POSTs back here, from this
+   * origin only, with the interaction cookie (SameSite=Lax, so another site cannot post it). Allow links the host to
+   * the person and finishes with the grant; deny finishes with access_denied.
+   */
+  async function hostConsent(req, res, interaction) {
+    const host = await hosts.describe(interaction.params.client_id);
+    if (!host) return toSignIn(res, 'expired');
+    const page = `/oauth/interaction/${interaction.uid}/consent`;
+    if (req.method === 'GET') {
+      const esc = (x) => String(x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY',
+        'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'" });
+      return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Allow ${esc(host.name)}?</title>`
+        + '<body style="font-family:system-ui,sans-serif;max-width:480px;margin:48px auto;padding:0 16px;line-height:1.5">'
+        + `<h1 style="font-size:22px">Allow ${esc(host.name)} to use Agent Team for you?</h1>`
+        + `<p>It is at ${host.origins.map((o) => `<b>${esc(o)}</b>`).join(', ')}. It will see your teams, chat, start and stop runs, and answer decision cards for you. It cannot approve anything, change members, budgets or keys, or see your passkeys.</p>`
+        + '<p>You can unlink it any time from your account.</p>'
+        + `<form method="post" action="${esc(page)}"><button name="decision" value="allow" style="padding:10px 16px">Allow</button> <button name="decision" value="deny" style="padding:10px 16px">Don't allow</button></form>`);
+    }
+    // The form's own origin only (a browser always sends Origin on a form POST).
+    if (req.headers.origin !== origin) return toSignIn(res, 'expired');
+    const body = new URLSearchParams(await readForm(req));
+    const accountId = interaction.session.accountId;
+    if (body.get('decision') !== 'allow') {
+      await audit(accountId, 'host.denied', { host: host.id });
+      return provider.interactionFinished(req, res, { error: 'access_denied', error_description: 'the person did not allow this site' }, { mergeWithLastSubmission: false });
+    }
+    await hosts.link(host.id, accountId);
+    await audit(accountId, 'host.linked', { host: host.id, name: host.name });
+    const { details } = interaction.prompt;
+    const grant = (interaction.grantId && await provider.Grant.find(interaction.grantId)) || new provider.Grant({ accountId, clientId: host.id });
+    if (details.missingOIDCScope) grant.addOIDCScope(details.missingOIDCScope.join(' '));
+    if (details.missingOIDCClaims) grant.addOIDCClaims(details.missingOIDCClaims);
+    return provider.interactionFinished(req, res, { consent: { grantId: await grant.save() } }, { mergeWithLastSubmission: true });
+  }
+
+  /** GitHub's install callback (github.mjs): a plain page that says what happened, and a link back. */
+  async function installDone(res, url) {
+    const r = await installations.callback(url.searchParams);
+    const esc = (x) => String(x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    res.writeHead(r.ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY',
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'" });
+    return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${r.ok ? 'GitHub connected' : 'GitHub not connected'}</title>`
+      + '<body style="font-family:system-ui,sans-serif;max-width:480px;margin:48px auto;padding:0 16px;line-height:1.5">'
+      + `<h1 style="font-size:22px">${r.ok ? 'GitHub connected' : 'GitHub not connected'}</h1><p>${esc(r.message)}</p><p><a href="/">Back to Agent Team</a></p>`);
   }
 
   async function upstreamDone(req, res, url) {
@@ -525,7 +614,11 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     const inter = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
     if (inter && req.method === 'GET') { await upstreamStart(req, res, inter[1]); return true; }
     const consent = /^\/oauth\/interaction\/([^/]+)\/consent$/.exec(p);
-    if (consent && req.method === 'GET') { await consentGranted(req, res, consent[1]); return true; }
+    if (consent && (req.method === 'GET' || req.method === 'POST')) {
+      if (req.method === 'POST' && !/^application\/x-www-form-urlencoded\b/i.test(req.headers['content-type'] ?? '')) throw new Problem(415, 'send the consent form');
+      await consentGranted(req, res, consent[1]); return true;
+    }
+    if (p === '/oauth/callback/github' && req.method === 'GET' && url.searchParams.has('setup_action')) { await installDone(res, url); return true; }
     if (p === '/oauth/callback/github' && req.method === 'GET') { await upstreamDone(req, res, url); return true; }
     if (p === '/oauth/web/done' && req.method === 'GET') { await webDone(req, res, url); return true; }
     if (p === '/oauth/revoke' && req.method === 'POST' && /^application\/json\b/i.test(req.headers['content-type'] ?? '')) { await signOut(req, res); return true; }
@@ -549,5 +642,5 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
   /** What the deploy smoke check reads (GET /v1/internal/caller): the caller as the limits see it, and the edge. */
   const caller = (req) => ({ ip: clientIp(req), edge: viaEdge(req, proxy) });
 
-  return { get provider() { return provider; }, caller, handle, sessionOf, workspaces, csrfOk, endSessions, sweep, origin, admit, lookup: (who) => upstream.lookup(who) };
+  return { get provider() { return provider; }, hosts, installations, caller, handle, sessionOf, workspaces, csrfOk, endSessions, sweep, origin, admit, lookup: (who) => upstream.lookup(who) };
 }

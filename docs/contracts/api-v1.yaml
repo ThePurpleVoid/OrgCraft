@@ -50,6 +50,12 @@ paths:
       tags: [teams]
       summary: The team, its live version (commit SHA), and its spec at that version as a TeamSpec
       responses: { "200": { $ref: "#/components/responses/Team" } }
+    put:
+      x-min-role: admin
+      tags: [teams]
+      summary: "Control plane: change the team's name or its GitHub repository (repo, owner/name, or null). The hosted Studio edits that repository only while its owner is an account the workspace proved (/github/installations). GET answers repo too"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { name: { type: string, maxLength: 100 }, repo: { type: [string, "null"], pattern: "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$" } } } } } }
+      responses: { "200": { description: "{ id, name, created_at, repo }" } }
   /teams/{team}/preview:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post:
@@ -106,8 +112,16 @@ paths:
     get:
       x-min-role: viewer
       tags: [events]
-      summary: Live events as server-sent events; resumes from Last-Event-ID
+      summary: "Live events as server-sent events; resumes from Last-Event-ID. With ?ticket= (a stream ticket) it needs no other credential, answers CORS for the minting host's origins only (never with credentials), and ends when the person leaves the workspace or the host is revoked"
+      parameters: [ { name: ticket, in: query, required: false, schema: { type: string }, description: "a stream ticket (single use, 60 seconds); keep it out of access logs" } ]
       responses: { "200": { description: text/event-stream of envelopes, content: { text/event-stream: {} } } }
+  /teams/{team}/stream-tickets:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: viewer
+      tags: [events]
+      summary: "A stream ticket (S8): single use, 60 seconds, read-only, for this team and the caller. A host's page opens the stream with it directly, because server-sent events cannot pass through a short-lived function. Needs sign-in on"
+      responses: { "201": { description: "{ ticket, url, expiresIn }" } }
   /teams/{team}/board:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
@@ -251,7 +265,7 @@ paths:
     post: { tags: [notifications], security: [], summary: "unsubscribe: turns off one kind for one team (also RFC 8058 one-click); resubscribe: Turn it back on", responses: { "200": { description: A page } } }
   /teams/{team}/slack:
     parameters: [ { $ref: "#/components/parameters/team" } ]
-    get: { x-min-role: viewer, tags: [notifications], summary: "Is Slack connected and working (health), the kinds, and the caller's own link", responses: { "200": { description: "{ connected, ready, canLink, health, kinds, me }" } } }
+    get: { x-min-role: viewer, tags: [notifications], summary: "Is Slack connected and working (health), the kinds, and the caller's own link", responses: { "200": { description: "{ connected, ready, canLink, health, kinds: [{ id, label, suggested, channelDefault }], me }: suggested kinds are ticked, not saved, the first time a person sees the DM switches" } } }
   /teams/{team}/slack/connect:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post: { x-min-role: viewer, tags: [notifications], summary: "Start Connect Slack: the Sign in with Slack URL (identity only), with a state bound to the caller and team for 10 minutes", responses: { "200": { description: "{ url }" }, "409": { description: Slack is not connected for this team } } }
@@ -393,6 +407,64 @@ paths:
       summary: Revoke a runner's key. Its connection and sessions end
       parameters: [ { name: runner, in: path, required: true, schema: { type: string } } ]
       responses: { "200": { description: Revoked } }
+  /hosts:
+    get:
+      x-min-role: admin
+      tags: [hosts]
+      summary: "Hosts: customers' own sites that mount the Studio and sign their users in here (studio-embed.md section 6). Needs sign-in on"
+      responses: { "200": { description: "{ hosts: [ { id, clientId, name, origins, redirectUris, createdBy, createdAt, revokedAt? } ] }" } }
+    post:
+      x-min-role: admin
+      tags: [hosts]
+      summary: "Register a host as a confidential OIDC client (client_secret_basic, PKCE S256, DPoP-bound tokens). The client secret is in this answer only. Needs step-up"
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name, origins, redirectUris], properties: { name: { type: string, maxLength: 100 }, origins: { type: array, minItems: 1, maxItems: 5, items: { type: string, description: "an https origin, no path" } }, redirectUris: { type: array, minItems: 1, maxItems: 5, items: { type: string, description: "https, on one of the origins, no fragment" } } } } } } }
+      responses: { "201": { description: "The host, with clientId, clientSecret (once), issuer, tokenAuth and dpop" }, "401": { description: "Step-up required (problem type step-up-required)" } }
+  /me/hosts:
+    get:
+      x-min-role: viewer
+      tags: [hosts]
+      summary: The sites I allowed on a host's consent page (studio-embed.md section 6)
+      responses: { "200": { description: "{ hosts: [ { id, name, origins, linkedAt } ] }" } }
+  /me/hosts/{host}:
+    delete:
+      x-min-role: viewer
+      tags: [hosts]
+      summary: Unlink a site. Its tokens for me end at once, and it must ask on the consent page again
+      parameters: [ { name: host, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: Unlinked } }
+  /hosts/{host}:
+    delete:
+      x-min-role: admin
+      tags: [hosts]
+      summary: Revoke a host. Every token it holds and every unused stream ticket it minted stop working at once
+      parameters: [ { name: host, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: Revoked } }
+  /github/installations:
+    get:
+      x-min-role: admin
+      tags: [github]
+      summary: "GitHub App installations this workspace proved it owns (studio-embed.md S9). Only these are used, by the hosted Studio and as repo.installations on session.start. Needs sign-in and GITHUB_APP_SLUG"
+      responses: { "200": { description: "{ installations: [ { id, account, accountType, provenBy, githubLogin, provenAt, method } ] }" } }
+    post:
+      x-min-role: admin
+      tags: [github]
+      summary: "Connect one: the app's install page with a signed, single-use, ten-minute state. GitHub sends the person back to /oauth/callback/github with a user code (the app must request user authorization during installation), and the binding is made only if GitHub says, as that person, that they are the GitHub user they sign in with, the installation is theirs to see and not suspended, they administer its account, and they can push to every repository it holds. A person's (not the admin token's). Needs step-up"
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      responses: { "201": { description: "{ url, expiresIn }" }, "401": { description: "Step-up required (problem type step-up-required)" } }
+  /github/installations/{installation}:
+    delete:
+      x-min-role: admin
+      tags: [github]
+      summary: Disconnect an installation. Connecting it again needs the proof again. Needs step-up
+      parameters: [ { name: installation, in: path, required: true, schema: { type: integer } }, { $ref: "#/components/parameters/stepUp" } ]
+      responses: { "200": { description: Disconnected } }
+  /github/webhook:
+    post:
+      tags: [github]
+      security: []
+      summary: "GitHub's webhook for the deployment's app, signed with GITHUB_WEBHOOK_SECRET (X-Hub-Signature-256). installation deleted or suspend disconnects it at once; installation_target renamed follows the new login. 404 when no secret is set"
+      responses: { "200": { description: "{ ok, unbound? , ignored? }" }, "401": { description: Bad signature } }
   /sessions/{session}/tools/{tool}:
     post:
       tags: [runs]

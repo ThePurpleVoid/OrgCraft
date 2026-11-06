@@ -21,6 +21,7 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeReturn } from '../../apps/studio/public/auth.js';
 import { KINDS, SUGGESTED } from '../../apps/server/email.mjs';
+import { CHANNEL_DEFAULT_KINDS } from '../../apps/server/slack.mjs';
 
 const PUBLIC = fileURLToPath(new URL('../../apps/studio/public/', import.meta.url));
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
@@ -55,6 +56,9 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
   const emails = []; // { id, team, person, email, verified, kinds, code, tries, createdAt }
   const codes = []; // { email, code }
   const mail = { sink: true }; // false: the team has no email sink yet, so no code is sent
+  // Slack (kit #110), in memory: the workspace connection, the people linked, the channels picked, and the
+  // states Connect Slack handed out (the "Slack" sign-in in a test comes back with one of them).
+  const slack = { connected: true, ready: true, canLink: true, failingSince: null, workspace: 'Acme', links: new Map(), channels: [], states: new Map(), user: { name: 'octo.cat', workspace: 'Acme' } };
   let origin = '';
 
   const server = createServer(async (req, res) => {
@@ -162,6 +166,81 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
         if (!verify && req.method === 'DELETE') { emails.splice(emails.indexOf(e), 1); return send(200, { ok: true }); }
       }
 
+      // The Slack API of kit #110, in memory, with apps/server/slack.mjs's paths, bodies and refusals.
+      const sl = /^\/v1\/teams\/([^/]+)\/slack(?:\/(connect|link|me|channels))?(?:\/([^/]+))?$/.exec(p);
+      if (sl) {
+        const [, team, what, cid] = sl;
+        if (!teams.has(team)) return problem(404, 'not-found', `no team ${team}`);
+        const admin = (who.workspaces ?? []).some((w) => w.role === 'owner' || w.role === 'admin');
+        const kindsOf = (body, fallback) => {
+          if (body?.kinds === undefined && fallback) return fallback;
+          const list = Array.isArray(body?.kinds) ? [...new Set(body.kinds.map(String))] : null;
+          return list && !list.some((k) => !KINDS[k]) ? list : null;
+        };
+        const linkView = (l) => (l ? { linked: true, id: l.id, name: l.name, kinds: l.kinds } : { linked: false, kinds: [] });
+        const mineLink = slack.links.get(`${team}:${who.id}`);
+        if (!what && req.method === 'GET') {
+          return send(200, {
+            connected: slack.connected, ready: slack.connected && slack.ready, canLink: slack.connected && slack.ready && slack.canLink,
+            health: !slack.connected ? null : slack.failingSince ? { status: 'failing', since: slack.failingSince, error: 'channel_not_found' } : { status: slack.ready ? 'working' : 'waiting for its token' },
+            kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label, suggested: SUGGESTED.includes(id), channelDefault: CHANNEL_DEFAULT_KINDS.includes(id) })),
+            me: linkView(mineLink),
+          });
+        }
+        if (what === 'connect' && req.method === 'POST') {
+          if (!slack.connected) return problem(409, 'conflict', "Slack isn't connected for this team yet. Ask an owner to add it.");
+          const state = rid('sls_');
+          slack.states.set(state, { team, person: who.id, expires: Date.now() + 10 * 60_000 });
+          const u = new URL('https://slack.com/openid/connect/authorize');
+          for (const [k, v] of Object.entries({ response_type: 'code', scope: 'openid profile', client_id: '123.456', state, redirect_uri: `${origin}/slack/callback` })) u.searchParams.set(k, v);
+          return send(200, { url: u.href });
+        }
+        if (what === 'link' && req.method === 'POST') {
+          const body = await read();
+          const s = slack.states.get(body.state);
+          if (!s || s.team !== team || s.person !== who.id) return problem(400, 'bad-request', 'this sign-in with Slack was not started here; start again');
+          if (s.expires < Date.now()) return problem(410, 'gone', 'the sign-in with Slack took too long; start again');
+          slack.states.delete(body.state);
+          if (slack.user.workspace !== slack.workspace) return problem(409, 'conflict', `sign in to the ${slack.workspace} Slack workspace, the one this team is connected to`);
+          const kinds = kindsOf(body, []);
+          const l = { id: mineLink?.id ?? rid('slk_'), name: slack.user.name, kinds: body.kinds === undefined && mineLink ? mineLink.kinds : kinds };
+          slack.links.set(`${team}:${who.id}`, l);
+          return send(201, { ...linkView(l), welcomed: false });
+        }
+        if (what === 'me' && req.method === 'PATCH') {
+          const kinds = kindsOf(await read());
+          if (!kinds) return problem(400, 'bad-request', 'send { kinds: [...] }');
+          if (!mineLink) return problem(404, 'not-found', 'connect Slack first');
+          mineLink.kinds = kinds;
+          return send(200, linkView(mineLink));
+        }
+        if (what === 'me' && req.method === 'DELETE') {
+          if (!mineLink) return problem(404, 'not-found', 'Slack is not connected for you');
+          slack.links.delete(`${team}:${who.id}`);
+          return send(200, { ok: true });
+        }
+        if (what === 'channels') {
+          if (!admin) return problem(403, 'forbidden', 'only an owner or admin picks channels');
+          const view = (c) => ({ id: c.id, channel: c.channel, name: c.name, kinds: c.kinds, addedBy: c.addedBy, createdAt: c.createdAt });
+          if (!cid && req.method === 'GET') return send(200, { channels: slack.channels.filter((c) => c.team === team).map(view) });
+          if (!cid && req.method === 'POST') {
+            const body = await read();
+            const channel = String(body.channel ?? ''), name = String(body.name ?? '').replace(/^#/, '').toLowerCase();
+            if (!/^[CG][A-Z0-9]{2,20}$/.test(channel) || !/^[a-z0-9][a-z0-9._-]{0,79}$/.test(name)) return problem(400, 'bad-request', 'send { channel, name } with the Slack channel id (like C0123ABCD) and its name');
+            const kinds = kindsOf(body, CHANNEL_DEFAULT_KINDS);
+            if (!kinds) return problem(400, 'bad-request', 'send { kinds: [...] }');
+            if (slack.channels.some((c) => c.team === team && c.channel === channel)) return problem(409, 'conflict', 'this channel is already picked; change its kinds instead');
+            const c = { id: rid('slc_'), team, channel, name, kinds, addedBy: who.name, createdAt: new Date().toISOString() };
+            slack.channels.push(c);
+            return send(201, { ...view(c), posted: !slack.failingSince, ...(slack.failingSince ? { reason: 'not_in_channel' } : {}) });
+          }
+          const c = slack.channels.find((x) => x.team === team && x.id === cid);
+          if (!c) return problem(404, 'not-found', 'no such channel');
+          if (req.method === 'PATCH') { const kinds = kindsOf(await read()); if (!kinds) return problem(400, 'bad-request', 'send { kinds: [...] }'); c.kinds = kinds; return send(200, view(c)); }
+          if (req.method === 'DELETE') { slack.channels.splice(slack.channels.indexOf(c), 1); return send(200, { ok: true }); }
+        }
+      }
+
       if (p === '/v1/me' && req.method === 'GET') return send(200, { id: who.id, login: who.login, name: who.name, workspaces: who.workspaces, passkeys: mine.length, authTime: new Date(session.authTime).toISOString(), notices: [...(notices.get(who.id) ?? [])].reverse() });
       if (p === '/v1/me/passkeys' && req.method === 'GET') return send(200, { passkeys: mine });
       if (p === '/v1/me/passkeys/options' && req.method === 'GET') {
@@ -222,7 +301,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
     }
 
     // The Studio's static pages, as the hosted deployment serves them.
-    const name = p === '/' ? 'account.html' : p === '/sign-in' ? 'sign-in.html' : p === '/account' ? 'account.html' : /^\/teams\/[^/]+\/notifications$/.test(p) ? 'notifications.html' : p.slice(1);
+    const name = p === '/' ? 'account.html' : p === '/sign-in' ? 'sign-in.html' : p === '/account' ? 'account.html' : /^\/teams\/[^/]+\/notifications$/.test(p) ? 'notifications.html' : p === '/slack/callback' ? 'slack-callback.html' : p.slice(1);
     const file = normalize(join(PUBLIC, name));
     if (req.method !== 'GET' || !file.startsWith(PUBLIC) || !existsSync(file)) return send(404, { error: 'not found' });
     res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
@@ -232,7 +311,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
   // localhost, not 127.0.0.1: WebAuthn needs a domain for rpId, and browsers treat localhost as a secure context.
   origin = `http://localhost:${server.address().port}`;
   return {
-    origin, upstream, sessions, passkeys, stepUps, log, emails, codes, mail, teams,
+    origin, upstream, sessions, passkeys, stepUps, log, emails, codes, mail, teams, slack,
     /** Ages every session's sign-in, as if it happened `ms` ago. */
     age(ms) { for (const s of sessions.values()) s.authTime -= ms; },
     close: () => { server.closeAllConnections?.(); server.close(); },

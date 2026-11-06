@@ -71,7 +71,13 @@ test('every kind renders: subject under 70 starting with [team], at most four li
   assert.deepEqual(compose(SAMPLES.budget80, { teamName: 'Shop' }).lines, ['Your team has used $4.00 of its $5.00 daily budget.', 'Work carries on. At 100% only release-blocking fixes and checks keep running.']);
   assert.deepEqual(compose(SAMPLES.budget100, { teamName: 'Shop' }).lines[1], 'New work is paused until 00:00 UTC. Raise the cap in the Studio to resume sooner.');
   assert.deepEqual(compose(SAMPLES.minutes, { teamName: 'Shop' }).lines, ['2 decisions and 3 action items.', '"Ship the footer on Friday"', '1 item needs you.']);
-  assert.deepEqual(compose(SAMPLES.ready, { teamName: 'Shop' }).lines, ['"Dark mode" is merged and ready to try.', 'Pull request #7.', 'The preview is up: open it from the Studio.']);
+  // The CPO's copy (docs/team/lanes/cpo.md, "Copy: Ready to try notification").
+  const ready = compose(SAMPLES.ready, { teamName: 'Shop' });
+  assert.equal(ready.subject, '[Shop] Ready to try: Dark mode');
+  assert.deepEqual(ready.lines, ['Web dev says "Dark mode" is ready for you to try.', "It's done and passed its checks."]);
+  assert.equal(ready.link.label, 'See the preview in the Studio');
+  const noPreview = compose({ ...SAMPLES.ready, data: { ...SAMPLES.ready.data, preview: undefined } }, { teamName: 'Shop' });
+  assert.deepEqual([noPreview.lines, noPreview.link.label], [['Web dev says "Dark mode" is ready for you to try.', "It's done and passed its checks."], 'Try it in the Studio']);
   assert.equal(compose(SAMPLES.ready, { teamName: 'Shop' }).link.path, '/teams/shop/inbox?card=card_r1');
   assert.equal(compose(ev('report.status', { status: 'working' })), null, 'no email for other events');
 });

@@ -13,7 +13,9 @@ export const OWNER = '1001';
  *  harness listens on another host and port, and names the URL the suite's browser reaches it by. */
 export async function stubGitHub({ host = '127.0.0.1', port = 0, url = null } = {}) {
   const codes = new Map(), tokens = new Map();
-  const gh = { as: null, issued: [], directory: [] };
+  const gh = { as: null, issued: [], directory: [], installs: [], memberships: {}, dropped: [] };
+  /** A code like the one GitHub's install callback carries (user authorization during installation): no PKCE. */
+  gh.installCode = (user = gh.as) => { const code = randomUUID(); codes.set(code, { user, challenge: null, redirect: null }); return code; };
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -33,7 +35,9 @@ export async function stubGitHub({ host = '127.0.0.1', port = 0, url = null } = 
       const b = JSON.parse(raw);
       const c = codes.get(b.code);
       codes.delete(b.code);
-      if (!c || b.client_secret !== 'gh-secret' || b.redirect_uri !== c.redirect || createHash('sha256').update(b.code_verifier).digest('base64url') !== c.challenge) return json(200, { error: 'bad_verification_code' });
+      const pkceOk = c?.challenge === null ? b.code_verifier === undefined && b.redirect_uri === undefined
+        : b?.redirect_uri === c?.redirect && typeof b.code_verifier === 'string' && createHash('sha256').update(b.code_verifier).digest('base64url') === c?.challenge;
+      if (!c || b.client_secret !== 'gh-secret' || !pkceOk) return json(200, { error: 'bad_verification_code' });
       const token = `ghu_${randomBytes(18).toString('hex')}`;
       tokens.set(token, c.user);
       gh.issued.push(token);
@@ -45,10 +49,26 @@ export async function stubGitHub({ host = '127.0.0.1', port = 0, url = null } = 
       const u = gh.directory.find((x) => x.login.toLowerCase() === decodeURIComponent(lookup).toLowerCase() || x.id === lookup);
       return u ? json(200, { id: Number(u.id), login: u.login }) : json(404, { message: 'Not Found' });
     }
+    if (/^\/applications\/[^/]+\/token$/.test(url.pathname) && req.method === 'DELETE') {
+      let raw = '';
+      for await (const c of req) raw += c;
+      const t = JSON.parse(raw || '{}').access_token;
+      if (req.headers.authorization !== `Basic ${Buffer.from('Iv1.test:gh-secret').toString('base64')}` || !tokens.has(t)) return json(404, {});
+      tokens.delete(t); gh.dropped.push(t);
+      res.writeHead(204); return res.end();
+    }
     const user = tokens.get(/^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1]);
     if (!user) return json(401, { message: 'Bad credentials' });
     if (url.pathname === '/user') return json(200, { id: Number(user.id), login: user.login, name: user.name ?? null });
     if (url.pathname === '/user/emails') return json(200, user.emails ?? []);
+    // The install callback's checks: installations this user can see, org membership, repositories with permissions.
+    const page = (list) => { const n = Number(url.searchParams.get('per_page') ?? 30), p = Number(url.searchParams.get('page') ?? 1); return list.slice((p - 1) * n, p * n); };
+    const visible = gh.installs.filter((i) => (i.visibleTo ?? [String(i.account.id)]).includes(String(user.id)));
+    if (url.pathname === '/user/installations') return json(200, { total_count: visible.length, installations: page(visible.map(({ repos, visibleTo, ...i }) => i)) });
+    const org = /^\/user\/memberships\/orgs\/([^/]+)$/.exec(url.pathname)?.[1];
+    if (org) { const m = gh.memberships[`${user.id}/${decodeURIComponent(org)}`]; return m ? json(200, m) : json(404, {}); }
+    const inst = /^\/user\/installations\/([0-9]+)\/repositories$/.exec(url.pathname)?.[1];
+    if (inst) { const i = visible.find((x) => String(x.id) === inst); return i ? json(200, { total_count: i.repos.length, repositories: page(i.repos) }) : json(404, {}); }
     return json(404, {});
   });
   await new Promise((r) => server.listen(port, host, r));
@@ -109,13 +129,13 @@ export function browser(local, { ip = 'browser' } = {}) {
   return b;
 }
 
-export async function issuer(fn, { ownerGithub = OWNER, now, clientIp = (req) => req.headers['x-test-ip'] ?? '', cronSecret, clients } = {}) {
+export async function issuer(fn, { ownerGithub = OWNER, now, clientIp = (req) => req.headers['x-test-ip'] ?? '', cronSecret, clients, streamCheckMs, githubApp } = {}) {
   const db = await fresh();
   await store.ensureTenant(db, 'acme');
   const gh = await stubGitHub();
   const upstream = githubUpstream({ clientId: 'Iv1.test', clientSecret: 'gh-secret', url: gh.url, apiUrl: gh.url });
-  const identity = await createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub, upstream, ...(clientIp ? { clientIp } : {}), ...(now ? { now } : {}), ...(clients ? { clients } : {}) });
-  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, publicUrl: ORIGIN, identity, tickMs: 0, stepUpVerifier: verifier, ...(cronSecret ? { cronSecret } : {}), ...(now ? { now } : {}) });
+  const identity = await createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub, upstream, ...(clientIp ? { clientIp } : {}), ...(now ? { now } : {}), ...(clients ? { clients } : {}), ...(githubApp ? { githubApp: { url: gh.url, ...githubApp } } : {}) });
+  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, publicUrl: ORIGIN, identity, tickMs: 0, stepUpVerifier: verifier, ...(cronSecret ? { cronSecret } : {}), ...(now ? { now } : {}), ...(streamCheckMs ? { streamCheckMs } : {}) });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const local = `http://127.0.0.1:${server.address().port}`;
   try {
