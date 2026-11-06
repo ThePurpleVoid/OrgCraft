@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.9.2
+
+### Security
+
+- **DNS rebinding on the local dashboard and the Studio (severity 2). Every team should sync to 0.9.2.** A web page on a hostile domain whose DNS name resolves to 127.0.0.1 could call `scripts/agent-team/dashboard.mjs` or `agent-team studio` as if it were the same origin. It could read the board, post reports, and use the token these servers hold for a hosted board (`TEAM_READ_TOKEN`) or the control plane. Both servers now check the `Host` header on every request, static files included, before anything else runs:
+  - Bound to a loopback address, they answer only `localhost`, `127.0.0.1` and `[::1]` (any port).
+  - Bound to another address, they also answer that address. On `0.0.0.0` or `::` that means every address of the machine.
+  - Each server also answers the names in its own allowlist, `DASHBOARD_ALLOWED_HOSTS` or `STUDIO_ALLOWED_HOSTS`.
+  - Anything else gets 403. The Studio's Origin and JSON checks on POSTs stay as they were.
+- **What existing teams see on sync:**
+  - A new file, `scripts/agent-team/hosts.mjs`.
+  - Threads on other machines that report to a dashboard started with `--host 0.0.0.0` keep working when they use its IP address. If they use a name (`TEAM_REPORT_URL=http://mac-mini.local:4747/...`, a VPN or tunnel name, a reverse proxy), set that name in `DASHBOARD_ALLOWED_HOSTS` on the dashboard machine; until then those reports get 403.
+  - The hosted board, the exported dashboard and CoachSpotter-style sites are not affected. Neither are reports written to the local log.
+
+### Design and contracts (nothing changes on sync)
 
 - **M4 sign-in design** ([docs/specs/m4-sign-in.md](docs/specs/m4-sign-in.md), [ADR 0007](docs/adr/0007-deployment-is-its-own-identity-provider.md), accepted with conditions): each deployment is its own OIDC issuer with GitHub upstream, a first-party cookie for the web on one origin, PKCE bearer tokens for apps and the CLI, invite-only membership, passkeys for step-up on the web, and the admin token and step-up secret retired outside local mode.
 - **M3 security requirements** (m3-design.md section 12, D1 to D9): sessions sandboxed with a throwaway HOME, an allowlisted environment and no credentials, with the runner pushing after an ownership and secret check on the checkpoint diff; approvals bound to the exact call and head sha, merges done by the runner with its own credential behind a branch ruleset, a scrypt-hashed step-up secret with lockout, step-up on raising spend, budget resume, runner codes and secrets, and no card answers from session tokens. Contracts: additive `pr` and `headSha` on approvals and a `superseded` decision; **a recorded exception to rule 1**: step-up is now required on four existing writes (`PUT /secrets/{name}`, raising `PUT /teams/{team}/budget`, `POST /runs/{run}/resume` after a budget pause, `POST /runners/codes`), tightened before any client calls them.

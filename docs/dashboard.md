@@ -34,6 +34,8 @@ TEAM_REPORT_URL=http://<dashboard machine>:4747/api/report
 TEAM_REPORT_TOKEN=<the same token>
 ```
 
+The dashboard answers only the names it is really reached by, so a hostile web page cannot reach it through a DNS name of its own that points at your machine (DNS rebinding). Started with `--host 0.0.0.0` it answers `localhost` and this machine's IP addresses. If other machines use a name instead (`mac-mini.local`, a VPN or tunnel name, a reverse proxy), add it on the dashboard machine: `DASHBOARD_ALLOWED_HOSTS=mac-mini.local,board.example.com`. A request for any other name gets 403. The machine's addresses are read when the first request comes in, so after the machine gets a new address (a new network, DHCP) restart the dashboard.
+
 `team-status.sh` then posts every report there as well as writing its own log. Each report carries an id, so a report that arrives twice is kept once.
 
 ## 3. On your website, readable from anywhere
@@ -131,6 +133,7 @@ node scripts/agent-team/dashboard.mjs export --out <dir> [--board <url>] [--dir 
 | --- | --- | --- |
 | `DASHBOARD_TOKEN` | dashboard | Require this token (`x-team-token`) on `POST /api/report` |
 | `DASHBOARD_PORT`, `DASHBOARD_HOST` | dashboard | Defaults for `--port` and `--host` |
+| `DASHBOARD_ALLOWED_HOSTS` | dashboard | More host names it answers (comma-separated), besides localhost, 127.0.0.1, [::1] and the address it is bound to |
 | `TEAM_BOARD_URL`, `TEAM_READ_TOKEN` | dashboard | Read a hosted board instead of the local log |
 | `TEAM_REPORT_URL`, `TEAM_REPORT_TOKEN` | threads | Also post every report there |
 | `TEAM_REPORT_MIRROR_URL`, `TEAM_REPORT_MIRROR_TOKEN` | threads | And to a second board (such as the Studio's control plane), with the same id |

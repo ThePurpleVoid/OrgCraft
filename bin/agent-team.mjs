@@ -16,7 +16,7 @@
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.9.1 init --preset engineering --project "My App"
+//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.9.2 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -40,7 +40,7 @@ const SCRIPTS = 'scripts/agent-team';
 const AGENTS = '.claude/agents';
 const LOCK = `${LAYER}/kit.lock.json`;
 const RUNTIME = ['lib.sh', 'team-status.sh', 'team-board.sh', 'merge-gate.sh', 'with-lock.sh', 'janitor.sh'];
-const TOOLS = ['briefs.mjs', 'roster.mjs', 'export-subagents.mjs', 'roster-graph.mjs', 'board.mjs', 'dashboard.mjs', 'report.mjs'];
+const TOOLS = ['briefs.mjs', 'roster.mjs', 'export-subagents.mjs', 'roster-graph.mjs', 'board.mjs', 'dashboard.mjs', 'report.mjs', 'hosts.mjs'];
 const SETTINGS = '.claude/settings.json';
 const HOOK_SCRIPT = `${SCRIPTS}/report.mjs`;
 const DASHBOARD = ['index.html', 'app.js', 'app.css', 'config.js'];

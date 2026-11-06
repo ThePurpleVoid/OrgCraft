@@ -16,6 +16,7 @@ import { build, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
 import { compileLayer, importLayer, resolveSpec, validate } from '../../packages/team-model/index.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
+import { hostGuard } from '../../tools/hosts.mjs';
 import { ownershipFromMarkdown, suggestAreas, suggestChecks } from './suggest.mjs';
 import { loadKit, readLayer, writeLayer } from '../../packages/team-model/node.mjs';
 import { liveSource } from './live.mjs';
@@ -118,7 +119,9 @@ const send = (res, status, body) => { res.writeHead(status, { 'content-type': 'a
 
 export function createStudio({ root, env = process.env }) {
   const live = liveSource(root, env);
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
+    // DNS rebinding: answer only the names this server is really reached by (tools/hosts.mjs), on every route.
+    if (!allowed(req)) return send(res, 403, { error: 'host not allowed (add it to STUDIO_ALLOWED_HOSTS)' });
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
       // The Studio's API, versioned like the public API it will become (ADR 0005): additive changes only within /v1/.
@@ -164,6 +167,8 @@ export function createStudio({ root, env = process.env }) {
       return send(res, status, { error: e.message });
     }
   });
+  const allowed = hostGuard(server, env.STUDIO_ALLOWED_HOSTS ?? '');
+  return server;
 }
 
 export function run(argv) {
