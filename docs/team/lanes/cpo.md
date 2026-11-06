@@ -14,6 +14,8 @@ Owner of this file: cpo. Last updated 2026-11-06.
 | Change safety part 1 (PRD 6.9, mockup 06, issue #30) | Building: story confirmed below; library to kit-core-dev, screens to web-dev |
 | Meeting definitions editor (PRD 6.7 M8, mockup 03, issue #30) | Building: story confirmed below; sync side to kit-core-dev, editor to web-dev |
 | Team templates (PRD E6, demo step 2, issue #30) | Building: story confirmed below; kit side to kit-core-dev, picker to web-dev after meetings |
+| Neutral protocols for business-function teams (issue #30 follow-up) | Idea: story confirmed below, not yet scheduled |
+| Other coding agents (PRD G3 b, issue #30 follow-up) | Idea: story confirmed below; kit-core-dev after "PR through gh" |
 
 ## Priorities, in order
 
@@ -30,6 +32,8 @@ Owner of this file: cpo. Last updated 2026-11-06.
 4. **Change safety part 1 story confirmed** (2026-11-06, issue #30): board-only warnings and a recorded plan; nothing is stopped or restarted by the Studio until the runner's part 2 (phase 3).
 5. **Meeting definitions story confirmed** (2026-11-06, issue #30): the editor half only; meetings are defined and published in phase 2 and run from phase 3.
 6. **Team templates story confirmed** (2026-11-06, issue #30): a template is a whole starting team, applied once; a role pack adds agents to a team that exists. Two of the first templates are not engineering teams.
+7. **Neutral protocols story confirmed** (2026-11-06): kit 0.12.0 ships the support and content templates without it. The shared protocols and project instructions get a neutral core plus an engineering pack, so a business-function team never reads about PRs, merge gates or deploys.
+8. **Other coding agents story confirmed** (2026-11-06): the first cut is one vendor-neutral `AGENTS.md` target, not one adapter per tool. Claude Code stays the default and loses nothing.
 
 ## Story: custom agents (issue #30, demo step 14)
 
@@ -236,3 +240,77 @@ A template may carry custom agents inside it, in the role pack format, so a non-
 - **web-dev**: criteria 5 to 10, after the meetings editor.
 - **qa-web**: criterion 11.
 - **CPO**: signs off the copy of every shipped template (criterion 4) and reviews the picker against this story.
+
+## Story: neutral protocols for business-function teams (follow-up to the templates story)
+
+The owner's words (2026-11-06, as recorded in project memory): "not just for engineering companies ... the model, vocabulary and UI must let any industry use the tool eventually."
+
+What follows is the CPO's reading, labelled as mine.
+
+**As** the owner of a support team or a content studio, **I want** my agents' shared rules to talk about my work (drafts, approvals, sign-offs, sending and publishing), not pull requests, merge gates and deploys, **so** the team follows rules that fit what it does, and nothing in its instructions is noise or wrong.
+
+Found during the copy review of kit #79: every team gets the same `protocols.md` and `project-instructions.md`, and both assume engineering (section "Pull requests", HANDOFF fields "branch and commit, artifact (build path or preview URL)", BUG fields "screen, build", SIGNOFF "tested on (device or browser, OS, commit)", worktrees, hardware locks, the janitor). The four custom agents in the templates are neutral; the shared files around them are not.
+
+### Product decisions
+
+- **D37. A neutral core plus packs.** `protocols.md` and `project-instructions.md` split into a core every team gets (one door, the dilution rule, owner-steps-in, ownership and one writer per area, the four message kinds, reporting to the board, memory files, digest and meetings) and an **engineering pack** (pull requests, merge gate, worktrees, hardware locks, janitor, deploys, migrations). A team's packs come from its template or preset; existing teams get the engineering pack automatically, so CoachSpotter's and this kit's generated files do not change in meaning.
+- **D38. The four message kinds keep their names; their fields become neutral.** HANDOFF: task, from, to, **what changed and where it is** (a link, a file or a branch), how to check it, done when. BUG: task, **where** (a screen, a document, a page), steps or quote, expected, actual, evidence, severity. SIGNOFF: task, **what was checked and on what version**, result, evidence (required). The engineering pack adds its fields back (branch and commit, build, device and OS).
+- **D39. Owner-steps-in gets business examples.** Next to "data changes that cannot be undone", the core names: sending to customers or the public without an approved policy, spending money, legal commitments, and anything published under the owner's name. The engineering pack keeps destructive migrations and production deploys.
+- **D40. "Push before long steps" becomes "save your work where the team can see it before long steps".** In a repository that still means push; the core does not say so.
+- **D41. No behaviour change for engineering teams.** A team on the engineering preset gets generated files with the same rules as today (wording may move, not meaning); `sync.sh check` on CoachSpotter and on this kit's own team shows only the expected moves, reviewed by the CPO and the CTO.
+
+### Acceptance criteria
+
+1. The core files contain none of: pull request, PR, merge, branch, commit, deploy, CI, build, worktree, migration (a test enforces this, like the template copy test).
+2. The engineering pack holds every rule removed from the core; a diff review shows no rule lost.
+3. The support and content templates generate instructions with the core only; their briefs' "Every thread, every task" footer uses D40's wording.
+4. Existing teams (presets engineering, minimal, company) get core plus the engineering pack with no rule lost (D41).
+5. The Studio shows a team's packs in its settings, and the template gallery says which packs a template uses (no new choice for the owner yet).
+6. The CPO signs off the core copy; the CTO signs off the engineering pack.
+
+### Build split (for the CTO to confirm)
+
+- **kit-core-dev**: criteria 1 to 4, as a kit minor release after 0.12.0.
+- **web-dev**: criterion 5, small, alongside the template picker.
+- **CPO and CTO**: criterion 6.
+
+## Story: other coding agents (PRD G3 b, follow-up to #30)
+
+Context: PRD gap G3, "Claude Code and bash only". Part (a) shipped (Node scripts, so reporting works without bash). This story is part (b) for the instructions: the same team, read by a coding agent other than Claude Code.
+
+What follows is the CPO's reading, labelled as mine.
+
+**As** a team whose members, or whose company, use a coding agent other than Claude Code, **I want** sync to write the instruction files that agent reads, with the same roles, rules and board reporting, **so** the team works the same way whichever agent runs a role, and I can see honestly what is weaker without Claude Code's hooks.
+
+### Product decisions
+
+- **D42. First cut: one vendor-neutral target, `AGENTS.md`.** Many coding agents read a root `AGENTS.md` as their project instructions, so one file reaches the most tools with the least per-vendor code. Sync writes it from the same sources as the Claude project instructions: the company, how work moves, the standing rules, a pointer to `docs/team/protocols.md`, and how a session finds its role (D43). No tool-specific files (per-vendor rule folders, settings, hooks) in the first cut.
+- **D43. How a session knows its role.** The same way as today, written for any agent: the role comes from `.agent-team/local.env` (`AGENT_TEAM_ROLE`) or from the first message ("You are <role>. Read docs/team/roles/<role>.md"). `AGENTS.md` says to read the role brief and the protocols before anything else, and to report `status working` first.
+- **D44. Reporting without hooks uses the Node reporter.** `AGENTS.md` names `node scripts/agent-team/report.mjs` (no bash, no `jq`) for every board report. The `team-status.sh` examples stay for teams that have bash.
+- **D45. Turned on per team, off by default.** `team.json` gets `"targets": ["claude-code", "agents-md"]`; existing teams have only `claude-code` and see no change on sync. In the Studio, team settings get one switch, "Also write instructions for other coding agents (AGENTS.md)". If a repository already has a hand-written `AGENTS.md`, sync does not overwrite it: it writes the kit's text between start and end markers inside the file and leaves the rest alone, as it does for other shared files.
+- **D46. What degrades without hooks, said plainly.** These Claude Code features have no equivalent in the first cut:
+  1. **Automatic liveness**: no automatic start, heartbeat, idle and stop events, so the board relies on the role's own reports.
+  2. **The ownership guard before each edit**: one writer per area is still checked by the merge gate and CI (and by the runner in hosted runs), but not live while the agent edits.
+  3. **Subagent and teammate reports.**
+  4. **Built-in agent teams export.**
+
+  The board marks a role that reported with no hook events as "self-reported", so the owner can see why a card may go quiet. The README and `docs/hooks-and-agent-teams.md` get a short table of what works with Claude Code and what works with other agents.
+- **D47. Tools in scope for the first cut.** The target is the `AGENTS.md` convention itself, not a list of vendors. Acceptance is proven with **two coding agents other than Claude Code that read a root `AGENTS.md`**, picked by kit-core-dev from what can be installed and run in CI or a cloud sandbox. The PR names them and records the exact versions. Per-tool adapters (that tool's own rule files or hook equivalents) come later, one story per tool, and only where the tool documents a stable mechanism.
+- **D48. Vendor-neutral words.** `AGENTS.md` names no vendor and no model. Model tiers stay as tier names (deep, standard, routine, light) with the tier descriptions from the project instructions, and each tool maps them however it can.
+
+### Acceptance criteria
+
+1. With `agents-md` in `targets`, `sync` writes `AGENTS.md` at the repository root; `sync.sh check` fails when it is stale, like every generated file.
+2. `AGENTS.md` holds the project instructions' content in tool-neutral words (D42, D48), how to find your role (D43), and the Node reporter commands (D44). It mentions no vendor or model name (a test checks a list of vendor names).
+3. A team without `agents-md` gets byte-identical output to the release before (D45).
+4. An existing hand-written `AGENTS.md` keeps every line outside the kit's markers after sync (D45).
+5. Walk with two agents (D47): in a sample repository with `agents-md` on, each agent, told only "You are web-dev; start the task 'Add a footer'", reads its brief, reports `status working` with the Node reporter, and the board shows it as "self-reported". Logs and board output are kept as evidence. Until the owner sets a model key there are no real model calls: the proof is offline, showing that each agent loads `AGENTS.md` (from the tool's own way of listing or printing the instructions it loaded) and that the reporter commands in it work. The live walk is recorded as pending and is run once a key exists (CTO, 2026-11-06).
+6. The board's "self-reported" mark (D46) shows on a role card with reports and no hook events, in the dashboard and in the Studio's live board.
+7. The README and `docs/hooks-and-agent-teams.md` have the table of what works with Claude Code and with other agents (D46), and the PRD's G3 row points to it.
+8. The Studio's team settings have the switch (D45); turning it on shows `AGENTS.md` in the publish diff.
+
+### Build split (for the CTO to confirm)
+
+- **kit-core-dev**: criteria 1 to 5 and 7, after "PR through gh".
+- **web-dev**: criteria 6 (Studio side) and 8; kit-core-dev does the dashboard side of 6.
+- **CPO**: signs off the `AGENTS.md` copy and the table.

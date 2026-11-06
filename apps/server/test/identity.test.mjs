@@ -3,125 +3,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
-import { createServer } from 'node:http';
 import { SignJWT, exportJWK } from 'jose';
-import { fresh, key, ADMIN, STEP_UP_SECRET, verifier } from './helpers.mjs';
+import { fresh, key, ADMIN } from './helpers.mjs';
+import { ORIGIN, OWNER, issuer, owner } from './sign-in-helpers.mjs';
 import * as store from '../store.mjs';
 import { createControlPlane } from '../server.mjs';
 import { createIdentity } from '../identity.mjs';
 import { REFUSED } from '../../../tests/fixtures/return-paths.mjs';
 
-const ORIGIN = 'https://studio.example';
-const OWNER = '1001';
-
-/** A stand-in GitHub: the user authorization flow with PKCE, /user and /user/emails. Tests set `as`. */
-async function stubGitHub() {
-  const codes = new Map(), tokens = new Map();
-  const gh = { as: null, issued: [] };
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://x');
-    const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
-    if (url.pathname === '/login/oauth/authorize') {
-      if (url.searchParams.get('code_challenge_method') !== 'S256' || url.searchParams.get('client_id') !== 'Iv1.test') return json(400, { error: 'bad request' });
-      const code = randomUUID();
-      codes.set(code, { user: gh.as, challenge: url.searchParams.get('code_challenge'), redirect: url.searchParams.get('redirect_uri') });
-      const back = new URL(url.searchParams.get('redirect_uri'));
-      back.searchParams.set('code', code);
-      back.searchParams.set('state', url.searchParams.get('state'));
-      res.writeHead(302, { location: back.href });
-      return res.end();
-    }
-    if (url.pathname === '/login/oauth/access_token' && req.method === 'POST') {
-      let raw = '';
-      for await (const c of req) raw += c;
-      const b = JSON.parse(raw);
-      const c = codes.get(b.code);
-      codes.delete(b.code);
-      if (!c || b.client_secret !== 'gh-secret' || b.redirect_uri !== c.redirect || createHash('sha256').update(b.code_verifier).digest('base64url') !== c.challenge) return json(200, { error: 'bad_verification_code' });
-      const token = `ghu_${randomBytes(18).toString('hex')}`;
-      tokens.set(token, c.user);
-      gh.issued.push(token);
-      return json(200, { access_token: token, token_type: 'bearer' });
-    }
-    const user = tokens.get(/^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1]);
-    if (!user) return json(401, { message: 'Bad credentials' });
-    if (url.pathname === '/user') return json(200, { id: Number(user.id), login: user.login, name: user.name ?? null });
-    if (url.pathname === '/user/emails') return json(200, user.emails ?? []);
-    return json(404, {});
-  });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  gh.url = `http://127.0.0.1:${server.address().port}`;
-  gh.close = () => { server.closeAllConnections(); server.close(); };
-  return gh;
-}
-
-/** A browser: a cookie jar with paths, and manual redirects, with the deployment's origin mapped to the test server. */
-function browser(local, { ip = 'browser' } = {}) {
-  const jar = new Map(); // name -> { value, path }
-  const toLocal = (u) => (u.startsWith(ORIGIN) ? local + u.slice(ORIGIN.length) : u.startsWith('/') ? local + u : u);
-  const keep = (res) => {
-    for (const line of res.headers.getSetCookie()) {
-      const [pair, ...attrs] = line.split(';').map((s) => s.trim());
-      const at = pair.indexOf('=');
-      const name = pair.slice(0, at), value = pair.slice(at + 1);
-      const path = attrs.find((a) => /^path=/i.test(a))?.slice(5) ?? '/';
-      const gone = attrs.some((a) => /^max-age=0$/i.test(a)) || attrs.some((a) => /^expires=/i.test(a) && new Date(a.slice(8)) < new Date());
-      if (gone) jar.delete(name); else jar.set(name, { value, path, raw: line });
-    }
-  };
-  const header = (u) => {
-    const path = new URL(u).pathname;
-    return [...jar].filter(([, c]) => path.startsWith(c.path)).map(([k, c]) => `${k}=${c.value}`).join('; ');
-  };
-  const b = {
-    jar,
-    async fetch(u, { method = 'GET', headers = {}, body } = {}) {
-      const target = toLocal(u);
-      const res = await fetch(target, { method, redirect: 'manual', headers: { 'x-test-ip': ip, ...(target.startsWith(local) && jar.size ? { cookie: header(target) } : {}), ...headers }, body });
-      if (target.startsWith(local)) keep(res);
-      return res;
-    },
-    /** Follows redirects until the Studio's /sign-in page, an app's redirect URI, or a non-redirect answer. */
-    async go(u, opts) {
-      let res = await b.fetch(u, opts);
-      for (let i = 0; i < 15 && [302, 303].includes(res.status); i++) {
-        const loc = res.headers.get('location');
-        const abs = loc.startsWith('/') ? ORIGIN + loc : loc;
-        if (abs.startsWith(`${ORIGIN}/sign-in`) || abs.startsWith(`${ORIGIN}/app/`) || abs.startsWith('http://127.0.0.1/callback') || (abs.startsWith(ORIGIN) && !new URL(abs).pathname.startsWith('/oauth/'))) return { at: abs, res };
-        res = await b.fetch(abs);
-      }
-      return { at: null, res };
-    },
-    /** A whole web sign-in: the web start, the sign-in page's "Continue with GitHub", back to `return`. */
-    async signIn(ret = '/') {
-      const first = await b.go(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=${encodeURIComponent(ret)}`);
-      if (!first.at?.startsWith(`${ORIGIN}/sign-in?interaction=`)) return first.at;
-      const uid = new URL(first.at).searchParams.get('interaction');
-      return (await b.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at;
-    },
-    call: async (method, path, body, headers = {}) => {
-      const res = await b.fetch(`${ORIGIN}/v1${path}`, { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), origin: ORIGIN, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
-      return { status: res.status, body: await res.json().catch(() => null) };
-    },
-  };
-  return b;
-}
-
-async function issuer(fn, { ownerGithub = OWNER, now, clientIp = (req) => req.headers['x-test-ip'] ?? '' } = {}) {
-  const db = await fresh();
-  await store.ensureTenant(db, 'acme');
-  const gh = await stubGitHub();
-  const upstream = (await import('../identity.mjs')).githubUpstream({ clientId: 'Iv1.test', clientSecret: 'gh-secret', url: gh.url, apiUrl: gh.url });
-  const identity = await createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub, upstream, ...(clientIp ? { clientIp } : {}), ...(now ? { now } : {}) });
-  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, publicUrl: ORIGIN, identity, tickMs: 0, stepUpVerifier: verifier, ...(now ? { now } : {}) });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const local = `http://127.0.0.1:${server.address().port}`;
-  try {
-    await fn({ db, gh, local, identity, server, browser: (o) => browser(local, o) });
-  } finally { server.runners?.closeAll(); server.closeAllConnections(); server.close(); gh.close(); await db.close(); }
-}
-
-const owner = { id: OWNER, login: 'octo', name: 'Octo Cat' };
 
 test('discovery names this deployment as the issuer, with the /oauth endpoints', () => issuer(async ({ local }) => {
   const d = await (await fetch(`${local}/.well-known/openid-configuration`)).json();
@@ -439,21 +328,6 @@ test('the signing key rotates from the tick after 90 days, and the old one stays
     assert.deepEqual(await kids(), [both[0]]);
   }, { now: () => new Date(t) });
 });
-
-test('a step-up token minted for the admin token is refused for a signed-in person', () => issuer(async ({ local, gh, browser }) => {
-  gh.as = owner;
-  const b = browser();
-  await b.signIn();
-  const mint = await fetch(`${local}/v1/auth/step-up`, { method: 'POST', headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' }, body: JSON.stringify({ secret: STEP_UP_SECRET }) });
-  const { token } = await mint.json();
-  assert.match(token, /^su_/);
-  const theirs = await b.call('POST', '/runners/codes', {}, { 'x-step-up': token });
-  assert.equal(theirs.status, 401);
-  assert.equal(theirs.body.type, 'step-up-required');
-  // Still good for the principal it was minted for: the refused try did not use it up.
-  const admins = await fetch(`${local}/v1/runners/codes`, { method: 'POST', headers: { authorization: `Bearer ${ADMIN}`, 'x-step-up': token, 'content-type': 'application/json' }, body: '{}' });
-  assert.equal(admins.status, 201);
-}));
 
 test('a state from another browser, or used twice, does not finish a sign-in', () => issuer(async ({ gh, browser }) => {
   gh.as = owner;

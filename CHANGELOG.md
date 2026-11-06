@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.14.0
+
+- **Studio Publish can open a pull request** (issue #30, "PR through gh"). `POST /v1/team/publish` with `"pr": true` first commits as before. It then pushes the branch to `origin`, never forced, and opens a pull request into the branch the publish started from. With `gh` installed and signed in, that is `gh pr create`, with the commit's first line as the title and the rest (the change-safety plan, "Work in progress") as the body. Without gh, the result has the branch, the compare link for a GitHub remote and the command to run. The result's `pr.state` is `opened`, `exists`, `pushed`, `not-pushed`, `no-remote` or `same-branch`. `GET /v1/team/pr-support` says whether there is a remote and whether gh is signed in. The server reads only `spec`, `branch`, `message` and `pr` from the page, never a token. `AGENT_TEAM_GH` points at another gh binary. The code is in `apps/studio/pr.mjs`.
+- **What existing teams see on sync:** only the version stamps.
+
+## 0.13.0
+
+Neutral protocols (CPO story "Neutral protocols for business-function teams", criteria 1 to 4, D37 to D41).
+
+- **`protocols.md` and `project-instructions.md` are a neutral core plus packs** ([customizing](docs/customizing.md#protocol-packs-packs)). The core uses no engineering words; a test enforces this. **The `engineering` pack** holds every rule that was taken out of the core: pull requests, the merge gate, worktrees, hardware locks, the janitor, deploys, migrations, and the architect-first list.
+- **Message fields go neutral in the core** (D38). HANDOFF has task, from, to, what changed and where it is, how to check it, and done when. BUG has task, where, steps or a quote, expected, actual, evidence and severity. SIGNOFF has task, what was checked and on what version, result and evidence. The engineering pack keeps the fields it had: branch and commit, build, device and OS.
+- **When the owner steps in, the core adds business examples** (D39): sending to customers or the public without an approved policy, legal commitments, and anything published under the owner's name.
+- **Without the engineering pack, every brief's footer says "save your work where the team can see it"** in place of "push" (D40). The role template gets a neutral group and manager.
+- **`team.json` `packs`**: a team without it gets `["engineering"]`. The support and content templates use `[]`. `templateCard` returns `packs`. New in `packages/team-model`: `DEFAULT_PACKS`, `teamPacks`, `parseFills`, `docSlots`, `composeDoc`, `teamDoc`, `fitToPacks`, `roleTemplateFor`, `checkPacks`. `loadKit` returns `docs` and `packs`.
+- **What existing teams see on sync** (D41): only the version stamps. The core plus the engineering pack is byte-identical to the 0.12 text, and a test checks it against a saved copy.
+
+## 0.12.1
+
+- **Fixed:** a role that owns no areas is allowed again. 0.11.1 made a missing or empty `## Owns (writes)` an error in `validate`, and sync's roster check had always refused it. So the Studio blocked importing, for example, a clerk or a reviewer that writes nothing of its own. Both now give a warning ("owns no areas"). A missing or empty `## Identity` is still an error in both.
+
+## 0.12.0
+
+Team templates (CPO story "Team templates", criteria 1 to 4). Additive: existing teams are not affected.
+
+- **Three team templates** in `team/templates/` ([customizing](docs/customizing.md#start-from-a-team-template)): Startup product team, Customer support team (with the custom agents support responder and knowledge base writer) and Content studio (with the custom agents editor and fact checker). Each gives zero `validate` errors and warnings. The support and content teams' briefs use no code, Git, CI or engineering words. A test enforces this.
+- **`agent-team templates`** lists them. **`agent-team init --template <id>`** writes the same `.agent-team/` the Studio writes from the same template, then syncs. **`agent-team validate --template <id|folder>`** checks a template.
+- `team.json` gains `"from": "<template>@<kit version>"` on teams made from a template.
+- New in `packages/team-model`: `TEMPLATE_SCHEMA` (`agent-team/team-template@1`), `TEMPLATE_GROUPS`, `readTemplate`, `templateSpec`, `templateLayer`, `templateCard`, `checkTemplate`. `node.mjs` adds `readTemplateDir` and `loadTemplates`. The Studio's template gallery uses the same functions.
+- **What existing teams see on sync:** only the version stamps change.
+
 ## 0.11.1
 
 - **The merge gate and hardware locks run without bash** ([Windows and machines without bash](docs/windows.md)). `scripts/agent-team/merge-gate.mjs` and `with-lock.mjs` take the same arguments as `merge-gate.sh` and `with-lock.sh`, and give the same summary, `.merge-gate/` logs, lock folders and exit codes (64 for usage, 75 when no slot frees up). Both kinds share one pool on a machine. The Node gate runs `.agent-team/gates.json` targets. Each step goes to `bash -c` when bash is installed and to the system shell otherwise. A target that is only a bash function in `config.sh` is handed to `merge-gate.sh` when bash is installed, and refused with a clear message when it is not.
@@ -29,6 +59,11 @@ Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD
 
 ## Unreleased
 
+### Control plane: signing in (M4)
+
+- **The deployment is its own OIDC issuer** (#68, ADR 0007, m4-sign-in.md). Built on oidc-provider, with GitHub as the upstream, the web's `__Host-agent-team` cookie with CSRF, and migration 004 (people, sessions, tokens, members, invitations). Off unless `GITHUB_APP_CLIENT_ID` is set. Rate limits read the caller's IP only from our own proxies (#73).
+- **Passkeys and step-up** (spec section 3, K2). `GET`/`POST /v1/me/passkeys`, `GET /v1/me/passkeys/options`, `DELETE /v1/me/passkeys/{id}`, `GET /v1/auth/step-up/challenge`, and `POST /v1/auth/step-up { webauthn }`, on @simplewebauthn/server. A `su_` token comes only from an assertion with user verification, and is bound to the person and the tenant. `GET /v1/internal/caller` (CRON_SECRET) is for the deploy's smoke check. Contracts: **a recorded exception to rule 7**. clients.md section 3 no longer accepts `auth_time` as a step-up, and a hosted deployment refuses `POST /auth/step-up { secret }`. Both changed before 1.0, before any client outside this repository called them.
+
 - **M3 design fix:** `run.resumed` now restarts every session a pause stopped, from its last checkpoint, after an owner's resume or the budget's next-day resume. Pause and resume handlers act only if the run's state and version still match (found in review of #54).
 
 ### Runner
@@ -44,6 +79,9 @@ Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD
 - **After a merge, a session starts again from the new base.** The runner deletes the merged branch (as GitHub's delete-branch-on-merge; the merger app's token can) and resets the session's copy to the base, so its next change opens a new pull request instead of conflicting with its own squash. It stays on the branch when the delete fails (a ruleset, say) or when files are left uncommitted outside its areas. A branch that changes nothing against its base gets no pull request (a role that only talked).
 
 ### Studio (nothing changes on sync)
+- The agent editor resolves path conflicts where they happen (#30, criterion 9): an area another role writes is held, never written as a second writer, until the owner picks "Read only, send fixes as BUG", "Take a narrower area" (checked again) or "Move the whole area to this agent". A move asks twice when the board says the writer is working on it now.
+- An imported role pack's `needs.resources` show as "Needs a <type>: connect one or skip", bound only on Connect (criterion 12). Its areas go through the same conflict choices.
+- Hands to: the role picker starts on "Choose a role" and adds roles by name. Clearing Identity is now an error from the kit's own check (0.11.1), no longer refilled with the template text.
 
 - **The agent editor** (PRD 6.6 A2, A3; mockup 02): a custom agent opens on a page of its own.
   - The left column lists the brief's sections (Identity, Place in the team, What it owns, Tools and systems, Wakes on, Hands to, Rules, Sign-off evidence), each marked done, optional or what is left to fix.

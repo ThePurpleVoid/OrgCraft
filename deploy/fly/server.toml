@@ -7,6 +7,11 @@
   # Runs in a one-off machine with the new image before any traffic moves; a refusal stops the deploy.
   release_command = "node deploy/server/migrate.mjs"
 
+[env]
+  # Fly's proxy appends the peer to x-forwarded-for, so the caller is the first entry from the right; behind the
+  # Vercel site (x-agent-team-edge matches AGENT_TEAM_EDGE_SECRET) it is one further left (apps/server identity.mjs).
+  AGENT_TEAM_PROXY_HOPS = "1"
+
 [http_service]
   internal_port = 8080
   force_https = true

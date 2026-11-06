@@ -9,6 +9,7 @@ import {
   setOwnsPaths, setSignoffEvidence, setWakesOn, signoffEvidence, splitBrief, wakesOn,
 } from './team-model.mjs';
 import { roleSystemsHtml, wireBindings } from './panels.js';
+import { packNeeds } from './agents.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const field = (md, name) => (new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm').exec(md ?? '')?.[1] ?? '').trim();
@@ -74,6 +75,11 @@ export function createAgentEditor(root, app) {
   let slug = null;
   const origins = new Map(); // slug → { from, md }: what a copy started from, to mark what differs
   let unresolved = { key: '', list: [] };
+  // Path conflicts (criterion 9, D5): an area that clashes is held here, never written as a second writer.
+  let pending = null; // { path, clashes } for a new area that another role writes
+  let narrow = null; // which conflict shows the "narrower area" input: 'new' or a row index
+  let confirmMove = null; // which conflict asked for a second click, because its writer is working now
+  let board = null; // the live board, fetched when a move is asked for
   let graphTimer = null;
 
   const brief = () => app.spec().roles[slug]?.brief ?? '';
@@ -86,6 +92,7 @@ export function createAgentEditor(root, app) {
 
   function open(s, origin) {
     slug = s;
+    pending = narrow = confirmMove = board = null;
     if (origin) origins.set(s, origin);
     document.body.classList.add('editing');
     root.hidden = false;
@@ -100,6 +107,33 @@ export function createAgentEditor(root, app) {
   }
 
   // ---------------------------------------------------------------------------------------------- drawing
+
+  const nameOf = (s) => app.roles().find((r) => r.slug === s)?.title ?? s;
+  /** What the board says a role is doing now, or null: working, or with an open branch or pull request. */
+  function busy(writer) {
+    const c = (board?.current ?? []).find((x) => x.role === writer && !x.instance);
+    return c && (c.status === 'working' || c.branch || c.pr) ? c : null;
+  }
+
+  /** A clash shown where it happens, with the three ways out (criterion 9). Two writers is never one of them. */
+  function conflictHtml(key, path, clashes) {
+    const who = clashes.map((c) => nameOf(c.writer)).join(' and ');
+    const at = clashes[0].path;
+    const b = clashes.map((c) => busy(c.writer)).find(Boolean);
+    const asked = confirmMove === key;
+    return `<div class="conflict" role="alert" data-conflict="${key}">
+      <p><strong>${esc(who)} already ${clashes.length > 1 ? 'write' : 'writes'} <code>${esc(at)}</code>.</strong> Two writers on one area breaks the one-writer rule; everyone else asks the writer.</p>
+      ${asked && b ? `<p class="busy">${esc(nameOf(b.role))} is working now${b.task ? ` on "${esc(b.task)}"` : ''}${b.branch ? `, branch <code>${esc(b.branch)}</code>` : ''}${b.pr ? `, PR #${esc(b.pr)}` : ''}. Moving the area changes work in flight; it should finish or hand over first.</p>` : ''}
+      <div class="opts">
+        <button type="button" data-fix="reads" data-key="${key}">Read only, send fixes to ${esc(nameOf(clashes[0].writer))} as BUG</button>
+        <button type="button" data-fix="narrow" data-key="${key}" aria-expanded="${narrow === key}">Take a narrower area</button>
+        <button type="button" data-fix="move" data-key="${key}" class="${asked ? 'warn' : ''}">${asked ? 'Move it anyway' : 'Move the whole area to this agent…'}</button>
+        ${key === 'new' ? `<button type="button" class="link" data-fix="cancel" data-key="new">Cancel</button>` : ''}
+      </div>
+      ${narrow === key ? `<div class="add-row"><input data-narrow="${key}" value="${esc(path)}" aria-label="A narrower area, inside or beside ${esc(path)}" spellcheck="false" autocomplete="off"><button type="button" data-fix="narrow-ok" data-key="${key}">Take this area</button></div>
+        <p class="hint">An area that does not overlap <code>${esc(at)}</code>: one beside it, or a part of <code>${esc(path)}</code> that ${esc(who)} does not write.</p><p class="result error" data-narrow-msg="${key}" role="alert"></p>` : ''}
+    </div>`;
+  }
 
   function draw() {
     if (!slug) return;
@@ -123,6 +157,9 @@ export function createAgentEditor(root, app) {
     const resources = app.spec().resources?.resources ?? [];
     const bound = new Set((app.spec().resources?.bindings ?? []).filter((b) => b.role === slug).map((b) => b.resource));
     const free = resources.filter((r) => !bound.has(r.id));
+    // What an imported pack says it needs (criterion 12): asked, never bound until the owner says which one.
+    const boundTypes = new Set(resources.filter((r) => bound.has(r.id)).map((r) => r.type));
+    const needs = (packNeeds.get(slug) ?? []).filter((t) => !boundTypes.has(t));
     const wake = (type, label, value, placeholder) => `<div class="wake"><label class="row"><input type="checkbox" data-wake="${type}" ${has(type) ? 'checked' : ''}> ${label}</label>${value ? `<input data-wake-value="${type}" value="${esc(has(type)?.value ?? '')}" placeholder="${esc(placeholder)}" aria-label="${esc(label)}: ${esc(placeholder)}">` : ''}</div>`;
 
     root.innerHTML = `
@@ -165,15 +202,22 @@ export function createAgentEditor(root, app) {
               return `<div class="area-row"><code>${esc(p.path)}</code>
                 <select data-mode="${i}" aria-label="What it does with ${esc(p.path)}"><option value="writes" ${p.mode === 'writes' ? 'selected' : ''}>writes</option><option value="reads" ${p.mode === 'reads' ? 'selected' : ''}>reads</option></select>
                 <button type="button" class="link" data-remove-area="${i}">Remove</button></div>
-                ${clash.length ? `<div class="conflict" role="alert"><strong>${esc(clash.map((c) => c.writer).join(', '))} already ${clash.length > 1 ? 'write' : 'writes'} ${esc(clash[0].path)}.</strong> Two writers on one area breaks the one-writer rule. Make this one "reads", or pick a narrower area.</div>` : ''}`;
-            }).join('') || '<p class="muted">No areas yet.</p>'}
+                ${p.note ? `<p class="hint area-note">${esc(p.note)}</p>` : ''}
+                ${clash.length ? conflictHtml(String(i), p.path, clash) : ''}`;
+            }).join('') || (pending ? '' : '<p class="muted">No areas yet.</p>')}
+            ${pending ? `<div class="area-row pending"><code>${esc(pending.path)}</code><span class="muted">${pending.held ? 'writes: not changed yet' : 'not added yet'}</span><span></span></div>${conflictHtml('new', pending.path, pending.clashes)}` : ''}
             <div class="add-row"><input id="e-area" placeholder="for example contracts/ or docs/handbook.md" aria-label="Area to add" autocomplete="off" spellcheck="false"><button type="button" id="e-area-add">Add an area</button></div>
-            ${owns.prose && !example('owns', owns.prose) ? `<p class="hint">Also in this section: ${esc(owns.prose)}</p>` : ''}
+            ${ownProse(owns.prose) ? `<p class="hint">Also in this section: ${esc(owns.prose)}</p>` : ''}
           </section>
 
           <section id="sec-tools"><h2>Tools and systems</h2>
             <div class="chips">${tools.map((t, i) => `<span class="chip">${esc(t)}<button type="button" data-remove-tool="${i}" aria-label="Remove ${esc(t)}">×</button></span>`).join('')}
               <span class="add-row inline"><input id="e-tool" placeholder="Add a tool, skill or connected service" aria-label="Tool to add" autocomplete="off"><button type="button" id="e-tool-add">Add</button></span></div>
+            ${needs.map((t, i) => { const fit = free.filter((r) => r.type === t);
+              return `<div class="need" data-need="${i}"><p><strong>Needs a ${esc(t)}</strong>: connect one or skip. The pack it came from used one.</p>
+                <div class="add-row">${fit.length ? `<select data-need-res="${i}" aria-label="The ${esc(t)} to connect">${fit.map((r) => `<option value="${esc(r.id)}">${esc(r.name || r.id)}</option>`).join('')}</select>
+                <select data-need-perm="${i}" aria-label="Permission for the ${esc(t)}"><option>read</option><option>write</option></select><button type="button" data-need-connect="${i}">Connect</button>` : `<span class="muted">This team has no ${esc(t)} set up yet; add one under Systems first.</span>`}
+                <button type="button" class="link" data-need-skip="${i}">Skip</button></div></div>`; }).join('')}
             <div class="ed-systems">${roleSystemsHtml(app.ctx, slug).replace('<h2>Systems</h2>', '')}</div>
             ${free.length ? `<div class="add-row"><select id="e-bind" aria-label="System to connect"><option value="">Connect a system…</option>${free.map((r) => `<option value="${esc(r.id)}">${esc(r.name || r.id)}</option>`).join('')}</select>
               <select id="e-bind-perm" aria-label="Permission"><option>read</option><option>write</option><option>deploy</option></select><button type="button" id="e-bind-add">Connect</button></div>` : ''}
@@ -196,8 +240,8 @@ export function createAgentEditor(root, app) {
 
           <section id="sec-hands"><h2>Hands to</h2>
             <p class="hint">Who this agent sends work to, and with which message.</p>
-            <textarea id="e-hands-text" aria-label="Hands to" rows="3" placeholder="${esc(hint('hands to', 'The roles it passes work to'))}, for example web-dev (BUG), qa-web (SIGNOFF)">${esc(own('hands to', md))}</textarea>
-            <div class="add-row"><select id="e-hand-role" aria-label="Role">${team.filter((r) => r.slug !== slug).map((r) => `<option value="${esc(r.slug)}">${esc(r.title)}</option>`).join('')}</select>
+            <textarea id="e-hands-text" aria-label="Hands to" rows="3" placeholder="${esc(hint('hands to', 'The roles it passes work to').replace(/\.$/, ''))}, for example Chief of staff (HANDOFF)">${esc(own('hands to', md))}</textarea>
+            <div class="add-row"><select id="e-hand-role" aria-label="Role"><option value="">Choose a role</option>${team.filter((r) => r.slug !== slug).map((r) => `<option value="${esc(r.slug)}">${esc(r.title)}</option>`).join('')}</select>
               <select id="e-hand-kind" aria-label="Message">${KINDS.map((k) => `<option>${k}</option>`).join('')}</select><button type="button" id="e-hand-add">Add</button></div>
           </section>
 
@@ -227,6 +271,9 @@ export function createAgentEditor(root, app) {
     const f = root.querySelector('.ed-form');
     if (f) f.scrollTop = scroll;
   }
+
+  /** The prose kept beside the areas: not the template's example, and not the "Nothing yet" an empty list writes. */
+  const ownProse = (p) => (example('owns', p) || /^nothing yet\.?$/i.test(p.trim()) ? '' : p);
 
   /** The manager the brief names: the first word of its Reports to line, which is what sync and the runner read. */
   const managerOf = (md) => field(md, 'Reports to').trim().split(/\s/)[0] ?? '';
@@ -326,7 +373,7 @@ export function createAgentEditor(root, app) {
     const typed = (sel, key, fn) => { const el = $(sel); if (el) el.oninput = () => edit((md) => fn(md, el.value), key); };
     typed('#e-title', 'title', (md, v) => (v.trim() ? setBriefTitle(md, v.trim()) : md));
     // Sync needs an Identity, so a cleared one goes back to the template's example (and the checks say so).
-    typed('#e-identity-text', 'identity', (md, v) => setText(md, 'Identity', v.trim() ? v : tpl.get('identity') ?? ''));
+    typed('#e-identity-text', 'identity', (md, v) => setText(md, 'Identity', v));
     typed('#e-rules-text', 'rules', (md, v) => setText(md, 'Rules', v));
     typed('#e-hands-text', 'hands', (md, v) => setText(md, 'Hands to', v));
     typed('#e-wakes-text', 'wakes-text', (md, v) => { const w = wakesOn(md); return setWakesOn(md, { triggers: w.triggers, text: v.split('\n').filter((l) => l.trim()).map((l) => `- ${l.trim()}`) }); });
@@ -343,14 +390,77 @@ export function createAgentEditor(root, app) {
     $('#e-newgroup').onchange = (e) => { const g = e.target.value.trim().toLowerCase(); if (GROUP.test(g)) edit((md) => setBriefField(md, 'Group', g)); else e.target.setCustomValidity('Lower-case letters, digits, spaces and hyphens'), e.target.reportValidity(); };
 
     // What it owns
-    const setPaths = (fn) => edit((md) => { const o = ownsPaths(md); return setOwnsPaths(md, fn(o.paths), example('owns', o.prose) ? '' : o.prose); });
-    for (const sel of root.querySelectorAll('[data-mode]')) sel.onchange = () => setPaths((ps) => ps.map((p, i) => (i === Number(sel.dataset.mode) ? { ...p, mode: sel.value } : p)));
+    const setPaths = (fn) => edit((md) => { const o = ownsPaths(md); return setOwnsPaths(md, fn(o.paths), ownProse(o.prose)); });
+    for (const sel of root.querySelectorAll('[data-mode]')) sel.onchange = () => {
+      const i = Number(sel.dataset.mode);
+      const p = ownsPaths(brief()).paths[i];
+      // Turning a "reads" into "writes" on someone else's area is held, like a new area: never two writers in the draft.
+      const clashes = sel.value === 'writes' ? pathConflicts(app.spec(), slug, p.path) : [];
+      // The row stays as it is (reads) until a choice is made, so Cancel loses nothing.
+      if (clashes.length) { pending = { path: p.path, clashes, held: true }; narrow = confirmMove = null; return draw(); }
+      setPaths((ps) => ps.map((q, j) => (j === i ? { ...q, mode: sel.value, note: sel.value === 'writes' ? '' : q.note } : q)));
+    };
     for (const b of root.querySelectorAll('[data-remove-area]')) b.onclick = () => setPaths((ps) => ps.filter((_, i) => i !== Number(b.dataset.removeArea)));
     const addArea = () => {
       const v = $('#e-area').value.trim().replace(/^\.?\//, '');
-      if (!v || /\s/.test(v) || v.includes('..')) { $('#e-area').setCustomValidity('A folder or file in the repository, with no spaces or ".."'); return $('#e-area').reportValidity(); }
+      if (!v || /\s/.test(v) || v.includes('..')) { $('#e-area').setCustomValidity('A folder or a file, with no spaces or ".."'); return $('#e-area').reportValidity(); }
+      const clashes = pathConflicts(app.spec(), slug, v);
+      if (clashes.length) { pending = { path: v, clashes }; narrow = confirmMove = null; return draw(); }
       setPaths((ps) => (ps.some((p) => p.path === v) ? ps : [...ps, { path: v, mode: 'writes', note: '' }]));
     };
+
+    // The three ways out of a clash. `key` is 'new' (the held area) or the index of an existing row.
+    const place = (key, entry) => {
+      if (key === 'new') pending = null;
+      narrow = confirmMove = null;
+      setPaths((ps) => (key === 'new' ? [...ps.filter((p) => p.path !== entry.path), entry] : ps.map((p, i) => (i === Number(key) ? entry : p))));
+    };
+    const clashOf = (key) => (key === 'new' ? pending : (() => { const p = ownsPaths(brief()).paths[Number(key)]; return { path: p.path, clashes: pathConflicts(app.spec(), slug, p.path) }; })());
+    for (const b of root.querySelectorAll('[data-fix]')) b.onclick = async () => {
+      const key = b.dataset.key;
+      const c = clashOf(key);
+      const fix = b.dataset.fix;
+      if (fix === 'cancel') { pending = null; narrow = confirmMove = null; return draw(); }
+      if (fix === 'reads') return place(key, { path: c.path, mode: 'reads', note: `fixes go to ${c.clashes[0].writer} as BUG` });
+      if (fix === 'narrow') { narrow = narrow === key ? null : key; draw(); return root.querySelector(`[data-narrow="${key}"]`)?.focus(); }
+      if (fix === 'narrow-ok') {
+        const v = root.querySelector(`[data-narrow="${key}"]`).value.trim().replace(/^\.?\//, '');
+        const msg = root.querySelector(`[data-narrow-msg="${key}"]`);
+        if (!v || /\s/.test(v) || v.includes('..')) { msg.textContent = 'A folder or a file, with no spaces or "..".'; return; }
+        const still = pathConflicts(app.spec(), slug, v);
+        if (still.length) { msg.textContent = `${v} still overlaps ${still[0].path}, which ${nameOf(still[0].writer)} writes. Pick an area beside it.`; return; }
+        return place(key, { path: v, mode: 'writes', note: '' });
+      }
+      if (fix === 'move') {
+        // D5: if the writer is working now, say so and ask for a second click.
+        if (confirmMove !== key) {
+          try { board = (await app.api('/v1/team/board')).board ?? null; } catch { board = null; }
+          if (c.clashes.some((x) => busy(x.writer))) { confirmMove = key; return draw(); }
+        }
+        const moved = c.clashes;
+        if (key === 'new') pending = null;
+        narrow = confirmMove = null;
+        app.change((sp) => {
+          for (const x of moved) {
+            const row = (sp.ownership?.rows ?? []).find((r) => r.path === x.path && r.writer === x.writer);
+            if (row) row.writer = slug;
+            const other = sp.roles[x.writer];
+            if (other?.brief !== undefined) { const o = ownsPaths(other.brief); other.brief = setOwnsPaths(other.brief, o.paths.filter((p) => !(p.path === x.path && p.mode === 'writes')), o.prose); }
+          }
+          // "The whole area": this agent gets every area it took over, plus what was typed when that is wider; a path
+          // inside another it now writes is dropped, so ownership.json and the brief say the same thing.
+          const norm = (q) => q.replace(/\*+$/, '');
+          const all = [...new Set([c.path, ...moved.map((x) => x.path)])];
+          const wide = all.filter((q) => !all.some((r) => r !== q && norm(q).startsWith(norm(r))));
+          const entries = wide.map((q) => ({ path: q, mode: 'writes', note: '' }));
+          const o = ownsPaths(sp.roles[slug].brief);
+          const rest = o.paths.filter((p, i) => (key === 'new' || i !== Number(key)) && !wide.some((q) => norm(p.path).startsWith(norm(q))));
+          const paths = [...rest, ...entries];
+          sp.roles[slug].brief = setOwnsPaths(sp.roles[slug].brief, paths, ownProse(o.prose));
+        });
+      }
+    };
+    for (const i of root.querySelectorAll('[data-narrow]')) i.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); root.querySelector(`[data-fix="narrow-ok"][data-key="${i.dataset.narrow}"]`).click(); } };
     $('#e-area-add').onclick = addArea;
     $('#e-area').onkeydown = (e) => { $('#e-area').setCustomValidity(''); if (e.key === 'Enter') { e.preventDefault(); addArea(); } };
 
@@ -361,6 +471,18 @@ export function createAgentEditor(root, app) {
     $('#e-tool-add').onclick = addTool;
     $('#e-tool').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addTool(); } };
     wireBindings(root.querySelector('.ed-systems'), app.ctx);
+    const needList = () => { const rs = app.spec().resources?.resources ?? []; const mine = new Set((app.spec().resources?.bindings ?? []).filter((b) => b.role === slug).map((b) => rs.find((r) => r.id === b.resource)?.type)); return (packNeeds.get(slug) ?? []).filter((t) => !mine.has(t)); };
+    for (const b of root.querySelectorAll('[data-need-skip]')) b.onclick = () => {
+      const t = needList()[Number(b.dataset.needSkip)];
+      packNeeds.set(slug, (packNeeds.get(slug) ?? []).filter((x) => x !== t));
+      draw();
+    };
+    for (const b of root.querySelectorAll('[data-need-connect]')) b.onclick = () => {
+      const i = b.dataset.needConnect;
+      const id = root.querySelector(`[data-need-res="${i}"]`).value;
+      const permission = root.querySelector(`[data-need-perm="${i}"]`).value;
+      app.change((s) => { s.resources.bindings ??= []; s.resources.bindings.push({ role: slug, resource: id, permission }); });
+    };
     const bind = $('#e-bind-add');
     if (bind) bind.onclick = () => {
       const id = $('#e-bind').value;
@@ -389,8 +511,9 @@ export function createAgentEditor(root, app) {
     // Hands to
     $('#e-hand-add').onclick = () => {
       const r = $('#e-hand-role').value;
-      if (!r) return;
-      edit((md) => { const cur = own('hands to', md).trim(); return setBriefSection(md, 'Hands to', `${cur ? `${cur}${/[,\n]$/.test(cur) ? '' : ','} ` : ''}${r} (${$('#e-hand-kind').value})`); });
+      if (!r) return $('#e-hand-role').focus();
+      // By name, as the owner reads it; the kit resolves titles as well as slugs.
+      edit((md) => { const cur = own('hands to', md).trim(); return setBriefSection(md, 'Hands to', `${cur ? `${cur}${/[,\n]$/.test(cur) ? '' : ','} ` : ''}${nameOf(r).replace(/\s*\([^)]*\)/g, '')} (${$('#e-hand-kind').value})`); });
     };
 
     // Sign-off evidence

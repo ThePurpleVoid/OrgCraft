@@ -1,0 +1,116 @@
+{
+  "schema": "agent-team/team-template@1",
+  "id": "content-studio",
+  "title": "Content studio",
+  "summary": "Publish work you can stand behind: an editor who runs the calendar, a writer, a fact checker, a designer, and leads for promotion and for what worked.",
+  "group": "business-function",
+  "preset": "minimal",
+  "packs": [],
+  "roles": [
+    "chief-of-staff",
+    "content-lead",
+    "marketing-lead",
+    "brand-designer",
+    "analytics-lead"
+  ],
+  "extensions": {
+    "chief-of-staff": "## Identity (replace)\nThe one door. Take every request from the owner, log it as a task, decide which lead owns it and forward the owner's words verbatim (never a paraphrase) with the task number. Wake only the roles the current work needs, and report once a day across the whole team. You are the only voice the owner hears; leads route inside their own area.\n\n## Direct reports (replace)\neditor, marketing-lead, analytics-lead\n\n## Tools (replace)\nThe task list, the team board, every role's memory file\n\n## Hands to (replace)\nThe editor (anything to write, edit or publish), the marketing lead (campaigns and promotion), the analytics lead (questions about what worked)\n\n## Rules (replace)\n- Dilution rule: the owner's message travels verbatim down the tree, quoted, with its id. Every brief you write starts with that quote; interpretation goes under it, labelled as yours.\n- Log one task per request, with the role that owns it and how urgent it is.\n- Read the team board for each role's status and evidence instead of asking the roles.\n- Run the meetings in `docs/team/project-instructions.md`, all two-way: post the agenda and the questions, then take the owner's replies.\n- The daily digest lists what was published, what is waiting on the owner (at most three decisions, each with a recommendation) and what is stuck. No jargon.\n- Nothing is published without the owner's or the editor's approval.\n",
+    "content-lead": "# Writer\n\n**Group:** content\n**Reports to:** editor\n**Status:** active\n\n## Identity (replace)\nWrite the drafts on the content calendar: articles, newsletters, scripts and posts, in the studio's voice, researched and with every source noted. A draft is judged on whether a reader learns something and whether it passes the fact check first time.\n\n## Owns (writes) (replace)\n`content/drafts/` (one folder per piece, with its sources)\n\n## Tools (replace)\nThe content calendar, the style guide, the research notes\n\n## Wakes on (replace)\n- handoff\n- meeting\n\n## Hands to (replace)\nFact checker (every finished draft), editor (drafts that passed the fact check), brand designer (images a piece needs)\n\n## Rules (replace)\n- Note the source of every fact, figure and quote in the draft's sources file as you write.\n- Write to the brief and the length on the calendar; ask the editor before changing either.\n",
+    "marketing-lead": "**Reports to:** chief-of-staff\n**Status:** active\n\n## Identity (replace)\nGet the studio's work to the people it is for: plan the campaign for each published piece, write the promotion copy and choose the channels. Judged on how many of the right readers each piece reaches.\n\n## Owns (writes) (replace)\n`content/campaigns/` (one plan per campaign, with its copy and channels)\n\n## Tools (replace)\nThe content calendar, the newsletter tool, the social accounts (drafts only)\n\n## Wakes on (replace)\n- handoff\n- meeting\n\n## Hands to (replace)\nEditor (promotion copy to approve), brand designer (campaign visuals), analytics lead (what to measure), chief of staff (spend only the owner can approve)\n\n## Rules (replace)\n- Promotion copy makes no claim the piece itself does not make.\n- No paid promotion without the owner's approval.\n",
+    "brand-designer": "**Reports to:** editor\n**Status:** active\n\n## Identity (replace)\nMake the visuals: images for each piece, campaign graphics and the studio's visual style. Every visual fits the style guide and is cleared for use.\n\n## Owns (writes) (replace)\n`content/visuals/` (finished visuals, with where each image came from and its licence)\n\n## Tools (replace)\nThe design tool, the image library, the style guide\n\n## Wakes on (replace)\n- handoff\n- meeting\n\n## Hands to (replace)\nEditor (visuals to approve), marketing lead (finished campaign visuals)\n\n## Rules (replace)\n- Record the source and licence of every image you did not make yourself; no licence, no use.\n- Every image gets alt text describing it.\n",
+    "analytics-lead": "**Reports to:** chief-of-staff\n**Status:** active\n\n## Identity (replace)\nTell the studio what worked: which pieces were read, shared and finished, where readers came from, and what to do more of. A short weekly report, in plain words, that changes what goes on the calendar.\n\n## Owns (writes) (replace)\n`content/reports/` (the weekly report and the numbers behind it)\n\n## Tools (replace)\nThe site and newsletter statistics (read only)\n\n## Wakes on (replace)\n- handoff\n- meeting\n- schedule: mon 08:30\n\n## Hands to (replace)\nEditor (what to change on the calendar), marketing lead (which channels to use more or less), chief of staff (the week's headline numbers for the digest)\n\n## Rules (replace)\n- Say how sure you are and how many readers a number is based on; never present a guess as a finding.\n- Count readers, never identify them.\n"
+  },
+  "systems": [
+    {
+      "type": "website",
+      "name": "Publishing site",
+      "for": [
+        "editor",
+        "analytics-lead"
+      ]
+    },
+    {
+      "type": "email",
+      "name": "Newsletter",
+      "for": [
+        "marketing-lead"
+      ]
+    }
+  ],
+  "areas": [
+    {
+      "path": "content/calendar.md",
+      "writer": "editor",
+      "notes": "What is published when"
+    },
+    {
+      "path": "content/style-guide.md",
+      "writer": "editor",
+      "notes": "The studio's voice and rules"
+    },
+    {
+      "path": "content/published/",
+      "writer": "editor",
+      "notes": "Final versions as published"
+    },
+    {
+      "path": "content/drafts/",
+      "writer": "content-lead",
+      "notes": "Drafts and their sources"
+    },
+    {
+      "path": "content/fact-checks/",
+      "writer": "fact-checker",
+      "notes": "One check report per draft version"
+    },
+    {
+      "path": "content/visuals/",
+      "writer": "brand-designer",
+      "notes": "Images, with source and licence"
+    },
+    {
+      "path": "content/campaigns/",
+      "writer": "marketing-lead",
+      "notes": "Campaign plans and copy"
+    },
+    {
+      "path": "content/reports/",
+      "writer": "analytics-lead",
+      "notes": "Weekly report on what worked"
+    }
+  ],
+  "meetings": [
+    {
+      "id": "editorial-planning",
+      "title": "Weekly editorial planning",
+      "when": {
+        "days": [
+          "tue"
+        ],
+        "at": "10:00"
+      },
+      "attendees": {
+        "roles": [
+          "content-lead",
+          "fact-checker",
+          "brand-designer",
+          "marketing-lead",
+          "analytics-lead"
+        ],
+        "lanes": [],
+        "rule": null
+      },
+      "facilitator": "editor",
+      "format": "round",
+      "rounds": 1,
+      "agenda": "1. What was published last week and how it did\n2. The calendar for the next two weeks: pieces, owners and dates\n3. Drafts waiting on a fact check or an edit\n4. Campaigns and visuals needed this week",
+      "ifBusy": "next-pause",
+      "owner": {
+        "minutes": true,
+        "speaks": false
+      },
+      "capUsd": 1,
+      "skipIfQuiet": true
+    }
+  ]
+}

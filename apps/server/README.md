@@ -168,8 +168,13 @@ OpenID-Certified library: `identity.mjs` holds its storage adapter and our polic
   `AGENT_TEAM_OWNER_GITHUB`, and `AGENT_TEAM_PROXY_HOPS` with `AGENT_TEAM_EDGE_SECRET` so rate limits read the caller's IP from our own proxies (from the right of `x-forwarded-for`), never from a client. The signing key is made on
   first start and sealed in the vault.
 
-Still to come (order 2): passkeys and step-up for signed-in people, roles on every route (until then a signed-in
-person can read, and only an owner can write), bearer tokens from the apps on `/v1`, and retiring the admin token.
+- **Passkeys and step-up** (`passkeys.mjs`, on @simplewebauthn/server). A person adds a passkey at
+  `/v1/me/passkeys`: the first one within 5 minutes of signing in, later ones with step-up. Step-up is
+  `GET /v1/auth/step-up/challenge`, then `POST /v1/auth/step-up { webauthn }`, which returns a single-use `su_` for
+  this person in this workspace. The typed secret is refused once sign-in is on.
+
+Still to come (order 2): roles on every route (until then a member can read, and only an owner can write), bearer
+tokens from the apps on `/v1`, member management, and retiring the admin token.
 
 ## Host it in another server
 
