@@ -245,7 +245,7 @@ export class Session {
     // Writes made from the shell skip the file tools' check, so nothing that touches paths outside the owned areas
     // leaves the working copy: a push or a pull request is refused until those changes are undone.
     if (tool === 'Bash' && /\bgit\s+push\b|\bgh\s+pr\s+create\b/.test(String(input.command ?? '')) && this.copy?.branch) {
-      const o = await outOfArea({ cwd: this.copy.cwd, base: this.copy.base, areas: this.body.areas ?? [] }).catch(() => ({ committed: [], uncommitted: [] }));
+      const o = await outOfArea({ cwd: this.copy.cwd, areas: this.body.areas ?? [] }).catch((e) => ({ committed: [`(the branch could not be checked: ${e.message})`], uncommitted: [] }));
       if (o.committed.length) {
         await this.emit('session.tool', { tool, target: String(input.command).slice(0, 500), decision: 'refused', rule: 'ownership', detail: o.committed.slice(0, 20).join(', ') });
         return { allow: false, reason: `This branch's commits change paths outside your owned areas (${o.committed.slice(0, 10).join(', ')}). Undo those changes, and send a request to the owner of each path instead.` };

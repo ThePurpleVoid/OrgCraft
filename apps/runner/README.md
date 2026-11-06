@@ -26,12 +26,15 @@ may be under someone else's control.
 
 - **No credentials.** Each session gets its own empty `HOME` and an allowlisted environment (`PATH`, locale, `TERM`;
   more only by the runner's `sessionEnv`). The model key stays in the runner: sessions reach the model through a
-  loopback proxy, with a token of their own that dies with the session (`modelproxy.mjs`). The runner key and the
+  loopback proxy, with a token of their own that dies with the session and works only for the messages API
+  (`modelproxy.mjs`). The runner key and the
   session's tool token never enter it.
 - **No pushing.** The session's environment holds nothing that can push. The runner pushes at checkpoints, with its
   own credential (`AGENT_TEAM_RUNNER_GITCONFIG`, a token that can push branches but not the default branch), and only
-  after it has checked every changed path against the owned areas (writes from the shell included), refused symlinks
-  that leave the copy, and scanned for secrets (`worktree.mjs`, `secrets.mjs`). Settings that steer agents or CI
+  after it has checked every commit since the base it recorded when the session started (paths touched in any
+  commit, the lines each commit adds, and the commit messages) against the owned areas and the secret scan, and
+  refused symlinks that leave the copy (`worktree.mjs`, `secrets.mjs`). If git cannot read that history, nothing
+  is pushed. Settings that steer agents or CI
   (`.claude/`, `.mcp.json`, `.github/workflows/`, `.git*`) leave only when an area names them.
 - **No planted code.** Each session has its own clone, sharing nothing with other sessions. Before every git command
   the runner runs there, it rewrites `.git/config` from its own template and clears the hooks, and it runs git with
@@ -91,7 +94,8 @@ the machine happens to have.
 
 ## Not yet
 
-Sessions as a separate OS user inside the container (today they share the runner's user, so a hostile shell could
-still read the runner's process environment), microVM sandboxes, merging and opening pull requests with the runner's
+Sessions as a separate OS user inside the container, with the runner's data folder closed to them (today they
+share the runner's user, so a hostile shell could still read the runner's process environment and its data folder;
+this must land before a real model key is set), microVM sandboxes, merging and opening pull requests with the runner's
 own credential after an approval, `secret.get` (M4, with the GitHub App), the subagents run mode, and the long-poll
 transport.

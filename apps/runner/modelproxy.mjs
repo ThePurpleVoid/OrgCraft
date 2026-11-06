@@ -7,6 +7,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 
 const HOP = new Set(['host', 'connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authorization', 'proxy-connection', 'content-length', 'x-api-key', 'authorization']);
+/** The only model API calls a session may make through the proxy (F4). */
+const ALLOWED = new Set(['POST /v1/messages', 'POST /v1/messages/count_tokens']);
 const same = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && timingSafeEqual(x, y); };
 
 /**
@@ -21,6 +23,7 @@ export function startModelProxy({ upstream = process.env.ANTHROPIC_BASE_URL || '
     const token = tokens.get(session);
     const given = req.headers['x-api-key'] ?? (/^Bearer (.+)$/.exec(req.headers.authorization ?? '') ?? [])[1];
     if (!token || !given || !same(given, token)) { res.writeHead(401, { 'content-type': 'application/json' }); return res.end('{"type":"error","error":{"type":"authentication_error","message":"not a live session of this runner"}}'); }
+    if (!ALLOWED.has(`${req.method} ${m[2] ?? '/'}`)) { res.writeHead(403, { 'content-type': 'application/json' }); return res.end('{"type":"error","error":{"type":"permission_error","message":"the runner forwards only the messages API"}}'); }
     const real = key();
     if (!real) { res.writeHead(503, { 'content-type': 'application/json' }); return res.end('{"type":"error","error":{"type":"api_error","message":"the runner has no model key"}}'); }
     const headers = {};

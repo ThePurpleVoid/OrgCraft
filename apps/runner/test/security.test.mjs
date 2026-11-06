@@ -115,3 +115,77 @@ test('R4: secrets, key files and escaping symlinks are never pushed; the memory 
   assert.equal(redactSecrets('use ghp_abcdefghijklmnopqrstuvwxyz0123456789 and sess-x12345678', ['sess-x12345678']), 'use [redacted] and [redacted]');
   release(w.cwd, 'r4b');
 });
+
+test('F1: moving or deleting origin/<base> in the clone does not shrink what the checkpoint checks', async () => {
+  const { bare, root } = origin();
+  const w = await prepare({ root, repo: { url: bare }, worktree: 'web/f1', session: 'f1' });
+  writeFileSync(join(w.cwd, 'server.mjs'), 'not mine\n');
+  agentGit(w.cwd, 'add', '-A'); agentGit(w.cwd, 'commit', '-qm', 'outside');
+  agentGit(w.cwd, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  let r = await checkpoint({ cwd: w.cwd, branch: 'web/f1', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.refused?.rule, 'ownership', 'a moved base ref is ignored');
+  agentGit(w.cwd, 'update-ref', '-d', 'refs/remotes/origin/main');
+  r = await checkpoint({ cwd: w.cwd, branch: 'web/f1', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.refused?.rule, 'ownership', 'a deleted base ref is ignored');
+  // When the history cannot be read at all, nothing is pushed.
+  agentGit(w.cwd, 'replace', '--graft', 'HEAD');
+  execFileSync('rm', ['-rf', join(w.cwd, '.git', 'objects')]); mkdirSync(join(w.cwd, '.git', 'objects'));
+  r = await checkpoint({ cwd: w.cwd, branch: 'web/f1', role: 'web-dev', reason: 't', areas: ['**'] }).catch((e) => ({ thrown: e }));
+  assert.ok(r.thrown || r.pushed === false, 'fails closed');
+  assert.throws(() => sh(bare, 'show', 'web/f1:server.mjs'));
+  release(w.cwd, 'f1');
+});
+
+test('F2: a secret or outside path committed and later removed is still caught, and so is one in a commit message', async () => {
+  const { bare, root } = origin();
+  const w = await prepare({ root, repo: { url: bare }, worktree: 'web/f2', session: 'f2' });
+  mkdirSync(join(w.cwd, 'web'));
+  writeFileSync(join(w.cwd, 'web', 'a.js'), "const k = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123';\n");
+  agentGit(w.cwd, 'add', '-A'); agentGit(w.cwd, 'commit', '-qm', 'add');
+  writeFileSync(join(w.cwd, 'web', 'a.js'), 'const k = process.env.K;\n');
+  agentGit(w.cwd, 'add', '-A'); agentGit(w.cwd, 'commit', '-qm', 'remove');
+  let r = await checkpoint({ cwd: w.cwd, branch: 'web/f2', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.refused?.rule, 'secret-scan');
+  assert.match(r.error, /web\/a\.js: anthropic key/);
+  assert.throws(() => sh(bare, 'rev-parse', '--verify', 'refs/heads/web/f2'));
+
+  const v = await prepare({ root, repo: { url: bare }, worktree: 'web/f2b', session: 'f2b' });
+  writeFileSync(join(v.cwd, 'server.mjs'), 'x\n');
+  agentGit(v.cwd, 'add', '-A'); agentGit(v.cwd, 'commit', '-qm', 'outside');
+  agentGit(v.cwd, 'rm', '-q', 'server.mjs'); agentGit(v.cwd, 'commit', '-qm', 'gone');
+  r = await checkpoint({ cwd: v.cwd, branch: 'web/f2b', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.refused?.rule, 'ownership', 'a path touched in any commit counts');
+
+  const m = await prepare({ root, repo: { url: bare }, worktree: 'web/f2c', session: 'f2c' });
+  mkdirSync(join(m.cwd, 'web'));
+  writeFileSync(join(m.cwd, 'web', 'ok.txt'), 'fine\n');
+  agentGit(m.cwd, 'add', '-A'); agentGit(m.cwd, 'commit', '-qm', 'token ghp_abcdefghijklmnopqrstuvwxyz0123456789');
+  r = await checkpoint({ cwd: m.cwd, branch: 'web/f2c', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.refused?.rule, 'secret-scan');
+  assert.match(r.error, /commit message: github token/);
+  // A clean branch still goes.
+  const ok = await prepare({ root, repo: { url: bare }, worktree: 'web/f2d', session: 'f2d' });
+  mkdirSync(join(ok.cwd, 'web'));
+  writeFileSync(join(ok.cwd, 'web', 'ok.txt'), 'fine\n');
+  r = await checkpoint({ cwd: ok.cwd, branch: 'web/f2d', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.pushed, true);
+  for (const [c, s] of [[w, 'f2'], [v, 'f2b'], [m, 'f2c'], [ok, 'f2d']]) release(c.cwd, s);
+});
+
+test('F4: the model proxy forwards only the messages API', async () => {
+  const { startModelProxy } = await import('../modelproxy.mjs');
+  const { createServer } = await import('node:http');
+  const seen = [];
+  const upstream = createServer((req, res) => { seen.push(`${req.method} ${req.url}`); res.writeHead(200); res.end('{}'); });
+  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+  const proxy = startModelProxy({ upstream: `http://127.0.0.1:${upstream.address().port}`, key: () => 'sk-ant-test-0123456789abcdefghij' });
+  await proxy.ready;
+  try {
+    const { baseUrl, token } = proxy.register('s');
+    const call = (method, path) => fetch(`${baseUrl}${path}`, { method, headers: { 'x-api-key': token }, body: method === 'POST' ? '{}' : undefined }).then((r) => r.status);
+    assert.equal(await call('POST', '/v1/messages'), 200);
+    assert.equal(await call('POST', '/v1/messages/count_tokens?beta=true'), 200);
+    for (const [method, path] of [['GET', '/v1/models'], ['POST', '/v1/files'], ['POST', '/v1/messages/batches'], ['GET', '/v1/organizations/me'], ['POST', '/v1/messages/../files']]) assert.equal(await call(method, path), 403, `${method} ${path}`);
+    assert.deepEqual(seen, ['POST /v1/messages', 'POST /v1/messages/count_tokens?beta=true']);
+  } finally { await proxy.close(); upstream.close(); }
+});
