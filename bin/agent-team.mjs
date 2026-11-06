@@ -11,11 +11,12 @@
 //   agent-team compile <spec.json>   write a TeamSpec back to .agent-team/, then sync
 //   agent-team validate      check the team: reporting lines, tiers, ownership, systems and bindings, secrets
 //   agent-team dashboard     open the live team dashboard (--port, --demo; "dashboard export --out dir" for a website)
+//   agent-team studio        edit the team visually in your browser, then publish it to a branch (--port, --open)
 //   agent-team doctor        smoke-test this setup: tools, sync, roster, hooks and the report pipeline (--ping posts a note)
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.5.0 init --preset engineering --project "My App"
+//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.6.0 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -442,6 +443,7 @@ function parseArgs(argv) {
 export function main(argv) {
   const [cmd = 'help', ...rest] = argv;
   if (cmd === 'dashboard') return import('../tools/dashboard.mjs').then((m) => m.run(rest));
+  if (cmd === 'studio') return import('../apps/studio/server.mjs').then((m) => m.run(rest));
   if (cmd === 'doctor') return import('../tools/doctor.mjs').then((m) => m.doctor(rest.includes('--dir') ? rest[rest.indexOf('--dir') + 1] : process.cwd(), { ping: rest.includes('--ping') }));
   try {
     const opts = parseArgs(rest);
@@ -459,7 +461,7 @@ export function main(argv) {
       case 'help': case '--help': case '-h':
         console.log(read(fileURLToPath(import.meta.url)).split('\n').slice(1).filter((l, i, a) => a.slice(0, i + 1).every((x) => x.startsWith('//'))).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
         return 0;
-      default: throw new UsageError(`unknown command "${cmd}" (init, sync, check, roles, import, compile, validate, dashboard, doctor, version)`);
+      default: throw new UsageError(`unknown command "${cmd}" (init, sync, check, roles, import, compile, validate, studio, dashboard, doctor, version)`);
     }
   } catch (e) {
     if (e instanceof UsageError) { console.error(`agent-team: ${e.message}`); return 64; }

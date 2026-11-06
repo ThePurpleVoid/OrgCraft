@@ -39,6 +39,7 @@ Roles: web dev (lead), design director and style threads (canvas visual language
 - Import any repository's `.agent-team/`; ownership table with suggestions from the repository tree; gates read from `config.sh` (read-only) and `gates.json` (editable).
 - Publish: diff preview, local commit on a branch, PR through `gh`.
 - Live board on the canvas from hook and role events (the kit dashboard's event model).
+- Progress: kit 0.6.0 shipped `agent-team studio` with the library, the org canvas (drag to re-parent), the inspector, live checks, undo/redo and publish (diff preview, commit on a branch). It is plain ES modules with no build ([ADR 0003](../adr/0003-studio-local-mode-without-a-build.md)). Still to do: Flow and Systems views, ownership and gates editors, PR through `gh`, and the live board on the canvas.
 - **Exit:** demo steps 1 to 8 and 13 on a sample repository, walked by QA web with screenshots; a usability test with 3 people.
 
 ## Phase 3: runner and chief-of-staff chat (the MVP)

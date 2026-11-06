@@ -1,0 +1,467 @@
+// Agent Team Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
+// edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
+import { resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
+
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const TIERS = ['deep', 'standard', 'routine', 'light'];
+const GROUP_ORDER = ['executive', 'engineering', 'quality', 'product', 'design'];
+const field = (md, name) => (new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm').exec(md ?? '')?.[1] ?? '').trim();
+const titleOf = (md, slug) => (/^#\s+(.+)$/m.exec(md ?? '')?.[1] ?? slug).replace(/\s*\(.*\)\s*$/, '').trim();
+const groupColor = (g) => `var(--g-${GROUP_ORDER.includes(g) ? g : 'other'})`;
+
+let S = null; // { root, kitVersion, kit, spec, git }
+let spec = null;
+let selected = null;
+let query = '';
+const undo = [];
+const redo = [];
+let view = null; // derived each render
+let zoom = 'fit'; // or a number
+let scale = 1;
+
+// ------------------------------------------------------------------------------------------------ model
+
+function derive() {
+  const { roles } = resolveSpec(spec, S.kit);
+  const bySlug = new Map(roles.map((r) => [r.slug, r]));
+  const info = (slug) => {
+    const r = spec.roles[slug];
+    const md = bySlug.get(slug)?.md ?? r.brief ?? S.kit.roles[slug] ?? '';
+    const model = field(md, 'Model');
+    return {
+      slug, md, enabled: r.enabled, source: r.source,
+      title: titleOf(md, slug), model, tier: (/^[a-z]+/i.exec(model)?.[0] ?? '').toLowerCase(),
+      group: field(md, 'Group').toLowerCase() || 'other',
+      reportsTo: (field(md, 'Reports to').split(/\s/)[0] ?? '').toLowerCase(),
+      dormant: /^dormant/i.test(field(md, 'Status')),
+      changed: !!(r.extension && ((r.extension.fields ?? []).length || (r.extension.sections ?? []).length || r.extension.title)),
+    };
+  };
+  const all = Object.keys(spec.roles).sort().map(info);
+  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team: all.filter((r) => r.enabled && bySlug.has(r.slug)), issues: validate(spec, S.kit) };
+}
+
+/** Every change goes through here, so undo, redo and the redraw are in one place. */
+function change(fn) {
+  undo.push(JSON.stringify(spec));
+  if (undo.length > 200) undo.shift();
+  redo.length = 0;
+  fn(spec);
+  render();
+}
+function step(from, to) {
+  if (!from.length) return;
+  to.push(JSON.stringify(spec));
+  spec = JSON.parse(from.pop());
+  render();
+}
+
+function ext(slug) {
+  const r = spec.roles[slug];
+  return (r.extension ??= { fields: [], sections: [] });
+}
+function setExtField(slug, name, value) {
+  const r = spec.roles[slug];
+  if (r.brief !== undefined && !r.extension) return setField(spec, slug, name, value);
+  const e = ext(slug);
+  const kitValue = field(S.kit.roles[slug] ?? r.brief, name);
+  e.fields = e.fields.filter((f) => f.name !== name);
+  if (value !== kitValue) e.fields.push({ name, value });
+}
+function setExtSection(slug, name, mode, text) {
+  const e = ext(slug);
+  e.sections = e.sections.filter((s) => s.name.toLowerCase() !== name.toLowerCase());
+  if (text.trim()) e.sections.push({ name, mode, text: text.trim() });
+}
+
+/** True when `maybe` is `slug` or reports to it, directly or not. */
+function under(slug, maybe) {
+  for (let m = maybe; m && m !== 'owner'; m = view.bySlug.get(m)?.reportsTo) if (m === slug) return true;
+  return false;
+}
+function setManager(slug, manager) {
+  if (slug === manager) return;
+  if (under(slug, manager)) return flash(`${view.bySlug.get(manager).title} reports to ${view.bySlug.get(slug).title}, so that would make a loop.`);
+  change(() => {
+    if (!spec.roles[slug].enabled) setEnabled(spec, slug, true);
+    setExtField(slug, 'Reports to', manager);
+  });
+  selected = slug;
+}
+
+// ------------------------------------------------------------------------------------------------ canvas
+
+const W = 176, H = 54, GX = 22, GY = 48, IND = 22, ROW = H + 12;
+
+/**
+ * An org chart that stays readable with forty roles. Managers of managers spread out sideways; a small subtree
+ * (two levels, up to ten roles) is drawn as a lane, listed down a column and indented by depth; a manager's
+ * direct reports that manage no one stack in one column beside its other reports.
+ */
+function layout(team) {
+  const kids = new Map(team.map((r) => [r.slug, []]));
+  kids.set('owner', []);
+  const present = new Set(team.map((r) => r.slug));
+  for (const r of team) (present.has(r.reportsTo) && r.reportsTo !== r.slug ? kids.get(r.reportsTo) : kids.get('owner')).push(r.slug);
+  // A reporting loop never reaches the owner; hang the first role of each loop under the owner so it still shows.
+  for (;;) {
+    const seen = new Set();
+    const visit = (s) => { for (const c of kids.get(s)) if (!seen.has(c)) { seen.add(c); visit(c); } };
+    visit('owner');
+    const lost = team.find((r) => !seen.has(r.slug));
+    if (!lost) break;
+    kids.set(lost.reportsTo, kids.get(lost.reportsTo).filter((c) => c !== lost.slug));
+    kids.get('owner').push(lost.slug);
+  }
+  const rank = (s) => { const g = GROUP_ORDER.indexOf(view.bySlug.get(s).group); return g < 0 ? 9 : g; };
+  const order = (a, b) => rank(a) - rank(b) || view.bySlug.get(a).title.localeCompare(view.bySlug.get(b).title);
+  for (const list of kids.values()) list.sort(order);
+  const size = (s) => kids.get(s).reduce((n, c) => n + 1 + size(c), 0);
+  const depth = (s) => kids.get(s).reduce((n, c) => Math.max(n, 1 + depth(c)), 0);
+  const isLane = (s) => s !== 'owner' && depth(s) <= 2 && size(s) <= 10;
+
+  const pos = new Map();
+  const edges = [];
+  // Each block: { w, h, at(x, y) } where (x, y) is its top left corner and the head card sits at its top.
+  const lane = (s) => {
+    const rows = [];
+    const walk = (p, d) => { for (const c of kids.get(p)) { rows.push([c, p, d]); walk(c, d + 1); } };
+    walk(s, 1);
+    const w = W + Math.max(0, ...rows.map((r) => r[2])) * IND;
+    return { w, h: H + rows.length * ROW, head: W / 2, at(x, y) {
+      pos.set(s, { x, y });
+      rows.forEach(([c, p, d], i) => {
+        const at = { x: x + d * IND, y: y + (i + 1) * ROW };
+        pos.set(c, at);
+        const a = pos.get(p);
+        edges.push(`M${a.x + 12},${a.y + H} V${at.y + H / 2} H${at.x}`);
+      });
+    } };
+  };
+  const stack = (list) => ({ w: W + IND, h: list.length * ROW - 12, list });
+  const block = (s) => {
+    if (isLane(s)) return lane(s);
+    const list = kids.get(s);
+    const leaves = list.filter((c) => !kids.get(c).length);
+    const parts = list.filter((c) => kids.get(c).length).map(block);
+    if (leaves.length) parts.push(stack(leaves));
+    const inner = parts.reduce((n, p) => n + p.w, 0) + GX * Math.max(0, parts.length - 1);
+    const w = Math.max(W, inner);
+    return { w, head: w / 2, h: H + (parts.length ? GY + Math.max(...parts.map((p) => p.h)) : 0), at(x, y) {
+      const me = { x: x + (w - W) / 2, y };
+      pos.set(s, me);
+      let cx = x + (w - inner) / 2;
+      const cy = y + H + GY;
+      const bar = y + H + GY / 2;
+      for (const p of parts) {
+        if (p.list) {
+          p.list.forEach((c, i) => {
+            const at = { x: cx + IND, y: cy + i * ROW };
+            pos.set(c, at);
+            edges.push(`M${me.x + W / 2},${me.y + H} V${bar} H${cx + 8} V${at.y + H / 2} H${at.x}`);
+          });
+        } else {
+          p.at(cx, cy);
+          edges.push(`M${me.x + W / 2},${me.y + H} V${bar} H${cx + p.head} V${cy}`);
+        }
+        cx += p.w + GX;
+      }
+    } };
+  };
+  const root = block('owner');
+  root.at(0, 0);
+  return { pos, edges, w: root.w, h: root.h };
+}
+
+function nodeSvg(r, p, extra = '') {
+  const tier = r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}` : '';
+  const flag = view.issues.some((i) => i.level === 'error' && i.where === `roles/${r.slug}`) ? ' ⚠' : r.changed ? ' •' : '';
+  return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${extra}" data-slug="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}">
+    <rect class="card" width="${W}" height="${H}"></rect>
+    <rect class="stripe" width="4" height="${H - 16}" x="8" y="8" fill="${groupColor(r.group)}"></rect>
+    <text class="title" x="20" y="23">${esc(r.title.length > 21 ? r.title.slice(0, 20) + '…' : r.title)}${flag}</text>
+    <text class="meta" x="20" y="41">${esc(tier)}</text>
+  </g>`;
+}
+
+function renderCanvas() {
+  const { pos, edges, w, h } = layout(view.team);
+  const PAD = 24;
+  const fit = Math.min(1, ($('#canvas').clientWidth - 8) / (w + PAD * 2));
+  scale = zoom === 'fit' ? Math.max(0.4, fit) : zoom;
+  $('#zoom-level').textContent = `${Math.round(scale * 100)}%`;
+  const owner = pos.get('owner');
+  const nodes = view.team.map((r) => nodeSvg(r, pos.get(r.slug))).join('');
+  $('#canvas').innerHTML = `<svg width="${(w + PAD * 2) * scale}" height="${(h + PAD * 2) * scale}" viewBox="${-PAD} ${-PAD} ${w + PAD * 2} ${h + PAD * 2}">
+    ${edges.map((d) => `<path class="edge" d="${d}"></path>`).join('')}
+    <g class="node owner" data-slug="owner" transform="translate(${owner.x},${owner.y})"><rect class="card" width="${W}" height="${H}"></rect>
+      <text class="title" x="20" y="23">${esc(spec.values?.OWNER || 'The owner')}</text><text class="meta" x="20" y="41">owner</text></g>
+    ${nodes}</svg>`;
+  $('#summary').textContent = `${view.team.length} roles on · ${view.all.length - view.team.length} off · kit ${S.kitVersion}`;
+}
+
+// Dragging a card onto another card makes it report there. Pointer events, so it works with touch too.
+function wireCanvas() {
+  const canvas = $('#canvas');
+  let drag = null;
+  canvas.addEventListener('pointerdown', (e) => {
+    const g = e.target.closest('.node');
+    if (!g || g.dataset.slug === 'owner') return;
+    drag = { slug: g.dataset.slug, g, x: e.clientX, y: e.clientY, moved: false, start: g.getAttribute('transform') };
+    g.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    drag.moved = true;
+    drag.g.classList.add('dragging');
+    const [, x, y] = /translate\(([-\d.]+),([-\d.]+)\)/.exec(drag.start);
+    drag.g.setAttribute('transform', `translate(${+x + dx / scale},${+y + dy / scale})`);
+    for (const n of canvas.querySelectorAll('.node.drop')) n.classList.remove('drop');
+    target(e)?.classList.add('drop');
+  });
+  const target = (e, d = drag) => {
+    d.g.style.pointerEvents = 'none';
+    const t = document.elementFromPoint(e.clientX, e.clientY)?.closest('.node');
+    d.g.style.pointerEvents = '';
+    return t && t !== d.g ? t : null;
+  };
+  canvas.addEventListener('pointerup', (e) => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    if (!d.moved) { select(d.slug); return; }
+    const t = target(e, d);
+    if (t?.dataset.slug) setManager(d.slug, t.dataset.slug); else render();
+  });
+  canvas.addEventListener('keydown', (e) => { const g = e.target.closest('.node'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); select(g.dataset.slug); } });
+  // Dropping a role from the library: switch it on and put it under the card it lands on.
+  canvas.addEventListener('dragover', (e) => { e.preventDefault(); for (const n of canvas.querySelectorAll('.node.drop')) n.classList.remove('drop'); e.target.closest?.('.node')?.classList.add('drop'); });
+  canvas.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const slug = e.dataTransfer.getData('text/x-role');
+    const t = e.target.closest?.('.node');
+    if (!slug) return;
+    if (t) setManager(slug, t.dataset.slug);
+    else { change(() => setEnabled(spec, slug, true)); selected = slug; render(); }
+  });
+}
+
+// ------------------------------------------------------------------------------------------------ library
+
+function renderLibrary() {
+  const q = query.toLowerCase();
+  const groups = new Map();
+  for (const r of view.all) {
+    if (q && !`${r.title} ${r.slug} ${r.group}`.toLowerCase().includes(q)) continue;
+    if (!groups.has(r.group)) groups.set(r.group, []);
+    groups.get(r.group).push(r);
+  }
+  const keys = [...groups.keys()].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
+  $('#library').innerHTML = keys.map((g) => `<div class="group-title"><span class="dot" style="background:${groupColor(g)}"></span>${esc(g)}</div>` +
+    groups.get(g).sort((a, b) => a.title.localeCompare(b.title)).map((r) => `<label class="lib-role${r.slug === selected ? ' selected' : ''}" draggable="true" data-slug="${r.slug}">
+      <input type="checkbox" ${r.enabled ? 'checked' : ''} data-toggle="${r.slug}" aria-label="${r.enabled ? 'Switch off' : 'Switch on'} ${esc(r.title)}">
+      <span class="name">${esc(r.title)}</span><span class="tag">${r.source === 'kit' ? '' : 'yours'}${r.dormant ? ' dormant' : ''}</span></label>`).join('')).join('') || '<p class="muted">No roles match.</p>';
+}
+
+function wireLibrary() {
+  $('#library').addEventListener('change', (e) => {
+    const slug = e.target.dataset.toggle;
+    if (slug) change(() => setEnabled(spec, slug, e.target.checked));
+  });
+  $('#library').addEventListener('click', (e) => { const l = e.target.closest('.lib-role'); if (l && !e.target.dataset.toggle) { e.preventDefault(); select(l.dataset.slug); } });
+  $('#library').addEventListener('dragstart', (e) => { const l = e.target.closest('.lib-role'); if (l) { e.dataTransfer.setData('text/x-role', l.dataset.slug); e.dataTransfer.effectAllowed = 'copy'; } });
+  $('#search').addEventListener('input', (e) => { query = e.target.value; renderLibrary(); });
+}
+
+// ------------------------------------------------------------------------------------------------ inspector
+
+function renderInspector() {
+  const el = $('#inspector');
+  const r = selected && view.bySlug.get(selected);
+  if (!r) { el.innerHTML = '<p class="muted">Pick a role on the canvas or in the library.</p>'; return; }
+  const role = spec.roles[r.slug];
+  const managers = view.team.filter((m) => m.slug !== r.slug && !under(r.slug, m.slug));
+  const ownProject = role.brief !== undefined;
+  const kitMd = S.kit.roles[r.slug];
+  const head = `<div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(r.title)}</h2>
+      <span class="badge${r.changed ? ' changed' : ''}">${ownProject ? 'your role' : r.changed ? 'kit role, changed' : 'kit role'}</span></div>
+    <p class="muted"><code>${esc(r.slug)}</code></p>
+    <label class="row"><input type="checkbox" id="i-enabled" style="width:auto" ${r.enabled ? 'checked' : ''}> On this team</label>
+    <div class="field"><span>Model tier</span><select id="i-tier">${TIERS.map((t) => `<option ${t === r.tier ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    <div class="field"><span>Reports to</span><select id="i-manager">
+      <option value="owner" ${r.reportsTo === 'owner' ? 'selected' : ''}>The owner</option>
+      ${managers.map((m) => `<option value="${m.slug}" ${m.slug === r.reportsTo ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select></div>
+    <label class="row"><input type="checkbox" id="i-dormant" style="width:auto" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>`;
+  let body;
+  if (ownProject) {
+    body = `<div class="field"><span>Brief (markdown)</span><textarea id="i-brief" rows="18">${esc(role.brief)}</textarea></div>`;
+  } else {
+    const sections = splitBrief(kitMd).sections.filter((s) => !/^## every thread/i.test(s.heading));
+    const mine = new Map((role.extension?.sections ?? []).map((s) => [s.name.toLowerCase(), s]));
+    body = `<div class="row" style="justify-content:space-between"><h2>What it does</h2>${r.changed ? '<button id="i-reset" type="button">Reset to kit</button>' : ''}</div>` +
+      sections.map((s) => {
+        const name = s.heading.replace(/^##\s+/, '');
+        const m = mine.get(name.toLowerCase());
+        return `<details class="section"${m ? ' open' : ''}><summary>${esc(name)}${m ? `<span class="badge changed">${m.mode === 'replace' ? 'replaced' : 'added to'}</span>` : ''}</summary>
+          <div class="kit-text">${esc(s.body.join('\n').trim())}</div>
+          <div class="field"><span>Your text</span><textarea data-section="${esc(name)}" rows="3" placeholder="Added after the kit's text">${esc(m?.text ?? '')}</textarea></div>
+          <label class="row hint"><input type="checkbox" data-replace="${esc(name)}" style="width:auto" ${m?.mode === 'replace' ? 'checked' : ''}> Replace the kit's text instead of adding to it</label></details>`;
+      }).join('');
+  }
+  el.innerHTML = head + body;
+  $('#i-enabled').onchange = (e) => change(() => setEnabled(spec, r.slug, e.target.checked));
+  $('#i-tier').onchange = (e) => change(() => setExtField(r.slug, 'Model', r.model.replace(/^[a-z]+/i, e.target.value) || e.target.value));
+  $('#i-manager').onchange = (e) => setManager(r.slug, e.target.value);
+  $('#i-dormant').onchange = (e) => change(() => setExtField(r.slug, 'Status', e.target.checked ? `dormant until the owner or the lane's executive opens it for a request.` : 'active'));
+  const reset = $('#i-reset');
+  if (reset) reset.onclick = () => change(() => { delete spec.roles[r.slug].extension; });
+  const brief = $('#i-brief');
+  if (brief) brief.onchange = (e) => change(() => { spec.roles[r.slug].brief = e.target.value; });
+  for (const ta of el.querySelectorAll('textarea[data-section]')) {
+    ta.onchange = () => { const name = ta.dataset.section; const replace = el.querySelector(`input[data-replace="${CSS.escape(name)}"]`).checked; change(() => setExtSection(r.slug, name, replace ? 'replace' : 'append', ta.value)); };
+  }
+  for (const cb of el.querySelectorAll('input[data-replace]')) {
+    cb.onchange = () => { const name = cb.dataset.replace; const ta = el.querySelector(`textarea[data-section="${CSS.escape(name)}"]`); if (ta.value.trim()) change(() => setExtSection(r.slug, name, cb.checked ? 'replace' : 'append', ta.value)); };
+  }
+}
+
+function renderIssues() {
+  const list = view.issues;
+  const errors = list.filter((i) => i.level === 'error').length;
+  const pill = $('#checks');
+  pill.className = `pill ${errors ? 'error' : 'ok'}`;
+  pill.textContent = errors ? `${errors} error${errors > 1 ? 's' : ''}, ${list.length - errors} warnings` : `Checks pass${list.length ? ` · ${list.length} warnings` : ''}`;
+  $('#issues').innerHTML = list.length ? list.map((i) => `<li class="${i.level}" data-where="${esc(i.where)}"><strong>${i.level}</strong> · ${esc(i.where)}: ${esc(i.message)}</li>`).join('') : '<li class="none">Everything checks out.</li>';
+}
+
+let flashTimer = null;
+function flash(text) {
+  const pill = $('#checks');
+  pill.className = 'pill error';
+  pill.textContent = text;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(renderIssues, 3500);
+}
+
+function select(slug) { selected = slug; render(); }
+
+function render() {
+  view = derive();
+  renderCanvas();
+  renderLibrary();
+  renderInspector();
+  renderIssues();
+  $('#undo').disabled = !undo.length;
+  $('#redo').disabled = !redo.length;
+}
+
+// ------------------------------------------------------------------------------------------------ publish
+
+/** A line diff with three lines of context (LCS; fine for files of a few hundred lines). */
+function diff(a, b) {
+  const x = (a ?? '').split('\n'), y = (b ?? '').split('\n');
+  if (x.length * y.length > 4_000_000) return '<span class="gap">(large change; open the file after publishing)</span>';
+  const n = x.length, m = y.length;
+  const L = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && x[i] === y[j]) { ops.push([' ', x[i]]); i++; j++; }
+    else if (j < m && (i === n || L[i][j + 1] >= L[i + 1][j])) { ops.push(['+', y[j]]); j++; }
+    else { ops.push(['-', x[i]]); i++; }
+  }
+  const keep = ops.map((o, k) => o[0] !== ' ' || ops.slice(Math.max(0, k - 3), k + 4).some((p) => p[0] !== ' '));
+  let out = '', gap = false;
+  ops.forEach((o, k) => {
+    if (!keep[k]) { if (!gap) out += '<span class="gap">…</span>\n'; gap = true; return; }
+    gap = false;
+    out += o[0] === '+' ? `<span class="add">+ ${esc(o[1])}</span>\n` : o[0] === '-' ? `<span class="del">- ${esc(o[1])}</span>\n` : `  ${esc(o[1])}\n`;
+  });
+  return out;
+}
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? res.statusText);
+  return data;
+}
+
+async function openPublish() {
+  const dlg = $('#publish-dialog');
+  $('#publish-result').textContent = '';
+  $('#publish-result').className = 'result';
+  $('#changes').innerHTML = '<p class="muted" style="padding:10px">Working out what changes…</p>';
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+  $('#branch').value ||= `agent-team/publish-${stamp}`;
+  $('#message').value ||= 'Update the agent team (Agent Team Studio)';
+  dlg.showModal();
+  try {
+    const { changes, issues } = await api('/api/preview', { spec });
+    const errors = issues.filter((i) => i.level === 'error');
+    $('#confirm').disabled = !changes.length || errors.length > 0;
+    $('#changes').innerHTML = errors.length ? `<p class="result error" style="padding:10px">Fix ${errors.length} error${errors.length > 1 ? 's' : ''} before publishing.</p>` :
+      changes.length ? changes.map((c) => `<details><summary><span class="st ${c.status}">${c.status}</span>${esc(c.path)}</summary><pre class="diff">${diff(c.before, c.after)}</pre></details>`).join('')
+        : '<p class="muted" style="padding:10px">Nothing to publish: the repository already has this team.</p>';
+  } catch (e) {
+    $('#changes').innerHTML = `<p class="result error" style="padding:10px">${esc(e.message)}</p>`;
+    $('#confirm').disabled = true;
+  }
+}
+
+async function confirmPublish() {
+  const out = $('#publish-result');
+  $('#confirm').disabled = true;
+  out.className = 'result';
+  out.textContent = 'Publishing…';
+  try {
+    const r = await api('/api/publish', { spec, branch: $('#branch').value.trim(), message: $('#message').value });
+    out.className = 'result ok';
+    out.textContent = r.commit ? `Committed ${r.commit} on ${r.branch} (${r.files.length} files). Push it and open a pull request: git push -u origin ${r.branch}` : `Nothing changed on ${r.branch}.`;
+    const fresh = await api('/api/state');
+    S = fresh;
+    spec = fresh.spec;
+    undo.length = 0; redo.length = 0;
+    render();
+  } catch (e) {
+    out.className = 'result error';
+    out.textContent = e.message;
+    $('#confirm').disabled = false;
+  }
+}
+
+// ------------------------------------------------------------------------------------------------ start
+
+async function start() {
+  try {
+    S = await api('/api/state');
+  } catch (e) {
+    document.body.innerHTML = `<main style="padding:24px"><h1>Agent Team Studio</h1><p>${esc(e.message)}</p></main>`;
+    return;
+  }
+  spec = S.spec;
+  $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${S.root}${S.git.branch ? ` · ${S.git.branch}` : ''}`;
+  wireCanvas();
+  wireLibrary();
+  $('#zoom-in').onclick = () => { zoom = Math.min(1.5, scale + 0.1); renderCanvas(); };
+  $('#zoom-out').onclick = () => { zoom = Math.max(0.3, scale - 0.1); renderCanvas(); };
+  $('#zoom-fit').onclick = () => { zoom = zoom === 'fit' ? 1 : 'fit'; renderCanvas(); };
+  addEventListener('resize', () => zoom === 'fit' && renderCanvas());
+  $('#undo').onclick = () => step(undo, redo);
+  $('#redo').onclick = () => step(redo, undo);
+  $('#publish').onclick = openPublish;
+  $('#confirm').onclick = confirmPublish;
+  $('#issues').addEventListener('click', (e) => { const w = e.target.closest('li')?.dataset.where; const m = /^roles\/(.+)$/.exec(w ?? ''); if (m && view.bySlug.has(m[1])) select(m[1]); });
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
+    e.preventDefault();
+    if (e.shiftKey) step(redo, undo); else step(undo, redo);
+  });
+  render();
+}
+
+start();

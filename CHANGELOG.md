@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.6.0
+
+**Agent Team Studio, local mode** (phase 2 of the [Studio plan](docs/product/delivery-plan.md)): build your team visually and publish it to a branch.
+
+- `agent-team studio` opens a visual editor for the repository's team at http://localhost:4848 (`--port`, `--host`, `--open`, `--dir`).
+  - **Library:** every kit role and every role of your own, grouped by lane, with a switch each and search. Drag a role onto a manager on the canvas to add it there.
+  - **Org chart:** drag a card onto another to change who it reports to (loops are refused), with zoom and fit.
+  - **Inspector:** model tier, reporting line, dormant or active, and each section of the kit's brief with your own text added to it or replacing it. Reset a role to the kit. Roles of your own are edited as markdown.
+  - **Checks:** the kit's `validate` runs on every change, and clicking an issue opens the role. Undo and redo (Ctrl+Z, Ctrl+Shift+Z).
+  - **Publish:** a diff of every file the publish would write (the layer and what sync generates), then one commit on a new branch. It refuses a team with errors, an existing branch and uncommitted changes to the team's files. Push the branch and open a pull request as usual.
+- The server has no dependencies and no build step ([ADR 0003](docs/adr/0003-studio-local-mode-without-a-build.md)). It listens on 127.0.0.1 and only accepts same-origin JSON posts.
 - This repository's own team is on 0.5.0 and uses the new data files: its ownership is `.agent-team/ownership.json` and its kit gate is `.agent-team/gates.json`.
 
 ## 0.5.0

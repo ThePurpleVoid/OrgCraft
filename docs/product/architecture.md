@@ -53,7 +53,7 @@ deploy/                    Dockerfiles, Compose, Helm
 ```jsonc
 {
   "schema": "agent-team/team-spec@1",
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.5.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.6.0",
   "base": { "preset": "engineering" },             // what the roles are diffed against
   "values": { "PROJECT_NAME": "My App", "OWNER": "Sam", "TIMEZONE": "UTC", "DIGEST_TIME": "08:00" },
   "roles": {
@@ -114,6 +114,7 @@ The package is plain ES modules with no Node-only APIs in its core, so the brows
 
 ## 4. The editor (`apps/studio`)
 
+- **Local mode (shipped in 0.6.0):** plain ES modules, a hand-drawn SVG org chart and a dependency-free Node server, so `npx` runs it with no build ([ADR 0003](../adr/0003-studio-local-mode-without-a-build.md)). The plan below is for the hosted Studio.
 - **Stack:** React + TypeScript + Vite. Canvas: React Flow (`@xyflow/react`, MIT), with automatic layout from ELK (`elkjs`) for the org tree. State: a single `TeamSpec` store (Zustand) with an undo/redo history of patches (Immer). Markdown sections: CodeMirror 6.
 - **Views:** Org (edges = `reportsTo`), Flow (edges from `Hands to`, as `tools/roster-graph.mjs` already derives), Systems (resource nodes in a side lane, binding edges labelled by permission). One model, three projections.
 - **Panels:** palette (the role library, grouped by lane), inspector (fields and sections, "kit default / your change", reset), checks (live `validate`), ownership table (with repository tree suggestions), gates, publish (diff and PR), chat, run controls.

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Team Studio</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand"><strong>Agent Team Studio</strong> <span id="project" class="muted"></span></div>
+    <div class="bar-actions">
+      <span id="checks" class="pill" role="status"></span>
+      <button id="undo" type="button" title="Undo (Ctrl+Z)">Undo</button>
+      <button id="redo" type="button" title="Redo (Ctrl+Shift+Z)">Redo</button>
+      <button id="publish" type="button" class="primary">Publish…</button>
+    </div>
+  </header>
+  <main class="layout">
+    <aside class="palette" aria-label="Role library">
+      <input id="search" type="search" placeholder="Search roles" aria-label="Search roles">
+      <p class="hint">Switch roles on and off, or drag one onto a manager on the canvas.</p>
+      <div id="library"></div>
+    </aside>
+    <section class="canvas-wrap" aria-label="Org chart">
+      <div class="canvas-head">
+        <span id="summary" class="muted"></span>
+        <span class="hint">Drag a card onto another to change who it reports to. Click a card to edit it.</span>
+        <span class="row zoom"><button id="zoom-out" type="button" aria-label="Zoom out">−</button><button id="zoom-fit" type="button" title="Fit or actual size"><span id="zoom-level">100%</span></button><button id="zoom-in" type="button" aria-label="Zoom in">+</button></span>
+      </div>
+      <div id="canvas" class="canvas"></div>
+    </section>
+    <aside class="inspector" aria-label="Role inspector">
+      <div id="inspector"><p class="muted">Pick a role on the canvas or in the library.</p></div>
+      <h2>Checks</h2>
+      <ul id="issues" class="issues"></ul>
+    </aside>
+  </main>
+  <dialog id="publish-dialog">
+    <form method="dialog" class="dialog">
+      <h2>Publish the team</h2>
+      <p class="muted">Writes <code>.agent-team/</code>, runs sync, and commits the result on a branch. Review the changes, then open a pull request as usual.</p>
+      <div id="changes" class="changes"></div>
+      <label>Branch <input id="branch" required pattern="[A-Za-z0-9._/\-]+"></label>
+      <label>Commit message <input id="message"></label>
+      <p id="publish-result" class="result" role="status"></p>
+      <div class="dialog-actions">
+        <button value="cancel" type="submit">Close</button>
+        <button id="confirm" type="button" class="primary">Commit to branch</button>
+      </div>
+    </form>
+  </dialog>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
