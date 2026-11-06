@@ -119,13 +119,14 @@ test('D1: an accept approval needs pr and headSha, and approval.result carries t
     const s = (await start(runner, 'chief-of-staff')).body;
     const ask = { action: 'accept', call: 'gh pr merge 7 --match-head-commit abc1234 token=ghp_abcdefghijklmnopqrstuvwxyz0123', why: 'tests pass' };
     assert.equal((await tool(p.call, s, 'request_approval', ask)).status, 422);
-    const r = await tool(p.call, s, 'request_approval', { ...ask, pr: 7, headSha: 'abc1234' });
+    assert.equal((await tool(p.call, s, 'request_approval', { ...ask, pr: 7, headSha: 'abc1234' })).status, 422, 'a short sha is refused: the merge is bound to the full head');
+    const r = await tool(p.call, s, 'request_approval', { ...ask, pr: 7, headSha: 'abc1234'.padEnd(40, '0') });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const card = (await p.call('GET', `/cards/${r.body.card}`)).body;
     assert.equal(card.title, 'chief-of-staff asks to merge #7 at abc1234', 'the person sees the PR and the head they approve');
     assert.ok(card.links.some((l) => l.url === 'https://github.com/example/shop/pull/7'));
     const [a] = await p.db.system('select call from approvals where id = $1', [r.body.approval]);
-    assert.deepEqual([a.call.pr, a.call.headSha], [7, 'abc1234']);
+    assert.deepEqual([a.call.pr, a.call.headSha], [7, 'abc1234'.padEnd(40, '0')]);
     assert.ok(!a.call.command.includes('ghp_'), 'a token in the command is redacted before it is stored');
     const ok = await p.call('POST', `/approvals/${r.body.approval}`, { decision: 'approved', version: 1 }, await p.su());
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
@@ -133,9 +134,9 @@ test('D1: an accept approval needs pr and headSha, and approval.result carries t
     // The policy path is bound the same way.
     const nope = await runner.request('approval.wait', { session: s.session, approval: { action: 'accept', call: 'gh pr merge 7', why: 'green' } });
     assert.equal(nope.op, 'nack');
-    const yes = await runner.request('approval.wait', { session: s.session, approval: { action: 'accept', call: 'gh pr merge 7', why: 'green', pr: 7, headSha: 'def5678' } });
+    const yes = await runner.request('approval.wait', { session: s.session, approval: { action: 'accept', call: 'gh pr merge 7', why: 'green', pr: 7, headSha: 'def5678'.padEnd(40, '0') } });
     assert.equal(yes.op, 'ack');
-    assert.deepEqual([res.body.approval, res.body.decision, res.body.headSha], [r.body.approval, 'approved', 'abc1234']);
+    assert.deepEqual([res.body.approval, res.body.decision, res.body.headSha], [r.body.approval, 'approved', 'abc1234'.padEnd(40, '0')]);
   }, { tickMs: 0 });
 });
 

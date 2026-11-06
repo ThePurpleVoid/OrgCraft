@@ -112,6 +112,7 @@ export function checkTool(name, input, ctx) {
       else out.risk = f.a.risk;
       if (out.headSha !== undefined && !/^[0-9a-f]{7,64}$/.test(out.headSha)) problems.push('headSha must be a commit sha');
       // D1: an approval to accept (merge) is bound to the exact head the person saw.
+      else if (out.action === 'accept' && out.headSha && !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(out.headSha)) problems.push('an accept approval needs the full head sha (40 or 64 hex characters)');
       if (out.action === 'accept' && (!out.pr || !out.headSha)) problems.push('an accept approval needs pr and headSha, so the merge can only land on the commit that was approved');
       break;
     default: break;

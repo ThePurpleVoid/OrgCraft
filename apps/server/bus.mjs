@@ -403,6 +403,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         // D1 on the policy path too: a merge approval is bound to a PR and the exact head sha.
         const pr = Number.isSafeInteger(a.pr) && a.pr > 0 ? a.pr : null;
         const headSha = typeof a.headSha === 'string' && /^[0-9a-f]{7,64}$/.test(a.headSha) ? a.headSha : null;
+        if (a.action === 'accept' && headSha && !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Problem(422, 'an accept approval needs the full head sha (40 or 64 hex characters)');
         if (a.action === 'accept' && (!pr || !headSha)) throw new Problem(422, 'an accept approval needs pr and headSha, so the merge can only land on the commit that was approved');
         await ctx.q("update sessions set state = 'waiting' where id = $1", [sess.id]);
         const call = { command: redact(typeof a.call === 'string' ? a.call : JSON.stringify(a.call ?? '')), ...(pr ? { pr } : {}), ...(headSha ? { headSha } : {}) };
