@@ -220,3 +220,66 @@ test('start a run: the published team, a daily cap first, step-up to set it, and
     }
   } finally { s2.closeAllConnections?.(); s2.close(); plane.close(); }
 });
+
+test('a resume refused because today\'s budget is spent says so in words, and Raise today\'s cap resumes it (QA sev-4)', { skip }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'studio-e2e-spent-'));
+  execFileSync('git', ['-C', root, 'init', '-q']);
+  execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
+  const plane = await fakeControlPlane({ team: 'sample-app' });
+  const s3 = createStudio({ root, env: plane.env });
+  await new Promise((r) => s3.listen(0, '127.0.0.1', r));
+  const at = `http://127.0.0.1:${s3.address().port}`;
+  try {
+    const page = await browser.newPage({ viewport: { width: 360, height: 760 } });
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(`${at}/?t=${s3.launchToken}`);
+    await page.goto(`${at}/#chat`);
+    await page.locator('#run-state', { hasText: 'Running' }).waitFor();
+    plane.usage(4380); // $50.00 spent
+    plane.exhaust();
+    await page.locator('#run-state', { hasText: 'Paused' }).waitFor();
+    plane.card({ id: 'crd_budget', kind: 'budget', subject: 'budget/today', title: "Today's budget is spent", body: 'The run is paused; nothing spends until you choose.', state: 'open',
+      options: [{ id: 'tomorrow', label: 'Resume tomorrow', style: 'primary', stepUp: false }, { id: 'raise', label: 'Add half again', style: 'danger', stepUp: true }] }, 'system');
+    await page.getByRole('button', { name: 'Resume' }).click();
+    const refused = page.getByText("Today's budget is spent, so the run can't resume yet. Raise today's cap to resume it now, or resume it tomorrow.");
+    await refused.waitFor();
+    assert.equal(await page.getByText("today's budget is spent;").count(), 0, 'not the server\'s own wording');
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, 'resume-refused-phone.png') });
+    // While today's budget card is open, the action points to it: it raises and resumes with one step-up.
+    await page.getByRole('button', { name: "Raise today's cap" }).click();
+    await page.locator('[data-card-id="crd_budget"].focused').waitFor();
+    assert.equal(await page.locator('dialog.ask-dialog').count(), 0);
+    // Once that card is answered (Resume tomorrow), the action asks for the new cap itself.
+    plane.bump('crd_budget', { state: 'answered', answer: { option: 'tomorrow' } });
+    await page.locator('[data-card-id="crd_budget"].answered').waitFor();
+    // An amount at or under today's spend changes nothing.
+    await page.getByRole('button', { name: "Raise today's cap" }).click();
+    const ask = page.locator('dialog.ask-dialog');
+    await ask.getByText("Today's spend so far is $50.00").waitFor();
+    await ask.locator('input').fill('40');
+    await ask.getByRole('button', { name: 'OK' }).click();
+    await page.getByText("The new cap must be more than today's spend of $50.00. Nothing changed.").waitFor();
+    assert.equal(plane.budget.perDay, 5000);
+    // A higher one goes through step-up, then the run resumes.
+    await page.getByRole('button', { name: 'Resume' }).click();
+    await refused.waitFor();
+    await page.getByRole('button', { name: "Raise today's cap" }).click();
+    await ask.locator('input').fill('80');
+    await ask.getByRole('button', { name: 'OK' }).click();
+    const su = page.locator('#stepup-dialog');
+    await su.getByText('Raising the daily cap to $80.00 lets the team spend more today.').waitFor();
+    await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
+    await su.getByRole('button', { name: 'Confirm' }).click();
+    // Each step-up is used once, so resuming asks again.
+    await su.getByText("Resuming a run that today's cap paused lets the team spend again.").waitFor();
+    assert.equal(plane.budget.perDay, 8000);
+    await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
+    await su.getByRole('button', { name: 'Confirm' }).click();
+    await page.locator('#run-state', { hasText: 'Running' }).waitFor();
+    assert.equal(await refused.count(), 0);
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, 'raise-cap-phone.png') });
+    assert.deepEqual(errors, []);
+    await page.close();
+  } finally { s3.closeAllConnections?.(); s3.close(); plane.close(); }
+});

@@ -297,7 +297,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       const [going] = await ctx.q("select id from runs where team = $1 and state <> 'stopped' limit 1", [team]);
       if (going) throw new Problem(409, `run ${going.id} is still going; stop it first`);
       const t = await today(ctx.q, team, ctx.now);
-      if (t.state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it or start tomorrow");
+      if (t.state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it or start tomorrow", { type: 'budget-exhausted' });
       const rid = id('run');
       // runs_one_going decides when two starts race; the loser gets the same 409 as the check above.
       const [row] = await ctx.q(`insert into runs(id, tenant, team, mode, state, caps, roster, team_version, started_by) values ($1, $2, $3, $4, 'running', $5, $6, $7, $8)
@@ -348,7 +348,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       }
       if (r.state !== 'paused') throw new Problem(409, `the run is ${r.state}`);
       // Whoever paused it, nothing resumes while today's budget is spent (issue #28 U2).
-      if ((await today(ctx.q, r.team, ctx.now)).state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it (the budget card) or wait for tomorrow");
+      if ((await today(ctx.q, r.team, ctx.now)).state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it (the budget card) or wait for tomorrow", { type: 'budget-exhausted' });
       if (r.reason === 'budget' && !(await useStepUp(ctx, by, stepUp))) throw new StepUpRequired('Resuming a run the budget paused');
       const row = await setRunState(ctx, r.team, rid, 'running', 'owner', actor);
       await ctx.audit({ team: r.team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'resume', stepUp: r.reason === 'budget' } });

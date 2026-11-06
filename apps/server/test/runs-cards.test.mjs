@@ -268,7 +268,9 @@ test('budget: warns once at 80%, and at 100% pauses the run and sends one card; 
     const summary = (await call('GET', '/me/summary')).body.teams[0];
     assert.deepEqual([summary.run, summary.cost.today, summary.cost.capPerDay, summary.inbox], ['paused', 1070, 1000, 1]);
 
-    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call))).status, 409, 'resuming is refused while today is still spent');
+    const refused = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call));
+    assert.equal(refused.status, 409, 'resuming is refused while today is still spent');
+    assert.match(refused.body.type ?? '', /budget-exhausted$/, 'a typed problem, so a client can say it in its own words');
     assert.equal((await call('POST', `/cards/${cards[0].id}`, { option: 'raise', version: 1 })).body.type, 'step-up-required', 'raising spends money, so it needs step-up');
     const raised = await call('POST', `/cards/${cards[0].id}`, { option: 'raise', version: 1 }, await stepUp(call));
     assert.equal(raised.status, 200);
