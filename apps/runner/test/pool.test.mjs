@@ -130,6 +130,32 @@ test('#28: a copy resumed on another agent user is handed over by the runner alo
   } finally { process.umask(umask); }
 });
 
+test('#136 review: ending a session with a large tree does not stall another session\'s tool call or the event loop', { skip }, async () => {
+  const { start, as, processesOf } = await world();
+  const { monitorEventLoopDelay } = await import('node:perf_hooks');
+  const umask = process.umask(0o007);
+  try {
+    const a = await start('ses_big', 'web-dev', 'web/big');
+    const b = await start('ses_busy', 'designer', 'design/busy');
+    // 20,000 small files of the agent's own: park copies each one over, which took about 2 s on the event loop.
+    const made = await as(a, 'mkdir -p deps && cd deps && i=0; while [ $i -lt 200 ]; do mkdir d$i; j=0; while [ $j -lt 100 ]; do echo x > d$i/f$j; j=$((j+1)); done; i=$((i+1)); done; echo made');
+    assert.match(made.out, /made/);
+    const lag = monitorEventLoopDelay({ resolution: 10 });
+    lag.enable();
+    const order = [];
+    const ending = a.stop('now').then(() => order.push('ended'));
+    const call = as(b, 'sleep 0.2; echo busy').then((r) => { order.push('call'); return r; });
+    assert.equal((await call).out.trim(), 'busy');
+    await ending;
+    lag.disable();
+    assert.deepEqual(order, ['call', 'ended'], 'the other session\'s tool call finished while the first was still being cleaned up');
+    assert.ok(lag.max / 1e6 < 500, `the event loop was never held for long (longest ${Math.round(lag.max / 1e6)} ms)`);
+    assert.deepEqual(processesOf(a.slot.uid), [], 'and the clean-up still did all of its work');
+    assert.equal(execFileSync('find', [a.copy.cwd, '-xdev', '!', '-user', String(process.getuid()), '-print', '-quit'], { encoding: 'utf8' }).trim(), '');
+    await b.stop('now');
+  } finally { process.umask(umask); }
+});
+
 test('#28 E: one shared agent user serves one team only', async () => {
   const { startRunner } = await import('../runner.mjs');
   const { fakeControlPlane } = await import('./fake-control-plane.mjs');

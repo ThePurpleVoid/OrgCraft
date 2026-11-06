@@ -182,7 +182,10 @@ export function park(dir) {
 // Shared folders an agent user can leave files in (and so hard links into its old copy), cleaned at each session end.
 const SHARED_TMP = ['/tmp', '/var/tmp', '/dev/shm', '/run', '/var/lock', '/dev/mqueue'];
 
-/** Pids whose real, effective or saved uid is `uid` (from /proc; the runner can read other users' status). */
+/**
+ * Pids whose real, effective or saved uid is `uid` (from /proc; the runner can read other users' status). A zombie
+ * (state Z) is not counted: it has exited and holds nothing but its pid until its parent, or process 1, reaps it.
+ */
 export function processesOf(uid) {
   const out = [];
   let names = [];
@@ -190,7 +193,9 @@ export function processesOf(uid) {
   for (const n of names) {
     if (!/^\d+$/.test(n)) continue;
     try {
-      const line = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)/m.exec(readFileSync(`/proc/${n}/status`, 'utf8'));
+      const status = readFileSync(`/proc/${n}/status`, 'utf8');
+      if (/^State:\s+Z/m.test(status)) continue;
+      const line = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)/m.exec(status);
       if (line && [line[1], line[2], line[3]].some((u) => Number(u) === uid)) out.push(Number(n));
     } catch { /* gone */ }
   }
@@ -241,6 +246,28 @@ export function reap(slot, leaves = [], { stopped = () => {} } = {}) {
   if (ipc) problems.push(`uid ${slot.uid} still holds ${ipc} SysV IPC object(s)`);
   for (const l of leaves) if (existsSync(l)) problems.push(`${l} could not be removed`);
   return { ok: problems.length === 0, problems };
+}
+
+/**
+ * reap (and park the copy) off the runner's event loop (review of #136): the kills, the deletes and the copy-over in
+ * park are synchronous and take seconds on a large tree, which would stall every other session's model stream, tool
+ * calls and the link's pings. A child node process does it, as the runner's own uid, with no environment but PATH
+ * (no key reaches it) and its input on stdin. Resolves to reap's { ok, problems }; a child that fails or overruns
+ * `timeout` counts as not ok, so the slot is kept out of use.
+ */
+export function reapAside(slot, leaves = [], { park: parkDir = null, timeout = 10 * 60_000 } = {}) {
+  if (!slot?.own) return Promise.resolve({ ok: true, skipped: true });
+  return new Promise((done) => {
+    const c = spawn(process.execPath, [new URL('./endslot.mjs', import.meta.url).pathname], { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, timeout, killSignal: 'SIGKILL' });
+    let out = '', err = '';
+    c.stdout.on('data', (d) => (out += d)); c.stderr.on('data', (d) => (err += d));
+    c.on('error', (e) => done({ ok: false, problems: [`the clean-up could not run: ${e.message}`] }));
+    c.on('close', (code, signal) => {
+      try { const r = JSON.parse(out.trim().split('\n').at(-1)); if (code === 0 && typeof r?.ok === 'boolean') return done(r); } catch { /* below */ }
+      done({ ok: false, problems: [`the clean-up ended with ${signal ?? `code ${code}`}${err.trim() ? `: ${err.trim().slice(0, 300)}` : ''}`] });
+    });
+    c.stdin.end(JSON.stringify({ slot: { uid: slot.uid, gid: slot.gid, sharedGid: slot.sharedGid, exec: slot.exec, own: true }, leaves, park: parkDir }));
+  });
 }
 
 /** fs.protected_hardlinks: without it an agent can hard-link files it cannot write; a pool refuses to run (C). */

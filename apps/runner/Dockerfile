@@ -15,7 +15,7 @@
 # to change uid and gid. Do not run the container with no-new-privileges: that disables those file capabilities,
 # and sessions then fail to start (closed, not open).
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssh-client util-linux libcap2-bin \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssh-client util-linux tini libcap2-bin \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --gid 10010 agentwork \
   && useradd --create-home --uid 10001 --user-group --groups agentwork runner \
@@ -37,5 +37,6 @@ COPY apps/runner/ apps/runner/
 ENV AGENT_TEAM_RUNNER_DATA=/data/runner AGENT_TEAM_RUNNER_WORK=/data/work NODE_ENV=production \
     AGENT_TEAM_SANDBOX_UIDS=10100-10107 AGENT_TEAM_SANDBOX_GID=10010 AGENT_TEAM_SANDBOX_EXEC=/usr/local/libexec/agent-team/setpriv
 VOLUME /data
-ENTRYPOINT ["/bin/sh", "/app/apps/runner/entrypoint.sh"]
+# tini is process 1: it reaps what a killed agent left orphaned, so no zombie of an agent user outlives its session.
+ENTRYPOINT ["/usr/bin/tini", "--", "/bin/sh", "/app/apps/runner/entrypoint.sh"]
 CMD ["node", "apps/runner/bin.mjs", "start"]

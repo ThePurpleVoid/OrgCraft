@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
-import { park, reap, safeRead, safeWrite, sandboxPool, sharedDir } from './sandbox.mjs';
+import { reapAside, safeRead, safeWrite, sandboxPool, sharedDir } from './sandbox.mjs';
 import { checkHead, checkpoint as saveWork, copyPath, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
@@ -160,7 +160,7 @@ export class Session {
       if (b.instance) this.env.AGENT_TEAM_INSTANCE = String(b.instance);
     } catch (e) {
       if (this.copy) release(this.copy.cwd, this.id);
-      this.endSlot();
+      await this.endSlot();
       await this.emit('session.ended', { role: this.role, reason: e.capacity ? 'capacity' : 'failed', detail: `could not start: ${e.message}` });
       this.state = 'ended';
       this._ended();
@@ -472,7 +472,7 @@ export class Session {
     if (this.copy) release(this.copy.cwd, this.id);
     this.deps.modelProxy?.unregister(this.id);
     await this.record({}, { last: true });
-    this.endSlot();
+    await this.endSlot();
     await this.emit('report.heartbeat', { status: 'idle', detail: reason === 'budget' ? 'stopped: the session reached its budget' : `stopped (${reason})`, source: 'hook' }, { via: 'hook' });
     await this.emit('session.ended', { role: this.role, reason, branch: this.copy?.branch, commit: saved.commit, pushed: saved.pushed ?? false, ...(saved.error ? { detail: saved.error } : {}) });
     this.state = 'ended';
@@ -487,14 +487,15 @@ export class Session {
   /**
    * Hand the session's agent user back (#28). A slot of its own is emptied first (reap: every process, its temporary
    * files, its home and memory folder) and its working copy parked (closed, and all of it the runner's). A slot
-   * that does not come back empty is kept out of the pool for good, and the runner says so.
+   * that does not come back empty is kept out of the pool for good, and the runner says so. The clean-up runs in a
+   * child process (reapAside), so it never stalls the other sessions; the slot goes back when it is done.
    */
-  endSlot() {
+  async endSlot() {
     const slot = this.slot;
     if (!slot || this.slotDone) return;
     this.slotDone = true;
     if (!slot.own) return this.pool.give(slot);
-    const r = reap(slot, [this.home, dirname(this.memoryPath)].filter((p) => p && existsSync(p)), { stopped: () => this.copy && park(this.copy.cwd) });
+    const r = await reapAside(slot, [this.home, dirname(this.memoryPath)].filter((p) => p && existsSync(p)), { park: this.copy?.cwd ?? null });
     if (r.ok) this.pool.give(slot);
     else this.deps.log?.(`agent user ${slot.uid} is kept out of use: ${r.problems.join('; ')}`);
   }
