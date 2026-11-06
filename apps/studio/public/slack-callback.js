@@ -20,7 +20,7 @@ export function callbackOf(search, storedTeam) {
 /** Why linking failed, in words a person can act on. */
 export function linkError(status, error) {
   if (status === 410) return 'That took more than 10 minutes. Choose Connect Slack again.';
-  if (status === 400) return 'This sign-in with Slack was started somewhere else. Choose Connect Slack again from Notifications.';
+  if (status === 400 && (!error || /not started here/.test(error))) return 'This sign-in with Slack was started somewhere else. Choose Connect Slack again from Notifications.';
   return error || `Slack could not be connected (HTTP ${status}).`;
 }
 
@@ -30,16 +30,23 @@ async function start() {
   const root = document.getElementById('slack-callback');
   let stored = null;
   try { stored = sessionStorage.getItem('agent-team-slack-team'); } catch { /* none */ }
-  const c = callbackOf(location.search, stored);
+  // The code works once: take it out of the address bar first, before a sign-in could carry it in its return path.
+  // This tab keeps it until the link is tried.
+  let search = location.search;
+  try {
+    if (search) sessionStorage.setItem('agent-team-slack-cb', search); else search = sessionStorage.getItem('agent-team-slack-cb') ?? '';
+  } catch { /* this visit only */ }
+  if (location.search) history.replaceState(null, '', location.pathname);
+  const c = callbackOf(search, stored);
   const fail = (text) => {
     document.getElementById('slack-title').textContent = 'Slack is not connected';
     root.innerHTML = `<p class="result error" role="alert">${esc(text)}</p><p><a href="${esc(back(c.team))}">Back to Notifications</a></p>`;
   };
-  if (c.error) return fail(c.error);
+  const done = () => { try { sessionStorage.removeItem('agent-team-slack-cb'); } catch { /* fine */ } };
+  if (c.error) { done(); return fail(c.error); }
   const me = await ensureSignedIn();
   if (!me) return;
-  // The code works once: take it out of the address bar before anything else can read or reload it.
-  history.replaceState(null, '', location.pathname);
+  done();
   const r = await call('POST', `/v1/teams/${encodeURIComponent(c.team)}/slack/link`, { code: c.code, state: c.state });
   // Kept after a failure, so "Back to Notifications" and a second try know the team; gone once it is linked.
   if (!r.ok) return fail(linkError(r.status, r.data?.error ?? r.data?.title));

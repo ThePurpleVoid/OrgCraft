@@ -148,6 +148,8 @@ test('Slack: the callback reads what Slack sent back, and says what to do when i
   assert.match(callbackOf('?state=x', 'sample-app').error, /did not send back/);
   assert.match(linkError(410), /more than 10 minutes/);
   assert.match(linkError(400), /started somewhere else/);
+  assert.match(linkError(400, 'this sign-in with Slack was not started here; start again'), /started somewhere else/);
+  assert.equal(linkError(400, 'send { code, state } from Slack'), 'send { code, state } from Slack');
   assert.equal(linkError(409, 'sign in to the Acme Slack workspace, the one this team is connected to'), 'sign in to the Acme Slack workspace, the one this team is connected to');
   const { slackSignInUrl, slackHealth, slackHtml } = await import('../../apps/studio/public/notifications.js');
   assert.equal(slackSignInUrl('https://slack.com/openid/connect/authorize?x=1'), 'https://slack.com/openid/connect/authorize?x=1');
@@ -263,4 +265,20 @@ test('Slack: failing health says so; a member sees no channels, and with no work
     if (SHOTS) await page.screenshot({ path: join(SHOTS, 'slack-not-connected-member-phone-light.png'), fullPage: true });
     await ctx.close();
   } finally { other.close(); }
+});
+
+test('Slack: a callback that needs a sign-in first never carries the code into the sign-in address', { skip }, async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await ctx.newPage();
+  await page.goto(`${iss.origin}/sign-in`);
+  await page.evaluate(() => sessionStorage.setItem('agent-team-slack-team', 'sample-app'));
+  await page.goto(`${iss.origin}/slack/callback?code=secret-code-123&state=sls_forged`);
+  await page.getByRole('link', { name: 'Continue with GitHub' }).waitFor();
+  assert.doesNotMatch(page.url(), /secret-code-123|sls_forged/);
+  assert.ok(!iss.log.some((l) => /secret-code-123/.test(l.to ?? '')), 'no redirect carried the code');
+  await page.getByRole('link', { name: 'Continue with GitHub' }).click();
+  // Back on the callback, the code this tab kept is tried once: here its state was not started by this person.
+  await page.getByText('This sign-in with Slack was started somewhere else. Choose Connect Slack again from Notifications.').waitFor();
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('agent-team-slack-cb')), null);
+  await ctx.close();
 });
