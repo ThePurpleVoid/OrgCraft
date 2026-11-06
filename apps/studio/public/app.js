@@ -4,7 +4,7 @@ import { checkUpgrade, resolveSpec, setEnabled, setField, splitBrief, validate }
 import { createChat } from './chat.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
-import { QUIET_S, assess, impactHtml, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
+import { QUIET_S, assess, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
 import { bind, renderAreas, renderChecks, renderSystemInspector, renderSystemsStrip, roleSystemsHtml, wireBindings } from './panels.js';
 
 const $ = (s) => document.querySelector(s);
@@ -752,13 +752,19 @@ const onRoles = () => view.team.map((r) => ({ slug: r.slug, title: r.title }));
 const roleTitle = (slug) => view.bySlug.get(slug)?.title ?? slug;
 
 /** The impact step and the commit message it adds (criteria 8 and 9). */
+/** The role that takes the owner's requests: the one that reports to the owner, when there is exactly one. */
+function dispatcher() {
+  const top = view.team.filter((r) => r.reportsTo === 'owner');
+  return top.length === 1 ? top[0].title.toLowerCase() : '';
+}
+
 function renderImpact() {
   const items = view.safety.on ? view.safety.items : [];
   for (const id of [...picks.keys()]) if (!items.some((i) => i.id === id)) picks.delete(id);
   const rec = recommendations(items, spec, onRoles());
   for (const [id, p] of rec) if (!picks.has(id)) picks.set(id, p);
-  $('#impact').innerHTML = impactHtml({ items, picks, on: onRoles(), titleOf: roleTitle, board, newest: view.safety.newest, spec, roles: view.team.map((x) => ({ slug: x.slug, md: x.md })) });
-  const plan = planText(items, picks, roleTitle);
+  $('#impact').innerHTML = impactHtml({ items, picks, on: onRoles(), titleOf: roleTitle, board, newest: view.safety.newest, spec, roles: view.team.map((x) => ({ slug: x.slug, md: x.md })), dispatcher: dispatcher() });
+  const plan = planText(items, picks, roleTitle, dispatcher());
   $('#plan').hidden = !plan;
   $('#plan').innerHTML = plan ? `<details open><summary>Commit message: Work in progress</summary><pre>${esc(plan)}</pre></details>` : '';
   return plan;
@@ -863,6 +869,8 @@ async function start() {
   spec = S.spec;
   published = structuredClone(S.spec);
   loadFollowUps();
+  // A move published to happen after its open work merges lives on in the draft, even across a reload or a restart.
+  for (const f of followUps) reapplyFollowUp(spec, f);
   wireImpact();
   loadBoard();
   try { new EventSource('/v1/team/board/stream').addEventListener('changed', loadBoard); } catch { /* no stream: the first read stands */ }

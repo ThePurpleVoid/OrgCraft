@@ -85,14 +85,35 @@ test('the plan: one line per item, with the target; a deferred move keeps its wr
   const on = [{ slug: 'clerk', title: 'Clerk' }, { slug: 'filer', title: 'Filer' }];
   const picks = recommendations([item], draft, on);
   assert.deepEqual(picks.get(item.id), { choice: 'move-after-merge', target: 'filer' });
-  assert.match(planText([item], picks, (s) => s), /^- clerk \(clerk\): Index, branch b, PR #7\. Area files\/ moves from clerk to filer: move the area after PR #7 merges\.$/m);
+  assert.match(planText([item], picks, (s) => s), /^- clerk \(clerk\): Index, branch b, PR #7\. Area files\/ moved from clerk to filer: move the area after PR #7 merges\.$/m);
   const { spec, deferred } = publishable(draft, published, [item], picks);
   assert.deepEqual(spec.ownership.rows, [{ path: 'files/', writer: 'clerk' }]);
   assert.doesNotMatch(spec.roles.filer.brief, /`files\//);
-  assert.deepEqual(deferred, [{ path: 'files/', from: 'clerk', to: 'filer', pr: '7' }]);
+  assert.deepEqual(deferred.map(({ owns, ...f }) => f), [{ path: 'files/', from: 'clerk', to: 'filer', pr: '7' }]);
+  assert.deepEqual(deferred[0].owns.filer, [{ path: 'files/', mode: 'writes', note: '' }], 'the draft\'s Owns lines, kept for a reload');
   assert.equal(draft.ownership.rows[0].writer, 'filer', 'the draft keeps the move');
   picks.set(item.id, { choice: 'move-and-handover', target: 'filer' });
   assert.match(planText([item], picks, (s) => s), /move the area now and hand the files over, to filer\./);
   assert.equal(publishable(draft, published, [item], picks).deferred.length, 0);
   assert.equal(planText([], new Map(), (s) => s), '');
+  assert.match(planText([item], picks, (s) => s), /^The team carries these out when this change is merged\./m, 'no chief of staff assumed');
+  assert.match(planText([item], picks, (s) => s, 'front desk'), /^Front desk carries these out/m);
+});
+
+test('a deferred move comes back into a draft read from disk (code review of #103)', async () => {
+  const { publishable, recommendations, reapplyFollowUp } = await import(pathToFileURL(join(dir, 'safety.mjs')).href + '?again2');
+  const item = { id: 'path-moved:clerk:files/', kind: 'path-moved', role: 'clerk', detail: 'x', severity: 'choice', inFlight: { pr: '7' }, choices: ['move-after-merge', 'move-and-handover'], recommended: 'move-after-merge' };
+  const published = { roles: { clerk: { enabled: true, brief: brief('standard', '- r', '- `files/`') }, filer: { enabled: true, brief: brief('standard', '- r', '- `other/`') } }, ownership: { rows: [{ path: 'files/', writer: 'clerk' }] } };
+  const draft = JSON.parse(JSON.stringify(published));
+  draft.roles.clerk.brief = brief('standard', '- r', 'Nothing yet');
+  draft.roles.filer.brief = brief('standard', '- r', '- `other/`\n- `files/`');
+  draft.ownership.rows = [{ path: 'files/', writer: 'filer' }];
+  const { spec: onDisk, deferred } = publishable(draft, published, [item], recommendations([item], draft, [{ slug: 'clerk', title: 'C' }, { slug: 'filer', title: 'F' }]));
+  const reloaded = JSON.parse(JSON.stringify(onDisk));
+  assert.equal(reapplyFollowUp(reloaded, JSON.parse(JSON.stringify(deferred[0]))), true);
+  assert.deepEqual(reloaded.ownership.rows, [{ path: 'files/', writer: 'filer' }]);
+  assert.match(reloaded.roles.filer.brief, /^- `files\/`$/m);
+  assert.match(reloaded.roles.filer.brief, /^- `other\/`$/m);
+  assert.doesNotMatch(reloaded.roles.clerk.brief, /`files\/`/);
+  assert.equal(reapplyFollowUp(reloaded, deferred[0]), false, 'once is enough');
 });

@@ -197,22 +197,24 @@ test('the impact step: choices with the recommendation, a hand-off target, and t
   // A hand-off asks for a target among the roles that are on, never the role itself.
   await box.getByRole('radio', { name: /Hand the work off now/ }).check();
   const target = box.getByLabel("Hand Web dev's work to");
+  assert.equal(await box.locator('label.choice:has(input[value="handoff"]) + label.target').count(), 1, 'the target sits under its choice');
   const options = await target.locator('option').evaluateAll((os) => os.map((o) => o.value));
   assert.ok(!options.includes('web-dev') && options.length > 0);
   assert.ok(options.includes(await target.inputValue()));
   await target.selectOption('qa-web');
   const plan = page.locator('#plan pre');
-  await plan.getByText(/^- Web dev \(web-dev\): Dark mode, branch web\/142-dark-mode, PR #142\. Switched off in this draft: hand the work off now, to qa-web\.$/m).waitFor();
+  await plan.getByText(/^- Web dev \(web-dev\): Dark mode, branch web\/142-dark-mode, PR #142\. Switched off: hand the work off now, to qa-web\.$/m).waitFor();
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'publish-impact-light.png') });
   // "Use the recommendations" puts every item back on its recommendation.
   await box.getByRole('button', { name: 'Use the recommendations' }).click();
   assert.equal(await box.getByRole('radio', { name: /Let it finish/ }).isChecked(), true);
-  await plan.getByText(/Switched off in this draft: let it finish its current task first\./).waitFor();
+  await plan.getByText(/Switched off: let it finish its current task first\./).waitFor();
 
   await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
   const msg = git(pubA.root, 'log', '-1', '--format=%B');
   assert.match(msg, /^Work in progress$/m);
+  assert.match(msg, /^Chief of staff carries these out when this change is merged\./m, 'the role that takes requests, by name');
   assert.match(msg, /^- Web dev \(web-dev\): .*let it finish its current task first\.$/m);
   // git grep exits 1 when nothing matches: no file holds the plan.
   assert.throws(() => execFileSync('git', ['-C', pubA.root, 'grep', '-l', 'Work in progress', 'HEAD', '--', '.agent-team'], { stdio: 'pipe' }), 'no file holds the plan');
@@ -243,7 +245,7 @@ test('never two writers: "move after the PR merges" keeps the writer in the file
   const after = box.getByRole('radio', { name: /Move the area after PR #142 merges/ });
   assert.equal(await after.isChecked(), true);
   await box.getByText('The published files keep the current writer').waitFor();
-  await page.locator('#plan pre').getByText(/Area web\/ moves from web-dev to site-builder: move the area after PR #142 merges\./).waitFor();
+  await page.locator('#plan pre').getByText(/Area web\/ moved from web-dev to site-builder: move the area after PR #142 merges\./).waitFor();
   await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
   const rows = JSON.parse(git(pubB.root, 'show', 'HEAD:.agent-team/ownership.json')).rows;
@@ -253,6 +255,12 @@ test('never two writers: "move after the PR merges" keeps the writer in the file
   await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
   await page.locator('#issues li', { hasText: 'web/ moves from web-dev to site-builder after PR #142 merges. Publish again then' }).waitFor();
   await page.locator('#impact-pill', { hasText: 'touches work in progress' }).waitFor();
+  // A reload reads the published team from disk; the deferred move and its reminder come back with the draft.
+  await page.reload();
+  await page.locator('#issues li', { hasText: 'web/ moves from web-dev to site-builder after PR #142 merges. Publish again then' }).waitFor();
+  await page.locator('#impact-pill', { hasText: 'touches work in progress' }).waitFor();
+  await page.locator('#library .lib-role', { hasText: 'Site builder' }).locator('.name').click();
+  assert.match(await page.locator('#e-raw').inputValue(), /^- `web\/`$/m, 'the new agent still takes the area in the draft');
   assert.deepEqual(errors, []);
   await page.close();
 });
