@@ -982,12 +982,15 @@ function renderTemplateBar() {
   const bar = $('#template-bar');
   if (previewing) {
     const c = previewing;
+    // Reporting order: whoever reports to the owner first, then their reports, level by level.
+    const depth = (slug) => { let d = 0; for (let m = view.bySlug.get(slug)?.reportsTo; m && m !== 'owner' && view.bySlug.has(m) && d < 20; m = view.bySlug.get(m).reportsTo) d++; return d; };
+    const byOrder = (list) => list.map((s) => ({ s, d: depth(s), t: view.bySlug.get(s)?.title ?? s })).sort((x, y) => x.d - y.d || x.t.localeCompare(y.t)).map((x) => x.t);
     const meetingsLine = (c.meetings ?? []).map((m) => `${m.title} (${m.when.replace(/`/g, '')})`).join(', ');
     bar.hidden = false;
     bar.innerHTML = `<div class="tb-text"><strong>Preview: ${esc(c.title)}</strong> <span class="muted">${esc(rolesLine(c))}</span>
       <dl>
-        <div><dt>Roles that start on</dt><dd>${esc(c.roles.filter((s) => !c.dormant.includes(s)).map((s) => view.bySlug.get(s)?.title ?? s).join(', '))}</dd></div>
-        ${c.dormant.length ? `<div><dt>Dormant until you start them</dt><dd>${esc(c.dormant.map((s) => view.bySlug.get(s)?.title ?? s).join(', '))}</dd></div>` : ''}
+        <div><dt>Roles that start on</dt><dd>${esc(byOrder(c.roles.filter((s) => !c.dormant.includes(s))).join(', '))}</dd></div>
+        ${c.dormant.length ? `<div><dt>Dormant until you start them</dt><dd>${esc(byOrder(c.dormant).join(', '))}</dd></div>` : ''}
         ${c.systems.length ? `<div><dt>Systems to connect</dt><dd>${esc(c.systems.map((s) => s.name).join(', '))}</dd></div>` : ''}
         ${meetingsLine ? `<div><dt>Starter meetings</dt><dd>${esc(meetingsLine)}</dd></div>` : ''}
       </dl></div>

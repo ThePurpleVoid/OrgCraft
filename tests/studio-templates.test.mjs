@@ -102,3 +102,13 @@ test('Start almost empty is a chief of staff only, with no check errors', async 
     assert.deepEqual(pre.body.issues.filter((i) => i.level === 'error'), []);
   });
 });
+
+test('a gallery card counts dormant roles only when there are some (D33)', async () => {
+  const { rolesLine, matches } = await import('../apps/studio/public/gallery.js');
+  assert.equal(rolesLine({ on: 28, dormant: [] }), '28 roles on');
+  assert.equal(rolesLine({ on: 28, dormant: ['a', 'b', 'c', 'd', 'e', 'f'] }), '28 roles on · 6 dormant');
+  assert.equal(rolesLine({ on: 1, dormant: [] }), '1 role on');
+  const card = { title: 'Customer support team', summary: 'Answer customers well', groupTitle: 'Run a business function', systems: [{ name: 'Help articles' }] };
+  assert.ok(matches(card, 'help ARTICLES'));
+  assert.ok(!matches(card, 'payroll'));
+});
