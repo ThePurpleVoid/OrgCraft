@@ -105,6 +105,47 @@ export async function appendReport(db, tenant, team, body, now = new Date()) {
   return { id: row.id, row, stored };
 }
 
+const ROLE_SLUG = /^[a-z0-9][a-z0-9_-]{0,59}$/;
+const PLAN = new Set(['finish', 'handoff', 'pause', 'move-after-merge', 'move-and-handover']);
+/** The event id of a publish: one per commit, so the repository's CI and the Studio's fast path store it once. */
+export const publishedId = (version) => `published-${String(version).toLowerCase()}`;
+
+/**
+ * A team.published event from the kit's `report.mjs published` (the repository's CI on main), through the report
+ * route and its token: { version (40 hex), publishedAt, pr, roles, off, plan, changes, by }. Idempotent per commit.
+ */
+export async function appendPublished(db, tenant, team, body, now = new Date()) {
+  const b = body && typeof body === 'object' ? body : {};
+  const version = String(b.version ?? '').toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(version)) throw new Problem(400, 'version is the full commit SHA (40 hex characters)');
+  if (b.publishedAt != null && (typeof b.publishedAt !== 'string' || Number.isNaN(Date.parse(b.publishedAt)))) throw new Problem(400, 'publishedAt is an ISO date and time');
+  if (b.pr != null && !(Number.isInteger(b.pr) && b.pr > 0)) throw new Problem(400, 'pr is a pull request number');
+  const slugs = (x, name) => {
+    if (x == null) return [];
+    if (!Array.isArray(x) || x.length > 500 || !x.every((r) => typeof r === 'string' && ROLE_SLUG.test(r))) throw new Problem(400, `${name} is a list of at most 500 role slugs`);
+    return [...new Set(x)];
+  };
+  const roles = slugs(b.roles, 'roles');
+  const off = slugs(b.off, 'off');
+  const plan = {};
+  if (b.plan != null) {
+    if (typeof b.plan !== 'object' || Array.isArray(b.plan) || Object.keys(b.plan).length > 500) throw new Problem(400, 'plan is { [role]: { choice, to? } }');
+    for (const [role, p] of Object.entries(b.plan)) {
+      if (!ROLE_SLUG.test(role) || !p || !PLAN.has(p.choice) || (p.to != null && !ROLE_SLUG.test(String(p.to)))) throw new Problem(400, `plan for ${role.slice(0, 60)}: choice is one of ${[...PLAN].join(', ')}, to a role slug`);
+      plan[role] = { choice: p.choice, ...(p.to != null ? { to: String(p.to) } : {}) };
+    }
+  }
+  if (b.changes != null && (!Array.isArray(b.changes) || b.changes.length > 200 || !b.changes.every((c) => typeof c === 'string' && c.length <= 300))) throw new Problem(400, 'changes is a list of at most 200 paths');
+  const publishedAt = b.publishedAt ? new Date(b.publishedAt).toISOString() : now.toISOString();
+  const data = { version, publishedAt, pr: b.pr ?? null, roles, off, plan, changes: b.changes ?? [], by: String(b.by ?? '').slice(0, 120) || null, via: 'repository' };
+  const event = {
+    specversion: '1.0', id: publishedId(version), type: 'team.published', version: 1, source: `/tenants/${tenant}/teams/${team}`,
+    tenant, team, time: publishedAt, actor: { kind: 'system', id: 'repository' }, subject: 'team', data,
+  };
+  const stored = await append(db, tenant, team, [event]);
+  return { id: event.id, stored, duplicate: !stored.length };
+}
+
 /** The seq of a stored event, for `after=<event id>` and Last-Event-ID. Throws 400 when the id is not in the log. */
 export async function seqOf(db, tenant, team, eventId) {
   if (!eventId) return 0;

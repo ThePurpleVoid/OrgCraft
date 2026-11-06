@@ -319,6 +319,13 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       const t = await store.authReport(db, team, req.headers['x-team-token']);
       if (!t) throw new Problem(401, 'a valid x-team-token for this team is required');
       const body = await readJson(req, 64 * 1024);
+      // A publish from the repository's CI (report.mjs published): team.published, once per commit.
+      if (body?.kind === 'published') {
+        if (limited(team, ':published')) throw new Problem(429, `more than ${REPORTS_PER_MINUTE} publishes a minute`);
+        const { id, stored, duplicate } = await store.appendPublished(db, t, team, body, now());
+        appended(team, stored);
+        return send(res, 200, { ok: true, id, duplicate });
+      }
       const role = String(body?.role ?? '').toLowerCase();
       if (limited(team, role)) throw new Problem(429, `more than ${REPORTS_PER_MINUTE} reports a minute from ${role}`);
       const { id, stored } = await store.appendReport(db, t, team, body, now());

@@ -90,7 +90,7 @@ if [ -z "$commit" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 # The team version this checkout runs: the last commit that changed .agent-team (the rollout view after a publish).
 if [ -z "$team_version" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  team_version="$(git log -1 --format=%H -- .agent-team 2>/dev/null | cut -c1-12 || true)"
+  team_version="$(git log -1 --first-parent --format=%H -- .agent-team 2>/dev/null | cut -c1-12 || true)"
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
