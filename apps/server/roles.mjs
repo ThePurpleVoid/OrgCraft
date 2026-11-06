@@ -129,7 +129,7 @@ export function routeOf(method, path) {
 /**
  * What a host (a customer's own site that mounts the Studio, studio-embed.md S4) may do for its signed-in user: read,
  * chat, start and steer runs and meetings, answer non-approval cards (checked again on the card's kind), and get
- * stream tickets. Nothing that changes who is in the workspace, its money, credentials, sinks or the hosts
+ * stream tickets, and the hosted Studio (read, preview, publish; never publish-code). Nothing that changes who is in the workspace, its money, credentials, sinks or the hosts
  * themselves, and nothing behind step-up: those open on this deployment in a top-level window. A route missing here is
  * refused for a host, so a new route is closed to hosts until someone decides otherwise.
  */
@@ -143,6 +143,12 @@ export const HOST_ROUTES = new Set([
   'GET /teams/{team}/chat', 'POST /teams/{team}/chat',
   'GET /teams/{team}/meetings', 'POST /teams/{team}/meetings', 'GET /teams/{team}/meetings/{meeting}',
   'GET /teams/{team}/board', 'GET /teams/{team}/rollout',
+  // Delegated publish (studio-embed.md section 6): the hosted Studio's routes, on installations the workspace proved
+  // (S9). studio.mjs refuses publish-code through a host, needs the person's current consent to publish, and limits
+  // each host's publishes and previews.
+  'GET /teams/{team}/studio/v1/team', 'GET /teams/{team}/studio/v1/team/pr', 'POST /teams/{team}/studio/v1/team/preview',
+  'POST /teams/{team}/studio/v1/team/graph', 'POST /teams/{team}/studio/v1/team/suggestions', 'POST /teams/{team}/studio/v1/team/from-template',
+  'POST /teams/{team}/studio/v1/team/publish', 'GET /teams/{team}/studio/assets/{version}/{name}',
 ]);
 /** The card kinds a host may answer (S4: never an approval; a budget card raises spending, an admin's call). */
 export const HOST_CARD_KINDS = new Set(['decision', 'ready']);

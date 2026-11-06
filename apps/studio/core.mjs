@@ -198,8 +198,17 @@ export function commitMessage(text, user) {
   return user ? `${body}\n\nPublished-by: ${cleanName(user.name)} (${cleanName(user.id)}) via Agent Team Studio` : body;
 }
 
+/**
+ * Another site the deployment published for (studio-embed.md section 6, security C3): its name and its own user, both
+ * host-controlled text, so cleaned like a trailer name, with `@` defused and backticks gone. Never a trailer.
+ */
+export const cleanVia = (v) => {
+  const t = (s) => cleanName(String(s ?? '').replace(/`/g, '')).replace(/@/g, '&#64;');
+  return { host: t(v?.host), ...(v?.user ? { user: t(v.user) } : {}), ...(v?.hostId ? { hostId: cleanName(v.hostId) } : {}) };
+};
+
 /** The pull request's title and body: the user's text quoted, with `@` defused so it pings nobody (S5), and the commands. */
-export function pullRequestBody(text, { commands = [], kitUpgrade = null, commit = null } = {}) {
+export function pullRequestBody(text, { commands = [], kitUpgrade = null, commit = null, via = null } = {}) {
   const [first, ...rest] = String(text ?? '').replace(/\r/g, '').split('\n').filter((l) => !/^\s*(published-by|co-authored-by)\s*:/i.test(l));
   const defuse = (s) => s.replace(/@/g, '&#64;');
   const title = cleanName(defuse(first ?? '')).slice(0, 100) || 'Update the agent team (Agent Team Studio)';
@@ -207,6 +216,7 @@ export function pullRequestBody(text, { commands = [], kitUpgrade = null, commit
   return {
     title,
     body: [quoted ? quoted.split('\n').map((l) => `> ${defuse(l)}`).join('\n') : '', kitUpgrade ? `This also moves the team to kit ${VERSION}.` : '', commandsSection(commands),
+      via ? (({ host, user }) => `Published through ${host}${user ? ` for \`${user}\`` : ''}.`)(cleanVia(via)) : '',
       `Published from Agent Team Studio${commit ? ` (commit ${commit.slice(0, 12)})` : ''}. Review it like any change to the team's rules: a person with write access merges it.`].filter(Boolean).join('\n\n'),
   };
 }

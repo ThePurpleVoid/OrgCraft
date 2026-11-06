@@ -498,7 +498,7 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
       return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Allow ${esc(host.name)}?</title>`
         + '<body style="font-family:system-ui,sans-serif;max-width:480px;margin:48px auto;padding:0 16px;line-height:1.5">'
         + `<h1 style="font-size:22px">Allow ${esc(host.name)} to use Agent Team for you?</h1>`
-        + `<p>It is at ${host.origins.map((o) => `<b>${esc(o)}</b>`).join(', ')}. It will see your teams, chat, start and stop runs, and answer decision cards for you. It cannot approve anything, change members, budgets or keys, or see your passkeys.</p>`
+        + `<p>It is at ${host.origins.map((o) => `<b>${esc(o)}</b>`).join(', ')}. It will see your teams, chat, start and stop runs, answer decision cards, and open pull requests that change your team, for you (a person with write access still merges them). It cannot approve anything, change commands your team runs, change members, budgets or keys, or see your passkeys.</p>`
         + '<p>You can unlink it any time from your account.</p>'
         + `<form method="post" action="${esc(page)}"><button name="decision" value="allow" style="padding:10px 16px">Allow</button> <button name="decision" value="deny" style="padding:10px 16px">Don't allow</button></form>`);
     }
