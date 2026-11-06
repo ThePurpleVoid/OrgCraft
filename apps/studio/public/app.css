@@ -526,3 +526,6 @@ body.previewing :is(#pages, .bar-actions, .edit-only, #new-agent), body.no-team 
   .tb-actions button { min-height: 44px; }
 }
 .chip.suggested { border-style: dashed; background: transparent; }
+.team-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0 0 10px; font-size: 13.5px; }
+.team-facts dt { color: var(--muted); }
+.team-facts dd { margin: 0; }
