@@ -777,7 +777,11 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 // ---- Ready to try helpers ------------------------------------------------------------------------------------------
 
 const PREVIEW_PENDING = 'The preview link is not up yet. It appears here when the deployment is ready.';
-const httpsUrl = (u) => typeof u === 'string' && u.length <= 2000 && /^https:\/\/[^\s/]+(\/\S*)?$/.test(u);
+/** An https URL a person may be sent to: no spaces, and no user or password in it (a link that hides its host). */
+const httpsUrl = (u) => {
+  if (typeof u !== 'string' || u.length > 2000 || !/^https:\/\/[^\s/@]+(\/\S*)?$/.test(u)) return false;
+  try { const x = new URL(u); return x.protocol === 'https:' && !x.username && !x.password; } catch { return false; }
+};
 const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null));
 
 /**

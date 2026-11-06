@@ -397,6 +397,7 @@ test('G-12 ready_to_try: front door only, only after a merge, preview from the r
     const prev = { connector: 'github', ref: 7, sha: merge, url: 'https://shop-git-dark.example.app', environment: 'Preview', state: 'success', deployment: 991 };
     assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, url: 'http://insecure.example' })] })).op, 'nack', 'only https');
     assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, state: 'failure' })] })).op, 'nack', 'only a successful deployment');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, url: 'https://user:pw@evil.example' })] })).op, 'nack', 'no user or password in the link');
     assert.equal((await runner.request('events', { events: [env('proposal.previewed', prev)] })).op, 'ack');
     assert.equal((await runner.request('events', { events: [env('proposal.previewed', prev)] })).op, 'ack', 'a repeat is fine');
     assert.equal((await p.call('GET', '/teams/shop/events?type=proposal.previewed')).body.events.length, 1, 'stored once per deployment');
