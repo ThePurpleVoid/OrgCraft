@@ -10,6 +10,15 @@ export function rolesLine(card) {
   return `${card.on} role${card.on === 1 ? '' : 's'} on${d ? ` · ${d} dormant` : ''}`;
 }
 
+/** What each pack of shared rules adds to the core, in plain words (neutral protocols story, criterion 5). */
+export const PACK_WORDS = { engineering: 'engineering (pull requests, the merge gate, deploys)' };
+
+/** "Shared rules: the core and engineering (…)", or "the core only" for a team with no packs. */
+export function rulesLine(packs) {
+  const list = (packs ?? []).map((p) => PACK_WORDS[p] ?? p);
+  return `Shared rules: ${list.length ? `the core and ${list.join(', ')}` : 'the core only'}`;
+}
+
 /** Whether a card matches the search box: its title, summary, group, suggested systems, starter meetings or roles. */
 export function matches(card, q) {
   const words = String(q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -30,6 +39,7 @@ export function createGallery({ root, ctx }) {
       <strong>${esc(c.title)}</strong>
       <span class="g-summary">${esc(c.summary)}</span>
       <span class="muted">${esc(rolesLine(c))}</span>
+      <span class="muted">${esc(rulesLine(c.packs))}</span>
       ${systems.length ? `<span class="muted">Suggests ${esc(systems.join(', '))}</span>` : ''}
     </button></li>`;
   }
