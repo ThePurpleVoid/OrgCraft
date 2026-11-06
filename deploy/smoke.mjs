@@ -13,7 +13,7 @@
 //   AGENT_TEAM_ADMIN_TOKEN=… CRON_SECRET=… node deploy/smoke.mjs --site https://<site> --api https://<container host>
 //   --api-only skips the Studio page check (when --site is the container itself, as in CI).
 //
-// Exit 0 when all pass, 1 when the deployment is broken, 4 when the caller's IP does not resolve through the site
+// Exit 0 when all pass, 1 when the deployment is broken, 3 before 4: 4 when the caller's IP does not resolve through the site
 // (keep sign-in off until it does), 3 when only the stream check fails (then clients must reach
 // streams on the container host directly: name it for streams in discovery, docs/deploy/vercel-supabase.md).
 import { parseArgs } from 'node:util';
@@ -107,4 +107,5 @@ async function callerCheck() {
 
 const caller = await callerCheck();
 const stream = await streamCheck();
-process.exit(broken ? 1 : caller === 'caller' ? 4 : stream === 'stream' ? 3 : 0);
+// 3 outranks 4: the workflow lets 4 (sign-in gate only) through green, never a buffered stream.
+process.exit(broken ? 1 : stream === 'stream' ? 3 : caller === 'caller' ? 4 : 0);
