@@ -69,6 +69,38 @@ expires in 15 minutes (`POST …/emails/{id}/verify`), and they switch on the ki
 - The copy is in `email.mjs`, and every delivery is logged in `email_deliveries`. Providers sit behind one interface,
   `send(message) -> { id }`, and `resend` is the first.
 
+**Message people in Slack** (PRD 6.8, phase 4). A `slack` sink connects the team to one Slack workspace. Its bot token
+and its sign-in client secret live in the vault, and the sink holds only their names. Until the token is stored,
+nothing is posted. This works the same way in local mode.
+
+```sh
+curl -X PUT -H "authorization: Bearer $T" -H "x-step-up: $SU" -H 'content-type: application/json' -d '{"value":"xoxb-…"}' localhost:4849/v1/secrets/SLACK_BOT_TOKEN
+curl -X PUT -H "authorization: Bearer $T" -H "x-step-up: $SU" -H 'content-type: application/json' -d '{"value":"<client secret>"}' localhost:4849/v1/secrets/SLACK_CLIENT_SECRET
+curl -X POST -H "authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"format":"slack","secret":"SLACK_BOT_TOKEN","clientId":"1234567890.1234567890","clientSecret":"SLACK_CLIENT_SECRET"}' \
+  localhost:4849/v1/teams/my-team/sinks
+```
+
+The Slack app needs one bot scope, `chat:write`. It also needs Sign in with Slack (`openid` and `profile`) with the
+redirect URL `$AGENT_TEAM_STUDIO_URL/slack/callback`. It has no interactivity and no request URL.
+
+- **DMs.** DMs are per person and opt-in. A person presses Connect Slack (`POST …/slack/connect` returns the sign-in
+  URL). Slack sends them back to the Studio's `/slack/callback`, which posts `{ code, state }` to `POST …/slack/link`
+  with their session. The state only works for that same person and team, and only for 10 minutes. The Slack
+  account must be in the team's workspace. They then choose kinds with `PATCH …/slack/me`, and the first DM says
+  what they will get. `DELETE …/slack/me` stops all their DMs.
+- **Channels.** An owner or admin picks channels with `POST …/slack/channels` and `{ channel, name, kinds? }`. The
+  bot must be in the channel. Kinds default to the two budget kinds and minutes; approval and BLOCKED start off.
+  Channel posts leave out recommendations and meeting decisions.
+- **Messages.** Every message has the notification text, at most four lines, exactly one link button into the Studio
+  (through `/v1/email/link`, with the same expiry as email), and a context line. Nothing can be approved or answered
+  from Slack. In a DM, "Turn off these messages" opens the same ask-first page as email, under `/v1/slack/unsubscribe`.
+- **Failures.** When a DM fails, it goes by email instead to that person's verified addresses for the team.
+  `GET …/slack` returns the health line (`working`, or `failing` since a time). A post that can never work, for
+  example because the bot was removed from the channel, is logged and skipped so it doesn't hold up the rest.
+- **Who gets messages.** Only people who are still members get DMs. Removing a member, or signing them out
+  everywhere, deletes their Slack link. Every try is logged in `slack_deliveries`, and the copy is in `slack.mjs`.
+
 ## Read it
 
 | Call | What it gives |

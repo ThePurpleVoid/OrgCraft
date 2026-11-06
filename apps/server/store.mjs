@@ -161,19 +161,28 @@ export async function readSecret(db, key, tenant, name) {
 
 const SINK_COLS = 'id, url, format, header, secret, cursor, failures, next_at, last_error, created_at';
 const EMAIL_SINK_COLS = "id, null as url, 'email' as format, null as header, secret, provider, sender, cursor, failures, next_at, last_error, created_at";
+const SLACK_SINK_COLS = "id, null as url, 'slack' as format, null as header, secret, client_id, client_secret, cursor, failures, next_at, last_error, failing_since, created_at";
 const SENDER = /^(?:[^\s@<>]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}|[^<>\r\n"]{1,80} <[^\s@<>]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}>)$/;
 
 /**
  * Adds a sink. kit-report and event sinks POST to a URL. An email sink ({ format: 'email', provider, sender,
  * secret }) sends the team's notification events to the people who opted in; `secret` names the vault entry that
  * holds the provider's key, and with no key stored nothing is sent. `providers` is the list of provider ids.
+ * A Slack sink ({ format: 'slack', secret, clientId, clientSecret }) is the team's Slack workspace connection, one per
+ * team: `secret` names the vault entry with the bot token, and `clientId` with `clientSecret` (a vault entry name)
+ * let people link their own Slack account. Nothing is posted until the token is stored.
  */
-export async function addSink(db, tenant, team, { url, format = 'kit-report', header = '', secret = '', from = 'now', provider = '', sender = '' }, { providers = [] } = {}) {
+export async function addSink(db, tenant, team, { url, format = 'kit-report', header = '', secret = '', from = 'now', provider = '', sender = '', clientId = '', clientSecret = '' }, { providers = [] } = {}) {
   await getTeam(db, tenant, team);
-  if (!['kit-report', 'event', 'email'].includes(format)) throw new Problem(400, 'format is kit-report, event or email');
+  if (!['kit-report', 'event', 'email', 'slack'].includes(format)) throw new Problem(400, 'format is kit-report, event, email or slack');
   if (secret && !/^[A-Z][A-Z0-9_]{0,63}$/.test(secret)) throw new Problem(400, 'secret is the name of a stored secret');
   let u = null;
-  if (format === 'email') {
+  if (format === 'slack') {
+    if (!/^SLACK_[A-Z0-9_]{1,58}$/.test(secret)) throw new Problem(400, 'secret names the vault entry with the bot token, and starts with SLACK_, like SLACK_BOT_TOKEN');
+    if (clientId && !/^[0-9]{1,20}\.[0-9]{1,20}$/.test(clientId)) throw new Problem(400, "clientId is the Slack app's client id, like 1234567890.1234567890");
+    if (clientSecret && !/^SLACK_[A-Z0-9_]{1,58}$/.test(clientSecret)) throw new Problem(400, 'clientSecret names the vault entry with the client secret, and starts with SLACK_');
+    if (!clientId !== !clientSecret) throw new Problem(400, 'send clientId and clientSecret together, or neither');
+  } else if (format === 'email') {
     if (!providers.includes(provider)) throw new Problem(400, `provider is one of ${providers.join(', ') || '(none configured)'}`);
     if (!SENDER.test(String(sender))) throw new Problem(400, 'sender is the From address, like "Acme team <team@acme.example>"');
     if (!/^EMAIL_[A-Z0-9_]{1,58}$/.test(secret)) throw new Problem(400, 'secret names the vault entry with the provider key, and starts with EMAIL_, like EMAIL_PROVIDER_KEY');
@@ -186,6 +195,11 @@ export async function addSink(db, tenant, team, { url, format = 'kit-report', he
     // A new sink starts at the end of the log unless asked to replay it from the start.
     const [{ max }] = await q('select coalesce(max(seq), 0) as max from events where team = $1', [team]);
     const cursor = from === 'start' ? 0 : Number(max);
+    if (format === 'slack') {
+      if ((await q('select 1 from slack_sinks where team = $1', [team])).length) throw new Problem(409, 'this team is already connected to Slack; remove that sink first');
+      return (await q(`insert into slack_sinks(id, tenant, team, secret, client_id, client_secret, cursor) values ($1, $2, $3, $4, $5, $6, $7) returning ${SLACK_SINK_COLS}`,
+        [id('sink'), tenant, team, secret, clientId || null, clientSecret || null, cursor]))[0];
+    }
     if (format === 'email') {
       return (await q(`insert into email_sinks(id, tenant, team, provider, sender, secret, cursor) values ($1, $2, $3, $4, $5, $6, $7) returning ${EMAIL_SINK_COLS}`,
         [id('sink'), tenant, team, provider, sender, secret, cursor]))[0];
@@ -198,12 +212,14 @@ export async function addSink(db, tenant, team, { url, format = 'kit-report', he
 export const listSinks = (db, tenant, team) => db.tenant(tenant, async ({ q }) => [
   ...(await q(`select ${SINK_COLS} from sinks where team = $1 order by created_at`, [team])),
   ...(await q(`select ${EMAIL_SINK_COLS} from email_sinks where team = $1 order by created_at`, [team])),
+  ...(await q(`select ${SLACK_SINK_COLS} from slack_sinks where team = $1 order by created_at`, [team])),
 ]);
 
 export async function removeSink(db, tenant, team, sid) {
   const rows = await db.tenant(tenant, async ({ q }) => [
     ...(await q('delete from sinks where id = $1 and team = $2 returning id', [sid, team])),
     ...(await q('delete from email_sinks where id = $1 and team = $2 returning id', [sid, team])),
+    ...(await q('delete from slack_sinks where id = $1 and team = $2 returning id', [sid, team])),
   ]);
   if (!rows.length) throw new Problem(404, 'no such sink');
 }

@@ -24,6 +24,7 @@ import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
 import { appCaller } from './dpop.mjs';
 import { PROVIDERS, createEmail, page } from './email.mjs';
+import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 
 /** The bus hears every stored event (deliveries) and run and approval changes (stops, results). */
 function wireBus(m3, bus) {
@@ -125,7 +126,7 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {} }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {} }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
@@ -134,6 +135,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const emailProviders = emailOpts.providers ?? PROVIDERS;
   const email = createEmail({ db, key, publicUrl, providers: emailProviders, readSecret: store.readSecret, now, fetch: emailOpts.fetch ?? fetch });
   const studioUrl = String(emailOpts.studioUrl ?? publicUrl ?? '').replace(/\/+$/, '');
+  // "Connect Slack" sends a person back to this Studio page, which posts { code, state } with their session.
+  const slack = createSlack({ db, key, publicUrl, redirectUri: studioUrl ? `${studioUrl}/slack/callback` : '', providers: slackOpts.providers ?? SLACK_PROVIDERS, readSecret: store.readSecret, now, fetch: slackOpts.fetch ?? fetch });
   let tickMisses = [];
   const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl });
   if (!givenBus) wireBus(m3, bus);
@@ -308,6 +311,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
 
     // Email links (no sign-in): the signed token is the proof. Unsubscribe turns off one kind for one team (D54).
     if (a === 'email' && !b) return emailPage(req, res, url, team);
+    // The same for Slack DMs: "Turn off these messages" (D60), with the same ask-first page.
+    if (a === 'slack' && !b && (team === 'unsubscribe' || team === 'resubscribe')) return noticePage(req, res, url, team, SLACK_WORDS);
 
     // The kit's reports: the same body and answer as the hosted board, so only TEAM_REPORT_URL changes.
     if (a === 'teams' && b === 'reports' && !c && m === 'POST') {
@@ -423,26 +428,35 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       res.writeHead(302, { location: studioUrl + target.path, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
       return res.end();
     }
-    if ((what === 'unsubscribe' || what === 'resubscribe') && (m === 'GET' || m === 'POST')) {
-      const on = what === 'resubscribe';
-      if (on && m !== 'POST') return html(res, 405, page('Use the button', ['Turn the emails back on with the button on the confirmation page.']), { allow: 'POST' });
-      // A GET only asks: mail scanners open links, and must not turn emails off (security review). The button POSTs.
-      if (m === 'GET') {
-        const p = await email.peekToken(t);
-        if (!p) return html(res, 400, page('This link is not valid', ['Manage your emails in the Studio.']));
-        if (url.searchParams.get('keep') === '1') return html(res, 200, page('Nothing changed', ['You still get these emails.']));
-        return html(res, 200, page(`Stop "${p.label}" emails for ${p.teamName}?`, ['Other emails you turned on still arrive. Your address stays verified.'],
-          [{ label: 'Turn off these emails', href: `/v1/email/unsubscribe?t=${encodeURIComponent(t)}`, post: true }, { label: 'Keep getting them', href: `/v1/email/unsubscribe?t=${encodeURIComponent(t)}&keep=1`, secondary: true }]));
-      }
-      const r = await email.fromToken(t, on);
-      if (!r) return html(res, 400, page('This link is not valid', ['Manage your emails in the Studio.']));
-      // A mail client's one-click unsubscribe (RFC 8058) only needs a 200.
-      if (!on && m === 'POST' && /List-Unsubscribe=One-Click/.test(await readText(req, 1024))) return html(res, 200, page('Unsubscribed', []));
-      const settings = studioUrl ? [{ label: 'Manage all emails', href: `${studioUrl}/teams/${encodeURIComponent(r.team)}/notifications`, secondary: true }] : [];
-      if (on) return html(res, 200, page(`You will get "${r.label}" emails for ${r.teamName} again`, ['Other emails you turned on still arrive.'], [{ label: 'Turn them off', href: `/v1/email/unsubscribe?t=${encodeURIComponent(t)}`, post: true, secondary: true }, ...settings]));
-      return html(res, 200, page(`You won't get "${r.label}" emails for ${r.teamName}`, ['Other emails you turned on still arrive. Your address stays verified.'], [{ label: 'Turn it back on', href: `/v1/email/resubscribe?t=${encodeURIComponent(t)}`, post: true }, ...settings]));
-    }
+    if (what === 'unsubscribe' || what === 'resubscribe') return noticePage(req, res, url, what, EMAIL_WORDS);
     throw new Problem(404, 'not found');
+  }
+
+  // The words of the turn-off pages, per channel (CPO copy, D54 and D60).
+  const EMAIL_WORDS = { api: email, path: 'email', noun: 'emails', these: 'these emails', still: 'Other emails you turned on still arrive. Your address stays verified.', again: 'Other emails you turned on still arrive.', manage: 'Manage all emails' };
+  const SLACK_WORDS = { api: slack, path: 'slack', noun: 'Slack messages', these: 'these messages', still: 'Other messages you turned on still arrive. Slack stays connected.', again: 'Other messages you turned on still arrive.', manage: 'Manage all messages' };
+  async function noticePage(req, res, url, what, w) {
+    const t = url.searchParams.get('t') ?? '';
+    const m = req.method;
+    if (m !== 'GET' && m !== 'POST') throw new Problem(404, 'not found');
+    const on = what === 'resubscribe';
+    const self = (op) => `/v1/${w.path}/${op}?t=${encodeURIComponent(t)}`;
+    if (on && m !== 'POST') return html(res, 405, page('Use the button', [`Turn the ${w.noun} back on with the button on the confirmation page.`]), { allow: 'POST' });
+    // A GET only asks: mail scanners and link previews open links, and must not turn anything off (security review). The button POSTs.
+    if (m === 'GET') {
+      const p = await w.api.peekToken(t);
+      if (!p) return html(res, 400, page('This link is not valid', [`Manage your ${w.noun} in the Studio.`]));
+      if (url.searchParams.get('keep') === '1') return html(res, 200, page('Nothing changed', [`You still get ${w.these}.`]));
+      return html(res, 200, page(`Stop "${p.label}" ${w.noun} for ${p.teamName}?`, [w.still],
+        [{ label: `Turn off ${w.these}`, href: self('unsubscribe'), post: true }, { label: 'Keep getting them', href: `${self('unsubscribe')}&keep=1`, secondary: true }]));
+    }
+    const r = await w.api.fromToken(t, on);
+    if (!r) return html(res, 400, page('This link is not valid', [`Manage your ${w.noun} in the Studio.`]));
+    // A mail client's one-click unsubscribe (RFC 8058) only needs a 200.
+    if (!on && w === EMAIL_WORDS && /List-Unsubscribe=One-Click/.test(await readText(req, 1024))) return html(res, 200, page('Unsubscribed', []));
+    const settings = studioUrl ? [{ label: w.manage, href: `${studioUrl}/teams/${encodeURIComponent(r.team)}/notifications`, secondary: true }] : [];
+    if (on) return html(res, 200, page(`You will get "${r.label}" ${w.noun} for ${r.teamName} again`, [w.again], [{ label: 'Turn them off', href: self('unsubscribe'), post: true, secondary: true }, ...settings]));
+    return html(res, 200, page(`You won't get "${r.label}" ${w.noun} for ${r.teamName}`, [w.still], [{ label: 'Turn it back on', href: self('resubscribe'), post: true }, ...settings]));
   }
 
   async function personRoute(req, res, who, url, parts) {
@@ -542,6 +556,22 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         if (c && d === 'verify' && m === 'POST') return send(res, 200, await email.verify(t, team, me, c, await readJson(req, 4 * 1024)));
         if (c && !d && m === 'PATCH') return send(res, 200, await email.setKinds(t, team, me, c, await readJson(req, 4 * 1024)));
         if (c && !d && m === 'DELETE') return send(res, 200, await email.remove(t, team, me, c));
+      }
+      // Slack (CPO story "Slack notifications"): a person's own DMs, and the channels an admin picks.
+      if (b === 'slack') {
+        const d = parts[5];
+        if (!c && m === 'GET') return send(res, 200, await slack.status(t, team, me));
+        if (c === 'connect' && !d && m === 'POST') return send(res, 200, await slack.connect(t, team, me));
+        if (c === 'link' && !d && m === 'POST') return send(res, 201, await slack.link(t, team, me, await readJson(req, 4 * 1024)));
+        if (c === 'me' && !d && m === 'PATCH') return send(res, 200, await slack.setKinds(t, team, me, await readJson(req, 4 * 1024)));
+        if (c === 'me' && !d && m === 'DELETE') return send(res, 200, await slack.unlink(t, team, me));
+        if (c === 'channels' && !d && m === 'GET') return send(res, 200, await slack.channels(t, team));
+        if (c === 'channels' && !d && m === 'POST') {
+          const name = who.session?.name ?? who.session?.login ?? (who.via === 'admin' ? 'The admin' : '');
+          return send(res, 201, await slack.addChannel(t, team, { principal: me, name }, await readJson(req, 4 * 1024)));
+        }
+        if (c === 'channels' && d && m === 'PATCH') return send(res, 200, await slack.setChannelKinds(t, team, d, await readJson(req, 4 * 1024)));
+        if (c === 'channels' && d && m === 'DELETE') return send(res, 200, await slack.removeChannel(t, team, d));
       }
       if (b === 'sinks' && c && m === 'DELETE') { await store.removeSink(db, t, team, c); return send(res, 200, { ok: true }); }
     }
