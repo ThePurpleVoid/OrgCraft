@@ -3,6 +3,7 @@
 import { checkUpgrade, resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
 import { createChat } from './chat.js';
 import { createMeetings } from './meetings.js';
+import { createGallery, rolesLine } from './gallery.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
 import { QUIET_S, assess, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
@@ -52,6 +53,15 @@ function saveFollowUps() { try { localStorage.setItem(followKey(), JSON.stringif
 function loadFollowUps() { try { followUps = JSON.parse(localStorage.getItem(followKey()) ?? '[]'); } catch { followUps = []; } }
 /** Phones get the control room (chat, live board) and a read-only team: building the team needs a large screen. */
 const small = matchMedia('(max-width: 640px)');
+// A repository with no team (templates story): the gallery, then a template on the canvas as a read-only preview,
+// then the team as an unpublished draft.
+let gallery = null;
+let previewing = null; // the template card on the canvas, before "Use this template"
+let made = null; // the template card the unpublished team came from; null for "almost empty"
+let booted = false;
+/** Editing is off on a phone and while a template is only being previewed. */
+const locked = () => small.matches || !!previewing;
+const lockedNote = () => (previewing ? 'This is a preview. Use this template to edit the team.' : 'Editing the team needs a larger screen');
 
 // ------------------------------------------------------------------------------------------------ model
 
@@ -96,7 +106,7 @@ function checksOf(sp) {
  * the form being typed in.
  */
 function change(fn, { quiet = false, key = '' } = {}) {
-  if (small.matches) { flash('Editing the team needs a larger screen'); render(); return; }
+  if (locked()) { flash(lockedNote()); render(); return; }
   const now = Date.now();
   if (!key || key !== lastEdit.key || now - lastEdit.at > 1500) {
     undo.push(JSON.stringify(spec));
@@ -519,7 +529,7 @@ function wireLibrary() {
     if (l && !e.target.dataset.toggle) {
       e.preventDefault();
       // A custom agent opens in its editor (on a large screen); any other role in the inspector.
-      if (isCustom(spec.roles[l.dataset.slug]) && !small.matches) return openEditor(l.dataset.slug);
+      if (isCustom(spec.roles[l.dataset.slug]) && !locked()) return openEditor(l.dataset.slug);
       select(l.dataset.slug);
       // On a phone the inspector sits below the canvas: bring it into view, or the tap seems to do nothing.
       if (small.matches) $('#inspector').scrollIntoView({ block: 'start' });
@@ -528,7 +538,7 @@ function wireLibrary() {
   $('#library').addEventListener('dragstart', (e) => { const l = e.target.closest('.lib-role, .lib-ref'); if (l) { e.dataTransfer.setData('text/x-role', l.dataset.slug); e.dataTransfer.effectAllowed = 'copy'; } });
   $('#search').addEventListener('input', (e) => { query = e.target.value; renderLibrary(); });
   $('#new-agent').onclick = () => {
-    if (small.matches) return flash('Editing the team needs a larger screen');
+    if (locked()) return flash(lockedNote());
     openNewAgent({ spec: () => spec, kit: S.kit, kitVersion: S.kitVersion, roles: () => view.all, change, select, edit: openEditor });
   };
 }
@@ -715,7 +725,8 @@ function render() {
   renderIssues();
   $('#undo').disabled = !undo.length;
   $('#redo').disabled = !redo.length;
-  if (small.matches) for (const el of document.querySelectorAll('#inspector :is(input, select, textarea, button), #library input')) el.disabled = true;
+  if (locked()) for (const el of document.querySelectorAll('#inspector :is(input, select, textarea, button), #library input')) el.disabled = true;
+  renderTemplateBar();
 }
 
 // ------------------------------------------------------------------------------------------------ publish
@@ -809,6 +820,7 @@ async function previewPublish() {
 }
 
 async function openPublish() {
+  if (locked()) return flash(lockedNote());
   const dlg = $('#publish-dialog');
   $('#publish-result').textContent = '';
   $('#publish-result').className = 'result';
@@ -836,8 +848,11 @@ async function confirmPublish() {
     out.className = 'result ok';
     out.textContent = r.commit ? `Committed ${r.commit} on ${r.branch} (${r.files.length} files). Push it and open a pull request: git push -u origin ${r.branch}` : `Nothing changed on ${r.branch}.`;
     const fresh = await api('/v1/team');
+    const wasNew = !!S.noTeam;
     S = fresh;
     published = structuredClone(fresh.spec);
+    // The first publish of a new team: from here on it is the repository's team, with its board.
+    if (wasNew) { made = null; document.body.classList.remove('no-team'); loadBoard(); }
     // A deferred move stays in the draft, so the next publish carries it; the checks remind until then (criterion 11).
     spec = deferred.length ? draft : fresh.spec;
     followUps = [...followUps.filter((f) => !deferred.some((d) => d.path === f.path)), ...deferred];
@@ -856,7 +871,8 @@ async function confirmPublish() {
 // ------------------------------------------------------------------------------------------------ start
 
 function setPage(page) {
-  const p = ['chat', 'meetings'].includes(page) ? page : 'team';
+  if (!spec) return showGallery();
+  const p = ['chat', 'meetings'].includes(page) && !(page === 'chat' && S.noTeam) && !previewing ? page : 'team';
   if (meetings?.dirty && document.body.dataset.page === 'meetings' && p !== 'meetings' && !confirm('Discard the changes to this meeting?')) { history.replaceState(null, '', '#meetings'); return; }
   document.body.dataset.page = p;
   for (const b of document.querySelectorAll('#pages [data-page]')) b.setAttribute('aria-pressed', String(b.dataset.page === p));
@@ -887,16 +903,144 @@ async function start() {
     document.body.innerHTML = `<main style="padding:24px"><h1>Agent Team Studio</h1><p>${esc(e.message)}</p></main>`;
     return;
   }
-  spec = S.spec;
-  published = structuredClone(S.spec);
   fetch('/model-prices.json').then((r) => (r.ok ? r.json() : null)).then((t) => { prices = t; if (document.body.dataset.page === 'meetings') meetings?.render(); }).catch(() => {});
+  small.addEventListener('change', () => { document.body.classList.toggle('small', small.matches); if (spec) render(); });
+  document.body.classList.toggle('small', small.matches);
+  wireTemplates();
+  if (S.noTeam) return showGallery();
+  load(S.spec);
+  setPage(location.hash.slice(1));
+}
+
+// ------------------------------------------------------------------------------------------------ templates
+
+/** The gallery: a repository with no team starts here (templates story D32). */
+function showGallery() {
+  previewing = null;
+  document.body.classList.remove('previewing');
+  document.body.classList.add('no-team');
+  document.body.dataset.page = 'gallery';
+  $('#project').textContent = `${S.root}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
+  gallery ??= createGallery({ root: $('#gallery-page'), ctx: { cards: () => S.templates ?? [], groups: () => S.groups ?? {}, onPick: pickTemplate, onAlmostEmpty: () => useTemplate('almost-empty') } });
+  gallery.render();
+  if (location.hash) history.replaceState(null, '', location.pathname);
+}
+
+const cardOf = (id) => (S.templates ?? []).find((c) => c.id === id) ?? null;
+
+/** A template on the real canvas, read-only, with its lists in the bar above (D31). Nothing is written. */
+async function pickTemplate(id) {
+  try {
+    const { spec: sp } = await api('/v1/team/from-template', { id });
+    previewing = cardOf(id);
+    document.body.classList.add('previewing');
+    load(sp);
+    selected = null;
+    setPage('team');
+  } catch (e) { flash(e.message); }
+}
+
+/** "Use this template": the create form, then the team as an unpublished draft (D31, criterion 7). */
+function useTemplate(id) {
+  if (small.matches) return flash('Create the team on a larger screen.');
+  const card = id === 'almost-empty' ? null : cardOf(id);
+  const dlg = $('#create-dialog');
+  const folder = S.root.split(/[\\/]/).filter(Boolean).at(-1) ?? '';
+  let zone = 'UTC';
+  try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { /* keep UTC */ }
+  $('#create-title').textContent = card ? `Use the ${card.title} template` : 'Start almost empty';
+  $('#create-what').textContent = card ? `${rolesLine(card)}. You can change everything before you publish.` : 'A chief of staff only. Add roles from the library before you publish.';
+  $('#c-project').value = folder;
+  $('#c-owner').value = '';
+  $('#c-zone').value = zone;
+  $('#create-result').textContent = '';
+  dlg.dataset.template = id;
+  dlg.showModal();
+  $('#c-project').focus();
+}
+
+async function createTeam() {
+  const dlg = $('#create-dialog');
+  const zone = $('#c-zone').value.trim() || 'UTC';
+  try { new Intl.DateTimeFormat('en', { timeZone: zone }); } catch { $('#create-result').textContent = `"${zone}" is not a time zone this browser knows, for example Europe/Lisbon or America/New_York.`; return; }
+  const project = $('#c-project').value.trim();
+  if (!project) { $('#create-result').textContent = 'Give the project a name.'; return; }
+  try {
+    const id = dlg.dataset.template;
+    const { spec: sp } = await api('/v1/team/from-template', { id, project, owner: $('#c-owner').value.trim() || undefined, timezone: zone });
+    made = id === 'almost-empty' ? null : cardOf(id);
+    previewing = null;
+    document.body.classList.remove('previewing');
+    dlg.close();
+    load(sp);
+    selected = null;
+    setPage('team');
+  } catch (e) { $('#create-result').textContent = e.message; }
+}
+
+/** The bar above the canvas while previewing a template, and the note on a team that is not published yet. */
+function renderTemplateBar() {
+  const bar = $('#template-bar');
+  if (previewing) {
+    const c = previewing;
+    // Reporting order: whoever reports to the owner first, then their reports, level by level.
+    const depth = (slug) => { let d = 0; for (let m = view.bySlug.get(slug)?.reportsTo; m && m !== 'owner' && view.bySlug.has(m) && d < 20; m = view.bySlug.get(m).reportsTo) d++; return d; };
+    const byOrder = (list) => list.map((s) => ({ s, d: depth(s), t: view.bySlug.get(s)?.title ?? s })).sort((x, y) => x.d - y.d || x.t.localeCompare(y.t)).map((x) => x.t);
+    const meetingsLine = (c.meetings ?? []).map((m) => `${m.title} (${m.when.replace(/`/g, '')})`).join(', ');
+    bar.hidden = false;
+    bar.innerHTML = `<div class="tb-text"><strong>Preview: ${esc(c.title)}</strong> <span class="muted">${esc(rolesLine(c))}</span>
+      <dl>
+        <div><dt>Roles that start on</dt><dd>${esc(byOrder(c.roles.filter((s) => !c.dormant.includes(s))).join(', '))}</dd></div>
+        ${c.dormant.length ? `<div><dt>Dormant until you start them</dt><dd>${esc(byOrder(c.dormant).join(', '))}</dd></div>` : ''}
+        ${c.systems.length ? `<div><dt>Systems to connect</dt><dd>${esc(c.systems.map((s) => s.name).join(', '))}</dd></div>` : ''}
+        ${meetingsLine ? `<div><dt>Starter meetings</dt><dd>${esc(meetingsLine)}</dd></div>` : ''}
+      </dl></div>
+      <div class="tb-actions"><button type="button" id="tb-back">Back to the starting teams</button>${small.matches ? '<span class="hint">Create the team on a larger screen.</span>' : `<button type="button" id="tb-use" class="primary" data-template="${esc(c.id)}">Use this template</button>`}</div>`;
+    return;
+  }
+  if (S.noTeam) {
+    bar.hidden = false;
+    bar.innerHTML = `<div class="tb-text"><strong>${made ? `A new team from the ${esc(made.title)} template.` : 'A new team.'}</strong> <span class="muted">Nothing is written to the repository until you publish.</span></div>
+      <div class="tb-actions"><button type="button" id="tb-back">Start over</button></div>`;
+    return;
+  }
+  bar.hidden = true;
+}
+
+function wireTemplates() {
+  $('#template-bar').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.id === 'tb-use') return useTemplate(b.dataset.template);
+    if (b.id === 'tb-back') {
+      if (!previewing && undo.length && !confirm('Discard this team? Nothing has been written yet.')) return;
+      made = null;
+      spec = null;
+      return showGallery();
+    }
+  });
+  $('#create-form').addEventListener('submit', (e) => { e.preventDefault(); createTeam(); });
+  $('#create-cancel').onclick = () => $('#create-dialog').close();
+}
+
+/** Opens a team in the editor: the repository's, a template preview, or a new draft. Wires the page once. */
+function load(initial) {
+  spec = initial;
+  published = structuredClone(initial);
+  undo.length = 0; redo.length = 0;
+  sugg = null; selected = null; selectedSystem = null; pop = null; picks = new Map();
+  document.body.classList.toggle('no-team', !!S.noTeam);
+  $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${S.root}${S.git.branch ? ` · ${S.git.branch}` : ''}`;
+  if (booted) return;
+  booted = true;
   loadFollowUps();
   // A move published to happen after its open work merges lives on in the draft, even across a reload or a restart.
   for (const f of followUps) reapplyFollowUp(spec, f);
   wireImpact();
-  loadBoard();
-  try { new EventSource('/v1/team/board/stream').addEventListener('changed', loadBoard); } catch { /* no stream: the first read stands */ }
-  $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${S.root}${S.git.branch ? ` · ${S.git.branch}` : ''}`;
+  if (!S.noTeam) {
+    loadBoard();
+    try { new EventSource('/v1/team/board/stream').addEventListener('changed', loadBoard); } catch { /* no stream: the first read stands */ }
+  }
   wireCanvas();
   wireLibrary();
   $('#zoom-in').onclick = () => { zoom = Math.min(1.5, scale + 0.1); renderCanvas(); };
@@ -932,15 +1076,11 @@ async function start() {
   $('#views').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setMode(b.dataset.view); });
   $('#pages').addEventListener('click', (e) => { const b = e.target.closest('[data-page]'); if (b) setPage(b.dataset.page); });
   addEventListener('hashchange', () => setPage(location.hash.slice(1)));
-  small.addEventListener('change', () => { document.body.classList.toggle('small', small.matches); render(); });
-  document.body.classList.toggle('small', small.matches);
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
     e.preventDefault();
     if (e.shiftKey) step(redo, undo); else step(undo, redo);
   });
-  render();
-  setPage(location.hash.slice(1));
 }
 
 start();

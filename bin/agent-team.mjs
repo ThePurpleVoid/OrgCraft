@@ -36,7 +36,7 @@ import { loadKit, loadTemplates, readLayer, readTemplateDir, writeLayer } from '
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8'));
 export const VERSION = pkg.version;
-const DEFAULT_KIT_SPEC = `github:PurpleGiragge/Agent-Team-Kit#v${VERSION}`;
+export const DEFAULT_KIT_SPEC = `github:PurpleGiragge/Agent-Team-Kit#v${VERSION}`;
 
 const LAYER = '.agent-team';
 const DOCS = 'docs/team';
@@ -452,13 +452,14 @@ Next:
 }
 
 /** The files init writes once, besides team.json: config.sh, the roles README, ownership.md, the lane template, .gitignore. */
-function initExtras(root, slug, values, { ownership }) {
+export function initExtras(root, slug, values, { ownership, quiet = false }) {
+  const log = quiet ? () => {} : console.log;
   const once = (rel, content) => {
     const p = join(root, rel);
-    if (existsSync(p)) { console.log(`kept ${rel}`); return; }
+    if (existsSync(p)) { log(`kept ${rel}`); return; }
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, content);
-    console.log(`wrote ${rel}`);
+    log(`wrote ${rel}`);
   };
   once(`${LAYER}/config.sh`, read(join(KIT, 'templates/config.sh')).replace(/^AGENT_TEAM_PROJECT=.*$/m, `AGENT_TEAM_PROJECT="${slug}"`));
   once(`${LAYER}/roles/README.md`, read(join(KIT, 'templates/roles-README.md')));
