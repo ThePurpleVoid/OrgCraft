@@ -74,8 +74,8 @@ export const TOOLS = {
     check: (a, ctx) => (!ctx.frontDoor ? `Only the front door tells the owner a change is ready: send a HANDOFF to ${ctx.frontDoorRole ?? 'the front door'} naming the pull request` : null),
   },
   meeting_reply: {
-    description: 'Your turn in a meeting: answer the agenda in a few sentences. It goes verbatim into the minutes, and later attendees read it. Only on your own turn, once.',
-    shape: { meeting: z.string().regex(meetingId, 'is the meeting id from your turn, such as mtg_01…'), text: need(8000) },
+    description: 'Your turn in a meeting: answer the agenda in a few sentences. It goes verbatim into the minutes, and later attendees read it. Only on your own turn, once. In a discussion, set done: true when you have nothing more to add (say so in text); you are then not asked in later rounds.',
+    shape: { meeting: z.string().regex(meetingId, 'is the meeting id from your turn, such as mtg_01…'), text: need(8000), done: z.boolean().optional() },
   },
   meeting_close: {
     description: 'Facilitator only, on the closing turn: write the minutes and close the meeting. Action items become HANDOFFs to their roles. Decisions go to the owner (as a card from the front door, otherwise as a BLOCKED to the front door).',

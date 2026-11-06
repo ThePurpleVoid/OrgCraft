@@ -12,6 +12,7 @@ const MEETINGS = [
   { id: 'busy-check', title: 'Quick check', agenda: 'Anything urgent?', attendees: ['web-dev', 'qa'], ifBusy: 'skip', capUsd: 1 },
   { id: 'design', title: 'Design review', agenda: 'The new page', facilitator: 'web-dev', attendees: ['qa', 'designer'], capUsd: 1 },
   { id: 'catch-up', title: 'Catch-up', agenda: 'Who worked?', attendees: [], rule: 'worked-since-last', capUsd: 1 },
+  { id: 'plan', title: 'Checkout plan', agenda: 'Pay later or cards first?', attendees: ['web-dev', 'qa', 'designer'], format: 'discussion', rounds: 3, capUsd: 1 },
 ];
 const roster = (meetings = MEETINGS) => ({
   version: 'abc123', repo: { url: 'https://github.com/example/shop.git', ref: 'main' },
@@ -43,6 +44,15 @@ async function turnFor(runner, meeting, role, { closing = false } = {}) {
   const sid = f.body.session;
   for (const x of runner.frames) if (x.op === 'session.start') sessions.set(x.body.session, x.body.token);
   return { session: sid, token: sessions.get(sid), wake: f.op === 'session.start' ? f.body.wake : f.body.message };
+}
+/** A discussion turn: the session that got `role`'s turn in `round` (the closing turn with closing). */
+async function turnIn(runner, meeting, role, round, { closing = false } = {}) {
+  const f = await runner.next((x) => {
+    const w = x.op === 'session.start' ? x.body.wake : x.op === 'session.message' ? x.body.message : null;
+    return w?.type === 'meeting.turn' && w.data.meeting === meeting && w.data.to === role && Boolean(w.data.closing) === closing && (closing || w.data.round === round);
+  });
+  for (const x of runner.frames) if (x.op === 'session.start') sessions.set(x.body.session, x.body.token);
+  return { session: f.body.session, token: sessions.get(f.body.session), wake: f.op === 'session.start' ? f.body.wake : f.body.message };
 }
 const tool = (call, s, name, input) => call('POST', `/sessions/${s.session}/tools/${name}`, input, { authorization: `Bearer ${s.token}` });
 const events = async (call, type) => (await call('GET', `/teams/shop/events?type=${type}`)).body.events;
@@ -371,4 +381,110 @@ test('G-15: the front door starts an ad hoc meeting from the chat; no cap given 
     assert.equal(low.status, 200, JSON.stringify(low.body));
     assert.deepEqual([low.body.perDay, low.body.meetingCap], [30, 30]);
   }, { tickMs: 0 });
+});
+
+test('discussion: attendees answer each other for up to the rounds set; done drops an attendee; the facilitator closes with decisions and actions', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    const m = (await p.call('POST', '/teams/shop/meetings', { meeting: 'plan' })).body;
+    assert.deepEqual([m.format, m.rounds, m.round], ['discussion', 3, 1]);
+    const [opened] = await events(p.call, 'meeting.opened');
+    assert.deepEqual([opened.data.format, opened.data.rounds], ['discussion', 3]);
+    const say = async (role, round, text, more = {}) => {
+      const s = await turnIn(runner, m.id, role, round);
+      const r = await tool(p.call, s, 'meeting_reply', { meeting: m.id, text, ...more });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      return s.wake.data;
+    };
+    // Round 1: everyone, in order, each seeing what was said before.
+    let w = await say('web-dev', 1, 'Cards first: pay later needs a new provider.');
+    assert.deepEqual([w.turn, w.of, w.round, w.rounds], [1, 3, 1, 3]);
+    w = await say('qa', 1, 'Agree; cards are already tested.');
+    assert.deepEqual(w.replies.map((r) => [r.role, r.round]), [['web-dev', 1]]);
+    await say('designer', 1, 'Pay later converts better on mobile.');
+    // Round 2: they answer each other. web-dev has nothing more to add.
+    w = await say('web-dev', 2, 'Nothing to add: cards first, pay later next.', { done: true });
+    assert.deepEqual([w.turn, w.of, w.round], [1, 3, 2]);
+    assert.deepEqual(w.replies.map((r) => r.role), ['web-dev', 'qa', 'designer'], 'the whole transcript');
+    await say('qa', 2, 'Designer has a point; we can test pay later in a week.');
+    await say('designer', 2, 'Then cards now, pay later in the next release.', { done: true });
+    // Round 3: only qa is left to ask.
+    w = await say('qa', 3, 'Agreed.', { done: true });
+    assert.deepEqual([w.turn, w.of, w.round], [1, 1, 3], 'of counts only the attendees asked this round');
+    const replied = await events(p.call, 'meeting.replied');
+    assert.deepEqual(replied.map((e) => [e.data.role, e.data.round, e.data.done ?? false]), [
+      ['web-dev', 1, false], ['qa', 1, false], ['designer', 1, false], ['web-dev', 2, true], ['qa', 2, false], ['designer', 2, true], ['qa', 3, true],
+    ]);
+    const close = await turnIn(runner, m.id, 'chief-of-staff', 0, { closing: true });
+    assert.deepEqual([close.wake.data.round, close.wake.data.rounds, close.wake.data.replies.length, close.wake.data.capped], [3, 3, 7, false]);
+    const r = await tool(p.call, close, 'meeting_close', {
+      meeting: m.id, minutes: 'Cards first; pay later in the next release.',
+      actionItems: [{ to: 'web-dev', task: 'Ship card checkout', doneWhen: 'cards work end to end' }],
+      decisions: [{ question: 'Pay later in the next release?', options: [{ id: 'yes', label: 'Yes', consequence: 'Planned next.' }, { id: 'no', label: 'No', consequence: 'Dropped.' }], recommended: 'yes' }],
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const [closed] = await events(p.call, 'meeting.closed');
+    assert.deepEqual([closed.data.outcome, closed.data.rounds, closed.data.replies, closed.data.actionItems, closed.data.decisions], ['completed', 3, 7, 1, 1]);
+    assert.ok(r.body.cards?.length === 1, 'the front door facilitator turns the decision into a card');
+  }, { tickMs: 0 });
+});
+
+test('discussion: when everyone is done early the facilitator closes early; done is refused as not boolean', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    const m = (await p.call('POST', '/teams/shop/meetings', { meeting: 'plan' })).body;
+    const s = await turnIn(runner, m.id, 'web-dev', 1);
+    assert.equal((await tool(p.call, s, 'meeting_reply', { meeting: m.id, text: 'x', done: 'yes' })).status, 422);
+    for (const role of ['web-dev', 'qa', 'designer']) {
+      const t = await turnIn(runner, m.id, role, 1);
+      assert.equal((await tool(p.call, t, 'meeting_reply', { meeting: m.id, text: `${role}: nothing to add`, done: true })).status, 200);
+    }
+    const close = await turnIn(runner, m.id, 'chief-of-staff', 0, { closing: true });
+    assert.deepEqual([close.wake.data.round, close.wake.data.rounds], [1, 3], 'closed after round 1 of 3');
+  }, { tickMs: 0 });
+});
+
+test('discussion: the cap skips each attendee still to speak once, from the round it would speak in next', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    const m = (await p.call('POST', '/teams/shop/meetings', { meeting: 'plan' })).body;
+    const web = await turnIn(runner, m.id, 'web-dev', 1);
+    assert.equal((await tool(p.call, web, 'meeting_reply', { meeting: m.id, text: 'Cards first.' })).status, 200);
+    await turnIn(runner, m.id, 'qa', 1);
+    const used = envFor(web, 'web-dev', 'usage.recorded', { inputTokens: 1, outputTokens: 1, cost: 100, currency: 'USD', meeting: m.id });
+    assert.equal((await runner.request('events', { events: [used] })).op, 'ack');
+    const skipped = (await events(p.call, 'meeting.skipped')).map((e) => [e.data.role, e.data.reason, e.data.fromRound]);
+    assert.deepEqual(skipped, [['web-dev', 'capped', 2], ['qa', 'capped', 1], ['designer', 'capped', 1]], 'one per attendee, not one per turn per round');
+    const close = await turnIn(runner, m.id, 'chief-of-staff', 0, { closing: true });
+    assert.equal(close.wake.data.capped, true);
+  }, { tickMs: 0 });
+});
+
+test('discussion: past its overall deadline the facilitator gets the closing turn early, timed out', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    const m = (await p.call('POST', '/teams/shop/meetings', { meeting: 'plan' })).body;
+    await turnIn(runner, m.id, 'web-dev', 1);
+    await p.db.system("update meetings set opened_at = now() - interval '5 hours' where id = $1", [m.id]);
+    await p.server.bus.tick();
+    const close = await turnIn(runner, m.id, 'chief-of-staff', 0, { closing: true });
+    assert.deepEqual([close.wake.data.timedOut, close.wake.data.capped], [true, false]);
+    const r = await tool(p.call, close, 'meeting_close', { meeting: m.id, minutes: 'Nobody answered in time.' });
+    assert.equal(r.status, 200);
+    const [closed] = await events(p.call, 'meeting.closed');
+    assert.equal(closed.data.timedOut, true);
+  }, { tickMs: 0 });
+});
+
+test('discussion: past 40 KB an attendee\'s earlier-round replies go before anyone\'s latest, so every voice stays', async () => {
+  const { carried } = await import('../meetings.mjs');
+  const big = 'x'.repeat(7000);
+  const replies = [];
+  for (const round of [1, 2, 3]) for (const role of ['a', 'b', 'c']) replies.push({ role, text: `${role}${round} ${big}`, round });
+  const out = carried(replies);
+  assert.ok(out.dropped > 0 && /left out/.test(out.note));
+  const roles = new Set(out.replies.map((r) => r.role));
+  assert.deepEqual([...roles].sort(), ['a', 'b', 'c'], 'every attendee is still there');
+  for (const role of ['a', 'b', 'c']) assert.ok(out.replies.some((r) => r.role === role && r.round === 3), `${role}'s latest reply is kept`);
+  assert.ok(!out.replies.some((r) => r.round === 1), 'the earliest round goes first');
 });
