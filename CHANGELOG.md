@@ -9,6 +9,7 @@
   - the connector manifest. The MCP tools come with `notify`, `sink`, `inbound`, `discover` and `work` capabilities. A `sink` in `kit-report` format keeps a board a team already runs working unchanged
   - the work contract: area, check, propose, accept, evidence
 - `packages/events`: the envelope and an exact two-way mapping with the kit's board reports, tested on every report kind.
+- **The control plane** ([apps/server](apps/server/README.md), milestone M2). An event log in Postgres with row-level security per tenant, PGlite for local mode and tests, so `node apps/server/bin.mjs` needs nothing else installed. A team already on the kit connects by changing `TEAM_REPORT_URL` and `TEAM_REPORT_TOKEN`: the kit's own `team-status.sh` is tested against it unchanged. It also has the board, the event log with its live stream (it resumes from `Last-Event-ID`), report tokens that can be revoked, and sinks that forward reports in the kit's shape to a board the team already runs, with their tokens sealed in a vault. The API contract gains sinks, secrets, token revoke and health.
 
 ## 0.7.1
 

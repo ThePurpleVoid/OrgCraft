@@ -105,6 +105,43 @@ paths:
       tags: [events]
       summary: Mint a report token for TEAM_REPORT_TOKEN (shown once; append-only for this team)
       responses: { "201": { description: The token, content: { application/json: { schema: { type: object, properties: { id: { type: string }, token: { type: string }, url: { type: string } } } } } } }
+  /teams/{team}/report-tokens/{token}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: token, in: path, required: true, schema: { type: string } } ]
+    delete: { tags: [events], summary: Revoke a report token, responses: { "200": { description: Revoked } } }
+  /teams/{team}/sinks:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { tags: [connectors], summary: Where this team's events are forwarded, responses: { "200": { description: Sinks } } }
+    post:
+      tags: [connectors]
+      summary: Forward events to a URL, in order, at least once (kit-report keeps a board the team already runs working)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri, description: "https, or http to this machine" }
+                format: { enum: [kit-report, event], default: kit-report }
+                header: { type: string, description: "Header to send the secret in, such as x-team-token" }
+                secret: { type: string, description: "Name of a stored secret (PUT /secrets/{name})" }
+                from: { enum: [now, start], default: now }
+      responses: { "201": { description: The sink } }
+  /teams/{team}/sinks/{sink}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: sink, in: path, required: true, schema: { type: string } } ]
+    delete: { tags: [connectors], summary: Stop forwarding, responses: { "200": { description: Removed } } }
+  /secrets:
+    get: { tags: [connectors], summary: Secret names and when they changed (never values), responses: { "200": { description: Names } } }
+  /secrets/{name}:
+    parameters: [ { name: name, in: path, required: true, schema: { type: string, pattern: "^[A-Z][A-Z0-9_]{0,63}$" } } ]
+    put:
+      tags: [connectors]
+      summary: Store a secret (write-only; sealed with the server's master key)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [value], properties: { value: { type: string } } } } } }
+      responses: { "200": { description: Stored } }
+  /health:
+    get: { tags: [teams], security: [], summary: The server is up, responses: { "200": { description: OK } } }
   /teams/{team}/runs:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get: { tags: [runs], summary: Runs, responses: { "200": { description: Runs } } }

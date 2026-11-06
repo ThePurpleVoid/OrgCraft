@@ -26,3 +26,26 @@ jobs:
         run: bash tests/scripts.test.sh
       - name: This repository's own team is in sync with its pinned kit release
         run: scripts/agent-team/sync.sh check
+
+  server:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: owner, POSTGRES_PASSWORD: owner, POSTGRES_DB: postgres }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: npm ci --prefix apps/server
+      - name: Control plane on PGlite
+        run: npm test --prefix apps/server
+      - name: Control plane on Postgres, as a schema owner that is not a superuser
+        env: { PGPASSWORD: owner }
+        run: |
+          psql -h localhost -U owner -d postgres -c "create role kit login createrole password 'kit'" -c "create database kit owner kit"
+          TEST_DATABASE_URL=postgres://kit:kit@localhost:5432/kit npm test --prefix apps/server
