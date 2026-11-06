@@ -38,10 +38,25 @@ AGENT_TEAM_ROLE=cto claude
 
 Claude Code keeps an agent team's state in `~/.claude/teams/` and builds it at run time; there is no project file for the team itself, which is why the kit exports the roles and the prompts, not a team file. Agent teams need an interactive session, allow one team per session and no nested teams, so they suit a lead working on one job with its reports. Long-running work across many lanes is still better as [threads](running-the-team.md), and both report to the same board.
 
+## With other coding agents
+
+Hooks are a Claude Code feature. With `"targets": ["claude-code", "agents-md"]`, sync also writes a root `AGENTS.md` for other coding agents ([other coding agents](other-coding-agents.md)). Those agents report with `node scripts/agent-team/report.mjs`, and miss what the hooks do:
+
+| | Claude Code | Other agents (`AGENTS.md`) |
+| --- | --- | --- |
+| Role brief, protocols, project instructions | Yes | Yes |
+| Role memory between sessions | Project memory | A file in the board folder, or in the checkout (never committed) |
+| Board reports the role makes (status, HANDOFF, BUG, SIGNOFF, BLOCKED) | Yes | Yes, with the Node reporter |
+| Automatic liveness (start, heartbeat, idle and stop from hooks) | Yes | No: the board shows only the role's own reports, and its card says **Self-reported** |
+| Ownership guard before each edit | Yes, live | No: one writer per area is still checked by the merge gate and CI, and by the runner in hosted runs |
+| Subagent and teammate reports | Yes | No |
+| Built-in agent teams export (`"agentTeams": true`) | Yes | No |
+| Merge gate, CI checks, approvals | Yes | Yes |
+
 ## Check the setup
 
 ```sh
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.14.0 doctor
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.15.0 doctor
 ```
 
 `doctor` checks the tools the scripts need, that the generated files and the hooks match `.agent-team/`, the roster and its hand-offs, and runs a hook event through the reporter into a scratch board to prove the pipeline works. `--ping` also posts a note to `TEAM_REPORT_URL`. It exits 1 when anything fails, so it can run in CI next to `sync.sh check`.
