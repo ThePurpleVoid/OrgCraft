@@ -33,6 +33,10 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
   let tenant = null;
   let readyResolve;
   const ready = new Promise((r) => (readyResolve = r));
+  // Whether the control plane is there now (welcomed, and not disconnected since). The budget and every approval live
+  // there, so while it is away no session starts a model turn or merges (resilience pass, #28).
+  let up = false;
+  let waiting = [];
 
   const link = makeLink({
     server, key, log,
@@ -119,7 +123,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     }
     let s;
     const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
-    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval });
+    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online });
     s.tools = tools;
     setToken(s, body.token, body.tokenExpires);
     sessions.set(body.session, s);
@@ -131,7 +135,20 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     s.start();
   }
 
+  link.on('close', () => { up = false; });
+
+  /**
+   * Resolves once the control plane is there: welcomed, and one request answered after that. Frames are in order,
+   * so by then anything the welcome brought (a session.stop for a session it stopped meanwhile) has been handled.
+   */
+  async function online() {
+    while (!up) await new Promise((r) => waiting.push(r));
+    await link.send('events', { events: [] });
+  }
+
   link.on('welcome', (w) => {
+    up = true;
+    for (const r of waiting.splice(0)) r();
     tenant = w.tenant ?? tenant ?? 'local';
     if (welcomed) for (const [, a] of approvals) if (a.resolve && sessions.get(a.session)?.state !== 'ended') link.send('approval.wait', { session: a.session, approval: a.approval, resend: true });
     welcomed = true;
@@ -145,9 +162,12 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     switch (f.op) {
       case 'session.start': return startSession(b);
       case 'session.message': {
+        // Refused when the session is not here (this runner restarted): the control plane starts it again rather
+        // than counting the message as delivered.
         const s = sessions.get(b.session);
-        if (!s?.deliver(b.message)) log(`no running session ${b.session} for a message`);
-        return;
+        if (s?.deliver(b.message)) return f.reply({});
+        log(`no running session ${b.session} for a message`);
+        return f.refuse(`no session ${b.session} on this runner`, 'no-session');
       }
       case 'session.checkpoint': {
         const s = sessions.get(b.session);

@@ -139,17 +139,25 @@ The server rejects an event a credential may not emit with a `nack` frame naming
 
 | `op` | Direction | M3 | Additions in M3 (additive) |
 | --- | --- | --- | --- |
-| `hello` / `welcome` | runner → / → runner | yes | `welcome.body.sessions`: sessions this runner should resume after a reconnect |
+| `hello` / `welcome` | runner → / → runner | yes | `hello.body.sessions`: the sessions the runner still runs (none after a restart); `welcome.body.sessions`: only those of them it should resume (#168, below) |
 | `session.start` | → runner | yes | `resume` (boolean), `checkpoint` (`commit`, `memory`), `token`, `tokenExpires`, `caps.remainingToday` and `caps.remainingRun` (minor units), `delivery` |
 | `session.message` | → runner | yes | `delivery` |
-| `session.stop` | → runner | yes, `finish-step` (pause, budget) and `now` (stop) | `reason` (owner, budget, error) |
+| `session.stop` | → runner | yes, `finish-step` (pause, budget) and `now` (stop) | `reason` (owner, budget, error, and after a reconnect run-stopped, run-paused or stopped) |
 | `session.checkpoint` | → runner | yes, before every stop and pause | the runner's `ack` body carries `commit` (the pushed branch head) and `memory` (the role's memory file), which the server stores in `sessions.checkpoint` |
 | `events` | runner → | yes, with the allowlist above | |
 | `approval.wait` / `approval.result` | runner → / → runner | yes | `approval.wait` is answered with an `ack` whose body is `{ approval, card }` |
 | `session.renew` / `session.token` | runner → / → runner | **new** | renew the session token before it expires: `{ session }`, answered with `{ session, token, tokenExpires }` |
 | `ping` / `pong` | both | yes | |
-| `ack` / `nack` | both | yes | `nack` is **new**: `{ ref, problem }`, for a refused frame |
+| `ack` / `nack` | both | yes | `nack` is **new**: `{ ref, problem, error }`, for a refused frame; `error: no-session` means the runner does not have the session a `session.message` was for |
 | `secret.get` / `secret.value` | | **not in M3** | The runner reads its model key from its own environment. Secret release comes with the GitHub App in M4 |
+
+**Reconnects** (#168, runner-protocol.md). The control plane trusts `hello.sessions`.
+- A session the runner no longer names was lost (a restart or a crash). The control plane marks it stopped and delivers again what was acked to it since its last `session.idle` or `session.ended`. It restarts through `deliver()`, like `run.resumed`: `session.start` with `resume: true`, the stored checkpoint when there is one, and the unfinished message as the wake. The marker is idle, not the checkpoint, because a checkpoint is stored only on a pause, and work finished before idle is already pushed or handed off.
+- A named session whose run stopped meanwhile gets `session.stop` `now`. If the run paused meanwhile, it takes the pause path: `session.checkpoint`, then `session.stop` `finish-step` with `run-paused`, acting only if the run is still paused at the version read (section 6).
+- A `session.message` the runner cannot place gets `nack` `no-session`, and the session restarts with that message as its wake.
+- While the link is down, a runner starts no model turn and merges nothing. The server sends an approved `accept`'s `approval.result` only while the run is running, so no merge lands on a stopped or paused run.
+
+**Proofs** (in #168): a runner restart redelivers to its lost sessions; a run stopped during a partition does not merge on reconnect; a nack `no-session` restarts the session.
 
 ### Approvals: one path for both triggers
 

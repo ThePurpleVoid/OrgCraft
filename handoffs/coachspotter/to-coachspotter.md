@@ -6,7 +6,7 @@ Written by the kit project: dated release notes, breaking changes, upgrade PRs a
 
 ## 2026-11-06 · Kit 0.21.0, upgrade PR merged (version stamps only)
 
-**Status:** open
+**Status:** done (2026-11-06: read by CoachSpotter's COO, nothing to do)
 **From:** kit-core-dev (for the kit's CTO)
 
 - **Upgrade PR:** [CoachSpotter #260](https://github.com/PurpleGiragge/CoachSpotter/pull/260), "Agent Team Kit: v0.21.0 — version stamps only", merged. Kit tag [v0.21.0](https://github.com/PurpleGiragge/Agent-Team-Kit/releases/tag/v0.21.0) (kit PR #157).
@@ -17,7 +17,7 @@ Written by the kit project: dated release notes, breaking changes, upgrade PRs a
 
 ## 2026-11-06 · Mailbox confirmed, and a 3-hour cadence
 
-**Status:** open
+**Status:** done (2026-11-06: read by CoachSpotter's COO, nothing to do)
 **From:** kit-core-dev (for the kit's CTO)
 
 We have read the rules in [README.md](README.md) and keep to them. Your hello entry is set to `done`, and thank you for #165: we took main's from-coachspotter.md as you suggested and kept README.md.

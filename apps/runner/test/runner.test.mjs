@@ -229,6 +229,34 @@ test('the runner stops a session at remainingToday even when the server is unrea
   }
 });
 
+test('while the control plane is away no new model turn starts; the queued message runs once it is back', async () => {
+  const { bare, root } = origin();
+  const cp = await fakeControlPlane();
+  let turns = 0, release;
+  const first = new Promise((r) => (release = r));
+  const adapter = stubAdapter({ 'qa-web': async () => { turns++; if (turns === 1) await first; return { usage: { inputTokens: 10, outputTokens: 10, costUsd: 0.01 } }; } });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  try {
+    await runner.ready;
+    const f = cp.start({ role: 'qa-web', run: 'run_away', repo: { url: bare } });
+    await cp.until(() => turns === 1);
+    cp.send('session.message', { session: f.body.session, message: 'and the signup screen' });
+    await cp.until(() => cp.frames.filter((x) => x.op === 'ack').length >= 2);
+    cp.away = true;
+    cp.drop();
+    release(); // the turn in flight ends while the control plane is away
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal(turns, 1, 'the queued message waits: no model turn, so no spend, while the budget cannot be checked');
+    cp.away = false;
+    await cp.until(() => turns === 2, 15_000);
+    await cp.until(() => cp.events.filter((e) => e.type === 'usage.recorded').length === 2, 15_000);
+    noFailedTurns(cp);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
+
 test('usage carries the fraction over and rounds up on the session\'s last report', async () => {
   const { bare, root } = origin();
   const cp = await fakeControlPlane();

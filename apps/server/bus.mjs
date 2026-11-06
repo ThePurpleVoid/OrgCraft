@@ -186,6 +186,12 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       await plan.conn.send(plan.op, plan.body, { timeoutMs: ACK_SECONDS * 1000 });
       await db.tenant(tenant, ({ q }) => q("update deliveries set state = 'acked' where id = $1 and state = 'sent'", [plan.d.id]));
     } catch (e) {
+      // The runner says it no longer runs that session (it restarted): the session stops, and the retry starts it.
+      if (plan.op === 'session.message' && e.nack?.error === 'no-session') {
+        await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where id = $1 and runner = $2 and state = any($3)", [plan.body.session, plan.conn.runner, LIVE]));
+        await db.tenant(tenant, ({ q }) => q("update deliveries set state = 'pending', next_at = now() where id = $1 and state = 'sent'", [plan.d.id]));
+        return deliver(tenant, plan.d.id);
+      }
       await retryLater(tenant, plan.d.id, e.message);
     }
   }
@@ -239,7 +245,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     // pause stops nothing and a late resume restarts nothing.
     const [{ version } = {}] = await db.tenant(tenant, ({ q }) => q('select version from runs where id = $1 and state = $2', [rid, state]));
     if (version === undefined) return;
-    const live = await db.tenant(tenant, ({ q }) => q('select id, runner from sessions where run = $1 and state = any($2) and runner is not null', [rid, LIVE]));
+    const live = await db.tenant(tenant, ({ q }) => q('select id, runner from sessions where run = $1 and state = any($2) and runner is not null', [rid, [...LIVE, 'unknown']]));
     if (state === 'running') {
       // Sessions the pause stopped start again from their checkpoint, woken by run.resumed; then the held messages.
       const due = await db.tenant(tenant, async ({ q }) => {
@@ -262,7 +268,11 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     }
     for (const s of live) {
       const conn = reg()?.get(s.runner);
-      if (!conn) continue;
+      if (!conn) {
+        // Its runner is away: the session stops here now, and the runner is told so when it is back (welcome).
+        await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where id = $1 and state = any($2) and exists (select 1 from runs where id = $3 and state = $4 and version = $5)", [s.id, [...LIVE, 'unknown'], rid, state, version]));
+        continue;
+      }
       (async () => {
         if (state === 'paused') {
           // Bring it to a safe point first: the branch pushed and the memory file sent (ADR 0004, budget).
@@ -288,7 +298,9 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   async function approvalDecided(tenant, team, { approval, decision, by, note, session }) {
     if (!session) return;
     const [s] = await db.tenant(tenant, ({ q }) => q('select runner from sessions where id = $1', [session]));
-    const [a] = await db.tenant(tenant, ({ q }) => q('select call from approvals where id = $1', [approval]));
+    const [a] = await db.tenant(tenant, ({ q }) => q('select a.call, a.action, r.state as run_state from approvals a left join runs r on r.id = a.run where a.id = $1', [approval]));
+    // A merge is only ever let go while its run is running: a stopped or paused run lands nothing, whatever the runner does.
+    if (decision === 'approved' && a?.action === 'accept' && a.run_state && a.run_state !== 'running') return;
     const conn = s?.runner ? reg()?.get(s.runner) : null;
     const headSha = a?.call && typeof a.call === 'object' ? a.call.headSha ?? null : null;
     if (conn) await conn.send('approval.result', { approval, decision, by, note, ...(headSha ? { headSha } : {}) }).catch(() => {});
@@ -424,12 +436,13 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     async 'approval.wait'(conn, body) {
       const a = body.approval ?? {};
       if (body.resend && typeof a.id === 'string') {
-        const [row] = await db.tenant(conn.tenant, ({ q }) => q('select id, card, state, session, decided_by, call from approvals where id = $1', [a.id]));
+        const [row] = await db.tenant(conn.tenant, ({ q }) => q('select a.id, a.card, a.state, a.session, a.decided_by, a.call, a.action, r.state as run_state from approvals a left join runs r on r.id = a.run where a.id = $1', [a.id]));
         if (!row) throw new Problem(404, `no approval ${a.id}`);
         if (!row.session) throw new Problem(403, `approval ${a.id} is not a session's`);
         await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, row.session));
         if (body.session && body.session !== row.session) throw new Problem(403, `approval ${a.id} belongs to another session`);
-        if (row.state !== 'pending') setImmediate(() => conn.send('approval.result', { approval: row.id, decision: row.state, by: row.decided_by, ...(row.call?.headSha ? { headSha: row.call.headSha } : {}) }).catch(() => {}));
+        const held = row.state === 'approved' && row.action === 'accept' && row.run_state && row.run_state !== 'running'; // as in approvalDecided
+        if (row.state !== 'pending' && !held) setImmediate(() => conn.send('approval.result', { approval: row.id, decision: row.state, by: row.decided_by, ...(row.call?.headSha ? { headSha: row.call.headSha } : {}) }).catch(() => {}));
         return { approval: row.id, card: row.card };
       }
       const { result } = await m3.tx(conn.tenant, async (ctx) => {
@@ -481,13 +494,53 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     await db.tenant(conn.tenant, ({ q }) => q("update sessions set state = 'unknown', last_seen = now() where runner = $1 and state = any($2)", [conn.runner, LIVE])).catch(() => {});
   }
 
-  /** welcome.sessions: what this runner should resume after a reconnect (its sessions marked unknown). */
+  /**
+   * welcome.sessions: what this runner should resume after a reconnect. Only the sessions it says in hello it still
+   * runs carry on there. The others it lost (it restarted, or crashed): they stop, and what they were woken for since
+   * they were last idle is delivered again, so they start afresh from their checkpoint (resilience pass, #28).
+   */
   async function welcome(conn) {
+    const still = new Set(conn.hello?.sessions ?? []);
+    const { kept, lost } = await db.tenant(conn.tenant, async ({ q }) => {
+      const rows = await q('select id, team from sessions where runner = $1 and state = any($2) for update', [conn.runner, [...LIVE, 'unknown']]);
+      const kept = rows.filter((r) => still.has(r.id)).map((r) => r.id);
+      const lost = rows.filter((r) => !still.has(r.id));
+      if (kept.length) await q("update sessions set state = 'running', last_seen = now() where id = any($1) and state = 'unknown'", [kept]);
+      for (const s of lost) {
+        await q("update sessions set state = 'stopped', last_seen = now() where id = $1", [s.id]);
+        // Its last rest: the newest session.idle or session.ended it sent. Anything woken after that is redone.
+        const [{ seq } = {}] = await q("select max(seq) as seq from events where team = $1 and type in ('session.idle', 'session.ended') and envelope->'actor'->>'session' = $2", [s.team, s.id]);
+        await q(`update deliveries d set state = 'pending', next_at = now() from events e
+                 where d.session = $1 and d.state in ('sent', 'acked') and e.team = d.team and e.id = d.event and e.seq > $2`, [s.id, seq ?? 0]);
+      }
+      return { kept, lost: lost.map((r) => r.id) };
+    });
+    if (lost.length) log.info?.(`bus: runner ${conn.runner} no longer runs ${lost.join(', ')}; they start again from their checkpoints`);
+    // And the other way round: sessions it still runs that were stopped while it was away (the run stopped or
+    // paused, or the session was given up) stop now, before anything else it sends is handled.
+    const gone = [...still].filter((x) => !kept.includes(x));
+    // The reason is the run's, so the session.ended the runner sends says why (run-stopped, run-paused).
+    const runOf = gone.length ? new Map((await db.tenant(conn.tenant, ({ q }) => q('select s.id, s.run, r.state, r.version from sessions s join runs r on r.id = s.run where s.id = any($1) and s.runner = $2', [gone, conn.runner]))).map((r) => [r.id, r])) : new Map();
+    for (const sid of gone) {
+      const r = runOf.get(sid);
+      if (r?.state === 'paused') {
+        // A pause goes through the pause path, so the resume starts from the newest work: checkpoint, then stop.
+        setImmediate(() => (async () => {
+          const cp = await conn.send('session.checkpoint', { session: sid, reason: 'run-paused' }, { timeoutMs: CHECKPOINT_MS }).catch(() => null);
+          if (cp && (cp.commit || cp.memory !== undefined)) await saveCheckpoint(conn.tenant, sid, cp);
+          // The checkpoint's session.idle marked it idle: stopped again, while the run is still paused.
+          // As in runChanged: if the run was resumed meanwhile, the session carries on (its wake may already be here).
+          const stopped = await db.tenant(conn.tenant, ({ q }) => q("update sessions set state = 'stopped' where id = $1 and exists (select 1 from runs where id = $2 and state = 'paused' and version = $3) returning id", [sid, r.run, r.version]));
+          if (stopped.length) await conn.send('session.stop', { session: sid, mode: 'finish-step', reason: 'run-paused' }).catch(() => {});
+        })().catch((e) => log.error?.(`bus: pausing ${sid}: ${e.message}`)));
+        continue;
+      }
+      const reason = r?.state === 'stopped' ? 'run-stopped' : 'stopped';
+      setImmediate(() => conn.send('session.stop', { session: sid, mode: 'now', reason }).catch(() => {}));
+    }
     // Whatever waited for a runner can go now.
     setTimeout(() => kick(conn.tenant).catch((e) => log.error?.(`bus: ${e.message}`)), 0);
-    const rows = await db.tenant(conn.tenant, ({ q }) => q("select id from sessions where runner = $1 and state = 'unknown'", [conn.runner]));
-    if (rows.length) await db.tenant(conn.tenant, ({ q }) => q("update sessions set state = 'running', last_seen = now() where runner = $1 and state = 'unknown'", [conn.runner]));
-    return { tenant: conn.tenant, sessions: rows.map((r) => r.id) };
+    return { tenant: conn.tenant, sessions: kept };
   }
 
   async function kick(tenant) {

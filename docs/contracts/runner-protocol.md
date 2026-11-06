@@ -29,10 +29,14 @@ A **runner** is the data plane: a process that holds checkouts, sandboxes and re
 
 ### Additive fields (since M3)
 
-- `welcome`: `sessions`, the sessions this runner should resume after a reconnect.
+- `hello`: `sessions`, the ids of the sessions the runner still runs (none after it restarts).
+- `welcome`: `sessions`, the sessions this runner should resume after a reconnect: only those it named in `hello`. Its other sessions it lost (it restarted or crashed); the control plane stops them and delivers again what woke them since their last `session.idle` or `session.ended`, so they start again from their checkpoints. They are started again through the ordinary path: `session.start` with `resume: true` and the stored `checkpoint` (if it has one), the wake being the message they had not finished. A session it named that was stopped while it was away gets `session.stop` straight after the welcome, and its `session.ended` carries the reason: `mode` now with `reason` run-stopped (its run stopped) or stopped (the session was given up); for a run paused meanwhile, the pause path, `session.checkpoint` and then `session.stop` (`mode` finish-step, `reason` run-paused), so the resume starts from its newest work.
+- `session.message` is acknowledged once the session has it. A runner that has no such session (it restarted, or the session ended) answers `nack` with `error: no-session` (an optional field of `nack`, next to `problem`); the control plane then stops that session and starts it again with the message as its wake, so a person's message is never dropped.
+- `approval.result` for an approved `accept` is sent only while its run is running, on the first answer and on a resend: a stopped or paused run lands no merge whatever a runner does.
+- **Nothing is spent or merged while the control plane is away.** It keeps the budget and every approval, so while the link is down a session starts no new model turn (one in flight ends) and merges nothing, even on an approval it already has. It carries on once it is welcomed again and the control plane has answered one request; by then a stop sent with the welcome has reached it, and a stopped session does not merge.
 - `session.start`: `resume` (boolean), `checkpoint` (`commit`, `memory`) for a resume, `token` and `tokenExpires` (the session token), `caps.remainingToday` and `caps.remainingRun` (minor units), and `delivery` (the bus delivery it answers).
 - `session.message`: `delivery`.
-- `session.stop`: `reason` (owner, budget, error).
+- `session.stop`: `reason` (owner, budget, error, and after a reconnect run-stopped, run-paused or stopped).
 - The `ack` of `session.checkpoint` carries `commit` (the pushed head) and `memory` (the role's memory file, at most 64 KiB), which the control plane stores so the session can resume on any runner.
 - The `ack` of `approval.wait` carries `approval` and `card` ids.
 - `approval.wait` carries `pr` and `headSha` for an `accept`, and `approval.result` carries the approved `headSha`. The runner merges with that sha pinned, using its own merge credential, never one a session can reach; any other held call runs only if it is byte-identical to the approved call ([M3 design](../product/m3-design.md) section 12, D1 and D2).
