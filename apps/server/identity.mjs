@@ -468,6 +468,10 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     else {
       await db.system('update person_sessions set revoked_at = now() where person = $1 and revoked_at is null', [person]);
       await db.system('update oauth_tokens set revoked_at = now() where person = $1 and revoked_at is null', [person]);
+      // Signed out everywhere (removed from their last workspace, or by request): their team email addresses go in
+      // every workspace too, so nothing about a team reaches someone with no way in (security review of #101). They
+      // add and verify an address again when they come back.
+      await db.system('delete from email_subscriptions where principal = $1', [person]);
     }
     await db.system("delete from oidc_store where model in ('Session', 'Grant') and payload->>'accountId' = $1 and (model = 'Session' or payload->>'clientId' = $2 or $3::boolean)", [person, WEB_CLIENT, !only]);
     await audit(person, only ? 'sign-out' : 'sessions.ended', {});

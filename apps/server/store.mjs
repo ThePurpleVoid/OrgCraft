@@ -160,28 +160,51 @@ export async function readSecret(db, key, tenant, name) {
 }
 
 const SINK_COLS = 'id, url, format, header, secret, cursor, failures, next_at, last_error, created_at';
+const EMAIL_SINK_COLS = "id, null as url, 'email' as format, null as header, secret, provider, sender, cursor, failures, next_at, last_error, created_at";
+const SENDER = /^(?:[^\s@<>]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}|[^<>\r\n"]{1,80} <[^\s@<>]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}>)$/;
 
-export async function addSink(db, tenant, team, { url, format = 'kit-report', header = '', secret = '', from = 'now' }) {
+/**
+ * Adds a sink. kit-report and event sinks POST to a URL. An email sink ({ format: 'email', provider, sender,
+ * secret }) sends the team's notification events to the people who opted in; `secret` names the vault entry that
+ * holds the provider's key, and with no key stored nothing is sent. `providers` is the list of provider ids.
+ */
+export async function addSink(db, tenant, team, { url, format = 'kit-report', header = '', secret = '', from = 'now', provider = '', sender = '' }, { providers = [] } = {}) {
   await getTeam(db, tenant, team);
-  let u;
-  try { u = new URL(url); } catch { throw new Problem(400, 'a sink needs a URL'); }
-  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname))) throw new Problem(400, 'a sink URL must be https (http only to this machine)');
-  if (!['kit-report', 'event'].includes(format)) throw new Problem(400, 'format is kit-report or event');
-  if (header && !/^[A-Za-z0-9-]{1,64}$/.test(header)) throw new Problem(400, 'header is a header name, like x-team-token');
+  if (!['kit-report', 'event', 'email'].includes(format)) throw new Problem(400, 'format is kit-report, event or email');
   if (secret && !/^[A-Z][A-Z0-9_]{0,63}$/.test(secret)) throw new Problem(400, 'secret is the name of a stored secret');
+  let u = null;
+  if (format === 'email') {
+    if (!providers.includes(provider)) throw new Problem(400, `provider is one of ${providers.join(', ') || '(none configured)'}`);
+    if (!SENDER.test(String(sender))) throw new Problem(400, 'sender is the From address, like "Acme team <team@acme.example>"');
+    if (!/^EMAIL_[A-Z0-9_]{1,58}$/.test(secret)) throw new Problem(400, 'secret names the vault entry with the provider key, and starts with EMAIL_, like EMAIL_PROVIDER_KEY');
+  } else {
+    try { u = new URL(url); } catch { throw new Problem(400, 'a sink needs a URL'); }
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname))) throw new Problem(400, 'a sink URL must be https (http only to this machine)');
+    if (header && !/^[A-Za-z0-9-]{1,64}$/.test(header)) throw new Problem(400, 'header is a header name, like x-team-token');
+  }
   return db.tenant(tenant, async ({ q }) => {
     // A new sink starts at the end of the log unless asked to replay it from the start.
     const [{ max }] = await q('select coalesce(max(seq), 0) as max from events where team = $1', [team]);
     const cursor = from === 'start' ? 0 : Number(max);
+    if (format === 'email') {
+      return (await q(`insert into email_sinks(id, tenant, team, provider, sender, secret, cursor) values ($1, $2, $3, $4, $5, $6, $7) returning ${EMAIL_SINK_COLS}`,
+        [id('sink'), tenant, team, provider, sender, secret, cursor]))[0];
+    }
     return (await q(`insert into sinks(id, tenant, team, url, format, header, secret, cursor) values ($1, $2, $3, $4, $5, $6, $7, $8) returning ${SINK_COLS}`,
       [id('sink'), tenant, team, u.toString(), format, header || null, secret || null, cursor]))[0];
   });
 }
 
-export const listSinks = (db, tenant, team) => db.tenant(tenant, ({ q }) => q(`select ${SINK_COLS} from sinks where team = $1 order by created_at`, [team]));
+export const listSinks = (db, tenant, team) => db.tenant(tenant, async ({ q }) => [
+  ...(await q(`select ${SINK_COLS} from sinks where team = $1 order by created_at`, [team])),
+  ...(await q(`select ${EMAIL_SINK_COLS} from email_sinks where team = $1 order by created_at`, [team])),
+]);
 
 export async function removeSink(db, tenant, team, sid) {
-  const rows = await db.tenant(tenant, ({ q }) => q('delete from sinks where id = $1 and team = $2 returning id', [sid, team]));
+  const rows = await db.tenant(tenant, async ({ q }) => [
+    ...(await q('delete from sinks where id = $1 and team = $2 returning id', [sid, team])),
+    ...(await q('delete from email_sinks where id = $1 and team = $2 returning id', [sid, team])),
+  ]);
   if (!rows.length) throw new Problem(404, 'no such sink');
 }
 

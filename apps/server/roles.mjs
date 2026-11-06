@@ -7,7 +7,7 @@
 //   owner     + makes and removes owners
 //
 // Not listed, on purpose: routes that are not a person's (the x-team-token report intake, a runner redeeming its code,
-// a session's tools, the cron's /internal), /health, and a person's own sign-in and passkeys (/me, /me/passkeys,
+// a session's tools, the cron's /internal, the signed links in team emails under /email), /health, and a person's own sign-in and passkeys (/me, /me/passkeys,
 // /auth/step-up/challenge), which any signed-in person may use, member or not.
 //
 // Every other /v1 route a person can call is listed here, and api-v1.yaml states the same minimum as x-min-role (a test
@@ -50,6 +50,12 @@ export const ROUTES = [
   ['GET', '/teams/{team}/sinks', 'admin'],
   ['POST', '/teams/{team}/sinks', 'admin'],
   ['DELETE', '/teams/{team}/sinks/{sink}', 'admin'],
+  // A person's own email addresses for a team: anyone who can see the team may get its emails (PRD 6.8 O7).
+  ['GET', '/teams/{team}/emails', 'viewer'],
+  ['POST', '/teams/{team}/emails', 'viewer'],
+  ['PATCH', '/teams/{team}/emails/{email}', 'viewer'],
+  ['DELETE', '/teams/{team}/emails/{email}', 'viewer'],
+  ['POST', '/teams/{team}/emails/{email}/verify', 'viewer'],
   ['GET', '/secrets', 'admin'],
   ['PUT', '/secrets/{name}', 'admin'],
   ['GET', '/teams/{team}/roles/{role}', 'viewer'],

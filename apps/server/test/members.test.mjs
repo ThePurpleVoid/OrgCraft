@@ -118,12 +118,17 @@ test('members: removing one ends their access at once, and nobody removes or dem
   assert.equal((await admin.b.call('PATCH', `/members/${ids.eli}`, { role: 'owner' }, { 'x-step-up': await admin.su() })).status, 403);
   assert.equal((await admin.b.call('PATCH', `/members/${ids.eli}`, { role: 'viewer' })).status, 401, 'step-up first');
 
+  // Eli gets team emails (a verified address with a kind on): removing Eli removes those too (security review).
+  assert.equal((await boss.b.call('POST', '/teams', { id: 'web' })).status, 201);
+  await db.system(`insert into email_subscriptions(id, tenant, team, principal, email, kinds, verified_at)
+    select 'eml_eli', tenant, 'web', person, 'eli@example.com', '{approval}', now() from members where person = (select id from people where subject = '3003')`);
   // Removing Eli: the very next request is refused, and Eli is signed out everywhere (no other workspace).
   assert.equal((await editor.b.call('GET', '/teams')).status, 200);
   assert.equal((await admin.b.call('DELETE', `/members/${ids.eli}`, {}, { 'x-step-up': await admin.su() })).status, 200);
   assert.equal((await editor.b.call('GET', '/teams')).status, 401);
   assert.equal((await editor.b.call('GET', '/me')).status, 401);
   assert.equal((await db.system("select count(*)::int as n from person_sessions where person = (select id from people where subject = '3003') and revoked_at is null"))[0].n, 0);
+  assert.equal((await db.system("select count(*)::int as n from email_subscriptions where id = 'eml_eli'"))[0].n, 0);
   assert.deepEqual((await boss.b.call('GET', '/members')).body.members.map((m) => m.login).sort(), ['dana', 'octo']);
 
   // With a second owner, the first can step down.

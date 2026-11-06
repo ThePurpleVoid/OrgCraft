@@ -98,7 +98,8 @@ if (positionals.length) {
   await db.close();
   process.exit();
 }
-const sinks = startSinks(db, key);
+const email = { studioUrl: env.AGENT_TEAM_STUDIO_URL ?? env.AGENT_TEAM_PUBLIC_URL ?? '' };
+const sinks = startSinks(db, key, { email: { publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '' } });
 const proxy = { hops: Number(env.AGENT_TEAM_PROXY_HOPS ?? 0) || 0, edgeSecret: env.AGENT_TEAM_EDGE_SECRET || null };
 if (proxy.edgeSecret && proxy.edgeSecret.length < 32) { console.error('agent-team-server: AGENT_TEAM_EDGE_SECRET must be at least 32 characters'); process.exit(2); }
 const identity = env.GITHUB_APP_CLIENT_ID ? await createIdentity({
@@ -106,7 +107,7 @@ const identity = env.GITHUB_APP_CLIENT_ID ? await createIdentity({
   upstream: githubUpstream({ clientId: env.GITHUB_APP_CLIENT_ID, clientSecret: env.GITHUB_APP_CLIENT_SECRET }),
   proxy,
 }) : null;
-const server = createControlPlane({ db, key, tenant, adminToken, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', sinks, stepUpVerifier: verifier, identity });
+const server = createControlPlane({ db, key, tenant, adminToken, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', sinks, stepUpVerifier: verifier, identity, email });
 server.listen(Number(o.port), o.host, () => {
   console.log(`Agent Team control plane on http://${o.host}:${server.address().port}/v1 (${db.kind}${local ? `, data in ${data}` : ''}${identity ? `, sign-in at ${identity.origin}` : ''})`);
   if (local) console.log(`Admin token: ${join(data, 'admin.token')}\nStep-up secret (typed before approving): ${join(data, 'step-up.secret')}`);
