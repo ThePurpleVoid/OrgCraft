@@ -11,6 +11,6 @@ if [ "$(id -u)" = 0 ]; then
   mkdir -p "$DATA" "$WORK"
   chown runner:runner "$DATA" && chmod 0700 "$DATA"
   chown runner:agentwork "$WORK" && chmod 2750 "$WORK"
-  exec setpriv --reuid=runner --regid=runner --init-groups --inh-caps=-all -- "$@"
+  exec setpriv --reuid=runner --regid=runner --init-groups --inh-caps=-all -- env HOME=/home/runner "$@"
 fi
 exec "$@"
