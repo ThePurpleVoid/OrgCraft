@@ -157,7 +157,7 @@ The server rejects an event a credential may not emit with a `nack` frame naming
 - A `session.message` the runner cannot place gets `nack` `no-session`, and the session restarts with that message as its wake.
 - While the link is down, a runner starts no model turn and merges nothing. The server sends an approved `accept`'s `approval.result` only while the run is running, so no merge lands on a stopped or paused run.
 
-**Proofs** (in #168): a runner restart redelivers to its lost sessions; a run stopped during a partition does not merge on reconnect; a nack `no-session` restarts the session.
+**Proofs:** `tests/e2e/m3-resilience.e2e.mjs` (restart, control plane away, link cut, budget pause, and a run stopped during a partition merges nothing), plus the reconnect cases in `apps/server/test/bus.test.mjs`.
 
 ### Approvals: one path for both triggers
 
