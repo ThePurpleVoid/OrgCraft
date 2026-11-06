@@ -126,7 +126,7 @@ Only the meeting's facilitator, on its closing turn (also when the meeting reach
 | --- | --- | --- |
 | `meeting` | yes | the id from the turn |
 | `minutes` | yes | at most 20,000 characters; partial minutes say so when the meeting was capped |
-| `actionItems` | no | at most 20, each `{ to, task, doneWhen }`: `to` as in the rules, `task` at most 200 characters |
+| `actionItems` | no | at most 20, each `{ to, task, doneWhen }`: `to` as in the rules and an attendee of the meeting (the server refuses anyone else), `task` at most 200 characters |
 | `decisions` | no | at most 4, each `{ question, options, recommended, why }`, checked like `ask_owner` |
 
 Emits `meeting.closed` (outcome `completed` or `capped`); the minutes as a `chat.message` from the facilitator when the definition's `owner.minutes` is set (the default); a `report.note` linking the meeting page; a `message.handoff` per action item; and per decision a `decision` card when the facilitator is the front door, otherwise a `message.blocked` to the front door with `needFrom: owner` and the recommendation, because no other role asks the owner directly. All carry `data.meeting`. Minutes are never committed to a repository. Result: `{ "event": "<id>" }`.

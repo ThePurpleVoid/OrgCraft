@@ -159,6 +159,12 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
                    on conflict (team) do update set currency = excluded.currency, per_day = excluded.per_day, per_run = excluded.per_run,
                    sessions = excluded.sessions, meeting_cap = excluded.meeting_cap, updated_by = excluded.updated_by, updated_at = now()`,
         [tenant, team, next.currency, next.perDay, next.perRun, next.sessions, next.meetingCap, by]);
+      // A stepped-up raise of the daily cap is newer than today's spent mark (and any Resume tomorrow): when the new cap
+      // is above today's spend, today is open again, so a resume goes through (QA #162). The warning stays if 80% is passed.
+      if (next.perDay !== null && raises(old.perDay, next.perDay, false)) {
+        await ctx.q(`update budget_days set exhausted_at = null, warned_at = case when spent >= ceil(($3::bigint + raised) * 0.8) then warned_at else null end
+                     where team = $1 and day = $2::date and exhausted_at is not null and spent < $3::bigint + raised`, [team, utcDay(ctx.now), next.perDay]);
+      }
       await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'budget', target: team, decision: 'allowed', detail: { from: old, to: next, stepUp: raising, ...(clamped ? { meetingCapClamped: true } : {}) } });
       await ctx.emit(team, 'budget.updated', { ...next, by }, { actor: personActor(by), subject: 'budget' });
       return { ...next, today: await today(ctx.q, team, ctx.now) };
@@ -297,7 +303,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       const [going] = await ctx.q("select id from runs where team = $1 and state <> 'stopped' limit 1", [team]);
       if (going) throw new Problem(409, `run ${going.id} is still going; stop it first`);
       const t = await today(ctx.q, team, ctx.now);
-      if (t.state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it or start tomorrow");
+      if (t.state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it or start tomorrow", { type: 'budget-exhausted' });
       const rid = id('run');
       // runs_one_going decides when two starts race; the loser gets the same 409 as the check above.
       const [row] = await ctx.q(`insert into runs(id, tenant, team, mode, state, caps, roster, team_version, started_by) values ($1, $2, $3, $4, 'running', $5, $6, $7, $8)
@@ -348,7 +354,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       }
       if (r.state !== 'paused') throw new Problem(409, `the run is ${r.state}`);
       // Whoever paused it, nothing resumes while today's budget is spent (issue #28 U2).
-      if ((await today(ctx.q, r.team, ctx.now)).state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it (the budget card) or wait for tomorrow");
+      if ((await today(ctx.q, r.team, ctx.now)).state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it (the budget card) or wait for tomorrow", { type: 'budget-exhausted' });
       if (r.reason === 'budget' && !(await useStepUp(ctx, by, stepUp))) throw new StepUpRequired('Resuming a run the budget paused');
       const row = await setRunState(ctx, r.team, rid, 'running', 'owner', actor);
       await ctx.audit({ team: r.team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'resume', stepUp: r.reason === 'budget' } });

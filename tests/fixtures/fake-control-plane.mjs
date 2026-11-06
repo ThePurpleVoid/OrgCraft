@@ -122,7 +122,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       if (budget.perDay === null) return send(res, 409, { title: 'set a daily cap first: PUT /v1/teams/{team}/budget with perDay', status: 409 });
       const going = runs.find((r) => r.state !== 'stopped');
       if (going) return send(res, 409, { title: `run ${going.id} is still going; stop it first`, status: 409 });
-      if (cost.state === 'exhausted') return send(res, 409, { title: "today's budget is spent; raise it or start tomorrow", status: 409 });
+      if (cost.state === 'exhausted') return send(res, 409, { type: 'budget-exhausted', title: "today's budget is spent; raise it or start tomorrow", status: 409 });
       const r = { id: `run_${runs.length + 1}`, state: 'running', started: new Date().toISOString(), teamVersion: body.team.version };
       runs.push(r);
       started.push(body);
@@ -145,7 +145,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     if (act && req.method === 'POST') {
       const r = runs.find((x) => x.id === act[1]);
       if (!r) return send(res, 404, { error: 'no such run' });
-      if (act[2] === 'resume' && cost.state === 'exhausted') return send(res, 409, { title: "today's budget is spent; raise it or wait for tomorrow", status: 409 });
+      if (act[2] === 'resume' && cost.state === 'exhausted') return send(res, 409, { type: 'budget-exhausted', title: "today's budget is spent; raise it or wait for tomorrow", status: 409 });
       if (act[2] === 'resume' && r.reason === 'budget' && !stepped(req)) return needStepUp(res, 'Resuming a run the budget paused');
       r.state = { pause: 'paused', resume: 'running', stop: 'stopped' }[act[2]];
       r.reason = act[2] === 'pause' ? 'owner' : null;

@@ -38,6 +38,13 @@ after(async () => { await browser?.close(); studio?.closeAllConnections?.(); stu
 if (!chromium && process.env.CI) throw new Error('CI is set but the playwright package is not installed');
 const skip = !chromium && 'the playwright package is not installed';
 
+test('the budget reset is said as 00:00 UTC and how far off', async () => {
+  const { resetIn } = await import('../../apps/studio/public/chat.js');
+  assert.equal(resetIn(Date.UTC(2026, 10, 6, 17, 50)), 'the budget resets at 00:00 UTC (in 7 h)');
+  assert.equal(resetIn(Date.UTC(2026, 10, 6, 23, 30)), 'the budget resets at 00:00 UTC (in under an hour)');
+  assert.equal(resetIn(Date.UTC(2026, 11, 31, 0, 0)), 'the budget resets at 00:00 UTC (in 24 h)');
+});
+
 test('a chat round trip, a stale card refreshed, and pause', { skip }, async () => {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   const errors = [];
@@ -219,4 +226,83 @@ test('start a run: the published team, a daily cap first, step-up to set it, and
       await ctx.close();
     }
   } finally { s2.closeAllConnections?.(); s2.close(); plane.close(); }
+});
+
+test('a resume refused because today\'s budget is spent says so in words, and Raise the daily cap resumes it (QA sev-4)', { skip }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'studio-e2e-spent-'));
+  execFileSync('git', ['-C', root, 'init', '-q']);
+  execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
+  const plane = await fakeControlPlane({ team: 'sample-app' });
+  const s3 = createStudio({ root, env: plane.env });
+  await new Promise((r) => s3.listen(0, '127.0.0.1', r));
+  const at = `http://127.0.0.1:${s3.address().port}`;
+  try {
+    const page = await browser.newPage({ viewport: { width: 360, height: 760 } });
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(`${at}/?t=${s3.launchToken}`);
+    await page.goto(`${at}/#chat`);
+    await page.locator('#run-state', { hasText: 'Running' }).waitFor();
+    plane.usage(4380); // $50.00 spent
+    plane.exhaust();
+    await page.locator('#run-state', { hasText: 'Paused' }).waitFor();
+    plane.card({ id: 'crd_budget', kind: 'budget', subject: 'budget/today', title: "Today's budget is spent", body: 'The run is paused; nothing spends until you choose.', state: 'open',
+      options: [{ id: 'tomorrow', label: 'Resume tomorrow', style: 'primary', stepUp: false }, { id: 'raise', label: 'Add half again', style: 'danger', stepUp: true }] }, 'system');
+    await page.getByRole('button', { name: 'Resume' }).click();
+    const spentLine = (what) => page.getByText(new RegExp(`^Today's budget is spent, so the run can't resume yet\\. Raise ${what} to resume it now, or resume it after the budget resets at 00:00 UTC \\((in \\d+ h|in under an hour)\\)\\.`));
+    const refused = spentLine('the cap for today');
+    await refused.waitFor();
+    assert.equal(await page.getByText("today's budget is spent;").count(), 0, 'not the server\'s own wording');
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, 'resume-refused-phone.png') });
+    // While today's budget card is open, the action points to it: it raises and resumes with one step-up.
+    await page.getByRole('button', { name: 'Raise the cap for today' }).click();
+    await page.locator('[data-card-id="crd_budget"].focused').waitFor();
+    assert.equal(await page.locator('dialog.ask-dialog').count(), 0);
+    // The card's Add half again resumes the run: the spent sentence goes (QA #162 sev 3).
+    plane.runs[0].state = 'running';
+    plane.cost.state = 'ok';
+    plane.bump('crd_budget', { state: 'answered', answer: { option: 'raise' } });
+    await page.locator('#run-state', { hasText: 'Running' }).waitFor();
+    await page.locator('[data-card-id="crd_budget"].answered').waitFor();
+    assert.equal(await page.getByText("Today's budget is spent, so the run can't resume").count(), 0, 'nothing is refused any more');
+    // Spent again, and the card is answered: the action asks for the new cap itself.
+    plane.exhaust();
+    await page.locator('#run-state', { hasText: 'Paused' }).waitFor();
+    await page.getByRole('button', { name: 'Resume' }).click();
+    await spentLine('the daily cap').waitFor();
+    // An amount at or under today's spend changes nothing.
+    await page.getByRole('button', { name: 'Raise the daily cap' }).click();
+    const ask = page.locator('dialog.ask-dialog');
+    await ask.getByText("Today's spend so far is $50.00").waitFor();
+    await ask.locator('input').fill('40');
+    await ask.getByRole('button', { name: 'OK' }).click();
+    await page.getByText("The new cap must be more than today's spend of $50.00. Nothing changed.").waitFor();
+    assert.equal(plane.budget.perDay, 5000);
+    // The sentence and its button stay (QA #162), and something that is not an amount says so.
+    await spentLine('the daily cap').waitFor();
+    await page.getByRole('button', { name: 'Raise the daily cap' }).click();
+    await ask.locator('input').fill('abc');
+    await ask.getByRole('button', { name: 'OK' }).click();
+    await page.getByText('That is not an amount. Nothing changed.').waitFor();
+    const tap = await page.getByRole('button', { name: 'Raise the daily cap' }).boundingBox();
+    assert.ok(tap.height >= 44, `a 44px tap target at 360px, got ${tap.height}`);
+    // A higher one goes through step-up, then the run resumes.
+    await page.getByRole('button', { name: 'Raise the daily cap' }).click();
+    await ask.locator('input').fill('80');
+    await ask.getByRole('button', { name: 'OK' }).click();
+    const su = page.locator('#stepup-dialog');
+    await su.getByText('Raising the daily cap to $80.00 lets the team spend more today.').waitFor();
+    await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
+    await su.getByRole('button', { name: 'Confirm' }).click();
+    // Each step-up is used once, so resuming asks again.
+    await su.getByText("Resuming a run that today's cap paused lets the team spend again.").waitFor();
+    assert.equal(plane.budget.perDay, 8000);
+    await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
+    await su.getByRole('button', { name: 'Confirm' }).click();
+    await page.locator('#run-state', { hasText: 'Running' }).waitFor();
+    assert.equal(await page.getByText("Today's budget is spent, so the run can't resume").count(), 0);
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, 'raise-cap-phone.png') });
+    assert.deepEqual(errors, []);
+    await page.close();
+  } finally { s3.closeAllConnections?.(); s3.close(); plane.close(); }
 });

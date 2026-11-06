@@ -268,7 +268,9 @@ test('budget: warns once at 80%, and at 100% pauses the run and sends one card; 
     const summary = (await call('GET', '/me/summary')).body.teams[0];
     assert.deepEqual([summary.run, summary.cost.today, summary.cost.capPerDay, summary.inbox], ['paused', 1070, 1000, 1]);
 
-    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call))).status, 409, 'resuming is refused while today is still spent');
+    const refused = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call));
+    assert.equal(refused.status, 409, 'resuming is refused while today is still spent');
+    assert.match(refused.body.type ?? '', /budget-exhausted$/, 'a typed problem, so a client can say it in its own words');
     assert.equal((await call('POST', `/cards/${cards[0].id}`, { option: 'raise', version: 1 })).body.type, 'step-up-required', 'raising spends money, so it needs step-up');
     const raised = await call('POST', `/cards/${cards[0].id}`, { option: 'raise', version: 1 }, await stepUp(call));
     assert.equal(raised.status, 200);
@@ -290,5 +292,30 @@ test('budget: answering "tomorrow" leaves the run paused until the next UTC day'
     const [r] = await db.system('select state, resume_on::text as resume_on from runs where id = $1', [run.id]);
     const d = new Date();
     assert.deepEqual([r.state, r.resume_on], ['paused', new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)).toISOString().slice(0, 10)]);
+  });
+});
+
+test('budget: after "tomorrow", a stepped-up raise of the daily cap above today\'s spend lets the run resume now (QA #162)', async () => {
+  await withStepUp(async ({ call, db }) => {
+    const run = await running(call, 'shop', 100);
+    await call('POST', '/teams/shop/events', { events: [usage('shop', 'u1', 100, run.id)] });
+    const [card] = (await call('GET', '/me/inbox')).body.cards;
+    await call('POST', `/cards/${card.id}`, { option: 'tomorrow', version: 1 });
+    // Raising to no more than today's spend leaves today spent.
+    assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 100 })).status, 200);
+    assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 90 })).status, 200, 'lowering never needs step-up');
+    assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 100 }, await stepUp(call))).body.today.state, 'exhausted', 'a cap equal to the spend is still spent');
+    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call))).status, 409);
+    // Above it, today is open again: the raise is newer than the spent mark and was stepped up.
+    assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 2000 })).body.type, 'step-up-required');
+    const put = await call('PUT', '/teams/shop/budget', { perDay: 2000 }, await stepUp(call));
+    assert.deepEqual([put.status, put.body.today.state], [200, 'ok'], 'under 80% of the new cap, so not even warned');
+    const resumed = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call));
+    assert.deepEqual([resumed.status, resumed.body.state], [200, 'running']);
+    const [r] = await db.system('select resume_on from runs where id = $1', [run.id]);
+    assert.equal(r.resume_on, null, 'the Resume tomorrow date is gone');
+    // Spending past the new cap pauses it again, with a new card.
+    await call('POST', '/teams/shop/events', { events: [usage('shop', 'u2', 1900, run.id)] });
+    assert.equal((await call('GET', '/teams/shop/runs')).body.runs[0].state, 'paused');
   });
 });
