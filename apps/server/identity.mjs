@@ -422,19 +422,23 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     return redirect(res, upstream.authorizeUrl({ state, challenge: s256(verifier), redirectUri: githubRedirect }), [setCookie(UPSTREAM_COOKIE, state, FLOW_SECONDS)]);
   }
 
-  /** Finishes a consent prompt for the person already signed in to this interaction (see `interactions` above). */
+  /**
+   * Finishes a consent prompt for the person already signed in to this interaction (see `interactions` above). The
+   * interaction is the one this browser's interaction cookie names (interactionDetails), and it must be the one in
+   * the path: another browser presenting the uid is refused (security review of #113).
+   */
   async function consentGranted(req, res, uid) {
     if (!UID.test(uid)) return toSignIn(res, 'expired');
-    const interaction = await provider.Interaction.find(uid);
-    if (!interaction || interaction.prompt.name !== 'consent' || !interaction.session?.accountId) return toSignIn(res, 'expired');
+    req.headers['x-forwarded-proto'] = 'https';
+    req.headers.host = issuer.host;
+    const interaction = await provider.interactionDetails(req, res).catch(() => null);
+    if (!interaction || interaction.uid !== uid || interaction.prompt.name !== 'consent' || !interaction.session?.accountId) return toSignIn(res, 'expired');
     const { details } = interaction.prompt;
     const grant = (interaction.grantId && await provider.Grant.find(interaction.grantId))
       || new provider.Grant({ accountId: interaction.session.accountId, clientId: interaction.params.client_id });
     if (details.missingOIDCScope) grant.addOIDCScope(details.missingOIDCScope.join(' '));
     if (details.missingOIDCClaims) grant.addOIDCClaims(details.missingOIDCClaims);
-    interaction.result = { ...interaction.result, consent: { grantId: await grant.save() } };
-    await interaction.save(Math.max(1, interaction.exp - epoch()));
-    return redirect(res, interaction.returnTo);
+    return provider.interactionFinished(req, res, { consent: { grantId: await grant.save() } }, { mergeWithLastSubmission: true });
   }
 
   async function upstreamDone(req, res, url) {

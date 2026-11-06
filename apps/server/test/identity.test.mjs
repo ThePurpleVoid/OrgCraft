@@ -449,10 +449,20 @@ test('prompt=consent for a signed-in person finishes without a page or GitHub', 
   const uid = new URL(first.at).searchParams.get('interaction');
   assert.ok(new URL((await b.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at).searchParams.get('code'));
   const signIns = gh.issued.length;
-  const again = await b.go(ask({ prompt: 'consent' }));
+
+  // The consent step, taken one redirect at a time: another browser presenting the same uid is refused.
+  const start = await b.fetch(ask({ prompt: 'consent' }));
+  const step = start.headers.get('location');
+  const cuid = /\/oauth\/interaction\/([^/]+)\/consent$/.exec(new URL(step, ORIGIN).pathname)?.[1];
+  assert.ok(cuid, step);
+  const stranger = await browser({ ip: 'other' }).fetch(`${ORIGIN}/oauth/interaction/${cuid}/consent`);
+  assert.match(stranger.headers.get('location') ?? '', /sign-in\?error=expired/);
+  // A uid other than the cookie's, in the right browser, is refused too.
+  const wrong = await b.fetch(`${ORIGIN}/oauth/interaction/${cuid.slice(1)}x/consent`);
+  assert.match(wrong.headers.get('location') ?? '', /sign-in\?error=expired/);
+
+  const again = await b.go(`${ORIGIN}/oauth/interaction/${cuid}/consent`);
   assert.ok(again.at?.startsWith(redirect), again.at);
   assert.ok(new URL(again.at).searchParams.get('code'));
   assert.equal(gh.issued.length, signIns, 'no second GitHub sign-in');
-  // Someone else's browser cannot use the consent step: it needs that interaction's signed-in session.
-  assert.match((await browser({ ip: 'other' }).go(`${ORIGIN}/oauth/interaction/${uid}/consent`)).at ?? '', /sign-in\?error=expired/);
 }));
