@@ -121,10 +121,10 @@ export function composeSlack(event, { teamName, where = 'dm', titles = {} } = {}
     'Answer in the Studio', `/teams/${at}/board?role=${encodeURIComponent(event.actor?.id ?? '')}`);
   }
   if (kind === 'ready') {
-    const title = mrk(outside(d.title ?? 'A change'));
-    return out(`${team}: ready to try`, [`*Ready to try:* "${title}"`, d.pr ? `Merged in pull request #${d.pr}.` : null,
-      d.preview ? 'The preview is up: open it from the Studio.' : 'The preview link appears in the Studio when the deployment is up.'],
-    'Open in the Studio', `/teams/${at}/inbox${d.cardId ? `?card=${encodeURIComponent(d.cardId)}` : ''}`);
+    // The CPO's copy, "Copy: Ready to try notification" in docs/team/lanes/cpo.md: the same in a DM and a channel.
+    const feature = outside(d.title ?? 'A change');
+    return out(`${team}: ${feature} is ready to try`, [`*"${mrk(feature)}" is ready to try.*`, "It's done and passed its checks."],
+      d.preview ? 'See the preview in the Studio' : 'Try it in the Studio', `/teams/${at}/inbox${d.cardId ? `?card=${encodeURIComponent(d.cardId)}` : ''}`);
   }
   // minutes
   const decisions = Array.isArray(d.decisions) ? d.decisions : [], actions = Array.isArray(d.actions) ? d.actions : [];

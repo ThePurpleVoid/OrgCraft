@@ -16,7 +16,10 @@ export function teamFromPath(pathname) {
 }
 
 /** Words under a kind's switch (copy): only approvals carry one. */
-const UNDER = { approval: 'The email links to the Studio. You always approve there, never by replying.' };
+const UNDER = {
+  approval: 'The email links to the Studio. You always approve there, never by replying.',
+  ready: 'When something the team built is ready for you to look at.',
+};
 
 /** The ticks to show for an address: its saved kinds, or the suggested ones when nothing is saved yet (D49). */
 export function shownKinds(sub, kinds, cleared = false) {

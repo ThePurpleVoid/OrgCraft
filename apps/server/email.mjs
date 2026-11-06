@@ -162,12 +162,12 @@ export function compose(event, { teamName, titles = {} } = {}) {
     };
   }
   if (kind === 'ready') {
-    const title = outside(d.title ?? 'A change');
+    // The CPO's copy, "Copy: Ready to try notification" in docs/team/lanes/cpo.md.
+    const feature = outside(d.title ?? 'A change');
     return {
-      kind, subject: cutSubject(`${tag} Ready to try: ${title}`),
-      lines: [`"${title}" is merged and ready to try.`, d.pr ? `Pull request #${d.pr}.` : null,
-        d.preview ? 'The preview is up: open it from the Studio.' : 'The preview link appears in the Studio when the deployment is up.'].filter(Boolean),
-      link: { label: 'Open in the Studio', path: `/teams/${at}/inbox${d.cardId ? `?card=${encodeURIComponent(d.cardId)}` : ''}` },
+      kind, subject: cutSubject(`${tag} Ready to try: ${feature}`),
+      lines: [`${role} says "${feature}" is ready for you to try.`, "It's done and passed its checks."],
+      link: { label: d.preview ? 'See the preview in the Studio' : 'Try it in the Studio', path: `/teams/${at}/inbox${d.cardId ? `?card=${encodeURIComponent(d.cardId)}` : ''}` },
     };
   }
   // minutes
