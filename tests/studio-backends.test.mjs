@@ -356,7 +356,7 @@ test('build and sync start no child process and open no connection (E7)', async 
   }
 });
 
-test('a 300-file team reads in under 3 s against the fake API with 50 ms per call', async () => {
+test('a 300-file team is read in parallel against the fake API with 50 ms per call (about 1.6 s; under 3 s on a quiet machine)', async () => {
   const r = repos();
   for (let i = 0; i < 280; i++) writeFileSync(join(r.local, `.agent-team/roles/x-${i}.extend.md`), `## Rules\n- rule ${i}\n`);
   git(r.local, 'add', '-A'); git(r.local, 'commit', '-qm', 'many files');
@@ -367,7 +367,12 @@ test('a 300-file team reads in under 3 s against the fake API with 50 ms per cal
     const res = await m.call('GET', '/v1/team');
     const ms = Date.now() - t0;
     assert.ok(res.status === 200 || res.status === 422, JSON.stringify(res.body).slice(0, 200));
-    assert.ok(ms < 3000, `${ms} ms, ${m.gh.calls.length} calls: ${JSON.stringify(Object.entries(m.gh.calls.reduce((a, c) => { const k = c.path.replace(/[0-9a-f]{40}/g, ':sha'); a[k] = (a[k] ?? 0) + 1; return a; }, {})))}`);
+    // The blobs go out in parallel: 325 at 50 ms each take 16 s one by one and about 1 s sixteen at a time. The wall
+    // clock also holds the core's CPU work, which a busy CI runner can slow to more than the network part (#141 saw
+    // 3.1 s), so the hard bound is the parallelism and the clock bound is loose enough to only catch a serial read.
+    assert.ok(m.gh.peak >= 8, `at most ${m.gh.peak} calls at once`);
+    assert.ok(m.gh.calls.length < 360, `${m.gh.calls.length} calls`);
+    assert.ok(ms < 6000, `${ms} ms, ${m.gh.calls.length} calls: ${JSON.stringify(Object.entries(m.gh.calls.reduce((a, c) => { const k = c.path.replace(/[0-9a-f]{40}/g, ':sha'); a[k] = (a[k] ?? 0) + 1; return a; }, {})))}`);
   } finally { await m.gh.close(); }
 });
 

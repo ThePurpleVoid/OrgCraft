@@ -25,6 +25,7 @@ import { atLeast, minRole } from './roles.mjs';
 import { appCaller } from './dpop.mjs';
 import { PROVIDERS, createEmail, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
+import { createHostedStudio } from './studio.mjs';
 
 /** The bus hears every stored event (deliveries) and run and approval changes (stops, results). */
 function wireBus(m3, bus) {
@@ -126,7 +127,7 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {} }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
@@ -137,6 +138,12 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const studioUrl = String(emailOpts.studioUrl ?? publicUrl ?? '').replace(/\/+$/, '');
   // "Connect Slack" sends a person back to this Studio page, which posts { code, state } with their session.
   const slack = createSlack({ db, key, publicUrl, redirectUri: studioUrl ? `${studioUrl}/slack/callback` : '', providers: slackOpts.providers ?? SLACK_PROVIDERS, readSecret: store.readSecret, now, fetch: slackOpts.fetch ?? fetch });
+  // The deployment's own Studio page (hosted mode, apps/server/studio.mjs): off until the M4 GitHub App is set up.
+  const studioOrigin = identity?.origin ?? (publicUrl ? new URL(publicUrl).origin : null);
+  const hostedStudio = createHostedStudio(studioOpts && studioOrigin ? {
+    origin: studioOrigin, ...studioOpts,
+    audit: (row) => m3.tx(row.tenant, (ctx) => ctx.audit({ team: row.team, actorKind: row.actorId ? 'person' : 'system', actorId: row.actorId ?? 'control-plane', action: row.action, target: row.target, decision: row.decision, rule: row.rule ?? null, detail: row.detail ?? null })),
+  } : null);
   let tickMisses = [];
   const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl });
   if (!givenBus) wireBus(m3, bus);
@@ -381,6 +388,22 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       const min = minRole(m, url.pathname.slice(3));
       if (!min) throw new Problem(404, 'not found');
       if (!atLeast(who.role, min)) throw new Problem(403, `this needs the ${min} role or above; you are ${who.role}`, { type: 'forbidden' });
+    }
+    // The Studio (hosted mode): the kit's handler answers; a publish is idempotent like every other write.
+    if (a === 'teams' && b === 'studio') {
+      // Up to 5 MB, the handler's own limit (E6), read here first so idempotent() hashes the same bytes.
+      const raw = m === 'GET' || m === 'HEAD' ? null : await readRaw(req, 5 * 1024 * 1024);
+      const serve = async () => {
+        const r = await hostedStudio.handle(req, who, team, raw);
+        if (/^application\/json/.test(r.headers['content-type'] ?? '')) {
+          const { 'content-type': _ct, 'content-length': _cl, ...headers } = r.headers;
+          let body; try { body = JSON.parse(r.body.toString('utf8') || 'null'); } catch { body = { error: 'the Studio answered something that is not JSON' }; }
+          return send(res, r.status, body, headers);
+        }
+        res.writeHead(r.status, r.headers);
+        return res.end(m === 'HEAD' ? undefined : r.body);
+      };
+      return m === 'POST' ? idempotent(req, res, who.tenant, who.principal, url.pathname, serve) : serve();
     }
     return idempotent(req, res, who.tenant, who.principal, url.pathname, () => personRoute(req, res, who, url, parts));
   }

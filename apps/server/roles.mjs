@@ -45,6 +45,16 @@ export const ROUTES = [
   ['POST', '/teams/{team}/meetings', 'editor'],
   ['GET', '/teams/{team}/meetings/{meeting}', 'viewer'],
   ['GET', '/teams/{team}/board', 'viewer'],
+  // The Studio, hosted mode (studio.mjs): reads for viewers, Publish for editors; a publish that changes commands the
+  // team runs needs admin, which the Studio's own authorize checks (publish-code).
+  ['GET', '/teams/{team}/studio/v1/team', 'viewer'],
+  ['GET', '/teams/{team}/studio/v1/team/pr', 'viewer'],
+  ['POST', '/teams/{team}/studio/v1/team/preview', 'viewer'],
+  ['POST', '/teams/{team}/studio/v1/team/graph', 'viewer'],
+  ['POST', '/teams/{team}/studio/v1/team/suggestions', 'viewer'],
+  ['POST', '/teams/{team}/studio/v1/team/from-template', 'viewer'],
+  ['POST', '/teams/{team}/studio/v1/team/publish', 'editor'],
+  ['GET', '/teams/{team}/studio/assets/{version}/{name}', 'viewer'],
   ['GET', '/teams/{team}/rollout', 'viewer'],
   ['POST', '/teams/{team}/report-tokens', 'admin'],
   ['DELETE', '/teams/{team}/report-tokens/{token}', 'admin'],

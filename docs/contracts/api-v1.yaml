@@ -26,6 +26,7 @@ security:
 tags:
   - { name: teams }
   - { name: events, description: "The event log (events.md) and the board projected from it" }
+  - { name: studio, description: "The deployment's own Studio page (hosted mode, docs/specs/studio-embed.md): the kit's Studio handler under each team" }
   - { name: runs }
   - { name: chat }
   - { name: approvals }
@@ -114,6 +115,62 @@ paths:
       tags: [events]
       summary: Where every role stands now (the board projection)
       responses: { "200": { description: Board, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } } }
+  /teams/{team}/studio/v1/team:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "The Studio (hosted mode): the team as the Studio reads it from the team's GitHub repository, with base (the default branch's head sha), git and features. 503 until the deployment's GitHub App is set up; 409 no-repo when the team has no repository connected"
+      responses: { "200": { description: OK } }
+  /teams/{team}/studio/v1/team/pr:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "The Studio: a pull request's state for ?branch= (agent-team/ branches only)"
+      responses: { "200": { description: OK } }
+  /teams/{team}/studio/v1/team/preview:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "The Studio: what Publish would change, { spec, base } → changes, issues, commands, needsCode, kitUpgrade. Writes nothing"
+      responses: { "200": { description: OK } }
+  /teams/{team}/studio/v1/team/graph:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "The Studio: the team's graph for a spec. Writes nothing"
+      responses: { "200": { description: OK } }
+  /teams/{team}/studio/v1/team/suggestions:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "The Studio: suggested areas and checks from the repository at base. Writes nothing"
+      responses: { "200": { description: OK } }
+  /teams/{team}/studio/v1/team/from-template:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "The Studio: a team spec from a template. Writes nothing"
+      responses: { "200": { description: OK } }
+  /teams/{team}/studio/v1/team/publish:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: editor
+      tags: [studio]
+      summary: "The Studio: Publish, { spec, base, message, branch? } → a new agent-team/ branch and a pull request, with the deployment's GitHub App on an installation this workspace has connected. A change to commands the team runs needs admin. 409 stale when the default branch moved, 409 exists for a branch name in use. Send Idempotency-Key so a retry opens one pull request"
+      responses: { "200": { description: OK } }
+  /teams/{team}/studio/assets/{version}/{name}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: version, in: path, required: true, schema: { type: string } }, { name: name, in: path, required: true, schema: { type: string } } ]
+    get:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "The Studio's page assets for this kit version (immutable)"
+      responses: { "200": { description: OK } }
   /teams/{team}/rollout:
     parameters:
       - { $ref: "#/components/parameters/team" }
