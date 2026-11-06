@@ -150,3 +150,26 @@ test('the admin token is retired once someone owns the deployment; reset-owner o
   assert.equal(await b.signIn(), `${ORIGIN}/`);
   assert.equal((await b.call('GET', '/me')).body.workspaces[0].role, 'owner');
 }));
+
+test('each card kind has a least role: an approver answers a decision but not a budget card', () => issuer(async ({ gh, browser, server }) => {
+  gh.directory.push(dana);
+  const boss = await person(gh, browser, owner);
+  assert.equal((await boss.b.call('POST', '/teams', { id: 'web' })).status, 201);
+  const approver = await join(gh, browser, boss, dana, 'approver');
+  const card = (kind) => server.m3.tx('acme', (ctx) => server.m3.createCard(ctx, 'web', { kind, subject: `${kind}/1`, title: 'Choose', options: [{ id: 'a', label: 'A', style: 'primary', stepUp: false }, { id: 'b', label: 'B', style: 'secondary', stepUp: false }] }));
+  const { result: budget } = await card('budget');
+  const { result: decision } = await card('decision');
+  const refused = await approver.b.call('POST', `/cards/${budget.id}`, { option: 'a', version: 1 });
+  assert.equal(refused.status, 403);
+  assert.match(refused.body.error, /budget card needs the admin role/);
+  assert.equal((await approver.b.call('POST', `/cards/${decision.id}`, { option: 'a', version: 1 })).status, 200);
+  assert.equal((await boss.b.call('POST', `/cards/${budget.id}`, { option: 'a', version: 1 })).status, 200);
+}));
+
+test('GET /v1/me lists the person\'s own security changes (S5, until notifications deliver them)', () => issuer(async ({ gh, browser }) => {
+  const boss = await person(gh, browser, owner);
+  const notices = (await boss.b.call('GET', '/me')).body.notices;
+  assert.equal(notices[0].action, 'passkey.added');
+  assert.equal(notices[0].name, 'octo\'s laptop');
+  assert.match(notices[0].passkey, /^pk_/);
+}));
