@@ -198,6 +198,10 @@ a { color: var(--accent); }
 .card-msg h3 { font-size: 15px; margin: 2px 0 4px; }
 .card-meta { font-size: 12px; }
 .card-msg .why { font-size: 12.5px; margin: 4px 0; }
+.card-msg .bound { margin: 4px 0; font-size: 13px; }
+.card-msg .bound summary { cursor: pointer; min-height: 32px; display: list-item; padding: 4px 0; }
+.card-msg .bound code { font-size: 12.5px; }
+.card-msg .bound .sha { margin: 2px 0 0; font-size: 12.5px; overflow-wrap: anywhere; }
 .card-msg .links { font-size: 12.5px; margin: 4px 0; }
 .card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .card-actions button { min-height: 36px; padding: 6px 16px; }
