@@ -5,7 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ownsPaths } from '../../packages/team-model/index.mjs';
+import { meetingAttendees, ownsPaths } from '../../packages/team-model/index.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
 
 const BRIEF_MAX = 20_000; // bytes: the control plane refuses a longer brief
@@ -58,6 +58,7 @@ export function runRequest(root, { dirty = [] } = {}) {
     const areas = ownership ? ownership.filter((r) => r.writer === slug).flatMap((r) => String(r.path).split(/,\s*/)) : ownsPaths(md).paths.filter((x) => x.mode === 'writes').map((x) => x.path);
     return { slug, reportsTo: b.reportsTo, areas: [...new Set(areas.map((a) => a.replace(/`/g, '').trim()).filter(Boolean))], ...(b.model ? { model: b.model } : {}), status: b.status, brief: cut(md, BRIEF_MAX, '\n\n(cut to fit a run)') };
   });
+  const mds = files.map((p) => { const slug = p.slice(p.lastIndexOf('/') + 1, -3); return { slug, md: readFileSync(join(dir, `${slug}.md`), 'utf8') }; });
   const slugs = new Set(roles.map((r) => r.slug));
   for (const r of roles) if (!r.reportsTo) throw new RunRefused(`${r.slug}'s brief does not say who it reports to`);
   for (const r of roles) if (r.reportsTo !== 'owner' && !slugs.has(r.reportsTo)) throw new RunRefused(`${r.slug} reports to ${r.reportsTo}, which is not in the published team`);
@@ -86,6 +87,24 @@ export function runRequest(root, { dirty = [] } = {}) {
       repo: { url, ref },
       summary: cut(summary, SUMMARY_MAX, '…'),
       roles,
+      ...(meetings(root, mds).length ? { meetings: meetings(root, mds) } : {}),
     },
   };
+}
+
+/**
+ * The team's meetings for a run (RunCreate.team.meetings): each meetings.json entry as published, with its attendees
+ * resolved here, where the briefs are, in meetingAttendees' order and without the facilitator. The control plane only
+ * adds the roles the worked-since-last rule finds at start.
+ */
+export function meetings(root, roles) {
+  let raw;
+  try { raw = JSON.parse(git(root, 'show', 'HEAD:.agent-team/meetings.json') || 'null'); } catch { return []; }
+  const list = Array.isArray(raw?.meetings) ? raw.meetings : [];
+  return list.map((m) => {
+    const who = meetingAttendees(m, roles).roles.filter((s) => s !== m.facilitator);
+    const { attendees, when, skipIfQuiet, ...rest } = m;
+    return { ...rest, attendees: who, ...(attendees?.rule ? { rule: attendees.rule } : {}) };
+  // A meeting with nobody to meet would refuse the whole run; it stays a definition until it has attendees.
+  }).filter((m) => m.attendees.length || m.rule);
 }

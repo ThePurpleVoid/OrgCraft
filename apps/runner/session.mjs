@@ -58,11 +58,28 @@ export function wakePrompt(m, role, { resume = false } = {}) {
   if (m.type === 'decision.answered') {
     return `${lead}. The owner answered your question${d.question ? ` "${d.question}"` : ''}: ${JSON.stringify(d.answer ?? null)}${d.note ? `, with this note, verbatim:\n\n> ${d.note}` : '.'}`;
   }
+  if (m.type === 'meeting.turn') return meetingPrompt(lead, d);
   const kind = (/^message\.(\w+)$/.exec(m.type ?? '') ?? [])[1];
   const head = kind ? `${kind.toUpperCase()} from ${from}` : `${m.type ?? 'Message'} from ${from}`;
   const fields = Object.entries(d).filter(([k, v]) => k !== 'source' && v !== null && v !== '' && !(Array.isArray(v) && !v.length))
     .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v) : v}`).join('\n');
   return `${lead}, then handle this.\n\n${head}${m.id ? ` (event ${m.id})` : ''}:\n\n${fields}`;
+}
+
+/** A meeting turn (written round): the agenda and the replies so far, or, for the facilitator, the closing turn. */
+function meetingPrompt(lead, d) {
+  const replies = (d.replies ?? []).map((r) => `- ${r.role}, verbatim:\n${String(r.text ?? '').split('\n').map((l) => `  > ${l}`).join('\n')}`).join('\n');
+  const skipped = (d.skipped ?? []).map((s) => `${s.role} (${s.reason})`).join(', ');
+  const head = `MEETING "${d.title ?? d.definition}" (meeting ${d.meeting})`;
+  const agenda = `Agenda: ${d.agenda || 'none given'}`;
+  if (d.closing) {
+    return `${lead}, then close this meeting: you run it.\n\n${head}: ${d.capped ? 'it reached its cost cap, so not every attendee had a turn. Write partial minutes and say so.' : 'every attendee has had a turn.'}\n${agenda}\n\n`
+      + `Replies${d.note ? ` (${d.note})` : ''}:\n${replies || '(none)'}${skipped ? `\n\nSkipped: ${skipped}` : ''}\n\n`
+      + `Call meeting_close with { meeting: "${d.meeting}", minutes } and, if the meeting agreed any, actionItems [{ to, task, doneWhen }] and decisions for the owner [{ question, options, recommended }]. The minutes go to the chat and the board; they are not committed.`;
+  }
+  return `${lead}, then take your turn in this meeting.\n\n${head}, turn ${d.turn} of ${d.of}.\n${agenda}\n\n`
+    + `${replies ? `Replies so far${d.note ? ` (${d.note})` : ''}:\n${replies}\n\n` : ''}`
+    + `Answer with meeting_reply { meeting: "${d.meeting}", text } in a few sentences; it goes verbatim into the minutes. Then go back to what you were doing.`;
 }
 
 export class Session {
@@ -212,7 +229,7 @@ export class Session {
       if (limit) clearTimeout(limit);
     }
     if (out.resume) this.resume = out.resume;
-    await this.record(out.usage ?? {});
+    await this.record(out.usage ?? {}, { meeting: message?.type === 'meeting.turn' ? message.data?.meeting : undefined });
     const timedOut = this.abort.signal.reason === 'time';
     if (this.remaining !== null && this.remaining <= 0 && this.state !== 'stopping') { this.stopReason = 'budget'; this.state = 'stopping'; }
     if (this.state === 'stopping') return;
@@ -222,14 +239,15 @@ export class Session {
   }
 
   /** usage.recorded in whole minor units, the fraction carried to the next report (rounded up on the last one). */
-  async record(u, { last = false } = {}) {
+  async record(u, { last = false, meeting } = {}) {
     const cost = (u.costUsd ?? 0) * 100;
     this.spent += cost;
     const whole = last ? Math.ceil(this.spent - 1e-9) : Math.floor(this.spent + 1e-9);
     const due = whole - this.reported;
     if (!(u.inputTokens || u.outputTokens || due > 0)) return;
     this.reported += Math.max(due, 0);
-    await this.emit('usage.recorded', { inputTokens: u.inputTokens ?? 0, outputTokens: u.outputTokens ?? 0, cost: Math.max(due, 0), currency: 'USD', model: this.model });
+    // A meeting turn's spend is tagged with the meeting; the server checks the tag before it counts toward the cap.
+    await this.emit('usage.recorded', { inputTokens: u.inputTokens ?? 0, outputTokens: u.outputTokens ?? 0, cost: Math.max(due, 0), currency: 'USD', model: this.model, ...(typeof meeting === 'string' ? { meeting } : {}) });
   }
 
   /** The front door's completed text blocks are its replies in the chat; other roles' text stays in their session. */

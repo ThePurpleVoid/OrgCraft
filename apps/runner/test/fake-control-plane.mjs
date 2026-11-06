@@ -49,6 +49,8 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
       return reply(200, { approval: a, card: id('card') });
     }
     if (tool === 'ask_owner') return reply(200, { card: id('card') });
+    // Meetings: the real sequencing is apps/server's; here a reply or a close is recorded and answered.
+    if (tool === 'meeting_reply' || tool === 'meeting_close') return reply(200, { event: id('ev') });
     // The event is minted here, with the actor from the token, never from the body.
     const event = {
       specversion: '1.0', id: id('ev'), type: TOOL_EVENT[tool], version: 1, source: `/tenants/${tenant}/teams/my-team`, tenant, team: 'my-team', time: new Date().toISOString(),

@@ -7,6 +7,7 @@ import { atLeast } from './roles.mjs';
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
+import { checkMeetingDefs } from './meetings.mjs';
 
 const scrypt = promisify(scryptCb);
 
@@ -262,7 +263,9 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       repo = { url: r.url, ref: r.ref ?? 'main' };
     }
     if (team.summary !== undefined && team.summary !== null && (typeof team.summary !== 'string' || team.summary.length > 2000)) throw new Problem(400, 'team.summary is text of at most 2,000 characters');
-    return { version, roles, frontDoor: doors[0].slug, ...(repo ? { repo } : {}), ...(team.summary ? { summary: team.summary } : {}) };
+    // The team's meetings, frozen with the run like the roles; attendees resolved by the Studio (meetings.mjs, A1).
+    const meetings = checkMeetingDefs(team.meetings, roles, doors[0].slug);
+    return { version, roles, frontDoor: doors[0].slug, ...(repo ? { repo } : {}), ...(team.summary ? { summary: team.summary } : {}), ...(meetings.length ? { meetings } : {}) };
   }
 
   async function startRun(tenant, team, body, by) {

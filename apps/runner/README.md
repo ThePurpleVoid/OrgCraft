@@ -62,12 +62,12 @@ AGENT_TEAM_SERVER=http://127.0.0.1:4849 AGENT_TEAM_SERVER_TOKEN="$T" AGENT_TEAM_
 # 2. The runner image.
 docker build -f apps/runner/Dockerfile -t agent-team-runner .
 
-# 3. Redeem a one-time code (15 minutes, once), with a step-up. The key lands in the volume, never on screen.
-SU=$(curl -s -H "authorization: Bearer $T" -H 'content-type: application/json' \
-  -d "{\"secret\":\"$(cat ~/.agent-team/server/step-up.secret)\"}" localhost:4849/v1/auth/step-up | jq -r .token)
-CODE=$(curl -s -X POST -H "authorization: Bearer $T" -H "x-step-up: $SU" localhost:4849/v1/runners/codes | jq -r .code)
+# 3. Get a one-time code in the Studio: open Chat, click "Add a runner…" in the header, name the machine (optional)
+#    and click "Get a code", then confirm with the step-up secret. The dialog shows the code once (15 minutes, one
+#    use) and the command to copy; run it with the server as Docker sees it. The key lands in the volume, never on
+#    screen. (Screenshot: docs/product/screenshots/runner-code/runner-code.png.)
 docker run --rm -v ~/.agent-team/runner-secrets:/run/agent-team:ro -v agent-team-runner:/data agent-team-runner \
-  node apps/runner/bin.mjs register --server http://host.docker.internal:4849 --code "$CODE" --name my-mac
+  node apps/runner/bin.mjs register --server http://host.docker.internal:4849 --code XXXX-XXXX-XXXX --name my-mac
 
 # 4. Start it. ANTHROPIC_API_KEY comes from your shell (part B of the owner checklist; not before).
 docker run -d --name agent-team-runner --restart unless-stopped \

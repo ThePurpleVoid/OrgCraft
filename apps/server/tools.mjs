@@ -2,7 +2,8 @@
 // first for quick feedback (apps/runner/tools.mjs); this is the authority (m3-design section 3), so it shares no
 // code with the runner and needs no dependency. Pure: no I/O. Returns { input } (cleaned) or { problems }.
 
-export const TOOL_NAMES = ['report', 'handoff', 'bug', 'signoff', 'blocked', 'ask_owner', 'request_approval'];
+export const TOOL_NAMES = ['report', 'handoff', 'bug', 'signoff', 'blocked', 'ask_owner', 'request_approval', 'meeting_reply', 'meeting_close'];
+const MEETING = /^mtg_[A-Za-z0-9_-]{1,60}$/;
 const MAX = 4000;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const ROLE = /^[a-z0-9][a-z0-9-]*(#[A-Za-z0-9._-]+)?$/;
@@ -115,6 +116,43 @@ export function checkTool(name, input, ctx) {
       else if (out.action === 'accept' && out.headSha && !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(out.headSha)) problems.push('an accept approval needs the full head sha (40 or 64 hex characters)');
       if (out.action === 'accept' && (!out.pr || !out.headSha)) problems.push('an accept approval needs pr and headSha, so the merge can only land on the commit that was approved');
       break;
+    case 'meeting_reply':
+      out = { meeting: f.text('meeting', { need: true, max: 80 }), text: f.text('text', { need: true, max: 8000 }) };
+      if (out.meeting && !MEETING.test(out.meeting)) problems.push('meeting is the meeting id from your turn, such as mtg_01…');
+      break;
+    case 'meeting_close': {
+      out = { meeting: f.text('meeting', { need: true, max: 80 }), minutes: f.text('minutes', { need: true, max: 20_000 }) };
+      if (out.meeting && !MEETING.test(out.meeting)) problems.push('meeting is the meeting id from your turn, such as mtg_01…');
+      const items = f.a.actionItems ?? [];
+      if (!Array.isArray(items) || items.length > 20) problems.push('actionItems is a list of at most 20 items');
+      else out.actionItems = items.map((x) => {
+        const g = fields(x, problems);
+        return { to: g.role('to', { need: true }), task: g.text('task', { need: true, max: 200 }), doneWhen: g.text('doneWhen', { need: true }) };
+      });
+      const ds = f.a.decisions ?? [];
+      if (!Array.isArray(ds) || ds.length > 4) problems.push('decisions is a list of at most 4 decisions');
+      else out.decisions = ds.map((x) => {
+        const g = fields(x, problems);
+        const d = { question: g.text('question', { need: true, max: 300 }), recommended: g.text('recommended', { need: true, max: 100 }), why: g.text('why', { max: 200 }) };
+        const opts = g.a.options;
+        if (!Array.isArray(opts) || opts.length < 2 || opts.length > 4) { problems.push('every decision needs 2 to 4 options'); return clean(d); }
+        d.options = opts.map((o) => ({ id: o?.id, label: o?.label, consequence: o?.consequence }));
+        for (const o of d.options) {
+          if (typeof o.id !== 'string' || !SLUG.test(o.id)) problems.push('every option id must be a slug');
+          if (typeof o.label !== 'string' || !o.label.trim() || o.label.length > 40) problems.push('every option needs a label of at most 40 characters');
+          if (typeof o.consequence !== 'string' || !o.consequence.trim() || o.consequence.length > 200) problems.push('every option needs a consequence of at most 200 characters');
+        }
+        if (new Set(d.options.map((o) => o.id)).size !== d.options.length) problems.push('option ids must be different');
+        if (d.recommended && !d.options.some((o) => o.id === d.recommended)) problems.push('recommended must be one of the option ids');
+        return clean(d);
+      });
+      for (const a of out.actionItems ?? []) {
+        const b = a.to?.split('#')[0];
+        if (b && b === ctx.role) problems.push('an action item goes to another role, never to yourself');
+        else if (b && ctx.roster?.length && !ctx.roster.includes(b)) problems.push(`${b} is not a role on this team (roles: ${ctx.roster.join(', ')})`);
+      }
+      break;
+    }
     default: break;
   }
   // Messages go to another role of this team version, never to the caller.
