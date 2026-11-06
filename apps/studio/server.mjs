@@ -47,7 +47,10 @@ export function gitState(root) {
 export function state(root) {
   if (!existsSync(join(root, '.agent-team/team.json'))) throw new HttpError(404, `no .agent-team/team.json in ${root}. Run "agent-team init" first.`);
   const kit = loadKit(KIT);
-  return { root, kitVersion: VERSION, spec: importLayer(readLayer(root), kit), kit, git: gitState(root) };
+  // The kit roles the team last synced with: a custom agent whose name a newer kit now ships is a clash (A7).
+  let kitRoles = null;
+  try { kitRoles = JSON.parse(readFileSync(join(root, '.agent-team/kit.lock.json'), 'utf8')).kitRoles ?? null; } catch { /* never synced */ }
+  return { root, kitVersion: VERSION, spec: importLayer(readLayer(root), kit), kit, kitRoles, git: gitState(root) };
 }
 
 /** The files a publish would write, compared with the repository as it is: [{ path, status, before, after }]. */

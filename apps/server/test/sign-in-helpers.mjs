@@ -12,7 +12,7 @@ export const OWNER = '1001';
 /** A stand-in GitHub: the user authorization flow with PKCE, /user and /user/emails. Tests set `as`. */
 export async function stubGitHub() {
   const codes = new Map(), tokens = new Map();
-  const gh = { as: null, issued: [] };
+  const gh = { as: null, issued: [], directory: [] };
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -37,6 +37,12 @@ export async function stubGitHub() {
       tokens.set(token, c.user);
       gh.issued.push(token);
       return json(200, { access_token: token, token_type: 'bearer' });
+    }
+    // Public user lookups, for invitations by login: everyone a test has signed in as, plus `gh.directory`.
+    const lookup = /^\/users\/([^/]+)$/.exec(url.pathname)?.[1] ?? /^\/user\/([0-9]+)$/.exec(url.pathname)?.[1];
+    if (lookup && req.method === 'GET') {
+      const u = gh.directory.find((x) => x.login.toLowerCase() === decodeURIComponent(lookup).toLowerCase() || x.id === lookup);
+      return u ? json(200, { id: Number(u.id), login: u.login }) : json(404, { message: 'Not Found' });
     }
     const user = tokens.get(/^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1]);
     if (!user) return json(401, { message: 'Bad credentials' });

@@ -52,7 +52,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.14.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.15.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -182,6 +182,14 @@ A file with a kit role's name replaces that brief entirely. Use it only when an 
 A `team.json` without `packs` gets `["engineering"]`, so a team made before 0.13 keeps its rules word for word. The support and content templates set `"packs": []`. A team without the engineering pack also reads "save your work where the team can see it" in place of "push" in every brief's footer. `validate` and `sync` refuse a pack the kit does not have.
 
 In the kit, a core file marks each place a pack can change with `<!-- slot:name -->` and `<!-- /slot -->` around the core's own wording. `team/packs/<pack>/<file>` has a `<!-- fill:name -->` block for each slot it replaces.
+
+## Other coding agents: `targets`
+
+```json
+{ "targets": ["claude-code", "agents-md"] }
+```
+
+`targets` says what sync writes the team for. A `team.json` without it gets `["claude-code"]`, the files it always wrote. `agents-md` adds a root `AGENTS.md` for other coding agents: how a session finds its role, the Node reporter commands and the project instructions, with no vendor or model names. The kit's text sits between `<!-- agent-team:start ... -->` and `<!-- agent-team:end -->`; anything else in the file is yours and sync keeps it. Take `agents-md` out and sync removes only its block. See [other coding agents](other-coding-agents.md) for what works without Claude Code's hooks.
 
 ## Project-wide rules
 

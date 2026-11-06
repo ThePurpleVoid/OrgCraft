@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Registers the hosted runner, once, by the owner: adding a runner needs a fresh step-up, which only a person can
-// give. It asks for the admin token and the step-up secret without echoing them, mints a one-time code, redeems it,
-// and prints the runner key once. Paste it into GitHub → Settings → Environments → production as the secret
+// give. With sign-in on, the owner mints a one-time runner code in the Studio (Runners → Add a runner, confirmed with
+// their passkey) and pastes it here; the admin token is retired once anyone owns the deployment. Before sign-in, it
+// asks for the admin token and the step-up secret instead. Nothing is echoed. It redeems the code and prints the
+// runner key once. Paste it into GitHub → Settings → Environments → production as the secret
 // AGENT_TEAM_RUNNER_KEY; the Deploy workflow's runner job stages it on the runner app.
 //
 //   node deploy/fly/register-runner.mjs --server https://<FLY_APP>.fly.dev [--name <runner name>]
@@ -37,14 +39,17 @@ async function post(path, body, headers = {}) {
   return b;
 }
 
-const token = (await ask('Admin token (not shown): ')).trim();
-const secret = await ask('Step-up secret (not shown): ');
-if (!token || !secret) fail('both are needed');
-const auth = { authorization: `Bearer ${token}` };
-const { token: stepUp } = await post('/v1/auth/step-up', { secret }, auth);
-if (!stepUp) fail('no step-up token in the answer');
-const { code } = await post('/v1/runners/codes', { name }, { ...auth, 'x-step-up': stepUp });
-if (!code) fail('no code in the answer');
+let code = (await ask('Runner code from the Studio (not shown; press Enter to use the admin token instead): ')).trim();
+if (!code) {
+  const token = (await ask('Admin token (not shown): ')).trim();
+  const secret = await ask('Step-up secret (not shown): ');
+  if (!token || !secret) fail('both are needed');
+  const auth = { authorization: `Bearer ${token}` };
+  const { token: stepUp } = await post('/v1/auth/step-up', { secret }, auth);
+  if (!stepUp) fail('no step-up token in the answer');
+  ({ code } = await post('/v1/runners/codes', { name }, { ...auth, 'x-step-up': stepUp }));
+  if (!code) fail('no code in the answer');
+}
 const reg = await post('/v1/runners', { code, name, capabilities: { sandboxes: ['process'], runtimes: ['agent-sdk'] } });
 if (!reg.key) fail('no key in the answer');
 console.error(`register-runner: registered ${reg.id} as ${name}. Paste the line below into GitHub as AGENT_TEAM_RUNNER_KEY, then clear your terminal.`);

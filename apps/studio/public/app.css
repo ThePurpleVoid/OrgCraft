@@ -38,12 +38,13 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
 .inspector { border-left: 1px solid var(--line); }
 .group-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin: 14px 0 4px; display: flex; align-items: center; gap: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
-.lib-role { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: grab; }
-.lib-role:hover { background: var(--off); }
-.lib-role.selected { outline: 2px solid var(--accent); }
+.lib-ref { width: 100%; background: none; border: 0; font: inherit; color: inherit; text-align: left; }
+:is(.lib-role, .lib-ref) { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: grab; }
+:is(.lib-role, .lib-ref):hover { background: var(--off); }
+:is(.lib-role, .lib-ref).selected { outline: 2px solid var(--accent); }
 .lib-role input { width: auto; margin: 0; }
-.lib-role .name { flex: 1; }
-.lib-role .tag { font-size: 11px; color: var(--muted); }
+:is(.lib-role, .lib-ref) .name { flex: 1; }
+:is(.lib-role, .lib-ref) .tag { font-size: 11px; color: var(--muted); }
 
 .canvas-wrap { display: flex; flex-direction: column; min-width: 0; }
 .zoom button { padding: 2px 9px; min-width: 30px; }

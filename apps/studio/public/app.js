@@ -1,6 +1,6 @@
 // Agent Team Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
-import { resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
+import { checkUpgrade, resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
 import { createChat } from './chat.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
@@ -59,7 +59,20 @@ function derive() {
     };
   };
   const all = Object.keys(spec.roles).sort().map(info);
-  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team: all.filter((r) => r.enabled && bySlug.has(r.slug)), issues: validate(spec, S.kit) };
+  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team: all.filter((r) => r.enabled && bySlug.has(r.slug)), issues: checksOf(spec) };
+}
+
+/**
+ * The team's checks, plus A7: a custom agent with the name of a role the pinned kit added since the team last synced
+ * (and not marked in team.json "replaces") is an error, with two fixes in its editor. Sync refuses it the same way.
+ */
+function checksOf(sp) {
+  const replaces = new Set(sp.options?.replaces ?? []);
+  const clashes = checkUpgrade(sp, S.kit, S.kitRoles).filter((c) => !replaces.has(c.slug))
+    .map((c) => ({ level: 'error', where: `roles/${c.slug}`, message: `the kit (${S.kitVersion}) adds a role called ${c.slug}, the same name as this agent: rename yours, or use the kit's`, fix: 'kit-clash' }));
+  // The "replaces the kit's" note says the opposite of a clash (the replacement was never chosen), so the clash wins.
+  const clashed = new Set(clashes.map((c) => c.where));
+  return [...validate(sp, S.kit).filter((i) => !(clashed.has(i.where) && /^replaces the kit's/.test(i.message))), ...clashes];
 }
 
 /** Every change goes through here, so undo, redo and the redraw are in one place. */
@@ -423,8 +436,16 @@ function renderLibrary() {
   // Your agents: the custom roles on this team, on or off (PRD 6.6 A6), each still in its own group's colour.
   const yours = mine.length ? `<div class="group-title yours"><span class="dot" style="background:var(--warn)"></span>Your agents</div>` +
     mine.sort(byTitle).map((r) => row(r).replace('<span class="name">', `<span class="dot" style="background:${groupColor(r.group)}" title="${esc(r.group)}"></span><span class="name">`)).join('') : '';
-  $('#library').innerHTML = (yours + keys.map((g) => `<div class="group-title"><span class="dot" style="background:${groupColor(g)}"></span>${esc(g)}</div>` +
-    groups.get(g).sort(byTitle).map(row).join('')).join('')) || '<p class="muted">No roles match.</p>';
+  // A group only custom agents use (a new one, D8) gets its own section in its colour, like a kit group, listing its
+  // agents again (criterion 13). These rows open the agent; switching it on or off stays in Your agents.
+  const kitGroups = new Set(view.all.filter((r) => !isCustom(spec.roles[r.slug])).map((r) => r.group));
+  const fresh = [...new Set(mine.map((r) => r.group))].filter((g) => g && !kitGroups.has(g));
+  const ref = (r) => `<button type="button" class="lib-ref${r.slug === selected ? ' selected' : ''}" data-slug="${esc(r.slug)}" draggable="true"><span class="name">${esc(r.title)}</span><span class="tag">${imported.has(r.slug) ? 'imported' : 'custom'}${r.enabled ? '' : ' · off'}${r.dormant ? ' · dormant' : ''}</span></button>`;
+  const section = (g) => (groups.has(g)
+    ? `<div class="group-title"><span class="dot" style="background:${groupColor(g)}"></span>${esc(g)}</div>` + groups.get(g).sort(byTitle).map(row).join('')
+    : `<div class="group-title" data-group="${esc(g)}"><span class="dot" style="background:${groupColor(g)}"></span>${esc(g)}</div>` + mine.filter((r) => r.group === g).sort(byTitle).map(ref).join(''));
+  const order = [...keys, ...fresh].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
+  $('#library').innerHTML = (yours + order.map(section).join('')) || '<p class="muted">No roles match.</p>';
 }
 
 function wireLibrary() {
@@ -435,7 +456,7 @@ function wireLibrary() {
   $('#library').addEventListener('click', async (e) => {
     const out = e.target.closest('[data-export]');
     if (out) { e.preventDefault(); const said = await exportPack(spec, out.dataset.export); if (said !== 'cancelled') note(said); return; }
-    const l = e.target.closest('.lib-role');
+    const l = e.target.closest('.lib-role, .lib-ref');
     if (l && !e.target.dataset.toggle) {
       e.preventDefault();
       // A custom agent opens in its editor (on a large screen); any other role in the inspector.
@@ -445,7 +466,7 @@ function wireLibrary() {
       if (small.matches) $('#inspector').scrollIntoView({ block: 'start' });
     }
   });
-  $('#library').addEventListener('dragstart', (e) => { const l = e.target.closest('.lib-role'); if (l) { e.dataTransfer.setData('text/x-role', l.dataset.slug); e.dataTransfer.effectAllowed = 'copy'; } });
+  $('#library').addEventListener('dragstart', (e) => { const l = e.target.closest('.lib-role, .lib-ref'); if (l) { e.dataTransfer.setData('text/x-role', l.dataset.slug); e.dataTransfer.effectAllowed = 'copy'; } });
   $('#search').addEventListener('input', (e) => { query = e.target.value; renderLibrary(); });
   $('#new-agent').onclick = () => {
     if (small.matches) return flash('Editing the team needs a larger screen');
@@ -561,7 +582,7 @@ function openEditor(slug, origin) {
   editor ??= createAgentEditor($('#agent-editor'), {
     spec: () => spec, kit: S.kit, roles: () => view.all, team: () => view.team,
     // A switched-off agent is checked as if it were on, so the editor shows what stands between it and the team.
-    issues: () => (spec.roles[editor.slug]?.enabled ? view.issues : validate({ ...spec, roles: { ...spec.roles, [editor.slug]: { ...spec.roles[editor.slug], enabled: true } } }, S.kit)),
+    issues: () => (spec.roles[editor.slug]?.enabled ? view.issues : checksOf({ ...spec, roles: { ...spec.roles, [editor.slug]: { ...spec.roles[editor.slug], enabled: true } } })),
     change, ctx, api,
     close: () => { editor.close(); render(); },
     setOn: (s) => { switchRole(s, true); },

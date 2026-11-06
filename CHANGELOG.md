@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.15.0
+
+Other coding agents (CPO story "Other coding agents", criteria 1 to 5 and 7, and the dashboard side of 6; D42 to D48).
+
+- **`team.json` `targets`** ([customizing](docs/customizing.md#other-coding-agents-targets)). A team without it gets `["claude-code"]` and sync writes exactly what it wrote before. `["claude-code", "agents-md"]` also writes a root **`AGENTS.md`**: how a session finds its role (`AGENT_TEAM_ROLE` in `.agent-team/local.env`, or the first message), what to do first in every task, every board report as a `node scripts/agent-team/report.mjs` command (no bash, no `jq`), and the project instructions. It names no vendor or model; a test checks this. `validate` and `sync` refuse an unknown target.
+- **Role memory for agents without project memory** (issue #90): `AGENTS.md` points them to `memory/<role>.md` in the board folder, or `.agent-team/memory/<role>.md` in the checkout, which sync adds to `.gitignore` when `agents-md` is on.
+- **A hand-written `AGENTS.md` is kept.** The kit writes between `<!-- agent-team:start ... -->` and `<!-- agent-team:end -->` and leaves every other line alone. `check` fails only when the kit's block is stale or edited. Switching the target off removes only the block.
+- **The board marks a thread "Self-reported"** when it has reports and no hook events: `summarize` gives each current row `self_reported`, and the dashboard shows it on the card and in the panel. The Studio's live board gets the same field.
+- **What works with Claude Code and with other agents** is a table in the README, `docs/hooks-and-agent-teams.md` and the new [docs/other-coding-agents.md](docs/other-coding-agents.md), which also records the offline proof with Codex CLI 0.167.0 and opencode 1.19.5. The live walk is pending an owner model key.
+- New in `packages/team-model`: `TARGETS`, `DEFAULT_TARGETS`, `teamTargets`, `neutralInstructions`, `spliceBlock`, `withoutBlock`.
+- **What existing teams see on sync:** the version stamps, and the board and dashboard scripts in `scripts/agent-team/` (the Self-reported mark). Nothing else, unless they add `agents-md`.
+
 ## 0.14.0
 
 - **Studio Publish can open a pull request** (issue #30, "PR through gh"). `POST /v1/team/publish` with `"pr": true` first commits as before. It then pushes the branch to `origin`, never forced, and opens a pull request into the branch the publish started from. With `gh` installed and signed in, that is `gh pr create`, with the commit's first line as the title and the rest (the change-safety plan, "Work in progress") as the body. Without gh, the result has the branch, the compare link for a GitHub remote and the command to run. The result's `pr.state` is `opened`, `exists`, `pushed`, `not-pushed`, `no-remote` or `same-branch`. `GET /v1/team/pr-support` says whether there is a remote and whether gh is signed in. The server reads only `spec`, `branch`, `message` and `pr` from the page, never a token. `AGENT_TEAM_GH` points at another gh binary. The code is in `apps/studio/pr.mjs`.
@@ -64,6 +76,8 @@ Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD
 - **The deployment is its own OIDC issuer** (#68, ADR 0007, m4-sign-in.md). Built on oidc-provider, with GitHub as the upstream, the web's `__Host-agent-team` cookie with CSRF, and migration 004 (people, sessions, tokens, members, invitations). Off unless `GITHUB_APP_CLIENT_ID` is set. Rate limits read the caller's IP only from our own proxies (#73).
 - **Passkeys and step-up** (spec section 3, K2). `GET`/`POST /v1/me/passkeys`, `GET /v1/me/passkeys/options`, `DELETE /v1/me/passkeys/{id}`, `GET /v1/auth/step-up/challenge`, and `POST /v1/auth/step-up { webauthn }`, on @simplewebauthn/server. A `su_` token comes only from an assertion with user verification, and is bound to the person and the tenant. `GET /v1/internal/caller` (CRON_SECRET) is for the deploy's smoke check. Contracts: **a recorded exception to rule 7**. clients.md section 3 no longer accepts `auth_time` as a step-up, and a hosted deployment refuses `POST /auth/step-up { secret }`. Both changed before 1.0, before any client outside this repository called them.
 
+- **Roles, members and invitations** (spec section 4). Every person route has a minimum role (`roles.mjs`, `x-min-role` in api-v1.yaml), and a route without one is refused. New: `GET /v1/members`, `PATCH`/`DELETE /v1/members/{member}`, `GET`/`POST /v1/invitations`, `DELETE /v1/invitations/{invitation}`, with step-up, audit, and last-owner protection. A person removed from their last workspace is signed out everywhere. With sign-in on, the admin token is retired once anyone owns the deployment; `agent-team-server admin reset-owner <github-user-id>` is the host's way back in. `deploy/fly/register-runner.mjs` takes a runner code minted in the Studio. Passkey and step-up writes honour `Idempotency-Key` (review of #82).
+
 - **M3 design fix:** `run.resumed` now restarts every session a pause stopped, from its last checkpoint, after an owner's resume or the budget's next-day resume. Pause and resume handlers act only if the run's state and version still match (found in review of #54).
 
 ### Runner
@@ -79,6 +93,8 @@ Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD
 - **After a merge, a session starts again from the new base.** The runner deletes the merged branch (as GitHub's delete-branch-on-merge; the merger app's token can) and resets the session's copy to the base, so its next change opens a new pull request instead of conflicting with its own squash. It stays on the branch when the delete fails (a ruleset, say) or when files are left uncommitted outside its areas. A branch that changes nothing against its base gets no pull request (a role that only talked).
 
 ### Studio (nothing changes on sync)
+- A custom agent whose name the pinned kit now ships (and that team.json "replaces" does not list) is an error, with two fixes in its editor: **Rename mine** (checked like a new slug) or **Use the kit's role** (#30, criterion 14, A7).
+- A group that only custom agents use gets its own library section in its colour, listing them as well as Your agents (criterion 13). The New agent dialog no longer defaults the group to "engineering": the owner picks one.
 - The agent editor resolves path conflicts where they happen (#30, criterion 9): an area another role writes is held, never written as a second writer, until the owner picks "Read only, send fixes as BUG", "Take a narrower area" (checked again) or "Move the whole area to this agent". A move asks twice when the board says the writer is working on it now.
 - An imported role pack's `needs.resources` show as "Needs a <type>: connect one or skip", bound only on Connect (criterion 12). Its areas go through the same conflict choices.
 - Hands to: the role picker starts on "Choose a role" and adds roles by name. Clearing Identity is now an error from the kit's own check (0.11.1), no longer refilled with the template text.

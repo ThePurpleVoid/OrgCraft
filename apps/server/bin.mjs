@@ -3,6 +3,10 @@
 // DATABASE_URL and passes the keys in the environment.
 //
 //   agent-team-server [--port 4849] [--host 127.0.0.1] [--data ~/.agent-team/server]
+//   agent-team-server admin reset-owner <github-user-id>
+//                           on the host, when no owner can sign in: an owner invitation for that numeric GitHub user id,
+//                           valid one day. With sign-in on, the admin token is retired once anyone owns the deployment,
+//                           so this is the way back in (fly ssh console -C "agent-team-server admin reset-owner 1234")
 //
 // Environment:
 //   DATABASE_URL            postgres://… (omit for local mode, which stores the database in --data)
@@ -36,8 +40,9 @@ import { startSinks } from './sinks.mjs';
 import { createControlPlane } from './server.mjs';
 import { hashStepUpSecret, stepUpVerifier } from './m3.mjs';
 import { createIdentity, githubUpstream } from './identity.mjs';
+import { resetOwner } from './members.mjs';
 
-const { values: o } = parseArgs({ options: {
+const { values: o, positionals } = parseArgs({ allowPositionals: true, options: {
   port: { type: 'string', default: process.env.PORT ?? '4849' },
   host: { type: 'string', default: process.env.HOST ?? '127.0.0.1' },
   data: { type: 'string', default: process.env.AGENT_TEAM_DATA ?? join(homedir(), '.agent-team', 'server') },
@@ -84,6 +89,15 @@ if (!verifier) console.error('agent-team-server: no AGENT_TEAM_STEP_UP_SECRET_HA
 
 const db = await openDb(local ? { dataDir: join(data, 'db') } : { url: env.DATABASE_URL });
 await ensureTenant(db, tenant);
+if (positionals.length) {
+  if (positionals[0] !== 'admin' || positionals[1] !== 'reset-owner' || positionals.length !== 3) { console.error('usage: agent-team-server admin reset-owner <github-user-id>'); process.exit(2); }
+  try {
+    const id = await resetOwner(db, tenant, positionals[2]);
+    console.log(`Owner invitation ${id} for GitHub user ${positionals[2]} in ${tenant}, valid for one day: they sign in at ${env.AGENT_TEAM_PUBLIC_URL ?? 'this deployment'}`);
+  } catch (e) { console.error(`agent-team-server: ${e.message}`); process.exitCode = 2; }
+  await db.close();
+  process.exit();
+}
 const sinks = startSinks(db, key);
 const proxy = { hops: Number(env.AGENT_TEAM_PROXY_HOPS ?? 0) || 0, edgeSecret: env.AGENT_TEAM_EDGE_SECRET || null };
 if (proxy.edgeSecret && proxy.edgeSecret.length < 32) { console.error('agent-team-server: AGENT_TEAM_EDGE_SECRET must be at least 32 characters'); process.exit(2); }
