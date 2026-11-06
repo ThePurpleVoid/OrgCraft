@@ -31,18 +31,19 @@ async function fresh() {
   return openDb({ url });
 }
 
-async function plane(fn) {
+const plane = (fn) => planeAt(undefined, fn);
+async function planeAt(now, fn) {
   const db = await fresh();
   await store.ensureTenant(db, 'acme');
   let woke = 0;
-  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, sinks: { wake: () => woke++ } });
+  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, sinks: { wake: () => woke++ }, ...(now ? { now } : {}) });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}/v1`;
   const call = async (method, path, body, headers = { authorization: `Bearer ${ADMIN}` }) => {
     const res = await fetch(base + path, { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: res.status, body: await res.json().catch(() => null) };
   };
-  try { await fn({ db, call, base, woke: () => woke }); } finally { server.closeAllConnections(); server.close(); await db.close(); }
+  try { await fn({ db, call, base, woke: () => woke }); } finally { server.runners.closeAll(); server.closeAllConnections(); server.close(); await db.close(); }
 }
 
 test('splits migrations without breaking dollar-quoted bodies', () => {
@@ -102,15 +103,19 @@ test('takes the kit\'s reports byte for byte with a report token, and serves the
   });
 });
 
-test('limits each role to 30 reports a minute', async () => {
-  await plane(async ({ call }) => {
+test('limits each role to 30 reports a minute, over a sliding minute', async () => {
+  // The clock sits a second before a minute turns: a calendar-minute limit would reset halfway through the burst.
+  let clock = Date.parse('2026-11-06T10:00:59.500Z');
+  await planeAt(() => new Date(clock), async ({ call }) => {
     await call('POST', '/teams', { id: 'busy' });
     const { token } = (await call('POST', '/teams/busy/report-tokens')).body;
     const codes = [];
-    for (let i = 0; i < 31; i++) codes.push((await call('POST', '/teams/busy/reports', { role: 'web-dev', kind: 'heartbeat' }, { 'x-team-token': token })).status);
+    for (let i = 0; i < 31; i++) { codes.push((await call('POST', '/teams/busy/reports', { role: 'web-dev', kind: 'heartbeat' }, { 'x-team-token': token })).status); clock += 50; }
     assert.deepEqual([...new Set(codes.slice(0, 30))], [200]);
     assert.equal(codes[30], 429);
     assert.equal((await call('POST', '/teams/busy/reports', { role: 'qa-web', kind: 'heartbeat' }, { 'x-team-token': token })).status, 200, 'other roles are not held up');
+    clock += 61_000;
+    assert.equal((await call('POST', '/teams/busy/reports', { role: 'web-dev', kind: 'heartbeat' }, { 'x-team-token': token })).status, 200, 'a minute later the role may report again');
   });
 });
 

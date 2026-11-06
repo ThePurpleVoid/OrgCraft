@@ -5,21 +5,36 @@
 //   x-team-token: <report token>     POST /v1/teams/{team}/reports only (append, for that one team; reads nothing)
 //   Authorization: Bearer <token>    everything else, as a person of the server's tenant. Until sign-in (OIDC)
 //                                    lands, that is one admin token per server (AGENT_TEAM_ADMIN_TOKEN).
+//   (none, a one-time code)          POST /v1/runners only: a runner redeems a code a person minted for its key.
+//
+// Every write may carry an Idempotency-Key: the first answer is kept for a day and a retry gets it back verbatim
+// (with Idempotent-Replayed: true), so a request sent twice from a bad connection acts once.
 import { createServer } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as store from './store.mjs';
+import { attachRunners } from './runners.mjs';
 
 const { Problem } = store;
 const REPORTS_PER_MINUTE = 30;
 
-const send = (res, status, body, headers = {}) => {
+const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const MAX_BODY = 2 * 1024 * 1024;
+
+/**
+ * Writes a JSON answer. `secrets` names fields shown once (a token, a key, a code): an idempotent write never stores
+ * them, and a replay of such a write answers 409 with the other fields instead of showing the secret again.
+ */
+const send = (res, status, body, headers = {}, { secrets = [] } = {}) => {
+  // Inside an idempotent write the answer is held until it is stored, so a retry can never overtake it.
+  if (res.hold) { res.answer = { status, body, headers, secrets }; return; }
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...headers });
   res.end(JSON.stringify(body));
 };
 
-function readJson(req, limit) {
+/** The raw body, read once and kept on the request (the idempotency check hashes it before a route parses it). */
+function readRaw(req, limit = MAX_BODY) {
+  if (req.rawBody) return req.rawBody.length > limit ? Promise.reject(new Problem(413, `at most ${limit} bytes`)) : Promise.resolve(req.rawBody);
   return new Promise((resolve, reject) => {
-    if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) return reject(new Problem(415, 'send JSON (content-type: application/json)'));
     const chunks = [];
     let size = 0;
     req.on('data', (c) => {
@@ -27,11 +42,15 @@ function readJson(req, limit) {
       if (size > limit) { reject(new Problem(413, `at most ${limit} bytes`)); req.destroy(); return; }
       chunks.push(c);
     });
-    req.on('end', () => {
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null')); } catch { reject(new Problem(400, 'the body is not valid JSON')); }
-    });
+    req.on('end', () => { req.rawBody = Buffer.concat(chunks); resolve(req.rawBody); });
     req.on('error', reject);
   });
+}
+
+async function readJson(req, limit) {
+  if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new Problem(415, 'send JSON (content-type: application/json)');
+  const raw = await readRaw(req, limit);
+  try { return JSON.parse(raw.toString('utf8') || 'null'); } catch { throw new Problem(400, 'the body is not valid JSON'); }
 }
 
 const same = (a, b) => {
@@ -40,11 +59,12 @@ const same = (a, b) => {
 };
 
 /** Live listeners per team, fed by every append on this instance. */
+/** Live listeners per team, and for every team ('*', which /me/stream filters by tenant), fed by every append. */
 function hub() {
   const subs = new Map();
   return {
     on(team, fn) { if (!subs.has(team)) subs.set(team, new Set()); subs.get(team).add(fn); return () => subs.get(team)?.delete(fn); },
-    emit(team, stored) { for (const fn of subs.get(team) ?? []) fn(stored); },
+    emit(team, stored) { for (const k of [team, '*']) for (const fn of subs.get(k) ?? []) fn(stored); },
   };
 }
 
@@ -52,8 +72,26 @@ function hub() {
  * The API server. `db` from openDb, `key` the vault master key, `tenant` the tenant this server signs people in to,
  * `adminToken` the bearer token for people, `publicUrl` how others reach this server (for report URLs).
  */
-export function createControlPlane({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date() }) {
+export function createControlPlane(opts) {
+  const server = createServer();
+  // Runners connect here over a WebSocket (runner-protocol.md). The ops they may send are wired in as M3 lands.
+  const runners = attachRunners(server, { db: opts.db, ...(opts.runnerOptions ?? {}) });
+  server.on('request', createHandler({ ...opts, runners }));
+  server.runners = runners;
+  server.on('close', () => runners.closeAll());
+  return server;
+}
+
+/**
+ * The API as a request handler, `(req, res) => Promise`, for hosts that bring their own HTTP server (serverless
+ * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
+ * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
+ */
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null }) {
   const live = hub();
+  // A key of its own for request fingerprints, derived from the master key so nothing new needs keeping.
+  if (!Buffer.isBuffer(key) || key.length !== 32) throw new Error('createHandler needs the 32-byte master key (vault.mjs masterKey)');
+  const idemKey = createHmac('sha256', key).update('agent-team/idempotency/v1').digest();
   const rate = new Map();
   const appended = (team, stored) => { if (stored.length) { live.emit(team, stored); sinks?.wake(); } };
 
@@ -63,38 +101,97 @@ export function createControlPlane({ db, key, tenant, adminToken, publicUrl = ''
     return tenant;
   };
 
+  // A sliding minute per team and role, so a burst that straddles the turn of a clock minute is still counted.
   const limited = (team, role) => {
-    const minute = Math.floor(Date.now() / 60_000);
+    const t = now().getTime();
     const k = `${team}/${role}`;
-    const r = rate.get(k);
-    if (!r || r.minute !== minute) { rate.set(k, { minute, n: 1 }); if (rate.size > 10_000) rate.clear(); return false; }
-    return ++r.n > REPORTS_PER_MINUTE;
+    const hits = (rate.get(k) ?? []).filter((x) => t - x < 60_000);
+    if (hits.length >= REPORTS_PER_MINUTE) { rate.set(k, hits); return true; }
+    hits.push(t);
+    if (!rate.has(k) && rate.size > 10_000) rate.clear();
+    rate.set(k, hits);
+    return false;
   };
 
+  /**
+   * Server-sent events: catch up from the log after an event id (Last-Event-ID on reconnect, or ?after=), then live.
+   * Ids, not positions, so clients never parse. `team` null streams every team of the tenant (/me/stream).
+   */
   async function stream(req, res, t, team, url) {
-    await store.getTeam(db, t, team);
-    // Resume after an event id (Last-Event-ID on reconnect, or ?after=); ids, not positions, so clients never parse.
-    let last = await store.seqOf(db, t, team, req.headers['last-event-id'] ?? url.searchParams.get('after') ?? '');
+    if (team) await store.getTeam(db, t, team);
+    const from = req.headers['last-event-id'] ?? url.searchParams.get('after') ?? '';
+    let last = team ? await store.seqOf(db, t, team, from) : await store.tenantSeqOf(db, t, from);
     const type = url.searchParams.get('type') ?? '';
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
     res.write('retry: 3000\n\n');
     const write = ({ seq, event }) => {
-      if (seq <= last) return;
       last = seq;
       if (!type || event.type.startsWith(type)) res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     };
-    // Listen first and hold what arrives, then catch up from the log, so nothing falls in between.
-    let held = [];
-    const off = live.on(team, (stored) => (held ? held.push(...stored) : stored.forEach(write)));
+    // Every event is sent from the log, in seq order. Appends take a per-tenant lock, so seq is commit order and a
+    // read after "seq > last" never skips one that commits late. The in-process hub only says "read now"; the poll
+    // covers appends made on other instances.
+    let closed = false, reading = false, again = false;
+    const pump = async () => {
+      if (reading) { again = true; return; }
+      reading = true;
+      try {
+        do {
+          again = false;
+          for (;;) {
+            if (closed) return;
+            const page = team
+              ? (await store.listEvents(db, t, team, { after: last, limit: 500 })).events
+              : await store.tenantEvents(db, t, { after: last, limit: 500 });
+            if (closed) return;
+            page.forEach(write);
+            if (page.length < 500) break;
+          }
+        } while (again && !closed);
+      } catch { /* the next wake or poll retries */ } finally { reading = false; }
+    };
+    const off = live.on(team ?? '*', (stored) => { if (stored.some((x) => x.event.tenant === t)) pump(); });
     const beat = setInterval(() => res.write(': keep-alive\n\n'), 20_000);
-    res.on('close', () => { off(); clearInterval(beat); });
-    for (;;) {
-      const page = await store.listEvents(db, t, team, { after: last, limit: 500 });
-      page.events.forEach(write);
-      if (!page.next) break;
+    const poll = pollMs > 0 ? setInterval(pump, pollMs) : null;
+    poll?.unref?.();
+    res.on('close', () => { closed = true; off(); clearInterval(beat); if (poll) clearInterval(poll); });
+    await pump();
+  }
+
+  /**
+   * Runs a write once per Idempotency-Key. The key is scoped to the tenant and the caller, and bound to the method,
+   * path and body: the same key on a different request is a 422, and on one still running a 409.
+   */
+  async function idempotent(req, res, t, principal, path, fn) {
+    const key = req.headers['idempotency-key'];
+    if (key === undefined || !WRITES.has(req.method)) return fn();
+    const raw = await readRaw(req);
+    // Keyed, so the table never holds a plain hash of a body (which could be guessed back for short secret values).
+    const hash = createHmac('sha256', idemKey).update(String(req.headers['content-type'] ?? '')).update('\n').update(raw).digest('hex');
+    const claim = await store.claimIdempotency(db, t, principal, String(key), { method: req.method, path, hash });
+    if (claim.state === 'replay') {
+      const { shownOnce, ...rest } = claim.response && typeof claim.response === 'object' ? claim.response : { body: claim.response };
+      if (shownOnce) return send(res, 409, { error: `this request already succeeded; its ${shownOnce.join(' and ')} was shown once and is not kept`, ...rest }, { 'idempotent-replayed': 'true' });
+      return send(res, claim.status, claim.response, { 'idempotent-replayed': 'true' });
     }
-    held.sort((a, b) => a.seq - b.seq).forEach(write);
-    held = null;
+    res.hold = true;
+    let answer;
+    try {
+      await fn();
+      answer = res.answer;
+    } catch (e) {
+      answer = e instanceof Problem ? { status: e.status, body: { error: e.message } } : e?.code === '23505' ? { status: 409, body: { error: 'already exists' } } : undefined;
+      if (!answer) { res.hold = false; await store.settleIdempotency(db, t, principal, String(key)); throw e; }
+    }
+    // A secret is never written to the idempotency table: only the answer without it, marked as shown once.
+    let kept = answer?.body;
+    if (answer?.secrets?.length && kept && typeof kept === 'object') {
+      kept = Object.fromEntries(Object.entries(kept).filter(([k]) => !answer.secrets.includes(k)));
+      kept.shownOnce = answer.secrets;
+    }
+    await store.settleIdempotency(db, t, principal, String(key), answer?.status, kept);
+    res.hold = false;
+    if (answer) send(res, answer.status, answer.body, answer.headers);
   }
 
   async function route(req, res) {
@@ -118,7 +215,35 @@ export function createControlPlane({ db, key, tenant, adminToken, publicUrl = ''
       return send(res, 200, { ok: true, id });
     }
 
+    // A runner redeems a one-time code for its key. No sign-in: the code is the proof, and it names the tenant.
+    if (a === 'runners' && !team && m === 'POST') {
+      const body = await readJson(req, 32 * 1024);
+      const t = await store.runnerCodeTenant(db, body?.code);
+      const principal = `code:${store.codeHash(body?.code)}`;
+      if (!t) throw new Problem(401, 'that code is unknown, used or expired; mint a new one in the Studio');
+      return idempotent(req, res, t, principal, url.pathname, async () => send(res, 201, await store.registerRunner(db, body ?? {}), {}, { secrets: ['key'] }));
+    }
+
     const t = person(req);
+    return idempotent(req, res, t, 'admin', url.pathname, () => personRoute(req, res, t, url, parts));
+  }
+
+  async function personRoute(req, res, t, url, parts) {
+    const m = req.method;
+    const [, a, team, b, c] = parts;
+    if (a === 'me' && team === 'summary' && !b && m === 'GET') {
+      const tag = `W/"${(await store.tenantHead(db, t)).seq}-${Math.floor(now().getTime() / 60_000)}"`;
+      if (req.headers['if-none-match'] === tag) { res.writeHead(304, { etag: tag }); return res.end(); }
+      const { seq, ...body } = await store.summary(db, t, { now: now() });
+      return send(res, 200, body, { etag: tag });
+    }
+    if (a === 'me' && team === 'stream' && !b && m === 'GET') return stream(req, res, t, null, url);
+    if (a === 'runners' && team === 'codes' && !b && m === 'POST') {
+      const body = req.headers['content-type'] ? (await readJson(req, 16 * 1024)) ?? {} : {};
+      return send(res, 201, await store.mintRunnerCode(db, t, 'admin', body), {}, { secrets: ['code'] });
+    }
+    if (a === 'runners' && !team && m === 'GET') return send(res, 200, { runners: await store.listRunners(db, t) });
+    if (a === 'runners' && team && team !== 'codes' && !b && m === 'DELETE') { await store.revokeRunner(db, t, team); runners?.close(team); return send(res, 200, { ok: true }); }
     if (a === 'teams' && !team) {
       if (m === 'GET') return send(res, 200, { teams: await store.listTeams(db, t) });
       if (m === 'POST') return send(res, 201, await store.createTeam(db, t, (await readJson(req, 16 * 1024)) ?? {}));
@@ -152,7 +277,7 @@ export function createControlPlane({ db, key, tenant, adminToken, publicUrl = ''
       if (b === 'report-tokens' && !c && m === 'POST') {
         const tok = await store.mintReportToken(db, t, team);
         const base = publicUrl || `http://${req.headers.host}`;
-        return send(res, 201, { ...tok, url: `${base.replace(/\/+$/, '')}/v1/teams/${team}/reports` });
+        return send(res, 201, { ...tok, url: `${base.replace(/\/+$/, '')}/v1/teams/${team}/reports` }, {}, { secrets: ['token'] });
       }
       if (b === 'report-tokens' && c && m === 'DELETE') { await store.revokeReportToken(db, t, team, c); return send(res, 200, { ok: true }); }
       if (b === 'sinks' && !c && m === 'GET') return send(res, 200, { sinks: await store.listSinks(db, t, team) });
@@ -168,13 +293,12 @@ export function createControlPlane({ db, key, tenant, adminToken, publicUrl = ''
     throw new Problem(404, 'not found');
   }
 
-  return createServer((req, res) => {
-    route(req, res).catch((e) => {
-      if (res.headersSent) { res.end(); return; }
-      if (e instanceof Problem) return send(res, e.status, { error: e.message });
-      if (e?.code === '23505') return send(res, 409, { error: 'already exists' });
-      console.error(e);
-      send(res, 500, { error: 'something went wrong on the server' });
-    });
+  return (req, res) => route(req, res).catch((e) => {
+    res.hold = false;
+    if (res.headersSent) { res.end(); return; }
+    if (e instanceof Problem) return send(res, e.status, { error: e.message });
+    if (e?.code === '23505') return send(res, 409, { error: 'already exists' });
+    console.error(e);
+    send(res, 500, { error: 'something went wrong on the server' });
   });
 }
