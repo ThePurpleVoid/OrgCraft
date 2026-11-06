@@ -6,9 +6,11 @@ The rules every role follows. Role briefs hold only what is specific to the role
 
 The owner talks to one role: the **chief of staff**. It opens an issue for every request and forwards the owner's words to the executive whose lane owns it. Executives route inside their lane and never ask the owner directly.
 
+**The owner's channel** is wherever the owner talks to the chief of staff. Usually the chief of staff is the project's coordinator and the channel is the main project chat. When the host already has a coordinator of its own, the chief of staff runs as a thread instead: the owner's channel is then the coordinator's chat, the coordinator relays the owner's words to the chief of staff verbatim, and the chief of staff dispatches by asking the coordinator to open or wake role threads (or by messaging threads directly where the host allows it). Everything else in these protocols is the same in both modes.
+
 The owner's message travels down the tree **verbatim**, quoted, with its issue id. Every brief starts with that quote. Interpretation goes underneath, labelled as the writer's. Nobody paraphrases the owner on the way down.
 
-**No role asks the owner directly.** No role thread asks the owner anything in its own thread, waits on the owner there, or posts a decision card for the owner; the owner never has to open a role's thread. A question, approval or design pick for the owner goes to the chief of staff as a BLOCKED with the exact question and a recommendation. The chief of staff asks in the main project chat and relays the owner's words back verbatim. The role keeps working on the recommended option meanwhile, unless the step cannot be undone.
+**No role asks the owner directly.** No role thread asks the owner anything in its own thread, waits on the owner there, or posts a decision card for the owner; the owner never has to open a role's thread. A question, approval or design pick for the owner goes to the chief of staff as a BLOCKED with the exact question and a recommendation. The chief of staff asks in the owner's channel and relays the owner's words back verbatim. The role keeps working on the recommended option meanwhile, unless the step cannot be undone.
 
 ## Chain of command
 
@@ -68,7 +70,7 @@ scripts/agent-team/team-status.sh code-reviewer#57 status done
 
 `scripts/agent-team/team-board.sh` shows where every role stands. The chief of staff reads the board for the daily digest instead of asking the roles.
 
-Where the repository has the kit's Claude Code hooks (`.claude/settings.json`), Claude Code also reports for you: `working` when your session starts or gets a message, a heartbeat while you use tools, `idle` when your turn ends, and each subagent or teammate as its own role. That is a safety net, not a substitute: report your start, your waits and every message yourself, because only you know the task's name and whom you wait on. Without bash or `jq`, `node scripts/agent-team/report.mjs` takes the same arguments as `team-status.sh`.
+Where the repository has the kit's Claude Code hooks (`.claude/settings.json`), Claude Code also reports for you: `working` when your session starts or gets a message, a heartbeat while you use tools, `idle` when your turn ends, and each subagent or teammate as its own role. That is a safety net, not a substitute: report your start, your waits and every message yourself, because only you know the task's name and whom you wait on. Without bash or `jq`, `node scripts/agent-team/report.mjs` takes the same arguments as `team-status.sh`. When your checkout's `.agent-team/local.env` names your role (`AGENT_TEAM_ROLE`), you can leave the role out: `team-status.sh status working --task "..."`.
 
 **Heartbeat.** A thread whose status is `working` reports again at least every 15 minutes, even when nothing has changed (`team-status.sh <role> heartbeat`, or a fresh `status working` when the task moved on). The moment it waits on CI, a review, another role or an answer, it reports `waiting` and names what it waits on (`--to <role>` or `--detail "CI on PR 57"`), and reports `working` again when it resumes. A thread that cannot keep this up (a long build, a long test run) says so first: `status waiting --detail "build, about 25 min"`. The dashboard shows a working thread silent for longer than `dashboard.staleMinutes.working` (and a waiting, in-review or blocked one silent for longer than its own limit) as **gone quiet**, with how long it has been silent, and the chief of staff nudges it. A scheduled check (the COO's when that role is installed, otherwise the chief of staff's) reads the board every hour and lists the quiet roles with their last task, so the nudges do not depend on someone looking.
 
@@ -126,4 +128,4 @@ A change that would help every team (a better rule, a script fix) goes upstream 
 - **Nothing product-specific in the kit.** Briefs, protocols, presets and scripts name no product, company or person. The examples and this repository's own `.agent-team/` are the only places a team is made concrete.
 - **The demo is the bar.** The product plan lives in `docs/product/`. The customer demo in `docs/product/prd.md` is the end-to-end acceptance test; the delivery plan in `docs/product/delivery-plan.md` says which phase moves which demo step.
 
-<!-- Generated by Agent Team Kit 0.8.0. Do not edit: change .agent-team/ and run scripts/agent-team/sync.sh. -->
+<!-- Generated by Agent Team Kit 0.9.1. Do not edit: change .agent-team/ and run scripts/agent-team/sync.sh. -->

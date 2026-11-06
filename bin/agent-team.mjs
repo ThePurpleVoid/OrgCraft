@@ -16,7 +16,7 @@
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.8.0 init --preset engineering --project "My App"
+//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.9.1 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -90,7 +90,7 @@ export function extendBrief(base, ext) {
   return extendBriefText(base, ext);
 }
 
-/** Resolves the roles: the preset plus include, minus exclude, plus the project's own roles; then overrides and extensions. */
+/** Resolves the roles: the preset plus include, plus the project's own roles, minus exclude; then overrides and extensions. */
 export function resolveRoles(root, project) {
   const dir = join(root, LAYER, 'roles');
   const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.md') && !f.startsWith('_') && f !== 'README.md') : [];
@@ -99,7 +99,8 @@ export function resolveRoles(root, project) {
   const kitSlugs = new Set(kitRoleSlugs());
   const wanted = new Set([...presetRoles(project.preset), ...project.include]);
   for (const x of project.exclude) wanted.delete(x);
-  for (const s of own) wanted.add(s);
+  // A project role is installed unless exclude lists it (a custom agent switched off keeps its file).
+  for (const s of own) if (!project.exclude.includes(s)) wanted.add(s);
   const roles = [];
   const warnings = [];
   for (const slug of [...wanted].sort()) {
@@ -289,6 +290,15 @@ function agentTeamsGuide(graph, values, project) {
 
 // ------------------------------------------------------------------------------------------------ commands
 
+/** .agent-team/local.env holds one checkout's own settings (its role, its board folder) and must never be committed. */
+export function ensureIgnored(root) {
+  const gi = join(root, '.gitignore');
+  const ignore = existsSync(gi) ? read(gi) : '';
+  if (/^\/?\.agent-team\/local\.env$/m.test(ignore) || /^\*\.env$/m.test(ignore)) return false;
+  writeFileSync(gi, `${ignore}${ignore && !ignore.endsWith('\n') ? '\n' : ''}\n# Agent Team Kit: this checkout's own role and board settings\n${LAYER}/local.env\n`);
+  return true;
+}
+
 export class UsageError extends Error {}
 
 function readLock(root) {
@@ -313,6 +323,7 @@ export function sync(root, { quiet = false } = {}) {
     if (sha(read(p)) === lock.files[rel]) { rmSync(p); log(`removed ${rel}`); }
     else log(`kept ${rel}: it was generated before but has been edited; delete it yourself if it is no longer needed`);
   }
+  if (ensureIgnored(root)) log(`added ${LAYER}/local.env to .gitignore (this checkout's own role and board settings)`);
   const settings = settingsChange(root, project);
   if (settings.changed) {
     mkdirSync(dirname(settings.path), { recursive: true });

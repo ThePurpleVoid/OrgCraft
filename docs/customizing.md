@@ -10,7 +10,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.8.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.9.1",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -23,7 +23,7 @@ In `.agent-team/team.json`:
 
 `hooks` merges the kit's reporting hooks into `.claude/settings.json`, and `agentTeams` sets the team up for Claude Code agent teams; see [hooks and agent teams](hooks-and-agent-teams.md).
 
-`include` adds kit roles outside the preset; `exclude` drops them. Reporting lines follow automatically: a role whose manager is not installed reports to the chief of staff, and direct-report lists show only installed roles.
+`include` adds kit roles outside the preset; `exclude` drops them. `exclude` also switches off one of your own roles (`.agent-team/roles/<slug>.md`) without deleting it: the file stays, the role is not installed, and taking it out of `exclude` brings it back as it was. The Studio does this when you switch a custom agent off. Reporting lines follow automatically: a role whose manager is not installed reports to the chief of staff, and direct-report lists show only installed roles.
 
 `"dashboard": { "export": "<folder>", "repo": "<url>" }` also writes the team dashboard into your website's source; see [the dashboard guide](dashboard.md#3-on-your-website-readable-from-anywhere).
 

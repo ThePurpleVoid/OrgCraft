@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KIT } from '../bin/agent-team.mjs';
-import { setEnabled, setField } from '../packages/team-model/index.mjs';
+import { addAgent, draftRole, setEnabled, setField } from '../packages/team-model/index.mjs';
 import { createStudio } from '../apps/studio/server.mjs';
 
 const cli = join(KIT, 'bin/agent-team.mjs');
@@ -101,6 +101,35 @@ test('publishes to a new branch, and refuses errors, dirty files and cross-site 
     const dirty = await call('/v1/team/publish', { spec, branch: 'team/next' });
     assert.equal(dirty.status, 409);
     assert.match(dirty.body.error, /uncommitted/);
+  });
+});
+
+test('a custom agent switched off, published and switched back on gets the identical brief', async () => {
+  const root = repo();
+  await serve(root, async (call) => {
+    const { spec, kit } = (await call('/v1/team')).body;
+    addAgent(spec, 'pricing-analyst', draftRole(spec, kit, { title: 'Pricing analyst', slug: 'pricing-analyst', reportsTo: 'chief-of-staff' }));
+    const added = await call('/v1/team/publish', { spec, branch: 'team/pricing', message: 'Add a pricing analyst' });
+    assert.equal(added.status, 200, JSON.stringify(added.body));
+    const brief = readFileSync(join(root, 'docs/team/roles/pricing-analyst.md'), 'utf8');
+    const source = readFileSync(join(root, '.agent-team/roles/pricing-analyst.md'), 'utf8');
+
+    const off = (await call('/v1/team')).body.spec;
+    setEnabled(off, 'pricing-analyst', false);
+    const paused = await call('/v1/team/publish', { spec: off, branch: 'team/pricing-off', message: 'Switch the pricing analyst off' });
+    assert.equal(paused.status, 200, JSON.stringify(paused.body));
+    assert.equal(readFileSync(join(root, '.agent-team/roles/pricing-analyst.md'), 'utf8'), source, 'the definition is kept');
+    assert.ok(JSON.parse(readFileSync(join(root, '.agent-team/team.json'), 'utf8')).exclude.includes('pricing-analyst'));
+    assert.equal(existsSync(join(root, 'docs/team/roles/pricing-analyst.md')), false, 'it is not installed');
+    execFileSync(process.execPath, [cli, 'check', '--dir', root], { stdio: 'ignore' });
+
+    const on = (await call('/v1/team')).body.spec;
+    assert.equal(on.roles['pricing-analyst'].enabled, false);
+    setEnabled(on, 'pricing-analyst', true);
+    const back = await call('/v1/team/publish', { spec: on, branch: 'team/pricing-on', message: 'Switch the pricing analyst on' });
+    assert.equal(back.status, 200, JSON.stringify(back.body));
+    assert.equal(readFileSync(join(root, 'docs/team/roles/pricing-analyst.md'), 'utf8'), brief);
+    assert.ok(!JSON.parse(readFileSync(join(root, '.agent-team/team.json'), 'utf8')).exclude.includes('pricing-analyst'));
   });
 });
 

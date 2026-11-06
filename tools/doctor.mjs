@@ -59,7 +59,7 @@ export async function doctor(root, { ping = false, print = console.log } = {}) {
     const file = join(root, '.claude/settings.json');
     const ok = existsSync(file) && readFileSync(file, 'utf8').includes('scripts/agent-team/report.mjs');
     say(ok ? 'ok' : 'FAIL', ok ? 'Claude Code hooks report to the board' : '.claude/settings.json has no agent-team hooks: run sync');
-    if (ok) print('     subagents and teammates report as their agent type; a session reports when started with AGENT_TEAM_ROLE=<role>');
+    if (ok) print('     subagents and teammates report as their agent type; a session reports as AGENT_TEAM_ROLE (environment or .agent-team/local.env)');
   } else say('warn', 'hooks are off: a role that forgets to report goes quiet on the board ("hooks": true in .agent-team/team.json turns them on)');
   if (project.agentTeams && !existsSync(join(root, '.claude/agents'))) say('FAIL', 'agentTeams is on but .claude/agents/ is missing: run sync');
 
@@ -76,6 +76,12 @@ export async function doctor(root, { ping = false, print = console.log } = {}) {
   } catch (e) { say('FAIL', `report pipeline: ${e.message}`); } finally { rmSync(scratch, { recursive: true, force: true }); }
 
   const ctx = context(process.env, root);
+  if (ctx.role) say(built.roles.some((r) => r.slug === ctx.role.split('#')[0]) ? 'ok' : 'FAIL', `this checkout reports as ${ctx.role}${built.roles.some((r) => r.slug === ctx.role.split('#')[0]) ? '' : ', which is not a role on this team'}`);
+  if (existsSync(join(root, '.agent-team/local.env'))) {
+    let tracked = false;
+    try { execFileSync('git', ['-C', root, 'ls-files', '--error-unmatch', '.agent-team/local.env'], { stdio: 'ignore' }); tracked = true; } catch { /* not tracked */ }
+    if (tracked) say('FAIL', '.agent-team/local.env is committed: it is this checkout\'s own; git rm --cached it');
+  }
   if (!ctx.url) say('ok', `reports go to ${ctx.log} (no TEAM_REPORT_URL)`);
   else if (!ping) say('ok', `reports also go to ${ctx.url.replace(/\?.*/, '')} (--ping posts a test note)`);
   else {
