@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 
-const MAY_EMIT = (t) => /^session\./.test(t) || ['usage.recorded', 'report.heartbeat', 'chat.message'].includes(t);
+const MAY_EMIT = (t) => /^session\./.test(t) || ['usage.recorded', 'report.heartbeat', 'chat.message'].includes(t) || /^proposal\.(opened|updated|accepted|failed)$/.test(t);
 const TOOL_EVENT = { report: 'report.status', handoff: 'message.handoff', bug: 'message.bug', signoff: 'message.signoff', blocked: 'message.blocked' };
 
 export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decide = () => ({ decision: 'approved', by: 'owner' }), sessionDefaults = () => ({}), tokenTtlMs = 15 * 60_000 } = {}) {
@@ -41,9 +41,11 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
     // The server checks again; one rule is enough to prove the runner relays a 422.
     if (tool === 'signoff' && !input.evidence?.length) return reply(422, { problems: ['evidence needs at least one link: a screenshot or a log'] });
     if (tool === 'request_approval') {
+      // As apps/server (D1): an accept names the pull request and the full head commit.
+      if (input.action === 'accept' && (!Number.isInteger(input.pr) || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(input.headSha ?? ''))) return reply(422, { problems: ['an accept approval needs pr and headSha, so the merge can only land on the commit that was approved'] });
       const a = id('apr');
       approvals.push({ approval: a, via: 'tool', input, as: who });
-      decideLater(a, { action: input.action, call: input.call });
+      decideLater(a, { action: input.action, call: input.call, pr: input.pr, headSha: input.headSha });
       return reply(200, { approval: a, card: id('card') });
     }
     if (tool === 'ask_owner') return reply(200, { card: id('card') });

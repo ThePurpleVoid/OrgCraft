@@ -77,7 +77,7 @@ const MERGE_TOOLS = { mcp__github__merge_pull_request: { pr: 'pullNumber', sha: 
 /** `owner/name` of a GitHub repository URL (https or ssh form), or null. */
 export function repoSlug(url) {
   const m = /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(String(url ?? ''));
-  return m ? `${m[1]}/${m[2]}` : null;
+  return m && ![m[1], m[2]].some((x) => x === '.' || x === '..') ? `${m[1]}/${m[2]}` : null;
 }
 
 /**

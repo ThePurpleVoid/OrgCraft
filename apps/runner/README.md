@@ -87,8 +87,9 @@ never trust on first use). To replace a key later: `docker run --rm -v ~/.agent-
 `--security-opt no-new-privileges` (the sandbox needs its file capabilities).
 
 - `AGENT_TEAM_SERVER` is not needed after `register`: the server is kept with the key in the volume.
-- The merger app's key and `AGENT_TEAM_MERGER_APP_ID` are read by the runner's PR step (`proposal.*`), which lands
-  next; installing them now means these commands do not change.
+- With the merger app's key and `AGENT_TEAM_MERGER_APP_ID`, the runner opens each session's pull request after its
+  first checkpoint push and merges it itself, pinned to the head the owner approved (`proposal.*` events). The
+  session never holds a credential that can merge: it asks with `request_approval`, action `accept`.
 - If the runner cannot connect, check the control plane from inside Docker:
   `docker run --rm agent-team-runner node -e "fetch('http://host.docker.internal:4849/v1/health').then(r=>r.text()).then(console.log)"`.
 - What is tested: CI builds this image, runs the sandbox tests in it, and checks the key copy and the git config
@@ -178,6 +179,5 @@ the machine happens to have.
 ## Not yet
 
 A user per session (today all sessions share `agent`, so one session could change another's working copy before
-its checkpoint), microVM sandboxes, merging and opening pull requests with the runner's
-own credential after an approval, `secret.get` (M4, with the GitHub App), the subagents run mode, and the long-poll
+its checkpoint), microVM sandboxes, `secret.get` (M4, with the GitHub App), the subagents run mode, and the long-poll
 transport.

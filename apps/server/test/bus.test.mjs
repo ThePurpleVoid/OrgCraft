@@ -140,6 +140,29 @@ test('D1: an accept approval needs pr and headSha, and approval.result carries t
   }, { tickMs: 0 });
 });
 
+test('D1: proposal.failed head-moved supersedes the approval and asks nothing itself (the runner asks again)', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    const head = 'abc1234'.padEnd(40, '0');
+    const r = await tool(p.call, s, 'request_approval', { action: 'accept', call: 'merge #7', why: 'tests pass', pr: 7, headSha: head });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal((await p.call('POST', `/approvals/${r.body.approval}`, { decision: 'approved', version: 1 }, await p.su())).status, 200);
+    await runner.next((f) => f.op === 'approval.result');
+    const failed = { specversion: '1.0', id: 'ev_failed_1', type: 'proposal.failed', version: 1, source: '/tenants/acme/teams/shop', tenant: 'acme', team: 'shop', time: new Date().toISOString(), actor: { kind: 'role', id: 'chief-of-staff', session: s.session }, data: { connector: 'github', ref: 7, branch: 'x', headSha: head, approval: r.body.approval, reason: 'head-moved' } };
+    assert.equal((await runner.request('events', { events: [failed] })).op, 'ack');
+    const rows = await p.db.system("select id, state from approvals where session = $1", [s.session]);
+    assert.deepEqual(rows.map((a) => [a.id, a.state]), [[r.body.approval, 'expired']], 'exactly one approval, expired; no second one pinned to the stale head');
+    const [card] = await p.db.system('select state from cards where id = $1', [r.body.card]);
+    assert.equal(card.state, 'answered', 'a card already answered keeps its answer; an open one would be marked superseded');
+    const decided = (await p.call('GET', '/teams/shop/events?type=approval.decided')).body.events.filter((e) => e.data.approval === r.body.approval).map((e) => e.data.decision);
+    assert.ok(decided.includes('superseded'), JSON.stringify(decided));
+    const [{ n }] = await p.db.system("select count(*)::int as n from cards where kind = 'approval'");
+    assert.equal(n, 1, 'no new card from the server');
+  }, { tickMs: 0 });
+});
+
 test('runner ops: the allowlist, own sessions only, the server sets the actor, renew, and approval.wait resends', async () => {
   await plane(async (p) => {
     const { runner } = await setup(p);
