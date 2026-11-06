@@ -10,7 +10,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.11.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.11.1",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -135,6 +135,8 @@ A file with a kit role's name replaces that brief entirely. Use it only when an 
 - `.agent-team/instructions.extend.md` is appended to the project instructions.
 
 ## Merge gates and hardware pools
+
+Gates can be data in `.agent-team/gates.json` (see [the data files](#ownership-gates-and-systems-as-data-optional)), which both `merge-gate.sh` and the bash-free `node scripts/agent-team/merge-gate.mjs` run, or bash functions in `.agent-team/config.sh`, which need bash ([Windows](windows.md)).
 
 `.agent-team/config.sh` is plain bash, sourced by every script. Gates are functions:
 

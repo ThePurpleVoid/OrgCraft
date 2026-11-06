@@ -148,3 +148,20 @@ test('meeting estimate: each attendee once per round at its tier, the facilitato
   const d = meetingEstimate({ ...m, format: 'discussion', rounds: 3, when: { label: 'x' } }, roles, prices, { turn });
   assert.deepEqual([d.perMeetingUsd, d.perMonthUsd, d.turns], [20.3, null, 8]);
 });
+
+test('validate refuses what sync refuses: an empty Identity or Owns section; the template\'s evidence line is not evidence', async () => {
+  const { signoffEvidence } = await import('../packages/team-model/index.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'roster-'));
+  execFileSync('git', ['init', '-q', root]);
+  execFileSync(process.execPath, [cli, 'init', '--preset', 'minimal', '--project', 'R', '--dir', root], { stdio: 'ignore' });
+  const spec = importLayer(readLayer(root), kit);
+  const brief = '# Empty one\n\n**Model:** standard\n**Group:** quality\n**Reports to:** cto\n**Status:** active\n\n## Identity\n\n## Owns (writes)\n\n## Wakes on\n- handoff\n';
+  spec.roles['empty-one'] = { source: 'project', enabled: true, brief };
+  const issues = validate(spec, kit).filter((i) => i.where === 'roles/empty-one' && i.level === 'error');
+  assert.ok(issues.some((i) => /missing "## Identity"/.test(i.message)) && issues.some((i) => /missing "## Owns \(writes\)"/.test(i.message)), JSON.stringify(issues));
+  // sync agrees: it refuses the same brief.
+  writeFileSync(join(root, '.agent-team/roles/empty-one.md'), brief);
+  assert.notEqual(spawnSync(process.execPath, [cli, 'sync', '--dir', root]).status, 0);
+  assert.deepEqual(signoffEvidence(kit.template), []);
+  assert.deepEqual(signoffEvidence('## Sign-off evidence\n- What a SIGNOFF from this role must attach (x)\n- the test log\n'), ['the test log']);
+});

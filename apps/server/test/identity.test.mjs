@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { SignJWT, exportJWK } from 'jose';
-import { fresh, key, ADMIN } from './helpers.mjs';
+import { fresh, key, ADMIN, STEP_UP_SECRET, verifier } from './helpers.mjs';
 import * as store from '../store.mjs';
 import { createControlPlane } from '../server.mjs';
 import { createIdentity } from '../identity.mjs';
@@ -107,13 +107,13 @@ function browser(local, { ip = 'browser' } = {}) {
   return b;
 }
 
-async function issuer(fn, { ownerGithub = OWNER, now } = {}) {
+async function issuer(fn, { ownerGithub = OWNER, now, clientIp = (req) => req.headers['x-test-ip'] ?? '' } = {}) {
   const db = await fresh();
   await store.ensureTenant(db, 'acme');
   const gh = await stubGitHub();
   const upstream = (await import('../identity.mjs')).githubUpstream({ clientId: 'Iv1.test', clientSecret: 'gh-secret', url: gh.url, apiUrl: gh.url });
-  const identity = await createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub, upstream, clientIp: (req) => req.headers['x-test-ip'] ?? '', ...(now ? { now } : {}) });
-  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, publicUrl: ORIGIN, identity, tickMs: 0, ...(now ? { now } : {}) });
+  const identity = await createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub, upstream, ...(clientIp ? { clientIp } : {}), ...(now ? { now } : {}) });
+  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, publicUrl: ORIGIN, identity, tickMs: 0, stepUpVerifier: verifier, ...(now ? { now } : {}) });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const local = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -393,6 +393,66 @@ test('the 21st authorize call in a minute from one IP gets 429', () => issuer(as
   assert.equal(res.status, 429);
   // Another IP is not slowed.
   assert.equal((await browser({ ip: '203.0.113.10' }).fetch(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=/`)).status, 303);
+}));
+
+test('rate limits read the caller from our own proxies, from the right; a forged x-forwarded-for dodges nothing', async () => {
+  const EDGE = 'e'.repeat(40);
+  const { callerIp } = await import('../identity.mjs');
+  await issuer(async ({ local }) => {
+    const hit = (headers) => fetch(`${local}/oauth/authorize?client_id=agent-team-web&return=/`, { redirect: 'manual', headers });
+    // Straight to the host (Fly appends the real peer, 192.0.2.1): 700 forged left-hand entries are all that peer.
+    let refused = 0;
+    for (let i = 0; i < 700; i++) if ((await hit({ 'x-forwarded-for': `10.${i >> 8}.${i & 255}.1, 192.0.2.1` })).status === 429) refused++;
+    assert.equal(refused, 680);
+    // A fresh real caller still gets in: there is no shared bucket to fill.
+    assert.equal((await hit({ 'x-forwarded-for': '192.0.2.2' })).status, 303);
+    // Through the edge (secret present): Vercel's entry names the caller, Fly's names Vercel.
+    for (let i = 0; i < 20; i++) await hit({ 'x-forwarded-for': '198.51.100.1, 76.76.21.1', 'x-agent-team-edge': EDGE });
+    assert.equal((await hit({ 'x-forwarded-for': '198.51.100.1, 76.76.21.1', 'x-agent-team-edge': EDGE })).status, 429);
+    assert.equal((await hit({ 'x-forwarded-for': '198.51.100.2, 76.76.21.1', 'x-agent-team-edge': EDGE })).status, 303, 'another caller behind the same edge IP');
+  }, { clientIp: (req) => callerIp(req, { hops: 1, edgeSecret: EDGE }) });
+  // Without the secret, the edge's entry is not believed: the caller is the peer Fly saw.
+  const req = (xff, edge) => ({ headers: { 'x-forwarded-for': xff, ...(edge ? { 'x-agent-team-edge': edge } : {}) }, socket: { remoteAddress: '127.0.0.1' } });
+  assert.equal(callerIp(req('6.6.6.6, 198.51.100.1, 76.76.21.1'), { hops: 1, edgeSecret: EDGE }), '76.76.21.1');
+  assert.equal(callerIp(req('6.6.6.6, 198.51.100.1, 76.76.21.1', 'wrong'), { hops: 1, edgeSecret: EDGE }), '76.76.21.1');
+  assert.equal(callerIp(req('6.6.6.6, 198.51.100.1, 76.76.21.1', EDGE), { hops: 1, edgeSecret: EDGE }), '198.51.100.1');
+  assert.equal(callerIp(req('6.6.6.6'), {}), '127.0.0.1', 'no hops configured: the socket, whatever the header says');
+});
+
+test('the signing key rotates from the tick after 90 days, and the old one stays in the JWKS for a day', async () => {
+  let t = Date.now();
+  await issuer(async ({ local, identity }) => {
+    const kids = async () => (await (await fetch(`${local}/oauth/jwks`)).json()).keys.map((k) => k.kid);
+    const [first] = await kids();
+    await identity.sweep();
+    assert.deepEqual(await kids(), [first], 'nothing to rotate yet');
+    const before = identity.provider;
+    t += 91 * 86400_000;
+    await identity.sweep();
+    const both = await kids();
+    assert.equal(both.length, 2);
+    assert.equal(both[1], first);
+    // The library was rebuilt around the new key, so new ID tokens are signed with it.
+    assert.notEqual(identity.provider, before);
+    t += 2 * 86400_000;
+    await identity.sweep();
+    assert.deepEqual(await kids(), [both[0]]);
+  }, { now: () => new Date(t) });
+});
+
+test('a step-up token minted for the admin token is refused for a signed-in person', () => issuer(async ({ local, gh, browser }) => {
+  gh.as = owner;
+  const b = browser();
+  await b.signIn();
+  const mint = await fetch(`${local}/v1/auth/step-up`, { method: 'POST', headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' }, body: JSON.stringify({ secret: STEP_UP_SECRET }) });
+  const { token } = await mint.json();
+  assert.match(token, /^su_/);
+  const theirs = await b.call('POST', '/runners/codes', {}, { 'x-step-up': token });
+  assert.equal(theirs.status, 401);
+  assert.equal(theirs.body.type, 'step-up-required');
+  // Still good for the principal it was minted for: the refused try did not use it up.
+  const admins = await fetch(`${local}/v1/runners/codes`, { method: 'POST', headers: { authorization: `Bearer ${ADMIN}`, 'x-step-up': token, 'content-type': 'application/json' }, body: '{}' });
+  assert.equal(admins.status, 201);
 }));
 
 test('a state from another browser, or used twice, does not finish a sign-in', () => issuer(async ({ gh, browser }) => {

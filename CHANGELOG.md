@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1
+
+- **The merge gate and hardware locks run without bash** ([Windows and machines without bash](docs/windows.md)). `scripts/agent-team/merge-gate.mjs` and `with-lock.mjs` take the same arguments as `merge-gate.sh` and `with-lock.sh`, and give the same summary, `.merge-gate/` logs, lock folders and exit codes (64 for usage, 75 when no slot frees up). Both kinds share one pool on a machine. The Node gate runs `.agent-team/gates.json` targets. Each step goes to `bash -c` when bash is installed and to the system shell otherwise. A target that is only a bash function in `config.sh` is handed to `merge-gate.sh` when bash is installed, and refused with a clear message when it is not.
+- **Fixed:** `validate` now refuses a brief whose `## Identity` or `## Owns (writes)` is missing or empty, as sync's roster check does. Before, the Studio could say "No problems" for a brief that sync then refused. The role template's placeholder evidence line no longer counts as sign-off evidence.
+- **What existing teams see on sync:** two new files in `scripts/agent-team/`, plus the version stamps. The bash scripts are unchanged.
+
 ## 0.11.0
 
 Meeting definitions, kit side (PRD 6.7 M8, CPO story criteria 11 and 12, issue #30), and one shared model price table. Additive: a team without `meetings.json` behaves as before.
@@ -38,6 +44,20 @@ Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD
 - **After a merge, a session starts again from the new base.** The runner deletes the merged branch (as GitHub's delete-branch-on-merge; the merger app's token can) and resets the session's copy to the base, so its next change opens a new pull request instead of conflicting with its own squash. It stays on the branch when the delete fails (a ruleset, say) or when files are left uncommitted outside its areas. A branch that changes nothing against its base gets no pull request (a role that only talked).
 
 ### Studio (nothing changes on sync)
+
+- **The agent editor** (PRD 6.6 A2, A3; mockup 02): a custom agent opens on a page of its own.
+  - The left column lists the brief's sections (Identity, Place in the team, What it owns, Tools and systems, Wakes on, Hands to, Rules, Sign-off evidence), each marked done, optional or what is left to fix.
+  - The middle column has the fields: the tier as a segmented choice with its cost, On or Dormant until asked, group and manager, areas with writes or reads, tool chips, and systems connected with a permission (the same binding as the Systems view).
+  - Wakes on is structured: a HANDOFF, a meeting, an issue label, a schedule, the areas or label of a pull request. Free text is kept.
+  - Hands to has a role and message picker, then rules, sign-off evidence, and the whole brief as markdown.
+  - The right column shows the exact file publish writes, updated on every keystroke, and the team's checks for this agent, passed and failed.
+  - Typing in one field is one undo step and keeps the focus. A copy names the role it came from, and the preview marks the lines that differ.
+  - The template's example text shows as a hint, not as the agent's text, and the checks say while it is still there.
+  - A switched-off agent is checked as if it were on, and **Add to the team** waits until it passes.
+  - Clicking a custom agent in Your agents opens its editor, and the inspector has **Edit this agent**.
+  - Browser test: tests/e2e/studio-agent-editor.e2e.mjs.
+
+- **New agent** (PRD 6.6 A1, A5, A6; mockup 01): a button in the library opens a sheet with three starts. **Blank** starts from the kit's role template. **Copy a role** makes a separate role from one as this team runs it, extension included. **Import a file** takes a role `.md`, several files, or a role pack folder, which is checked with `checkPack` and the team's checks first. The name fills the slug, and the slug is checked as you type. A kit role's slug is taken only by ticking "Replace the kit's role". The group can be a new one, which gets its own colour from a stable hash. Imports arrive switched off, a secret in one refuses it, and a custom agent with an error in its checks cannot be switched on. **Your agents** at the top of the library lists the team's custom agents, tagged custom or imported, each with **Export** as a role pack (a folder where the browser can write one, otherwise both files download). On a phone, Your agents is a read-only list and an agent says to edit it on a larger screen. Browser test: tests/e2e/studio-agents.e2e.mjs.
 
 - **Sign-in and passkey pages for a hosted Studio** (milestone M4, docs/specs/m4-sign-in.md section 8, order 1). These are static pages that only a hosted deployment uses, so the local Studio does not change.
   - `sign-in.html` is the issuer's sign-in page. It has Continue with GitHub, and it says "Ask an owner to invite you" for an account that is not a member or invitee, and when a sign-in expired, was refused, or the person signed out.
