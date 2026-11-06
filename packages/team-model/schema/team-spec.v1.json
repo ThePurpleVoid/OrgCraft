@@ -253,6 +253,10 @@
         },
         "extension": {
           "$ref": "#/$defs/extension"
+        },
+        "extensionText": {
+          "type": "string",
+          "description": "The extension file as read. Compile writes it back unchanged while `extension` still matches it, so a round trip keeps the file's own formatting."
         }
       },
       "additionalProperties": false

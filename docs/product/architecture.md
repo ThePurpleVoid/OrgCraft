@@ -57,7 +57,7 @@ deploy/                    Dockerfiles, Compose, Helm
 ```jsonc
 {
   "schema": "agent-team/team-spec@1",
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.7.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.7.1",
   "base": { "preset": "engineering" },             // what the roles are diffed against
   "values": { "PROJECT_NAME": "My App", "OWNER": "Sam", "TIMEZONE": "UTC", "DIGEST_TIME": "08:00" },
   "roles": {

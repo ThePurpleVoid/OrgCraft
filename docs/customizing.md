@@ -10,7 +10,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.7.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.7.1",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.7.1
+
+- **Round trips keep extension files byte-identical.** A `roles/<x>.extend.md` with no blank line after its title was rewritten with one on import and compile, so opening a real team in the Studio and publishing it changed files nobody edited. The team model now keeps an unchanged extension's own text (`extensionText` in the TeamSpec). Found by opening a 50-role production team in the Studio.
+- **Custom agents in the team model** (the editor comes next): `draftRole` (blank from the kit template, a copy of a role as the team runs it, or an imported brief), `addAgent`, `checkSlug`, `briefSection`/`setBriefSection`/`setBriefField`/`setBriefTitle`, `ownsPaths`/`setOwnsPaths`, `pathConflicts`, and role packs (`rolePack`, `readPack`; `pack.json` lists tools, system types and paths, never secrets). `loadKit` now includes the role template.
+- `validate` checks custom agents: a valid slug, a warning when one replaces a kit role, an Identity, one writer per area (against `ownership.json` and other custom agents), and sign-off evidence for roles that send SIGNOFF.
+- This repository's own team is on 0.7.0.
+
 ## 0.7.0
 
 Agent Team Studio: connect your systems, assign owned areas and set checks (demo steps 5 and 6).

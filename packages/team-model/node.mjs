@@ -17,7 +17,8 @@ export function loadKit(kitDir = KIT_DIR) {
     const slugs = readFileSync(join(kitDir, 'presets', f), 'utf8').split('\n').map((l) => l.replace(/#.*/, '').trim()).filter(Boolean);
     presets[f.slice(0, -4)] = slugs[0] === '*' ? Object.keys(roles) : slugs;
   }
-  return { roles, presets };
+  const template = existsSync(join(rolesDir, '_template.md')) ? readFileSync(join(rolesDir, '_template.md'), 'utf8') : undefined;
+  return { roles, presets, template };
 }
 
 /** The layer files a TeamSpec is made from, as relative path → content. */

@@ -88,7 +88,7 @@ export function importLayer(files, kit) {
     const inKit = slug in kit.roles;
     const role = { source: own.includes(slug) ? (inKit ? 'project-replaces-kit' : 'project') : inKit ? 'kit' : 'missing', enabled: wanted.has(slug) };
     if (own.includes(slug)) role.brief = files[`roles/${slug}.md`];
-    if (extended.includes(slug)) role.extension = parseExtension(files[`roles/${slug}.extend.md`]);
+    if (extended.includes(slug)) { role.extension = parseExtension(files[`roles/${slug}.extend.md`]); role.extensionText = files[`roles/${slug}.extend.md`]; }
     roles[slug] = role;
   }
 
@@ -132,7 +132,9 @@ export function compileLayer(spec, kit) {
       if (!r.enabled) continue; // a project role that is switched off is removed from the layer
       files[`roles/${slug}.md`] = r.brief.endsWith('\n') ? r.brief : r.brief + '\n';
     }
-    if (!emptyExtension(r.extension)) files[`roles/${slug}.extend.md`] = formatExtension(r.extension);
+    // An unchanged extension keeps its file's own text (blank lines and all), so opening and publishing a team
+    // changes nothing it did not edit.
+    if (!emptyExtension(r.extension)) files[`roles/${slug}.extend.md`] = r.extensionText !== undefined && JSON.stringify(parseExtension(r.extensionText)) === JSON.stringify(r.extension) ? r.extensionText : formatExtension(r.extension);
   }
   for (const [k, f] of Object.entries(RULE_FILES)) if (spec.rules?.[k] !== undefined) files[f] = spec.rules[k];
   for (const [k, f] of Object.entries(DATA_FILES)) if (spec[k] !== undefined) files[f] = JSON.stringify(spec[k], null, 2) + '\n';
@@ -408,9 +410,175 @@ export function validate(spec, kit) {
   for (const [target, steps] of Object.entries(spec.gates?.targets ?? {})) {
     for (const s of steps) if (s.pool && spec.gates.pools && !(s.pool in spec.gates.pools)) add('warning', `gates/${target}`, `"${s.name}" uses pool "${s.pool}", which gates.json does not size`);
   }
+  for (const i of checkCustomRoles(spec, kit, installed)) add(i.level, i.where, i.message);
   // No secrets anywhere in the team's text.
   const texts = [['values', JSON.stringify(spec.values ?? {})], ['rules', JSON.stringify(spec.rules ?? {})], ['resources', JSON.stringify(spec.resources ?? {})],
     ['gates', JSON.stringify(spec.gates ?? {})], ...Object.entries(spec.roles).map(([s, r]) => [`roles/${s}`, JSON.stringify([r.brief ?? '', r.extension ?? {}])])];
   for (const [where, text] of texts) if (SECRET_PATTERNS.some((p) => p.test(text))) add('error', where, 'looks like it contains a secret value; name the secret instead and set it in the environment');
   return issues.sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
+}
+
+// ------------------------------------------------------------------------------------------------ custom agents
+//
+// A custom agent is a project role: .agent-team/roles/<slug>.md, carried in the spec as { source: 'project', brief }.
+// These helpers build and edit that brief as data, for the Studio's agent editor (architecture section 12.1).
+
+export const SLUG = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+export const slugify = (title) => String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+const isCustom = (r) => r && r.brief !== undefined;
+const fieldRe = (name) => new RegExp(`^\\*\\*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\*\\*.*$`, 'm');
+
+/** Whether `slug` can name a new agent on this team: { ok, message }. */
+export function checkSlug(spec, kit, slug, { replaceKit = false } = {}) {
+  if (!SLUG.test(slug ?? '')) return { ok: false, message: 'Use lower-case letters, digits and single hyphens, starting with a letter.' };
+  if (spec.roles[slug] && isCustom(spec.roles[slug])) return { ok: false, message: `This team already has an agent called ${slug}.` };
+  if (slug in kit.roles && !replaceKit) return { ok: false, message: `The kit has a role called ${slug}. Pick another name, or choose to replace the kit role.` };
+  if (slug in kit.roles) return { ok: true, message: `This replaces the kit's ${slug} on this team; the kit role is not changed.` };
+  return { ok: true, message: 'The slug is free. No kit role uses it.' };
+}
+
+/** The text of a "## " section, without the heading; '' when the brief has none. */
+export function briefSection(md, name) {
+  const s = splitBrief(md ?? '').sections.find((x) => key(x.heading) === name.toLowerCase());
+  return s ? trimBlank(s.body).join('\n') : '';
+}
+
+/** Sets a section's text. A new section goes before "Every thread"; empty text removes the section. */
+export function setBriefSection(md, name, text, heading = `## ${name}`) {
+  const b = splitBrief(md);
+  const i = b.sections.findIndex((x) => key(x.heading) === key(heading));
+  const body = String(text ?? '').replace(/\s+$/, '').split('\n');
+  if (!String(text ?? '').trim()) { if (i >= 0) b.sections.splice(i, 1); return joinBrief(b); }
+  if (i >= 0) { b.sections[i].body = body; return joinBrief(b); }
+  const footer = b.sections.findIndex((x) => key(x.heading).startsWith('every thread'));
+  b.sections.splice(footer >= 0 ? footer : b.sections.length, 0, { heading, body });
+  return joinBrief(b);
+}
+
+/** Sets a "**Name:** value" header line, adding it after the other header fields when missing. */
+export function setBriefField(md, name, value) {
+  const line = `**${name}:** ${value}`;
+  if (fieldRe(name).test(md)) return md.replace(fieldRe(name), line);
+  const b = splitBrief(md);
+  const last = b.header.map((l, j) => (l.startsWith('**') ? j : -1)).filter((j) => j >= 0).at(-1);
+  b.header.splice(last === undefined ? 1 : last + 1, 0, line);
+  return joinBrief(b);
+}
+
+export function setBriefTitle(md, title) {
+  return /^#\s+.*$/m.test(md) ? md.replace(/^#\s+.*$/m, `# ${title}`) : `# ${title}\n\n${md}`;
+}
+
+/** The paths an agent writes or reads, from its "Owns (writes)" section; other lines come back as `prose`. */
+export function ownsPaths(md) {
+  const paths = [];
+  const prose = [];
+  for (const line of briefSection(md, 'owns').split('\n')) {
+    const m = /^-\s*(reads\s+)?`([^`]+)`\s*(.*)$/.exec(line.trim());
+    if (m) paths.push({ path: m[2], mode: m[1] ? 'reads' : 'writes', note: m[3].replace(/^\(|\)$/g, '').trim() });
+    else if (line.trim()) prose.push(line);
+  }
+  return { paths, prose: prose.join('\n') };
+}
+
+export function setOwnsPaths(md, paths, prose = '') {
+  const lines = paths.filter((p) => p.path).map((p) => `- ${p.mode === 'reads' ? 'reads ' : ''}\`${p.path}\`${p.note ? ` (${p.note})` : ''}`);
+  const text = [...lines, ...(prose.trim() ? [prose.trim()] : [])].join('\n') || 'Nothing yet';
+  return setBriefSection(md, 'Owns (writes)', text, '## Owns (writes)');
+}
+
+/** Who already writes `path` (or a folder that contains it, or one inside it), other than `slug`: [{ path, writer }]. */
+export function pathConflicts(spec, slug, path) {
+  const norm = (p) => p.replace(/\*+$/, '');
+  const overlap = (a, b) => norm(a).startsWith(norm(b)) || norm(b).startsWith(norm(a));
+  const out = [];
+  for (const r of spec.ownership?.rows ?? []) if (r.writer !== slug && overlap(r.path, path)) out.push({ path: r.path, writer: r.writer });
+  for (const [other, r] of Object.entries(spec.roles)) {
+    if (other === slug || !r.enabled || !isCustom(r)) continue;
+    for (const p of ownsPaths(r.brief).paths) if (p.mode === 'writes' && overlap(p.path, path) && !out.some((o) => o.path === p.path && o.writer === other)) out.push({ path: p.path, writer: other });
+  }
+  return out;
+}
+
+/**
+ * A new agent's brief. start: 'blank' (the kit's role template), 'copy' (a role as this team runs it today, with its
+ * extension applied, as a separate role) or 'import' (a brief from a file). The title, group and manager are set and
+ * the "every thread" lines name the new slug.
+ */
+export function draftRole(spec, kit, { start = 'blank', from, md: imported, title, slug, group, reportsTo }) {
+  let md;
+  let old = '<slug>';
+  if (start === 'copy') {
+    const r = spec.roles[from];
+    md = r?.brief ?? kit.roles[from];
+    if (md === undefined) throw new Error(`no role "${from}" to copy`);
+    if (r?.extension) md = applyExtension(md, r.extension);
+    old = from;
+  } else if (start === 'import') {
+    md = imported;
+    old = /scripts\/agent-team\/team-status\.sh\s+(\S+)/.exec(md ?? '')?.[1] ?? '<slug>';
+  } else {
+    md = kit.template ?? '# Role title\n\n**Model:** standard\n**Group:** engineering\n**Reports to:** cto\n**Status:** active\n\n## Identity\n\n## Owns (writes)\n\n## Tools\n\n## Wakes on\n\n## Hands to\n\n## Rules\n';
+    md = md.replaceAll('Role title', title || 'New agent');
+  }
+  md = md.replaceAll(`team-status.sh ${old} `, `team-status.sh ${slug} `).replaceAll(`roles/${old}.md`, `roles/${slug}.md`);
+  if (title) md = setBriefTitle(md, title);
+  if (group) md = setBriefField(md, 'Group', group);
+  if (reportsTo) md = setBriefField(md, 'Reports to', reportsTo);
+  if (start === 'blank') md = setBriefField(md, 'Status', 'active');
+  return md.replace(/\s+$/, '') + '\n';
+}
+
+/** Adds a custom agent to the team, switched on. */
+export function addAgent(spec, slug, md) {
+  const inKit = !!spec.roles[slug] && spec.roles[slug].source !== 'project';
+  spec.roles[slug] = { source: inKit ? 'project-replaces-kit' : 'project', enabled: true, brief: md };
+  return spec;
+}
+
+/** A role pack for one agent: { '<slug>.md': brief, 'pack.json': what it needs }. Never secrets: only names and paths. */
+export function rolePack(spec, slug) {
+  const r = spec.roles[slug];
+  if (!isCustom(r)) throw new Error(`${slug} is not a custom agent`);
+  const bindings = (spec.resources?.bindings ?? []).filter((b) => b.role === slug);
+  const types = bindings.map((b) => spec.resources.resources.find((x) => x.id === b.resource)?.type).filter(Boolean);
+  const needs = {
+    tools: briefSection(r.brief, 'tools').split(/[,\n]/).map((t) => t.replace(/^-\s*/, '').trim()).filter(Boolean),
+    resources: [...new Set(types)],
+    paths: ownsPaths(r.brief).paths.filter((p) => p.mode === 'writes').map((p) => p.path),
+  };
+  return { [`${slug}.md`]: r.brief, 'pack.json': JSON.stringify({ schema: 'agent-team/role-pack@1', roles: [slug], needs }, null, 2) + '\n' };
+}
+
+/** Reads a role pack or loose role files (name → text) into agents to import: [{ slug, md, needs }]. */
+export function readPack(files) {
+  const pack = files['pack.json'] ? JSON.parse(files['pack.json']) : null;
+  const mds = Object.entries(files).filter(([n]) => n.endsWith('.md'));
+  const slugs = pack?.roles ?? mds.map(([n]) => n.replace(/^.*\//, '').slice(0, -3));
+  return slugs.map((slug) => {
+    const md = files[`${slug}.md`] ?? mds.find(([n]) => n.endsWith(`/${slug}.md`))?.[1];
+    if (md === undefined) throw new Error(`the pack lists ${slug} but has no ${slug}.md`);
+    return { slug, md, needs: pack?.needs ?? {} };
+  });
+}
+
+/** Checks only custom agents need, run as part of validate. */
+function checkCustomRoles(spec, kit, installed) {
+  const issues = [];
+  for (const [slug, r] of Object.entries(spec.roles)) {
+    if (!isCustom(r) || !r.enabled) continue;
+    const where = `roles/${slug}`;
+    if (!SLUG.test(slug)) issues.push({ level: 'error', where, message: `"${slug}" is not a valid slug (lower-case letters, digits and hyphens)` });
+    if (r.source === 'project-replaces-kit') issues.push({ level: 'warning', where, message: `replaces the kit's ${slug} on this team; a kit upgrade will not change it` });
+    if (!briefSection(r.brief, 'identity').trim()) issues.push({ level: 'warning', where, message: 'has no Identity: say what it owns and how it is judged' });
+    for (const p of ownsPaths(r.brief).paths.filter((x) => x.mode === 'writes')) {
+      for (const c of pathConflicts(spec, slug, p.path)) {
+        if (installed.has(c.writer) || !SLUG.test(c.writer)) issues.push({ level: 'error', where, message: `${p.path} overlaps ${c.path}, which ${c.writer} writes; one writer per area` });
+      }
+    }
+    if (/signoff/i.test(briefSection(r.brief, 'hands to')) && !briefSection(r.brief, 'sign-off evidence').trim()) {
+      issues.push({ level: 'warning', where, message: 'sends SIGNOFF but lists no sign-off evidence (screenshots, logs, links)' });
+    }
+  }
+  return issues;
 }
