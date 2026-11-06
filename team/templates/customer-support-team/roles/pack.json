@@ -1,0 +1,21 @@
+{
+  "schema": "agent-team/role-pack@1",
+  "roles": [
+    "support-responder",
+    "knowledge-base-writer"
+  ],
+  "needs": {
+    "tools": [
+      "support inbox",
+      "help articles"
+    ],
+    "resources": [
+      "email"
+    ],
+    "paths": [
+      "support/drafts/",
+      "support/articles/",
+      "support/saved-replies/"
+    ]
+  }
+}

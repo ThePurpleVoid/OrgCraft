@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.0
+
+Team templates (CPO story "Team templates", criteria 1 to 4). Additive: existing teams are not affected.
+
+- **Three team templates** in `team/templates/` ([customizing](docs/customizing.md#start-from-a-team-template)): Startup product team, Customer support team (with the custom agents support responder and knowledge base writer) and Content studio (with the custom agents editor and fact checker). Each gives zero `validate` errors and warnings. The support and content teams' briefs use no code, Git, CI or engineering words. A test enforces this.
+- **`agent-team templates`** lists them. **`agent-team init --template <id>`** writes the same `.agent-team/` the Studio writes from the same template, then syncs. **`agent-team validate --template <id|folder>`** checks a template.
+- `team.json` gains `"from": "<template>@<kit version>"` on teams made from a template.
+- New in `packages/team-model`: `TEMPLATE_SCHEMA` (`agent-team/team-template@1`), `TEMPLATE_GROUPS`, `readTemplate`, `templateSpec`, `templateLayer`, `templateCard`, `checkTemplate`. `node.mjs` adds `readTemplateDir` and `loadTemplates`. The Studio's template gallery uses the same functions.
+- **What existing teams see on sync:** only the version stamps change.
+
 ## 0.11.1
 
 - **The merge gate and hardware locks run without bash** ([Windows and machines without bash](docs/windows.md)). `scripts/agent-team/merge-gate.mjs` and `with-lock.mjs` take the same arguments as `merge-gate.sh` and `with-lock.sh`, and give the same summary, `.merge-gate/` logs, lock folders and exit codes (64 for usage, 75 when no slot frees up). Both kinds share one pool on a machine. The Node gate runs `.agent-team/gates.json` targets. Each step goes to `bash -c` when bash is installed and to the system shell otherwise. A target that is only a bash function in `config.sh` is handed to `merge-gate.sh` when bash is installed, and refused with a clear message when it is not.

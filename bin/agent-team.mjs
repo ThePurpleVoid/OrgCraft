@@ -4,19 +4,23 @@
 //
 //   agent-team init [--preset minimal|engineering|company] [--project "Name"] [--owner "Name"]
 //                   [--timezone "UTC"] [--digest-time "08:00"] [--kit <npx spec>] [--subagents] [--force]
+//   agent-team init --template <id> [--project "Name"] [--owner "Name"] [--timezone "UTC"]
+//                            start from a team template (agent-team templates lists them)
+//   agent-team templates     list the kit's team templates
 //   agent-team sync          regenerate docs/team/, scripts/agent-team/ (and .claude/agents/) from .agent-team/
 //   agent-team check         exit 1 when a generated file is missing, edited by hand or out of date
 //   agent-team roles         list the roles the project layer resolves to, and where each comes from
 //   agent-team import        print the project layer as a TeamSpec (JSON; see packages/team-model)
 //   agent-team compile <spec.json>   write a TeamSpec back to .agent-team/, then sync
 //   agent-team validate      check the team: reporting lines, tiers, ownership, systems and bindings, secrets
+//                            (--template <id|folder> checks a team template instead)
 //   agent-team dashboard     open the live team dashboard (--port, --demo; "dashboard export --out dir" for a website)
 //   agent-team studio        edit the team visually in your browser, then publish it to a branch (--port, --open)
 //   agent-team doctor        smoke-test this setup: tools, sync, roster, hooks and the report pipeline (--ping posts a note)
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.11.1 init --preset engineering --project "My App"
+//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.12.0 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -26,8 +30,8 @@ import { parseBrief } from '../tools/briefs.mjs';
 import { check as checkRoster, tree } from '../tools/roster.mjs';
 import { DEFAULT_MODELS, toSubagent } from '../tools/export-subagents.mjs';
 import { graphFrom } from '../tools/roster-graph.mjs';
-import { applyBindings, applyMeetings, renderMeetings, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
-import { loadKit, readLayer, writeLayer } from '../packages/team-model/node.mjs';
+import { applyBindings, applyMeetings, checkTemplate, renderMeetings, templateCard, templateLayer, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
+import { loadKit, loadTemplates, readLayer, readTemplateDir, writeLayer } from '../packages/team-model/node.mjs';
 
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8'));
@@ -392,9 +396,10 @@ export function findProblems(root) {
 export function init(root, opts) {
   const teamFile = join(root, LAYER, 'team.json');
   if (existsSync(teamFile) && !opts.force) throw new UsageError(`${LAYER}/team.json already exists. Use "agent-team sync", or --force to start over.`);
-  presetRoles(opts.preset); // validates the preset name
   const project = opts.project ?? root.split('/').filter(Boolean).at(-1);
   const slug = project.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (opts.template) return initFromTemplate(root, opts, project, slug);
+  presetRoles(opts.preset); // validates the preset name
   mkdirSync(join(root, LAYER, 'roles'), { recursive: true });
   const team = {
     kit: opts.kit ?? DEFAULT_KIT_SPEC,
@@ -406,20 +411,7 @@ export function init(root, opts) {
     hooks: true,
   };
   writeFileSync(teamFile, JSON.stringify(team, null, 2) + '\n');
-  const once = (rel, content) => {
-    const p = join(root, rel);
-    if (existsSync(p)) { console.log(`kept ${rel}`); return; }
-    mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, content);
-    console.log(`wrote ${rel}`);
-  };
-  once(`${LAYER}/config.sh`, read(join(KIT, 'templates/config.sh')).replace(/^AGENT_TEAM_PROJECT=.*$/m, `AGENT_TEAM_PROJECT="${slug}"`));
-  once(`${LAYER}/roles/README.md`, read(join(KIT, 'templates/roles-README.md')));
-  once(`${DOCS}/ownership.md`, fill(read(join(KIT, 'team/ownership.md')), team.values));
-  once(`${DOCS}/lanes/_template.md`, read(join(KIT, 'team/lanes/_template.md')));
-  const gi = join(root, '.gitignore');
-  const ignore = existsSync(gi) ? read(gi) : '';
-  if (!/^\.merge-gate\/$/m.test(ignore)) writeFileSync(gi, `${ignore}${ignore && !ignore.endsWith('\n') ? '\n' : ''}\n# Agent Team Kit merge gate logs\n.merge-gate/\n`);
+  initExtras(root, slug, team.values, { ownership: true });
   const code = sync(root);
   console.log(`
 Next:
@@ -429,6 +421,61 @@ Next:
   4. Start the chief of staff: "Read ${DOCS}/roles/chief-of-staff.md and ${DOCS}/protocols.md."
   5. Commit .agent-team/, ${DOCS}/ and ${SCRIPTS}/. Add "${SCRIPTS}/sync.sh check" to CI.`);
   return code;
+}
+
+/** The files init writes once, besides team.json: config.sh, the roles README, ownership.md, the lane template, .gitignore. */
+function initExtras(root, slug, values, { ownership }) {
+  const once = (rel, content) => {
+    const p = join(root, rel);
+    if (existsSync(p)) { console.log(`kept ${rel}`); return; }
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, content);
+    console.log(`wrote ${rel}`);
+  };
+  once(`${LAYER}/config.sh`, read(join(KIT, 'templates/config.sh')).replace(/^AGENT_TEAM_PROJECT=.*$/m, `AGENT_TEAM_PROJECT="${slug}"`));
+  once(`${LAYER}/roles/README.md`, read(join(KIT, 'templates/roles-README.md')));
+  if (ownership) once(`${DOCS}/ownership.md`, fill(read(join(KIT, 'team/ownership.md')), values));
+  once(`${DOCS}/lanes/_template.md`, read(join(KIT, 'team/lanes/_template.md')));
+  const gi = join(root, '.gitignore');
+  const ignore = existsSync(gi) ? read(gi) : '';
+  if (!/^\.merge-gate\/$/m.test(ignore)) writeFileSync(gi, `${ignore}${ignore && !ignore.endsWith('\n') ? '\n' : ''}\n# Agent Team Kit merge gate logs\n.merge-gate/\n`);
+}
+
+/** A template folder by id (the kit's) or by path. */
+function templateFiles(idOrDir) {
+  const kitOnes = loadTemplates(KIT);
+  if (kitOnes[idOrDir]) return kitOnes[idOrDir];
+  if (existsSync(join(idOrDir, 'template.json'))) return readTemplateDir(idOrDir);
+  throw new UsageError(`no template "${idOrDir}" (templates: ${Object.keys(kitOnes).join(', ')})`);
+}
+
+/** init --template <id>: the team the Studio would make from the same template and answers (criterion 2). */
+function initFromTemplate(root, opts, project, slug) {
+  const files = templateFiles(opts.template);
+  const kit = loadKit(KIT);
+  const layer = templateLayer(files, kit, { project, owner: opts.owner ?? 'the owner', timezone: opts.timezone ?? 'UTC', kitVersion: VERSION, kitSpec: opts.kit ?? DEFAULT_KIT_SPEC });
+  for (const line of writeLayer(root, layer)) console.log(line);
+  initExtras(root, slug, JSON.parse(layer['team.json']).values, { ownership: !layer['ownership.json'] });
+  const code = sync(root);
+  console.log(`\nMade from the "${JSON.parse(files['template.json']).title}" template. Next: commit .agent-team/, ${DOCS}/ and ${SCRIPTS}/, and start the chief of staff: "Read ${DOCS}/roles/chief-of-staff.md and ${DOCS}/protocols.md."`);
+  return code;
+}
+
+function listTemplates() {
+  const kit = loadKit(KIT);
+  for (const [id, files] of Object.entries(loadTemplates(KIT))) {
+    const c = templateCard(files, kit);
+    console.log(`${id.padEnd(24)} ${c.title} (${c.on} on, ${c.dormant.length} dormant): ${c.summary}`);
+  }
+  return 0;
+}
+
+function validateTemplate(idOrDir) {
+  const issues = checkTemplate(templateFiles(idOrDir), loadKit(KIT));
+  for (const i of issues) console.log(`${i.level}: ${i.where}: ${i.message}`);
+  const errors = issues.filter((i) => i.level === 'error').length;
+  console.log(`${errors} errors, ${issues.length - errors} warnings`);
+  return errors ? 1 : 0;
 }
 
 function listRoles(root) {
@@ -463,7 +510,7 @@ function compileSpec(root, file) {
 
 function parseArgs(argv) {
   const opts = { preset: 'engineering' };
-  const names = { '--preset': 'preset', '--project': 'project', '--owner': 'owner', '--timezone': 'timezone', '--digest-time': 'digestTime', '--kit': 'kit', '--dir': 'dir' };
+  const names = { '--template': 'template', '--preset': 'preset', '--project': 'project', '--owner': 'owner', '--timezone': 'timezone', '--digest-time': 'digestTime', '--kit': 'kit', '--dir': 'dir' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a in names) { if (argv[i + 1] === undefined) throw new UsageError(`${a} needs a value`); opts[names[a]] = argv[++i]; }
@@ -491,12 +538,13 @@ export function main(argv) {
       case 'roles': return listRoles(root);
       case 'import': return importSpec(root);
       case 'compile': return compileSpec(root, opts.file);
-      case 'validate': return validateLayer(root);
+      case 'validate': return opts.template ? validateTemplate(opts.template) : validateLayer(root);
+      case 'templates': return listTemplates();
       case 'version': case '--version': console.log(VERSION); return 0;
       case 'help': case '--help': case '-h':
         console.log(read(fileURLToPath(import.meta.url)).split('\n').slice(1).filter((l, i, a) => a.slice(0, i + 1).every((x) => x.startsWith('//'))).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
         return 0;
-      default: throw new UsageError(`unknown command "${cmd}" (init, sync, check, roles, import, compile, validate, studio, dashboard, doctor, version)`);
+      default: throw new UsageError(`unknown command "${cmd}" (init, sync, check, roles, import, compile, validate, templates, studio, dashboard, doctor, version)`);
     }
   } catch (e) {
     if (e instanceof UsageError) { console.error(`agent-team: ${e.message}`); return 64; }

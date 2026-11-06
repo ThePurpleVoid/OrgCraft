@@ -1083,3 +1083,118 @@ export function meetingEstimate(meeting, roles, prices, { turn = { inputTokens: 
   const days = meeting.when?.label ? 0 : (meeting.when?.days ?? []).length;
   return { perMeetingUsd, perMonthUsd: days ? Math.round(usd * days * (52 / 12) * 100) / 100 : null, asOf: prices.asOf, turns };
 }
+
+// ------------------------------------------------------------------------------------------------ team templates (kit 0.12)
+//
+// A template is a folder the Studio's "New team" gallery and `agent-team init --template <id>` start a team from
+// (CPO story "team templates", D29 to D36):
+//   template.json   { "schema": "agent-team/team-template@1", "id", "title", "summary", "group",
+//                     "preset" (the base, default "minimal") and optionally "roles" (the exact kit roles to switch on),
+//                     "dormant": [slug], "values": {...}, "extensions": { slug: "<role>.extend.md text" },
+//                     "systems": [{ "type", "name", "for": [slug] }]   suggested, never bound, never secrets
+//                     "areas": [{ "path", "writer", "notes" }]          → ownership.json
+//                     "checks": { gates.json }                          → gates.json
+//                     "meetings": [ meetings.json entries ]             → meetings.json
+//                     "layout": { slug: { x, y } } }                    → studio.json, with the suggested systems }
+//   roles/          custom agents in the role pack format (<slug>.md, optional pack.json)
+// A team made from a template has no link back to it: team.json only records "from": "<id>@<kit version>" (D35).
+
+export const TEMPLATE_SCHEMA = 'agent-team/team-template@1';
+export const TEMPLATE_GROUPS = { product: 'Build a product', 'business-function': 'Run a business function', 'open-source': 'Maintain open source' };
+
+/** template.json and the custom agents of a template folder (files: relative path → text). */
+export function readTemplate(files) {
+  const template = JSON.parse(files['template.json']);
+  const packFiles = Object.fromEntries(Object.entries(files).filter(([p]) => p.startsWith('roles/')).map(([p, t]) => [p.slice('roles/'.length), t]));
+  const agents = Object.keys(packFiles).some((p) => p.endsWith('.md')) ? readPack(packFiles) : [];
+  return { template, agents, packFiles };
+}
+
+/**
+ * The TeamSpec a template makes, for the values the create form asks for (D31). The Studio and `init --template`
+ * both compile this spec, so they write the same files.
+ */
+export function templateSpec(files, kit, { project, owner = 'the owner', timezone = 'UTC', kitVersion = '', kitSpec } = {}) {
+  const { template: t, agents } = readTemplate(files);
+  const preset = t.preset ?? 'minimal';
+  const team = {
+    ...(kitSpec ? { kit: kitSpec } : {}), preset, include: [], exclude: [],
+    values: { DIGEST_TIME: '08:00', ...(t.values ?? {}), PROJECT_NAME: project ?? t.title, OWNER: owner, TIMEZONE: timezone },
+  };
+  const spec = importLayer({ 'team.json': JSON.stringify(team) }, kit);
+  if (Array.isArray(t.roles)) {
+    for (const [slug, r] of Object.entries(spec.roles)) r.enabled = t.roles.includes(slug);
+    for (const slug of t.roles) if (!spec.roles[slug]) spec.roles[slug] = { source: 'missing', enabled: true };
+  }
+  for (const a of agents) spec.roles[a.slug] = { source: a.slug in kit.roles ? 'project-replaces-kit' : 'project', enabled: true, brief: a.md };
+  for (const [slug, text] of Object.entries(t.extensions ?? {})) {
+    if (!spec.roles[slug]) continue;
+    spec.roles[slug].extension = parseExtension(text);
+    spec.roles[slug].extensionText = text;
+  }
+  for (const slug of t.dormant ?? []) {
+    const r = spec.roles[slug];
+    if (!r || isCustom(r)) continue;
+    const title = titleOf(applyExtension(kit.roles[slug] ?? '', r.extension ?? {}), slug);
+    setField(spec, slug, 'Status', `dormant until the owner says "start ${title}". The chief of staff or the lane's executive opens the thread with this brief and an empty memory file.`);
+  }
+  if (t.areas?.length) spec.ownership = { rows: t.areas.map((a) => ({ path: a.path, writer: a.writer, notes: a.notes ?? '' })) };
+  if (t.checks) spec.gates = t.checks;
+  if (t.meetings?.length) spec.meetings = { meetings: t.meetings };
+  if (t.systems?.length || t.layout) spec.canvas = { ...(t.systems?.length ? { suggestedSystems: t.systems } : {}), ...(t.layout ? { layout: t.layout } : {}) };
+  spec.options = { subagents: false, hooks: true, from: `${t.id}@${kitVersion}` };
+  return spec;
+}
+
+/** The .agent-team/ files a template makes (what the Studio publishes and `agent-team init --template` writes). */
+export function templateLayer(files, kit, form) {
+  return compileLayer(templateSpec(files, kit, form), kit);
+}
+
+/** A template's catalogue card: what the gallery shows before anything is written (D31, D33). */
+export function templateCard(files, kit) {
+  const { template: t } = readTemplate(files);
+  const { roles } = resolveSpec(templateSpec(files, kit, { project: t.title }), kit);
+  const dormant = roles.filter((r) => isDormant(r.md)).map((r) => r.slug);
+  return {
+    id: t.id, title: t.title, summary: t.summary, group: t.group, groupTitle: TEMPLATE_GROUPS[t.group] ?? t.group,
+    roles: roles.map((r) => r.slug), on: roles.length - dormant.length, dormant,
+    systems: (t.systems ?? []).map((s) => ({ type: s.type, name: s.name })), meetings: (t.meetings ?? []).map((m) => ({ id: m.id, title: m.title, when: meetingWhen(m.when) })),
+  };
+}
+
+/**
+ * Checks a template the way a team is checked (criterion 1): the format, the custom agents as a role pack, and the
+ * team it makes through validate. Returns [{ level, where, message }], errors first.
+ */
+export function checkTemplate(files, kit) {
+  const out = [];
+  const add = (level, where, message) => out.push({ level, where, message });
+  let parsed;
+  try { parsed = readTemplate(files); } catch (e) { return [{ level: 'error', where: 'template.json', message: `cannot be read: ${e.message}` }]; }
+  const { template: t, agents, packFiles } = parsed;
+  if (t.schema !== TEMPLATE_SCHEMA) add('error', 'template.json', `schema must be ${TEMPLATE_SCHEMA}`);
+  if (!SLUG.test(t.id ?? '')) add('error', 'template.json', `id "${t.id ?? ''}" must be a lower-case slug`);
+  for (const k of ['title', 'summary']) if (!String(t[k] ?? '').trim()) add('error', 'template.json', `has no ${k}`);
+  if (!(t.group in TEMPLATE_GROUPS)) add('error', 'template.json', `group "${t.group}" is not one of ${Object.keys(TEMPLATE_GROUPS).join(', ')}`);
+  if (t.preset !== undefined && !kit.presets[t.preset]) add('error', 'template.json', `the kit has no preset "${t.preset}"`);
+  const agentSlugs = new Set(agents.map((a) => a.slug));
+  for (const s of t.roles ?? []) if (!(s in kit.roles) && !agentSlugs.has(s)) add('error', 'template.json', `roles lists "${s}", which is neither a kit role nor one of the template's agents`);
+  for (const s of t.dormant ?? []) if (!(s in kit.roles) && !agentSlugs.has(s)) add('error', 'template.json', `dormant lists "${s}", which is not on the team`);
+  for (const s of Object.keys(t.extensions ?? {})) if (!(s in kit.roles)) add('error', `extensions/${s}`, 'extends a role the kit does not have');
+  for (const s of t.systems ?? []) {
+    if (!String(s.type ?? '').trim() || !String(s.name ?? '').trim()) add('error', 'template.json', 'every suggested system needs a type and a name');
+    if (s.secrets || s.config) add('error', 'template.json', `suggested system "${s.name}" carries settings or secrets; a template suggests the type only`);
+  }
+  if (SECRET_PATTERNS.some((p) => p.test(files['template.json']))) add('error', 'template.json', 'looks like it contains a secret value');
+  if (agents.length) for (const i of checkPack(packFiles, null, kit)) if (!/the kit has a role called/.test(i.message)) out.push(i);
+  for (const a of agents) {
+    if (!briefSection(a.md, 'hands to')) add('error', `roles/${a.slug}`, 'has no "## Hands to"');
+    const handsTo = briefSection(a.md, 'hands to');
+    if (/SIGNOFF/.test(handsTo) && !signoffEvidence(a.md).length) add('error', `roles/${a.slug}`, 'signs off but lists no sign-off evidence');
+  }
+  if (out.some((i) => i.level === 'error')) return out.sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
+  const spec = templateSpec(files, kit, { project: t.title });
+  for (const i of validate(spec, kit)) out.push(i);
+  return out.sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
+}
