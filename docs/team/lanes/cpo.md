@@ -16,6 +16,7 @@ Owner of this file: cpo. Last updated 2026-11-06.
 | Team templates (PRD E6, demo step 2, issue #30) | Building: story confirmed below; kit side to kit-core-dev, picker to web-dev after meetings |
 | Neutral protocols for business-function teams (issue #30 follow-up) | Idea: story confirmed below, not yet scheduled |
 | Other coding agents (PRD G3 b, issue #30 follow-up) | Idea: story confirmed below; kit-core-dev after "PR through gh" |
+| Email notifications (PRD 6.8 O1 to O7, phase 3) | Building: story and copy confirmed below; kit-core-dev builds the email sink |
 
 ## Priorities, in order
 
@@ -34,6 +35,7 @@ Owner of this file: cpo. Last updated 2026-11-06.
 6. **Team templates story confirmed** (2026-11-06, issue #30): a template is a whole starting team, applied once; a role pack adds agents to a team that exists. Two of the first templates are not engineering teams.
 7. **Neutral protocols story confirmed** (2026-11-06): kit 0.12.0 ships the support and content templates without it. The shared protocols and project instructions get a neutral core plus an engineering pack, so a business-function team never reads about PRs, merge gates or deploys.
 8. **Other coding agents story confirmed** (2026-11-06): the first cut is one vendor-neutral `AGENTS.md` target, not one adapter per tool. Claude Code stays the default and loses nothing.
+9. **Email notifications copy confirmed** (2026-11-06): every email is short, names the team, carries one link, and never lets an email reply approve anything.
 
 ## Story: custom agents (issue #30, demo step 14)
 
@@ -314,3 +316,101 @@ What follows is the CPO's reading, labelled as mine.
 - **kit-core-dev**: criteria 1 to 5 and 7, after "PR through gh".
 - **web-dev**: criteria 6 (Studio side) and 8; kit-core-dev does the dashboard side of 6.
 - **CPO**: signs off the `AGENTS.md` copy and the table.
+
+## Story: email notifications (PRD 6.8, phase 3)
+
+The owner's words (2026-11-06, PRD header): "There should be a way to connect emails/communication systems with the owner so if they want to receive emails for certain triggers or team members they can."
+
+What follows is the CPO's reading, labelled as mine.
+
+**As** a team owner away from the Studio, **I want** an email when something needs me or is going wrong, only for the things I chose, **so** the team never waits on me for long and my inbox is not flooded.
+
+### Product decisions
+
+- **D49. Opt-in, per person, per kind.** Nothing is emailed until the person adds and verifies an address and switches on at least one kind (O2, O7). The first time, the Studio suggests "Approval needed" and "Budget at 100%" switched on, everything else off.
+- **D50. One email, one link.** Every email has a subject under 70 characters that starts with the team's name in square brackets, a body of at most four short lines, and exactly one button-style link into the Studio. Links expire after 7 days (approval links after 24 hours) and open the sign-in page first when the person is signed out.
+- **D51. Never an action in the email.** An approval email links to the card; approving needs the signed-in Studio and its step-up (O4). No email says "reply to approve". The verification code is the only thing a person types back.
+- **D52. Text from outside the team** (issue titles, PR titles, agent text) is shown in quotes and cut to 120 characters (architecture 12.3). Role names are shown as their titles ("Web dev"), not slugs.
+- **D53. Neutral words.** No email mentions branches, commits or CI; an approval's link opens the card, which shows those details for engineering teams.
+- **D54. The unsubscribe link turns off only that kind**, in one click with no sign-in, and lands on a confirmation page that offers "Turn it back on" and "Manage all emails" (the latter signs in). The address stays verified.
+
+### Copy
+
+Placeholders in braces are filled by the sink. `{team}` is the team's name, `{role}` a role's title, `{link}` the one link.
+
+**Approval needed** (breaks through quiet hours)
+- Subject: `[{team}] Approval needed: {summary}`
+- Body:
+  > {role} needs your approval before it can go on.
+  > "{summary}"
+  > Recommendation: {recommendation}
+  > Nothing happens until you approve in the Studio.
+- Link: `Review in the Studio`
+
+**Budget at 80%**
+- Subject: `[{team}] 80% of today's budget used`
+- Body:
+  > Your team has used {spent} of its {cap} daily budget.
+  > Work carries on. At 100% only release-blocking fixes and checks keep running.
+- Link: `See today's usage`
+
+**Budget at 100%** (breaks through quiet hours)
+- Subject: `[{team}] Daily budget reached, new work paused`
+- Body:
+  > Your team has used its {cap} daily budget.
+  > New work is paused until {reset_time}. Raise the cap in the Studio to resume sooner.
+- Link: `See usage and the cap`
+
+**BLOCKED**
+- Subject: `[{team}] {role} is waiting on a decision`
+- Body:
+  > {role} is blocked on: "{question}"
+  > Recommendation: {recommendation}
+  > It keeps working on the recommendation unless the step cannot be undone.
+- Link: `Answer in the Studio`
+
+**Meeting minutes**
+- Subject: `[{team}] Minutes: {meeting} ({date})`
+- Body:
+  > {decisions_count} decisions and {actions_count} action items.
+  > {first_decision_or_"No decisions this time."}
+  > {needs_you_line, e.g. "1 item needs you." or nothing}
+- Link: `Read the minutes`
+
+**Verify your address**
+- Subject: `Your code for Agent Team Studio: {code}`
+- Body:
+  > Enter this code in the Studio to get team emails at this address:
+  > {code}
+  > It expires in 15 minutes. If you did not ask for it, ignore this email; nothing will be sent.
+- No link.
+
+**Footer on every email except verification**
+> You get this because you turned on "{kind}" emails for {team}. [Turn off these emails]({unsubscribe_link}) · [Manage all emails]({settings_link})
+
+**Unsubscribe confirmation page**
+- Heading: `You won't get "{kind}" emails for {team}`
+- Text: `Other emails you turned on still arrive. Your address stays verified.`
+- Buttons: `Turn it back on` · `Manage all emails`
+
+**Opt-in, in the Studio's Notifications page**
+- Heading: `Emails`
+- Text: `Get an email when something needs you. Nothing is sent until you verify your address and choose what you want.`
+- Address field label: `Your email address` · button `Send a code`
+- After the code: `Verified. Choose what to email you about:` then switches labelled: `Approval needed`, `Budget at 80%`, `Budget at 100%`, `A role is blocked`, `Meeting minutes`
+- Under the approval switch: `The email links to the Studio. You always approve there, never by replying.`
+
+### Acceptance criteria
+
+1. Every template renders with real event data in under four body lines, one link, and the footer (D50); a test checks subject length and link count per kind.
+2. No template offers an action by reply; approval links expire in 24 hours and require sign-in plus step-up (D51).
+3. Outside text is quoted and cut to 120 characters; role titles, not slugs (D52).
+4. Unsubscribe turns off one kind for one team without sign-in, lands on the confirmation page, and "Turn it back on" works (D54).
+5. Nothing is sent before verification and opt-in (D49); a code expires in 15 minutes.
+6. The CPO signs off the rendered emails from a test send of each kind (screenshots of the HTML and the plain-text part).
+
+### Build split
+
+- **kit-core-dev** (as the CTO assigned): the email sink, templates from this copy, criteria 1 to 5.
+- **web-dev**: the opt-in section of the Notifications page with this copy.
+- **CPO**: criterion 6.
