@@ -35,6 +35,9 @@ A **runner** is the data plane: a process that holds checkouts, sandboxes and re
 - `session.stop`: `reason` (owner, budget, error).
 - The `ack` of `session.checkpoint` carries `commit` (the pushed head) and `memory` (the role's memory file, at most 64 KiB), which the control plane stores so the session can resume on any runner.
 - The `ack` of `approval.wait` carries `approval` and `card` ids.
+- `approval.wait` carries `pr` and `headSha` for an `accept`, and `approval.result` carries the approved `headSha`. The runner merges with that sha pinned, using its own merge credential, never one a session can reach; any other held call runs only if it is byte-identical to the approved call ([M3 design](../product/m3-design.md) section 12, D1 and D2).
+- **Proposals are opened and accepted by the runner, not the session.** After the first checkpoint push of a session branch, the runner opens (or later updates) its proposal (for a repository, the pull request) with its own credential and emits `proposal.opened` or `proposal.updated`. To accept, the session calls `request_approval` with `action: accept`; the runner checkpoints first, so the approval names the pushed `headSha`. On `approval.result` approved, the runner itself accepts the proposal pinned to that `headSha` and emits `proposal.accepted` (with the merge commit) or `proposal.failed` (`reason`: head-moved, checks, conflict). On `head-moved` the server supersedes the approval and raises a new one for the new head. No new op: `approval.result` is the trigger.
+- **`approval.wait` after a reconnect** carries `approval` (the id from the first `ack`) and `resend: true`. The server answers with the stored approval and card ids and never raises a second card; if the approval was already decided while the runner was away, it sends `approval.result` again.
 
 ### What each credential may send
 
@@ -42,7 +45,7 @@ The control plane answers anything else with `nack` and audits it.
 
 | Credential | May send |
 | --- | --- |
-| Runner key (the WebSocket) | the ops above, and `events` whose types are `session.*`, `usage.recorded`, `report.heartbeat`, or `chat.message` from the front-door role of a session this runner runs. The control plane sets that message's `from` and `actor` from the session and ignores what the frame says |
+| Runner key (the WebSocket) | the ops above, and `events` whose types are `session.*`, `usage.recorded`, `report.heartbeat`, `proposal.*` for a session it runs, or `chat.message` from the front-door role of a session this runner runs. The control plane sets that message's `from` and `actor` from the session and ignores what the frame says |
 | Session token (HTTP) | `POST /v1/sessions/{its session}/tools/{tool}` only ([team-tools.md](team-tools.md)) |
 
 Messages between roles, decisions, approvals, cards and run changes are always minted by the control plane, never sent by a runner.

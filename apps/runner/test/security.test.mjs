@@ -189,3 +189,219 @@ test('F4: the model proxy forwards only the messages API', async () => {
     assert.deepEqual(seen, ['POST /v1/messages', 'POST /v1/messages/count_tokens?beta=true']);
   } finally { await proxy.close(); upstream.close(); }
 });
+
+/** Someone else lands a change on the origin's main. */
+function landOnMain(bare, path, text) {
+  const dir = join(bare, '..', `other-${Math.random().toString(36).slice(2)}`);
+  execFileSync('git', ['clone', '--quiet', bare, dir]);
+  mkdirSync(join(dir, path, '..'), { recursive: true });
+  writeFileSync(join(dir, path), text);
+  sh(dir, 'add', '-A'); sh(dir, 'commit', '--quiet', '-m', `land ${path}`); sh(dir, 'push', '--quiet', 'origin', 'main');
+}
+
+test('base moves: what lands on main mid-session or before a resume is not counted as the branch\'s change', async () => {
+  const { bare, root } = origin();
+  let w = await prepare({ root, repo: { url: bare }, worktree: 'web/mv', session: 'mv1' });
+  mkdirSync(join(w.cwd, 'web'));
+  writeFileSync(join(w.cwd, 'web', 'a.txt'), 'a\n');
+  assert.equal((await checkpoint({ cwd: w.cwd, branch: 'web/mv', role: 'web-dev', reason: 't', areas: ['web/'] })).pushed, true);
+  // main moves while the session runs; the agent merges it in.
+  landOnMain(bare, 'server/b.txt', 'b\n');
+  writeFileSync(join(w.cwd, 'web', 'a.txt'), 'a2\n');
+  let r = await checkpoint({ cwd: w.cwd, branch: 'web/mv', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.pushed, true, r.error);
+  agentGit(w.cwd, 'fetch', '-q', bare, 'main'); agentGit(w.cwd, 'merge', '-q', '--no-edit', 'FETCH_HEAD');
+  r = await checkpoint({ cwd: w.cwd, branch: 'web/mv', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.pushed, true, r.error);
+  release(w.cwd, 'mv1');
+  // main moves again; a later session resumes the branch without merging it.
+  landOnMain(bare, 'server/c.txt', 'c\n');
+  w = await prepare({ root, repo: { url: bare }, worktree: 'web/mv', session: 'mv2' });
+  assert.equal(w.resumed, true);
+  writeFileSync(join(w.cwd, 'web', 'a.txt'), 'a3\n');
+  r = await checkpoint({ cwd: w.cwd, branch: 'web/mv', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.pushed, true, r.error);
+  // A change of its own outside the areas is still refused.
+  writeFileSync(join(w.cwd, 'server', 'b.txt'), 'mine now\n');
+  agentGit(w.cwd, 'add', '-A'); agentGit(w.cwd, 'commit', '-qm', 'outside');
+  r = await checkpoint({ cwd: w.cwd, branch: 'web/mv', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.deepEqual(r.refused?.items, ['server/b.txt']);
+  release(w.cwd, 'mv2');
+});
+
+test('an added line that starts with "++ " is still scanned', async () => {
+  const { bare, root } = origin();
+  const w = await prepare({ root, repo: { url: bare }, worktree: 'web/pp', session: 'pp' });
+  mkdirSync(join(w.cwd, 'web'));
+  writeFileSync(join(w.cwd, 'web', 'n.md'), 'intro\n++ sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123\n');
+  agentGit(w.cwd, 'add', '-A'); agentGit(w.cwd, 'commit', '-qm', 'notes');
+  const r = await checkpoint({ cwd: w.cwd, branch: 'web/pp', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.refused?.rule, 'secret-scan');
+  release(w.cwd, 'pp');
+});
+
+test('binary files are scanned too: a session credential inside one is not pushed', async () => {
+  const { bare, root } = origin();
+  const w = await prepare({ root, repo: { url: bare }, worktree: 'web/bin', session: 'bin' });
+  mkdirSync(join(w.cwd, 'web'));
+  writeFileSync(join(w.cwd, 'web', 'logo.png'), Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]), Buffer.from('sess-proxytoken-abc123456'), Buffer.alloc(64)]));
+  agentGit(w.cwd, 'add', '-A'); agentGit(w.cwd, 'commit', '-qm', 'logo');
+  let r = await checkpoint({ cwd: w.cwd, branch: 'web/bin', role: 'web-dev', reason: 't', areas: ['web/'], secrets: ['sess-proxytoken-abc123456'] });
+  assert.equal(r.refused?.rule, 'secret-scan');
+  assert.match(r.error, /web\/logo\.png: a session credential/);
+  // A clean binary goes.
+  agentGit(w.cwd, 'reset', '-q', '--hard', 'HEAD~1');
+  mkdirSync(join(w.cwd, 'web'), { recursive: true });
+  writeFileSync(join(w.cwd, 'web', 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 1, 2, 3]));
+  r = await checkpoint({ cwd: w.cwd, branch: 'web/bin', role: 'web-dev', reason: 't', areas: ['web/'], secrets: ['sess-proxytoken-abc123456'] });
+  assert.equal(r.pushed, true, r.error);
+  release(w.cwd, 'bin');
+});
+
+test('when the remote cannot be reached, the push is refused and the session is told not to push another way', async () => {
+  const { bare, root } = origin();
+  const w = await prepare({ root, repo: { url: bare }, worktree: 'web/off', session: 'off' });
+  mkdirSync(join(w.cwd, 'web'));
+  writeFileSync(join(w.cwd, 'web', 'a.txt'), 'a\n');
+  execFileSync('mv', [bare, `${bare}.gone`]);
+  const r = await checkpoint({ cwd: w.cwd, branch: 'web/off', role: 'web-dev', reason: 't', areas: ['web/'] });
+  execFileSync('mv', [`${bare}.gone`, bare]);
+  assert.equal(r.pushed, false);
+  assert.equal(r.refused?.rule, 'remote-unreachable');
+  assert.match(r.error, /Do not push another way/);
+  release(w.cwd, 'off');
+});
+
+// Needs root (to switch uid without the container's capability-carrying setpriv) and setpriv; skips otherwise.
+const canSwitch = process.getuid?.() === 0 && (() => { try { execFileSync('setpriv', ['--version']); return true; } catch { return false; } })();
+test('F3: a session runs as another user and cannot read the runner\'s environment or data folder', { skip: canSwitch ? false : 'needs root and setpriv to switch users (the container image has both)' }, async () => {
+  const { Session } = await import('../session.mjs');
+  const { sandboxSpawn, privateDir } = await import('../sandbox.mjs');
+  const { mkdtempSync, chmodSync: chmod, readFileSync: read } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { bare } = origin();
+  const top = mkdtempSync(join(tmpdir(), 'runner-f3-'));
+  chmod(top, 0o711);
+  const root = join(top, 'data'), work = join(top, 'work');
+  privateDir(root);
+  writeFileSync(join(root, 'runner.json'), '{"key":"rk_live_secret"}', { mode: 0o600 });
+  const sandbox = { uid: 10002, gid: 10010, exec: 'setpriv' };
+  const umask = process.umask(0o007);
+  process.env.RUNNER_F3_MARKER = 'sk-ant-f3-marker-0123456789abcdef';
+  try {
+    const s = new Session({ session: 'ses_f3', role: 'web-dev', team: 't', repo: { url: bare }, worktree: 'web/f3', areas: ['web/'] }, { root, work, sandbox, emit: async () => {}, adapter: { turn: async () => ({}) } });
+    s.pump = () => {};
+    await s.start();
+    const asAgent = (script) => new Promise((done) => {
+      const c = sandboxSpawn(sandbox)({ command: '/bin/sh', args: ['-c', script], cwd: s.copy.cwd, env: s.env });
+      let out = ''; c.stdout.on('data', (d) => (out += d)); c.stderr.on('data', (d) => (out += d));
+      c.stdin.end(); c.on('close', (code) => done({ code, out }));
+    });
+    const who = await asAgent('id -u');
+    assert.equal(who.out.trim(), '10002');
+    assert.match((await asAgent('grep CapEff /proc/self/status')).out, /CapEff:\s+0+\n/, 'no capabilities');
+    const env = await asAgent(`cat /proc/${process.pid}/environ; cat /proc/1/environ`);
+    assert.ok(!env.out.includes('sk-ant-f3-marker'), 'the runner\'s environment is out of reach');
+    const data = await asAgent(`cat ${join(root, 'runner.json')}; ls ${root}`);
+    assert.notEqual(data.code, 0);
+    assert.ok(!data.out.includes('rk_live_secret'));
+    // It can work in its copy and commit with git; the runner then checks and pushes what it made.
+    const wrote = await asAgent('mkdir -p web && echo hi > web/a.txt && git add web/a.txt && git commit -qm "from the agent" && git log --oneline -1');
+    assert.equal(wrote.code, 0, wrote.out);
+    const r = await s.checkpoint('t');
+    assert.equal(r.pushed, true, r.problem);
+    assert.equal(sh(bare, 'show', 'web/f3:web/a.txt'), 'hi');
+    // A .git the agent replaces is not trusted.
+    await asAgent('mv .git .git-old && cp -r .git-old .git');
+    assert.match((await s.checkpoint('t')).problem ?? '', /replaced by the session/);
+    assert.equal(read(join(root, 'runner.json'), 'utf8').includes('rk_live'), true);
+  } finally {
+    process.umask(umask);
+    delete process.env.RUNNER_F3_MARKER;
+  }
+});
+
+test('F3: stopping a sandboxed session signals its whole process group through setpriv, then SIGKILL', async () => {
+  const { sandboxSpawn } = await import('../sandbox.mjs');
+  const { mkdtempSync, readFileSync: read, chmodSync: chmod } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  // A stand-in setpriv that records how it was called and runs the command after `--` as the same user.
+  const dir = mkdtempSync(join(tmpdir(), 'runner-kill-'));
+  const log = join(dir, 'calls'), fake = join(dir, 'setpriv');
+  writeFileSync(fake, `#!/bin/sh\necho "$*" >> ${log}\nwhile [ "$1" != "--" ]; do shift; done; shift\nexec "$@"\n`);
+  chmod(fake, 0o755);
+  const sandbox = { uid: 10002, gid: 10010, exec: fake };
+  const child = sandboxSpawn(sandbox, { grace: 300 })({ command: '/bin/sh', args: ['-c', 'trap "" TERM; sleep 30 & echo $!; wait'], cwd: dir, env: { PATH: process.env.PATH } });
+  const grandchild = await new Promise((r) => child.stdout.once('data', (d) => r(Number(String(d).trim()))));
+  const exited = new Promise((r) => child.on('exit', r));
+  assert.equal(child.kill('SIGTERM'), true);
+  await exited;
+  const calls = read(log, 'utf8').trim().split('\n');
+  assert.ok(calls.some((c) => c.endsWith(`-- kill -TERM -- -${child.pid}`)), calls.join('\n'));
+  assert.ok(calls.some((c) => c.endsWith(`-- kill -KILL -- -${child.pid}`)), 'SIGKILL after the grace period');
+  assert.ok(calls.every((c) => c.startsWith('--reuid=10002 --regid=10010')), 'as the agent');
+  await new Promise((r) => setTimeout(r, 100));
+  // Gone, or a zombie waiting for init to reap it: either way it no longer runs.
+  let state = 'gone';
+  try { state = read(`/proc/${grandchild}/stat`, 'utf8').split(') ')[1][0]; } catch {}
+  assert.ok(['gone', 'Z'].includes(state), `the group is gone, children included (state ${state})`);
+});
+
+test('G1: the runner never follows a link the agent planted in its home, memory folder or .git', async () => {
+  const { Session } = await import('../session.mjs');
+  const { sharedDir } = await import('../sandbox.mjs');
+  const { readFileSync: read, rmSync: rm, symlinkSync: link, mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { bare, root } = origin();
+  const outside = mkdtempSync(join(tmpdir(), 'runner-outside-'));
+  const secretFile = join(outside, 'environ'), target = join(outside, 'gitconfig');
+  writeFileSync(secretFile, 'AGENT_TEAM_RUNNER_KEY=rnr_abcdefghijkl.abcdefghijklmnopqrstuvwxyz0123456789ABCD\n');
+  writeFileSync(target, '[credential]\n\thelper = store\n');
+  const start = () => { const s = new Session({ session: 'ses_g1', role: 'web-dev', team: 't', repo: { url: bare }, worktree: 'web/g1', areas: ['web/'] }, { root, emit: async () => {}, adapter: { turn: async () => ({}) }, runnerKey: 'rnr_abcdefghijkl.abcdefghijklmnopqrstuvwxyz0123456789ABCD' }); s.pump = () => {}; return s; };
+  let s = start();
+  await s.start();
+  // Reading: the memory file becomes a link to something the runner can read and the agent cannot.
+  rm(s.memoryPath); link(secretFile, s.memoryPath);
+  let r = await s.checkpoint('t');
+  assert.equal(r.memory, '', 'nothing read through the link');
+  assert.match(r.problem, /memory file was not sent: it is a link/);
+  // Writing: on the next start, .gitconfig and the memory file are links to the runner's own files.
+  await s.stop('now', 't');
+  rm(join(s.home, '.gitconfig')); link(target, join(s.home, '.gitconfig'));
+  s = start();
+  await s.start();
+  assert.equal(read(target, 'utf8'), '[credential]\n\thelper = store\n', 'the runner did not write through the link');
+  assert.equal(s.state, 'ended', 'the session does not start on a planted link');
+  // .git: a link in it, or .git/config as a link, is refused or replaced without touching the target.
+  const { prepare: prep, checkpoint: save, release: rel } = await import('../worktree.mjs');
+  const w = await prep({ root, repo: { url: bare }, worktree: 'web/g1b', session: 'g1b' });
+  rm(join(w.cwd, '.git', 'config')); link(target, join(w.cwd, '.git', 'config'));
+  await assert.rejects(() => save({ cwd: w.cwd, branch: 'web/g1b', role: 'r', reason: 't', areas: ['web/'] }), /is a link/);
+  assert.equal(read(target, 'utf8'), '[credential]\n\thelper = store\n');
+  rel(w.cwd, 'g1b');
+  // sharedDir refuses a folder that is a link.
+  link(outside, join(root, 'planted'));
+  assert.throws(() => sharedDir(join(root, 'planted'), null), /ELOOP|ENOTDIR|not a folder/);
+  // The runner key is a secret like the others.
+  assert.deepEqual(findSecrets({ text: 'rnr_abcdefghijkl.abcdefghijklmnopqrstuvwxyz0123456789ABCD' }), ['memory: runner key']);
+});
+
+test('F3: when the leader exits (on TERM, or at a normal end), the rest of its group is killed too', async () => {
+  const { sandboxSpawn } = await import('../sandbox.mjs');
+  const { mkdtempSync, readFileSync: read, chmodSync: chmod } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'runner-kill2-'));
+  const fake = join(dir, 'setpriv');
+  writeFileSync(fake, '#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift\nexec "$@"\n');
+  chmod(fake, 0o755);
+  const gone = (pid) => { try { return read(`/proc/${pid}/stat`, 'utf8').split(') ')[1][0] === 'Z'; } catch { return true; } };
+  for (const [name, script, stop] of [['TERM', '(trap "" TERM; exec sleep 30) & echo $!; wait', true], ['normal end', '(trap "" TERM; exec sleep 30) & echo $!; exit 0', false]]) {
+    const child = sandboxSpawn({ uid: 10002, gid: 10010, exec: fake }, { grace: 60000 })({ command: '/bin/sh', args: ['-c', script], cwd: dir, env: { PATH: process.env.PATH } });
+    const bg = await new Promise((r) => child.stdout.once('data', (d) => r(Number(String(d).trim()))));
+    const exited = new Promise((r) => child.on('exit', r));
+    if (stop) child.kill('SIGTERM');
+    await exited;
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(gone(bg), `${name}: the background command is gone`);
+  }
+});

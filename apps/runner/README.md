@@ -16,14 +16,22 @@ ANTHROPIC_API_KEY=… node bin.mjs start
 `register` trades the code for a runner key, kept in `~/.agent-team/runner/runner.json` (readable only by you).
 `start` connects with it. A deployment sets `AGENT_TEAM_SERVER` and `AGENT_TEAM_RUNNER_KEY` instead.
 
-**Run it in a container** (`Dockerfile`), as its own user. That is the supported deployment. On a bare machine the
-sessions share the runner's OS user, which no process can fully wall off.
+**Run it in the container** (`Dockerfile`). That is the supported deployment: the runner runs as `runner` and every
+session as `agent`. Outside it (no `AGENT_TEAM_SANDBOX_UID`), sessions share the runner's OS user and could read its
+environment, so that is for development only, and the runner says so when it starts.
 
 ## What a session can reach
 
 The agent is the untrusted part: it reads repository content, issues and web pages, so the runner assumes its shell
 may be under someone else's control.
 
+- **Another OS user.** Each session's Claude Code process, and every command it runs, starts as `agent`
+  (`sandbox.mjs`), with no capabilities and no way to gain any. It cannot read the runner's process environment
+  (the runner key, the model key) or the data folder (`/data`, 0700: the key file, the push credential, the
+  caches). It works in `/work`, shared with the runner through a group, so the runner can check what it made.
+  The runner never follows a link there: the folders on the way to a session's own are the runner's and closed to
+  its writes, and the memory file, `.gitconfig` and `.git` are opened without following links. Stopping a session
+  signals its whole process group, as the agent, and kills it after a grace period.
 - **No credentials.** Each session gets its own empty `HOME` and an allowlisted environment (`PATH`, locale, `TERM`;
   more only by the runner's `sessionEnv`). The model key stays in the runner: sessions reach the model through a
   loopback proxy, with a token of their own that dies with the session and works only for the messages API
@@ -94,8 +102,7 @@ the machine happens to have.
 
 ## Not yet
 
-Sessions as a separate OS user inside the container, with the runner's data folder closed to them (today they
-share the runner's user, so a hostile shell could still read the runner's process environment and its data folder;
-this must land before a real model key is set), microVM sandboxes, merging and opening pull requests with the runner's
+A user per session (today all sessions share `agent`, so one session could change another's working copy before
+its checkpoint), microVM sandboxes, merging and opening pull requests with the runner's
 own credential after an approval, `secret.get` (M4, with the GitHub App), the subagents run mode, and the long-poll
 transport.
