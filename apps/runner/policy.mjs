@@ -66,6 +66,22 @@ export function owns(areas, path) {
 /** Split an ownership row's path cell (`bin/, presets/, tools/`) into patterns. */
 export const areasOf = (cells) => (Array.isArray(cells) ? cells : [cells]).flatMap((c) => String(c).split(/,\s*/)).map((s) => s.trim()).filter(Boolean);
 
+const SHA = '([0-9a-f]{7,64})';
+/** The pull request number and head commit a merge names, or null when it does not name both. */
+export function mergeTarget(tool, input = {}, text = '') {
+  let pr = null, headSha = null;
+  if (tool === 'Bash') {
+    pr = (/\bgh\s+pr\s+merge\s+(?:-\S+\s+)*#?(\d+)\b/.exec(text) ?? /\/pulls\/(\d+)\/merge\b/.exec(text) ?? /\bglab\s+mr\s+merge\s+(?:-\S+\s+)*!?(\d+)\b/.exec(text) ?? [])[1] ?? null;
+    headSha = (new RegExp(`--match-head-commit[= ]\\s*${SHA}\\b`).exec(text) ?? new RegExp(`\\bsha["']?\\s*[=:]\\s*["']?${SHA}\\b`).exec(text) ?? new RegExp(`--sha[= ]\\s*${SHA}\\b`).exec(text) ?? [])[1] ?? null;
+  } else {
+    pr = input.pullNumber ?? input.pull_number ?? input.number ?? null;
+    headSha = input.expectedHeadSha ?? input.expected_head_sha ?? input.sha ?? input.headSha ?? null;
+    if (headSha !== null && !new RegExp(`^${SHA}$`).test(String(headSha))) headSha = null;
+  }
+  const n = Number(pr);
+  return Number.isInteger(n) && n > 0 && headSha ? { pr: n, headSha: String(headSha) } : null;
+}
+
 /**
  * The decision for one tool call: { decision: 'allowed' | 'refused' | 'needs-approval', rule, why, target }.
  * `cwd` is the session's working copy, `areas` the role's owned areas (none: the role writes nothing), `rules` the
@@ -93,9 +109,12 @@ export function decide({ tool, input = {}, cwd, areas = [], also = [], rules = D
   for (const r of rules) {
     const pats = isShell ? r.command : tool.startsWith('mcp__') ? r.call : null;
     if (pats?.some((re) => re.test(isShell ? text : tool))) {
-      // A merge is approved for one head commit (R5): the command must pin it, so a later push cannot ride along.
-      if (r.action === 'accept' && isShell && /\bgh\s+pr\s+merge\b/.test(text) && !/--match-head-commit[= ]\s*[0-9a-f]{7,40}\b/.test(text)) {
-        return { decision: 'refused', rule: 'match-head-commit', why: 'a merge must name the commit it merges: add --match-head-commit <sha of the head that was reviewed>', target: text };
+      // A merge is approved for one pull request at one head commit (R5, D1): the call must name both, so a later
+      // push cannot ride along. Anything accepted without them (a push straight to the main line) is refused.
+      if (r.action === 'accept') {
+        const m = mergeTarget(tool, input, text);
+        if (!m) return { decision: 'refused', rule: 'match-head-commit', target: isShell ? text : tool, why: 'a merge must name the pull request and the commit it merges (for example gh pr merge 12 --match-head-commit <sha of the head that was reviewed>); the main line is never pushed to directly' };
+        return { decision: 'needs-approval', rule: r.action, why: r.why, target: isShell ? text : tool, ...m };
       }
       return { decision: 'needs-approval', rule: r.action, why: r.why, target: isShell ? text : tool };
     }

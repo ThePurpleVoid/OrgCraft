@@ -38,10 +38,15 @@ test('the owner-steps-in list becomes approvals', () => {
   assert.equal(needs('gh pr merge 12 --squash --match-head-commit abc1234'), 'accept');
   assert.equal(needs('gh pr merge 12 --squash'), 'match-head-commit', 'a merge must pin the head commit it was approved for (R5)');
   assert.equal(decide({ tool: 'Bash', input: { command: 'gh pr merge 12' }, cwd }).decision, 'refused');
-  assert.equal(needs('git push origin main'), 'accept');
-  assert.equal(needs('gh api -X PUT repos/o/r/pulls/12/merge'), 'accept');
-  assert.equal(needs('curl -X PUT https://api.github.com/repos/o/r/pulls/12/merge'), 'accept');
-  assert.equal(needs('git push origin HEAD:main'), 'accept');
+  assert.equal(needs('git push origin main'), 'match-head-commit', 'the main line is never pushed to directly');
+  assert.equal(needs('gh api -X PUT repos/o/r/pulls/12/merge'), 'match-head-commit');
+  assert.equal(needs('gh api -X PUT repos/o/r/pulls/12/merge -f sha=abc1234'), 'accept');
+  assert.equal(needs('curl -X PUT https://api.github.com/repos/o/r/pulls/12/merge -d \'{"sha":"abc1234"}\''), 'accept');
+  assert.equal(needs('gh pr merge --squash --match-head-commit abc1234'), 'match-head-commit', 'the PR number is named');
+  assert.equal(needs('git push origin HEAD:main'), 'match-head-commit');
+  // D1: the approval carries the pull request and the head commit.
+  const d = decide({ tool: 'Bash', input: { command: 'gh pr merge 12 --squash --match-head-commit abc1234' }, cwd });
+  assert.deepEqual([d.pr, d.headSha], [12, 'abc1234']);
   assert.equal(needs('git push -u origin feature/main-menu'), null, 'a branch that mentions main is not main');
   assert.equal(needs('git push --force origin web/1'), 'force-push');
   assert.equal(needs('git push --force-with-lease origin web/1'), null);
@@ -52,7 +57,9 @@ test('the owner-steps-in list becomes approvals', () => {
   assert.equal(needs('npm test && git push -u origin web/12-login'), null);
   assert.equal(needs('rm -rf node_modules'), null);
   const call = (tool) => decide({ tool, input: {}, cwd }).rule;
-  assert.equal(call('mcp__github__merge_pull_request'), 'accept');
+  assert.equal(call('mcp__github__merge_pull_request'), 'match-head-commit');
+  const m = decide({ tool: 'mcp__github__merge_pull_request', input: { pullNumber: 7, expectedHeadSha: 'deadbeef' }, cwd });
+  assert.deepEqual([m.rule, m.pr, m.headSha], ['accept', 7, 'deadbeef']);
   assert.equal(call('mcp__gmail__send_email'), 'outbound-message');
   assert.equal(call('mcp__github__get_file_contents'), null);
   assert.equal(call('mcp__team__handoff'), 'team-tool');

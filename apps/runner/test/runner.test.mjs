@@ -123,6 +123,7 @@ test('the runner pauses a merge until approval.result, and refuses it on deny', 
     assert.deepEqual(order, ['asking', 'merged'], 'the merge ran only after the approval, and the denied one never ran');
     assert.deepEqual(cp.approvals.map((a) => `${a.via}:${a.via === 'policy' ? a.approval.action : a.input.action}`), ['policy:accept', 'policy:accept', 'tool:deploy-production']);
     assert.equal(cp.approvals[0].approval.call, 'gh pr merge 12 --squash --match-head-commit abc1234');
+    assert.deepEqual([cp.approvals[0].approval.pr, cp.approvals[0].approval.headSha], [12, 'abc1234'], 'D1: the approval names the PR and head');
     const decisions = cp.events.filter((e) => e.type === 'session.tool').map((e) => `${e.data.decision}:${e.data.rule}`);
     assert.deepEqual(decisions, ['needs-approval:accept', 'allowed:accept', 'needs-approval:accept', 'refused:accept']);
     noFailedTurns(cp);
