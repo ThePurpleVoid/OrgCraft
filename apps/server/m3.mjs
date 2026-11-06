@@ -32,6 +32,25 @@ export function eventId() {
 }
 
 const SYSTEM = { kind: 'system', id: 'control-plane', via: 'api' };
+/** What a held call will do, in words for the card (QA M3 exit A): the exact call stays in the card's data. */
+export function describeCall(call) {
+  const cut = (t, n = 300) => (t.length > n ? `${t.slice(0, n)}…` : t);
+  if (typeof call === 'string') return `It will run: ${cut(call)}`;
+  if (call && typeof call === 'object') {
+    if (call.pr) return `It will merge pull request #${call.pr}${call.headSha ? ` at commit ${String(call.headSha).slice(0, 7)}` : ''}${call.repo ? ` in ${call.repo}` : ''}.`;
+    if (typeof call.command === 'string') return `It will run: ${cut(call.command)}`;
+    if (typeof call.tool === 'string') return `It will call the tool ${call.tool}.`;
+  }
+  return 'The exact call is attached to this card.';
+}
+
+/** Minor units as money for a card's text ($6.14); the numbers stay in the card's data for clients to format. */
+export function money(minor, currency = 'USD') {
+  try {
+    const f = new Intl.NumberFormat('en-US', { style: 'currency', currency });
+    return f.format(Number(minor) / 10 ** f.resolvedOptions().maximumFractionDigits);
+  } catch { return `${minor} ${currency} (minor units)`; }
+}
 export const personActor = (who) => ({ kind: 'person', id: who, via: 'studio' });
 
 /** A new envelope minted by the control plane. */
@@ -190,7 +209,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     const card = await createCard(ctx, team, {
       kind: 'budget', subject: info.scope === 'run' ? `run/${info.run}` : `budget/${info.day}`, run: info.run ?? runs[0]?.id ?? null,
       title: info.scope === 'run' ? 'This run reached its budget' : "Today's budget is spent",
-      body: `The team has spent ${info.spent} of ${info.cap} (${info.currency}, minor units) ${info.scope === 'run' ? 'on this run' : `on ${info.day} (UTC)`}. The run is paused; nothing spends until you choose.`,
+      body: `The team has spent ${money(info.spent, info.currency)} of ${money(info.cap, info.currency)} ${info.scope === 'run' ? 'on this run' : `on ${info.day} (UTC)`}. The run is paused; nothing spends until you choose.`,
       recommendation: { option: 'tomorrow', why: 'Nothing more is spent today.' },
       options: [
         { id: 'tomorrow', label: info.scope === 'run' ? 'Leave it paused' : 'Resume tomorrow', style: 'primary', stepUp: false },
@@ -451,8 +470,9 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       title: call && typeof call === 'object' && call.pr && call.headSha
         ? `${role ?? 'A role'} asks to ${action === 'accept' ? 'merge' : action} #${call.pr} at ${String(call.headSha).slice(0, 7)}`
         : `${role ?? 'A role'} asks to ${action}`,
-      ...(call && typeof call === 'object' && call.pr ? { data: { pr: call.pr, ...(call.headSha ? { headSha: call.headSha } : {}) } } : {}),
-      body: `${why}\n\n\`${callText.length > 500 ? `${callText.slice(0, 500)}…` : callText}\``,
+      // The held call is data, for the client to lay out (and wrap) as code; the body is the role's words only.
+      data: { ...(call && typeof call === 'object' && call.pr ? { pr: call.pr, ...(call.headSha ? { headSha: call.headSha } : {}) } : {}), call: callText.length > 2000 ? `${callText.slice(0, 2000)}…` : callText },
+      body: `${why}\n\n${describeCall(call)}`,
       options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger', stepUp: false }],
       risk: r, expiresAt, links: links.filter((l) => l && typeof l.url === 'string').slice(0, 20),
     });
