@@ -86,14 +86,20 @@ jobs:
             "$DATABASE_URL" "$AGENT_TEAM_MASTER_KEY" "$AGENT_TEAM_ADMIN_TOKEN" \
             | flyctl secrets import --stage --app "$FLY_APP" >/dev/null
 
-      - name: Deploy the control plane (migrations run first; destructive ones need the owner's OK)
+      - name: Run migrations the owner approved as destructive (only when allow_destructive is ticked)
+        if: inputs.allow_destructive
         env:
-          ALLOW: ${{ inputs.allow_destructive && '1' || '0' }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ALLOW_DESTRUCTIVE: "1"
+        run: |
+          npm ci --prefix apps/server
+          node deploy/server/migrate.mjs
+
+      - name: Deploy the control plane (its release command migrates first and refuses anything destructive)
         run: |
           flyctl deploy . --app "$FLY_APP" --config deploy/fly/server.toml --dockerfile deploy/server/Dockerfile \
             --remote-only --ha=false --primary-region "$FLY_REGION" --wait-timeout 5m \
-            --env AGENT_TEAM_PUBLIC_URL="$PUBLIC_URL" --env AGENT_TEAM_TENANT="$TENANT" --env DATABASE_POOL=5 \
-            --env ALLOW_DESTRUCTIVE="$ALLOW"
+            --env AGENT_TEAM_PUBLIC_URL="$PUBLIC_URL" --env AGENT_TEAM_TENANT="$TENANT" --env DATABASE_POOL=5
 
       - name: Deploy the Studio site on Vercel
         run: |

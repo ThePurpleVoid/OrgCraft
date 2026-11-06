@@ -10,7 +10,7 @@ The split is the architect's (m3-design.md §8), accepted by the CTO.
 
 | Part | Where | Why |
 |---|---|---|
-| Studio page | **Vercel**, static files only | Plain files, no build ([ADR 0003](../adr/0003-studio-local-mode-without-a-build.md)). No Vercel Functions, no Vercel Cron |
+| Site page | **Vercel**, static files only | For now a status page that calls `/v1/health`. The Studio page talks to the local Studio server's own routes, so the hosted Studio is an M4 item (architect, web-dev). Then `build.mjs --studio` ships it. No Vercel Functions, no Vercel Cron |
 | `/v1/*` and `/.well-known/agent-team` | Vercel **rewrites** them to the container | People, phones and the kit's report scripts use one host |
 | The whole API, live streams, the sink worker, timers (a 15-second in-process tick), the runner's WebSocket | **One always-on `apps/server` container on Fly.io** | Serverless functions end; streams, sockets and timers are long-lived. One instance, so live fan-out needs nothing extra |
 | Runner (Agent SDK sessions in git worktrees) | **A second Fly.io app** in the same organization and region, with a volume | Long sessions, a filesystem and git. It connects out to the container by WebSocket, never through Vercel |
@@ -62,7 +62,7 @@ Thirteen steps, about 30 minutes. Values go only where a step says. Never into c
 9. Add the variable `AGENT_TEAM_DEPLOY` = `on`. Until it exists, the Deploy workflow does nothing.
 
 **First deploy**
-10. Go to Actions → Deploy → Run workflow on `main`. It checks that every name is set, creates the Fly app, stages the three server secrets on Fly, migrates Supabase, starts the container, publishes the site, and smoke-tests both. It takes about 5 minutes. After this, every green CI run on `main` deploys by itself.
+10. Go to Actions → Deploy → Run workflow on `main`. It checks that every name is set, creates the Fly app, stages the three server secrets on Fly, migrates Supabase, starts the container, publishes the site, and smoke-tests both. If a later migration is flagged destructive, the deploy stops. Once you have agreed to it, re-run with `allow_destructive` ticked: that runs the migration once from Actions, and no running machine ever carries the flag. It takes about 5 minutes. After this, every green CI run on `main` deploys by itself.
 11. Tell the chief of staff it is green. The team then connects the kit's own team to it: it creates the team, mints a report token, and puts `TEAM_REPORT_URL` and `TEAM_REPORT_TOKEN` in the shared board's `team.env`. You paste nothing for this.
 
 **Later, when the chief of staff asks (M3 and M4)**
@@ -85,9 +85,9 @@ Prices are as of November 2026; check each provider's page.
 
 | Missing | What you see |
 |---|---|
-| The container (Fly) | The Studio loads, but every `/v1` call through Vercel returns a 5xx. Reports from the kit's scripts fail and are logged locally only (the scripts never block) |
+| The container (Fly) | The status page says the control plane is not reachable, and every `/v1` call through Vercel returns a 5xx. Reports from the kit's scripts fail and are logged locally only (the scripts never block) |
 | Supabase | The container fails its release command (`migrate:` errors in the Fly logs), so the old version keeps serving. A running server answers 500 on data calls and `/v1/health` still answers |
-| Vercel | The API still works at `https://<FLY_APP>.fly.dev`. People, phones and report URLs that name the Vercel host fail |
+| Vercel | The status page is gone, but the API still works at `https://<FLY_APP>.fly.dev`. People, phones and report URLs that name the Vercel host fail |
 | The runner | The board, reports and approvals work. Chat and runs wait in the queue until a runner connects |
 | `AGENT_TEAM_MASTER_KEY` changed | Stored secrets cannot be opened. Put the old key back, or re-enter every secret |
 

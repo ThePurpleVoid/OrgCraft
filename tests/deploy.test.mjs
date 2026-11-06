@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { destructiveStatements } from '../deploy/server/guard.mjs';
-import { siteConfig } from '../deploy/vercel/build.mjs';
+import { siteConfig, STATUS_PAGE } from '../deploy/vercel/build.mjs';
 
 test('the guard flags data-losing statements and nothing in the shipped migrations', () => {
   const flagged = destructiveStatements([
@@ -36,4 +36,9 @@ test('the site rewrites the API and discovery to one https origin, and nothing e
   for (const bad of ['http://api.example.org', 'https://api.example.org/v1', 'https://u:p@api.example.org', 'https://a.org/?x=1']) {
     assert.throws(() => siteConfig(bad), /https origin/, bad);
   }
+});
+
+test('until the Studio has a hosted mode, the site page only calls what the control plane serves', () => {
+  const calls = [...STATUS_PAGE.matchAll(/fetch\(\s*['"`](\/v1\/[^'"`?$]*)/g)].map((m) => m[1]);
+  assert.deepEqual(calls, ['/v1/health']);
 });

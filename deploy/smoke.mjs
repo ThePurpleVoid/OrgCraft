@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Checks a deployment after it ships, without writing anything to it:
 //   1. the control plane answers /v1/health directly and through the site's rewrite
-//   2. the site serves the Studio page
+//   2. the site serves its page, and the page's own call (/v1/health, checked in 1) is the one it makes
 //   3. a live stream passes the site's rewrite unbuffered: the first bytes arrive at once, and the server's 20-second
 //      keep-alive arrives while the stream is open. A buffering proxy would hold both until the stream ended.
 //
@@ -38,7 +38,17 @@ await health(site, 'site rewrite');
 if (!o['api-only']) try {
   const r = await fetch(`${site}/`, { signal: AbortSignal.timeout(10_000) });
   const html = await r.text();
-  (r.ok && /<html/i.test(html)) ? ok('site serves the Studio page') : bad(`site / answered ${r.status}`);
+  if (!r.ok || !/<html/i.test(html)) bad(`site / answered ${r.status}`);
+  else {
+    // Every same-origin API path the page calls must be one the control plane answers through the rewrite.
+    const calls = [...new Set([...html.matchAll(/fetch\(\s*['"`](\/v1\/[^'"`?$]*)/g)].map((m) => m[1]))];
+    const failing = [];
+    for (const path of calls) {
+      const c = await fetch(`${site}${path}`, { headers: auth, signal: AbortSignal.timeout(10_000) }).catch(() => null);
+      if (!c || c.status === 404 || c.status >= 500) failing.push(`${path} → ${c?.status ?? 'no answer'}`);
+    }
+    failing.length ? bad(`the page calls API paths the control plane does not serve: ${failing.join(', ')}`) : ok(`site serves its page; its API calls answer (${calls.join(', ') || 'none'})`);
+  }
 } catch (e) { bad(`site /: ${e.message}`); }
 
 async function streamCheck() {
