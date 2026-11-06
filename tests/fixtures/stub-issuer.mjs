@@ -84,7 +84,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       interactions.delete(entry[0]);
       const login = url.searchParams.get('code');
       const person = members[login];
-      if (!person) return redirect(`/sign-in?error=not-invited&login=${encodeURIComponent(login)}`);
+      if (!person) return redirect('/sign-in?error=not-invited');
       const sid = randomBytes(32).toString('base64url');
       sessions.set(sid, { person: { login, ...person }, authTime: Date.now() });
       return redirect(entry[1].return, { 'set-cookie': `${COOKIE}=${sid}; HttpOnly; Secure; SameSite=Lax; Path=/` });

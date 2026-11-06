@@ -75,6 +75,20 @@ test('sign in with GitHub, add a first passkey, step up with it, and sign out', 
   await page.locator('.passkey', { hasText: 'Work laptop' }).waitFor();
   assert.equal(iss.passkeys.get('per_octo').length, 1);
 
+  // A second passkey asks for step-up before anything is created: one create() in all, so no orphan credential is
+  // left on the device. (This virtual device already holds one, so the browser refuses the new one, and the page says so.)
+  await page.evaluate(() => { window.creates = 0; const c = navigator.credentials.create.bind(navigator.credentials); navigator.credentials.create = (o) => { window.creates++; return c(o); }; });
+  await page.getByRole('button', { name: 'Add a passkey' }).click();
+  await add.getByLabel('Name').fill('Second');
+  await add.getByRole('button', { name: 'Create passkey' }).click();
+  await page.locator('#passkey-stepup').getByRole('heading', { name: 'Confirm it is you' }).waitFor();
+  assert.equal(await page.evaluate(() => window.creates), 0, 'nothing is created before step-up');
+  await page.locator('#passkey-stepup').getByRole('button', { name: 'Use passkey' }).click();
+  await add.getByText('already has a passkey').waitFor();
+  assert.equal(await page.evaluate(() => window.creates), 1, 'one create() in all');
+  await add.getByRole('button', { name: 'Not now' }).click();
+  const leftover = iss.stepUps.size; // the su_ for the refused create was never sent; it expires in 5 minutes
+
   // Removing it needs step-up: the dialog asks for the passkey, the issuer mints one su_ token, the page spends it once.
   page.once('dialog', (d) => d.accept());
   await page.locator('.passkey', { hasText: 'Work laptop' }).getByRole('button', { name: 'Remove' }).click();
@@ -84,17 +98,21 @@ test('sign in with GitHub, add a first passkey, step up with it, and sign out', 
   await su.getByRole('button', { name: 'Use passkey' }).click();
   await page.getByText('Add a passkey before you can approve anything').waitFor();
   assert.equal(iss.passkeys.get('per_octo').length, 0);
-  assert.equal(iss.stepUps.size, 0, 'the su_ token was spent by the one call that needed it');
+  assert.equal(iss.stepUps.size, leftover, 'the su_ token was spent by the one call that needed it');
   assert.ok(iss.log.some((l) => l.method === 'DELETE' && l.status === 401) && iss.log.some((l) => l.method === 'DELETE' && l.status === 200));
 
   // A return path that leaves the host is refused: signed in, the issuer sends the browser to '/' instead.
-  await page.goto(`${iss.origin}/oauth/authorize?client_id=agent-team-web&return=${encodeURIComponent('//evil.example/x')}`);
-  assert.equal(new URL(page.url()).origin, iss.origin);
-  assert.equal(new URL(page.url()).pathname, '/');
+  for (const evil of ['//evil.example/x', '/.//evil.example', '/a/..//evil.example']) {
+    await page.goto(`${iss.origin}/oauth/authorize?client_id=agent-team-web&return=${encodeURIComponent(evil)}`);
+    assert.equal(new URL(page.url()).origin, iss.origin, evil);
+    assert.equal(new URL(page.url()).pathname, '/', evil);
+  }
 
   // Sign out ends the session; the account page then needs a sign-in again.
   await page.goto(`${iss.origin}/account`);
-  await page.locator('#passkey-add').getByRole('button', { name: 'Not now' }).click();
+  // "Not now" was pressed above, so this visit does not ask for a passkey again.
+  await page.getByText('Add a passkey before you can approve anything').waitFor();
+  assert.equal(await page.locator('#passkey-add').isVisible(), false);
   await page.getByRole('button', { name: 'Sign out' }).click();
   await page.getByRole('heading', { name: 'You are signed out' }).waitFor();
   assert.equal((await ctx.cookies()).filter((c) => c.name === '__Host-agent-team').length, 0);
@@ -118,7 +136,7 @@ test('a GitHub account that is not a member or invitee is told to ask an owner, 
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'sign-in-phone-light.png') });
   await go.click();
   await page.getByRole('heading', { name: 'Ask an owner to invite you' }).waitFor();
-  assert.equal(await page.locator('#auth-body strong').textContent(), 'stranger<b>', 'the login is shown as text');
+  assert.equal(await page.getByText('stranger').count(), 0, 'no login from the address bar is shown');
   assert.equal(iss.sessions.size, before, 'no session');
   await noSideScroll(page, 360);
   if (SHOTS) {

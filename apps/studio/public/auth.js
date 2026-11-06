@@ -25,10 +25,14 @@ export function safeReturn(raw) {
   if (raw[0] !== '/' || raw[1] === '/' || raw[1] === '\\') return '/';
   // Encoded slashes and backslashes, anywhere: a server or proxy that decodes once would see '//' or '/\'.
   if (/\\|%2f|%5c|%25/i.test(raw)) return '/';
+  // Dot segments, raw or encoded: normalising '/.//evil' or '/a/..//evil' yields '//evil' (code review, PR #59).
+  if (/(^|\/)(\.|%2e){1,2}(\/|$)/i.test(raw.split(/[?#]/)[0])) return '/';
   let url;
   try { url = new URL(raw, 'https://host.invalid'); } catch { return '/'; }
   if (url.origin !== 'https://host.invalid') return '/';
-  return url.pathname + url.search + url.hash;
+  const out = url.pathname + url.search + url.hash;
+  // And check what comes out, not only what went in: whatever the parser did, the result is one leading '/'.
+  return out[0] === '/' && out[1] !== '/' && out[1] !== '\\' ? out : '/';
 }
 
 /** Where the sign-in page sends "Continue with GitHub": built only from an interaction id the issuer gave. */

@@ -49,17 +49,21 @@ document.getElementById('passkey-add-form').addEventListener('submit', async (e)
   const button = e.submitter ?? dlg.querySelector('button[type="submit"]');
   button.disabled = true;
   out.textContent = '';
-  let r = await addPasskey(name);
-  // Every passkey after the first, or the first one long after signing in, needs one you already have.
-  if (needsStepUp(r)) {
+  // Every passkey after the first needs one you already have. Ask first: creating the new credential before the
+  // server says no would leave a passkey on the device that the server never heard of (code review, PR #59).
+  let header = {};
+  if (keys.length) {
     dlg.close();
-    const header = keys.length ? await stepUpDialog('Adding a passkey lets that device approve things for you.') : null;
-    if (!keys.length) { note = 'Your sign-in is too old to add a first passkey. Sign out and in again, then add it.'; button.disabled = false; return render(); }
-    if (!header) { button.disabled = false; return; }
+    header = await stepUpDialog('Adding a passkey lets that device approve things for you.');
+    button.disabled = false;
+    if (!header) return;
     dlg.showModal();
-    r = await addPasskey(name, header);
+    button.disabled = true;
   }
+  const r = await addPasskey(name, header);
   button.disabled = false;
+  // A first passkey needs a sign-in under 5 minutes old; after that, the only way is to sign in again.
+  if (needsStepUp(r) && !keys.length) { dlg.close(); note = 'Your sign-in is too old to add a first passkey. Sign out and in again, then add it.'; return render(); }
   if (!r.ok) { out.textContent = r.data.error ?? `HTTP ${r.status}`; return; }
   dlg.close();
   note = '';

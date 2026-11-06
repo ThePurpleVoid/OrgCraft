@@ -1,6 +1,6 @@
 // The issuer's sign-in page (docs/specs/m4-sign-in.md section 2, step 2). The issuer sends a person here with an
 // interaction id when they have no session, or with an error code after GitHub. Everything shown comes from a fixed
-// list of messages; the only value from the address bar that reaches the page is the GitHub login, as text.
+// list of messages: nothing from the address bar reaches the page as text.
 import { esc, githubStart, signInUrl } from './auth.js';
 
 const q = new URLSearchParams(location.search);
@@ -10,7 +10,8 @@ const title = document.getElementById('auth-title');
 const MESSAGES = {
   'not-invited': {
     title: 'Ask an owner to invite you',
-    text: (login) => `${login ? `You signed in to GitHub as <strong>${esc(login)}</strong>, but that account` : 'That GitHub account'} is not a member of any workspace here, and has no open invitation. Ask an owner of the workspace to invite you, then sign in again. Nothing was created for you.`,
+    // No login from the address bar: anyone can craft this link, so the page names no account (security review, #59).
+    text: () => 'The GitHub account you signed in with is not a member of any workspace here, and has no open invitation. Ask an owner of the workspace to invite you, then sign in again. Nothing was created for you.',
   },
   expired: { title: 'That sign-in took too long', text: () => 'The sign-in link expired before it finished. Start again.' },
   denied: { title: 'GitHub did not sign you in', text: () => 'The sign-in was cancelled or refused at GitHub. Start again when you are ready.' },
@@ -25,7 +26,7 @@ if (err && MESSAGES[err]) {
   const m = MESSAGES[err];
   title.textContent = m.title;
   document.title = `${m.title} · Agent Team Studio`;
-  body.innerHTML = `<p>${m.text(q.get('login')?.slice(0, 39))}</p>${again}`;
+  body.innerHTML = `<p>${m.text()}</p>${again}`;
 } else if (err) {
   title.textContent = 'Sign-in did not finish';
   body.innerHTML = `<p>Something went wrong while signing you in. Start again.</p>${again}`;
