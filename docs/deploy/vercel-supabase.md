@@ -13,7 +13,7 @@ The split is the architect's (m3-design.md §8), accepted by the CTO.
 | Site page | **Vercel**, static files only | For now a status page that calls `/v1/health`. The Studio page talks to the local Studio server's own routes, so the hosted Studio is an M4 item (architect, web-dev). Then `build.mjs --studio` ships it. No Vercel Functions, no Vercel Cron |
 | `/v1/*` and `/.well-known/agent-team` | Vercel **rewrites** them to the container | People, phones and the kit's report scripts use one host |
 | The whole API, live streams, the sink worker, timers (a 15-second in-process tick), the runner's WebSocket | **One always-on `apps/server` container on Fly.io** | Serverless functions end; streams, sockets and timers are long-lived. One instance, so live fan-out needs nothing extra |
-| Runner (Agent SDK sessions in git worktrees) | **A second Fly.io app** in the same organization and region, with a volume | Long sessions, a filesystem and git. It connects out to the container by WebSocket, never through Vercel |
+| Runner (Agent SDK sessions in git worktrees) | **A second Fly.io app** (`<FLY_APP>-runner`) in the same organization and region, with one volume at `/data`, deployed by the same workflow once `AGENT_TEAM_RUNNER=on` | Long sessions, a filesystem and git. It connects out to the container's public URL by WebSocket, never through Vercel. Sessions run as a separate user inside it (apps/runner/Dockerfile) |
 | Postgres | **Supabase**, in a dedicated `agent_team` schema | Migrations run as they are. Row-level security per tenant, unchanged |
 
 Streams pass through the Vercel rewrite. The deploy's smoke test proves they arrive unbuffered (first bytes at once, the server's 20-second keep-alive while open). If that check ever fails, clients must open streams on the container host directly, and discovery names that host for streams.
@@ -66,7 +66,7 @@ Thirteen steps, about 30 minutes. Values go only where a step says. Never into c
 11. Tell the chief of staff it is green. The team then connects the kit's own team to it: it creates the team, mints a report token, and puts `TEAM_REPORT_URL` and `TEAM_REPORT_TOKEN` in the shared board's `team.env`. You paste nothing for this.
 
 **Later, when the chief of staff asks (M3 and M4)**
-12. `ANTHROPIC_API_KEY`, with a daily spend cap set in the Anthropic console, as an environment secret for the runner app.
+12. **The runner, only after step 13.** Without step 13's push credential, every checkpoint push fails while the runner still spends from your model budget, so leave `AGENT_TEAM_RUNNER` unset until then. Set a daily spend cap in the Anthropic console, then add the environment secret `ANTHROPIC_API_KEY`. Run `node deploy/fly/register-runner.mjs --server https://<FLY_APP>.fly.dev` in a clone. It asks for your admin token and step-up secret without showing them, registers the runner, and prints its key once. Add that as the environment secret **`AGENT_TEAM_RUNNER_KEY`**, then clear your terminal. Set the variable `AGENT_TEAM_RUNNER` = `on` and run Deploy again: it creates `<FLY_APP>-runner` with a 20 GB volume and starts the runner, about $25 a month. Once that run has created the runner app (an app-scoped token cannot create apps), narrow the Fly tokens: run `fly tokens create deploy --app <FLY_APP>` and `fly tokens create deploy --app <FLY_APP>-runner`, put them in `FLY_API_TOKEN` and `FLY_RUNNER_API_TOKEN`, and revoke the org token. An org-wide token can also open a shell on the runner, where the model key lives.
 13. The GitHub App (sign-in and pushes): its app id, private key and client secret, by the names the chief of staff gives.
 
 ## Costs to expect
@@ -103,6 +103,7 @@ Prices are as of November 2026; check each provider's page.
 | [`apps/runner/Dockerfile`](../../apps/runner/Dockerfile) | The runner image: the runner as one user, sessions as another |
 | [`deploy/vercel/build.mjs`](../../deploy/vercel/build.mjs) | Writes the static site and its rewrites |
 | [`deploy/smoke.mjs`](../../deploy/smoke.mjs) | The read-only post-deploy check |
+| [`deploy/fly/register-runner.mjs`](../../deploy/fly/register-runner.mjs) | The owner's one-time runner registration (needs their step-up) |
 | [`deploy/env/`](../../deploy/env/) | Every secret and variable, by name only |
 | [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml) | The deploy, after CI on `main` or by hand |
 

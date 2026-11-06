@@ -19,10 +19,16 @@ export function hashStepUp(secret, salt = randomBytes(16)) {
   return ['scrypt', N, r, p, salt.toString('base64url'), key.toString('base64url')].join('$');
 }
 
-async function ask(prompt) {
+let piped = null; // when stdin is not a terminal: its lines, one per question
+
+/** Asks for a line on the terminal without echoing it (or takes the next line of piped stdin). */
+export async function ask(prompt) {
   const { stdin, stderr } = process;
   stderr.write(prompt);
-  if (!stdin.isTTY) { let s = ''; for await (const c of stdin) s += c; return s.split('\n')[0]; }
+  if (!stdin.isTTY) {
+    if (!piped) { let s = ''; for await (const c of stdin) s += c; piped = s.split('\n'); }
+    return piped.shift() ?? '';
+  }
   stdin.setRawMode(true);
   let s = '';
   return new Promise((done) => {
