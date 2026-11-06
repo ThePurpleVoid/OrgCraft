@@ -165,7 +165,7 @@ OpenID-Certified library: `identity.mjs` holds its storage adapter and our polic
   Anyone else gets `/sign-in?error=not-invited` and nothing is stored. The person's GitHub token is used once to
   read who they are, and dropped.
 - **Settings:** `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, an https `AGENT_TEAM_PUBLIC_URL` (the issuer),
-  `AGENT_TEAM_OWNER_GITHUB`, and `AGENT_TEAM_CLIENT_IP_HEADER` for rate limits behind a proxy. The signing key is made on
+  `AGENT_TEAM_OWNER_GITHUB`, and `AGENT_TEAM_PROXY_HOPS` with `AGENT_TEAM_EDGE_SECRET` so rate limits read the caller's IP from our own proxies (from the right of `x-forwarded-for`), never from a client. The signing key is made on
   first start and sealed in the vault.
 
 Still to come (order 2): passkeys and step-up for signed-in people, roles on every route (until then a signed-in
