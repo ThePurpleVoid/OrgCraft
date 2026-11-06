@@ -1099,6 +1099,12 @@ function load(initial) {
     if (item) { change((sp) => revert(sp, published, item)); pop = null; render(); }
   });
   $('#canvas').addEventListener('pointerdown', (e) => { if (e.target.closest('.impact-pop')) e.stopPropagation(); }, true);
+  // Back to the team's settings (QA of #119): a click on the canvas's empty space or on the owner, or Escape.
+  $('#canvas').addEventListener('click', (e) => {
+    if (e.target.closest('.impact-pop, button, a, input')) return;
+    const n = e.target.closest('.node');
+    if ((!n || n.dataset.slug === 'owner') && (selected || selectedSystem)) select(null);
+  });
   $('#live').onclick = toggleLive;
   $('#confirm').onclick = confirmPublish;
   $('#issues').addEventListener('click', (e) => {
@@ -1114,6 +1120,7 @@ function load(initial) {
   $('#pages').addEventListener('click', (e) => { const b = e.target.closest('[data-page]'); if (b) setPage(b.dataset.page); });
   addEventListener('hashchange', () => setPage(location.hash.slice(1)));
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && (selected || selectedSystem) && !document.querySelector('dialog[open]') && $('#agent-editor').hidden && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return select(null);
     if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
     e.preventDefault();
     if (e.shiftKey) step(redo, undo); else step(undo, redo);

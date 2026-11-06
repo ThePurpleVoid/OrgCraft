@@ -76,10 +76,55 @@ test('the AGENTS.md switch publishes AGENTS.md and keeps the repository\'s own t
   await page.getByLabel('Also write AGENTS.md, for coding agents other than Claude Code').uncheck();
   await page.locator('#publish').click();
   await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
+  // The review shows what sync does: the kit's block goes, the owner's text stays (QA of #119).
+  assert.equal(await page.locator('#changes summary', { hasText: /^changedAGENTS\.md$/ }).count(), 1);
   await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
   assert.equal(readFileSync(join(root, 'AGENTS.md'), 'utf8'), '# Sample app\n\nRun the tests with npm test.\n');
   assert.equal(JSON.parse(readFileSync(join(root, '.agent-team/team.json'), 'utf8')).targets, undefined);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('a kit-made AGENTS.md: the review shows only real changes, switching off commits the deletion, and the team settings come back (QA of #119)', { skip }, async () => {
+  const { unlinkSync } = await import('node:fs');
+  const git = (...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8' });
+  git('checkout', '-q', '-b', 'kit-made');
+  unlinkSync(join(root, 'AGENTS.md'));
+  git('commit', '-qam', 'no AGENTS.md of its own');
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${base}/?t=${studio.launchToken}`);
+  await page.locator('.lib-role').first().waitFor();
+  const label = 'Also write AGENTS.md, for coding agents other than Claude Code';
+
+  // A role picked, then back to the team settings: Escape, and a click on the owner.
+  await page.locator('#canvas .node[data-slug="web-dev"]').click();
+  assert.equal(await page.getByLabel(label).count(), 0);
+  await page.keyboard.press('Escape');
+  await page.getByLabel(label).waitFor();
+  await page.locator('#canvas .node[data-slug="web-dev"]').click();
+  await page.locator('#canvas .node[data-slug="owner"]').click();
+  await page.getByLabel(label).check();
+  await page.locator('#publish').click();
+  await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
+  await page.locator('#confirm').click();
+  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
+  // Nothing left to publish: the review reads the repository's AGENTS.md, so it is not shown as changed.
+  await page.locator('#publish').click();
+  await page.locator('#publish-dialog', { hasText: 'Nothing to publish' }).waitFor();
+  await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
+
+  // Off: the kit made the file, so it goes, and the deletion is committed.
+  await page.getByLabel(label).uncheck();
+  await page.locator('#publish').click();
+  await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
+  await page.locator('#confirm').click();
+  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  assert.equal(git('status', '--porcelain'), '', 'the deletion is committed');
+  assert.throws(() => git('show', 'HEAD:AGENTS.md'));
   assert.deepEqual(errors, []);
   await page.close();
 });

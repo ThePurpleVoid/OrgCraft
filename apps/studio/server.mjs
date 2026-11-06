@@ -14,7 +14,7 @@ import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build, DEFAULT_KIT_SPEC, initExtras, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
-import { compileLayer, importLayer, resolveSpec, teamTargets, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
+import { compileLayer, importLayer, resolveSpec, teamTargets, withoutBlock, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
 import { hostGuard } from '../../tools/hosts.mjs';
@@ -134,7 +134,8 @@ export function preview(root, spec) {
   const scratch = mkdtempSync(join(tmpdir(), 'agent-team-studio-'));
   try {
     if (existsSync(join(root, '.agent-team'))) cpSync(join(root, '.agent-team'), join(scratch, '.agent-team'), { recursive: true });
-    for (const keep of ['docs/team/ownership.md', 'docs/team/lanes']) if (existsSync(join(root, keep))) cpSync(join(root, keep), join(scratch, keep), { recursive: true });
+    // AGENTS.md may hold the repository's own text, which the kit's block is spliced into (QA of #119).
+    for (const keep of ['docs/team/ownership.md', 'docs/team/lanes', 'AGENTS.md']) if (existsSync(join(root, keep))) cpSync(join(root, keep), join(scratch, keep), { recursive: true });
     writeLayer(scratch, layer);
     if (!hasTeam(root)) extras(scratch, layer);
     const before = hasTeam(root) ? build(root).files : new Map();
@@ -147,7 +148,8 @@ export function preview(root, spec) {
     }
     for (const p of new Set([...before.keys(), ...after.keys()])) {
       const now = read(p);
-      const next = after.get(p) ?? null;
+      // Switched off, AGENTS.md loses only the kit's block, as sync does.
+      const next = after.get(p) ?? (p === 'AGENTS.md' ? withoutBlock(now) : null);
       if (now !== next) changes.push({ path: p, status: now === null ? 'added' : next === null ? 'removed' : 'changed', before: now, after: next });
     }
     if (!hasTeam(root)) for (const p of INIT_FILES) {
@@ -198,7 +200,7 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
     if (fresh) extras(root, layer);
     const code = sync(root, { quiet: true });
     if (code !== 0) throw new HttpError(500, 'sync reported roster errors; nothing was committed');
-    git(root, 'add', '-A', '--', ...paths.filter((p) => existsSync(join(root, p))), ...(ignoreClean && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
+    git(root, 'add', '-A', '--', ...paths.filter((p) => existsSync(join(root, p)) || tryGit(root, 'ls-files', '--', p)), ...(ignoreClean && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
     staged = tryGit(root, 'diff', '--cached', '--name-only').split('\n').filter(Boolean);
     if (staged.length) git(root, 'commit', '-q', '-m', text);
   } catch (e) {
