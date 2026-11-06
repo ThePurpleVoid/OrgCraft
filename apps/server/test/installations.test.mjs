@@ -67,6 +67,7 @@ test('the install callback binds an installation the person administers; the sta
   assert.equal(gh.dropped.length, 1, 'the user token is revoked once read');
   const list = (await b.call('GET', '/github/installations')).body.installations;
   assert.deepEqual(list.map((i) => [i.id, i.account, i.accountType, i.githubLogin, i.method]), [[42, 'octo', 'User', 'octo', 'install-callback']]);
+  assert.equal(list[0].proverLeft, false);
   const [a] = await db.system("select detail from identity_audit where action = 'github.installation.bound'");
   assert.equal(a.detail.installation, 42);
 
@@ -151,6 +152,18 @@ test('every proof GitHub must give: same user, listed, not suspended, account ad
   await refused(77, 'taken');
   const [row] = await db.system('select tenant from github_installations where installation_id = 77');
   assert.equal(row.tenant, 'other');
+  // A binding whose prover is no longer an owner or admin of the workspace is flagged.
+  const [mine5] = (await b.call('GET', '/github/installations')).body.installations.filter((i) => i.id === 5);
+  assert.equal(mine5.proverLeft, false);
+  await db.system("insert into people(id, provider, subject, login) values ('per_formeradmin', 'github', '5005', 'former')");
+  await db.system("insert into members(id, tenant, person, role) values ('mem_former', 'acme', 'per_formeradmin', 'admin')");
+  await db.system("update github_installations set proven_by = 'per_formeradmin' where installation_id = 5");
+  const flag = async () => (await b.call('GET', '/github/installations')).body.installations.find((i) => i.id === 5).proverLeft;
+  assert.equal(await flag(), false, 'an admin who proved it');
+  await db.system("update members set role = 'editor' where id = 'mem_former'");
+  assert.equal(await flag(), true, 'no longer an admin');
+  await db.system("update members set role = 'admin', removed_at = now() where id = 'mem_former'");
+  assert.equal(await flag(), true, 'left the workspace');
   assert.equal(gh.dropped.length, gh.issued.length - 1, 'every user token is revoked, whatever the answer (the sign-in one is not a user token here)');
 }, { githubApp: APP }));
 

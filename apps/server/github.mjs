@@ -166,8 +166,13 @@ export function createInstallations({ db, key, tenant, upstream = null, appSlug 
     },
 
     async list(t) {
-      const rows = await db.system('select * from github_installations where tenant = $1 order by proven_at, installation_id', [t]);
-      return { installations: rows.map((r) => ({ id: Number(r.installation_id), account: r.account_login, accountType: r.account_type, provenBy: r.proven_by, githubLogin: r.github_login, provenAt: new Date(r.proven_at).toISOString(), method: r.method })) };
+      // proverLeft (security review of #148): the person who proved it is no longer an owner or admin here. The
+      // binding still works (the app is installed on the account either way); the Studio shows it so an admin can
+      // prove it again or disconnect it.
+      const rows = await db.system(`select g.*, exists (select 1 from members m where m.tenant = g.tenant and m.person = g.proven_by and m.removed_at is null
+          and m.role in ('owner', 'admin')) as prover_here
+        from github_installations g where g.tenant = $1 order by g.proven_at, g.installation_id`, [t]);
+      return { installations: rows.map((r) => ({ id: Number(r.installation_id), account: r.account_login, accountType: r.account_type, provenBy: r.proven_by, githubLogin: r.github_login, provenAt: new Date(r.proven_at).toISOString(), method: r.method, proverLeft: !r.prover_here })) };
     },
 
     async unbind(t, id, by) {

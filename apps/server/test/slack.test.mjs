@@ -150,7 +150,7 @@ test('channels leave out recommendations and meeting decisions (criterion 4)', (
 
 test('nothing is posted until the token is stored and a person linked and chose kinds, or an admin picked a channel (criteria 1 and 6)', async () => {
   const slack = fakeSlack();
-  await plane(async ({ db, call, su, base }) => {
+  await plane(async ({ db, call, su, base, inject }) => {
     await call('POST', '/teams', { id: 'shop', name: 'Shop' });
     // Not connected: the page says so, and Connect Slack is refused.
     let st = (await call('GET', '/teams/shop/slack')).body;
@@ -175,7 +175,7 @@ test('nothing is posted until the token is stored and a person linked and chose 
     // Linked with nothing switched on: no welcome, no messages.
     const link = await linked(call);
     assert.deepEqual([link.linked, link.name, link.kinds, link.welcomed], [true, 'Olive', [], false]);
-    await call('POST', '/teams/shop/events', { events: [SAMPLES.approval] });
+    await inject('shop', [SAMPLES.approval]);
     await drain(db, key, drainOpts(slack));
     assert.equal(slack.posts.length, 0);
     // The first switch on: the welcome DM, once.
@@ -200,7 +200,7 @@ test('nothing is posted until the token is stored and a person linked and chose 
     // Events: the approval goes only to the DM, the budget warning to both, each once.
     slack.posts.length = 0;
     const [{ cursor: before }] = await db.tenant('acme', ({ q }) => q('select cursor from slack_sinks'));
-    await call('POST', '/teams/shop/events', { events: [again(SAMPLES.approval, 'b'), SAMPLES.budget80, SAMPLES.blocked] });
+    await inject('shop', [again(SAMPLES.approval, 'b'), SAMPLES.budget80, SAMPLES.blocked]);
     await drain(db, key, drainOpts(slack));
     assert.deepEqual(slack.posts.map((p) => [p.channel, p.text]), [
       ['U0OWNER', 'Shop: Web dev needs your approval'],
@@ -236,13 +236,13 @@ test('nothing is posted until the token is stored and a person linked and chose 
     // Disconnect Slack stops every DM; the channel keeps getting what the admin chose, until it is removed.
     assert.equal((await call('DELETE', '/teams/shop/slack/me')).status, 200);
     slack.posts.length = 0;
-    await call('POST', '/teams/shop/events', { events: [again(SAMPLES.budget80, 'c')] });
+    await inject('shop', [again(SAMPLES.budget80, 'c')]);
     await drain(db, key, drainOpts(slack));
     assert.deepEqual(slack.posts.map((p) => p.channel), ['C0LAUNCH']);
     const chans = (await call('GET', '/teams/shop/slack/channels')).body.channels;
     assert.equal((await call('PATCH', `/teams/shop/slack/channels/${chans[0].id}`, { kinds: ['approval'] })).status, 200);
     assert.equal((await call('DELETE', `/teams/shop/slack/channels/${chans[0].id}`)).status, 200);
-    await call('POST', '/teams/shop/events', { events: [again(SAMPLES.budget80, 'd'), again(SAMPLES.approval, 'd')] });
+    await inject('shop', [again(SAMPLES.budget80, 'd'), again(SAMPLES.approval, 'd')]);
     await drain(db, key, drainOpts(slack));
     assert.equal(slack.posts.length, 1);
   }, opts(slack));
@@ -251,7 +251,7 @@ test('nothing is posted until the token is stored and a person linked and chose 
 test('Connect Slack only links the signed-in person who started it, within 10 minutes, in the team\'s own workspace (D56)', async () => {
   let clock = new Date('2026-11-06T09:00:00Z');
   const slack = fakeSlack();
-  await plane(async ({ call, su }) => {
+  await plane(async ({ call, su, inject }) => {
     await connected(call, su);
     await call('POST', '/teams', { id: 'other', name: 'Other' });
     const state = new URL((await call('POST', '/teams/shop/slack/connect')).body.url).searchParams.get('state');
@@ -274,21 +274,21 @@ test('Connect Slack only links the signed-in person who started it, within 10 mi
 test('without a bot token in the vault Slack is never called and deliveries are logged as skipped (criterion 1)', async () => {
   let calls = 0;
   const fetch = async () => { calls++; return new Response('{"ok":true}', { status: 200 }); };
-  await plane(async ({ db, call, su }) => {
+  await plane(async ({ db, call, su, inject }) => {
     await call('POST', '/teams', { id: 'shop', name: 'Shop' });
     assert.equal((await call('POST', '/teams/shop/sinks', { format: 'slack', secret: 'SLACK_BOT_TOKEN' })).status, 201);
     await db.tenant('acme', ({ q }) => q(`insert into slack_links(id, tenant, team, principal, slack_user, slack_workspace, kinds) values ('slk_v', 'acme', 'shop', 'admin', 'U0OWNER', 'T0SHOP', '{approval}')`));
     await db.tenant('acme', ({ q }) => q(`insert into slack_channels(id, tenant, team, channel, name, kinds, added_by, added_by_name) values ('slc_v', 'acme', 'shop', 'C0LAUNCH', 'launch', '{approval}', 'admin', 'The admin')`));
     const ch = await call('POST', '/teams/shop/slack/channels', { channel: 'C0OTHER', name: 'other' });
     assert.deepEqual([ch.body.posted, ch.body.reason], [false, 'no Slack token stored as SLACK_BOT_TOKEN']);
-    await call('POST', '/teams/shop/events', { events: [SAMPLES.approval] });
+    await inject('shop', [SAMPLES.approval]);
     await drain(db, key, { fetch, email: { publicUrl: PUBLIC } });
     assert.equal(calls, 0);
     const rows = await db.tenant('acme', ({ q }) => q('select target, status, error from slack_deliveries order by target desc'));
     assert.deepEqual(rows, [{ target: 'slk_v', status: 'skipped', error: 'no Slack token stored as SLACK_BOT_TOKEN' }, { target: 'slc_v', status: 'skipped', error: 'no Slack token stored as SLACK_BOT_TOKEN' }]);
     // A person's token (not a bot's) is refused too: posts would go out as that person (security review).
     assert.equal((await call('PUT', '/secrets/SLACK_BOT_TOKEN', { value: 'xoxp-person' }, await su())).status, 200);
-    await call('POST', '/teams/shop/events', { events: [again(SAMPLES.approval, 'user-token')] });
+    await inject('shop', [again(SAMPLES.approval, 'user-token')]);
     await drain(db, key, { fetch, email: { publicUrl: PUBLIC } });
     assert.equal(calls, 0);
     const refused = await db.tenant('acme', ({ q }) => q("select distinct error from slack_deliveries where event like '%user-token'"));
@@ -313,7 +313,7 @@ test('without a bot token in the vault Slack is never called and deliveries are 
 test('when Slack fails a DM goes by email instead and the health line says so; a removed channel does not hold up the rest (criterion 7)', async () => {
   const slack = fakeSlack();
   const mail = fakeEmail();
-  await plane(async ({ db, call, su }) => {
+  await plane(async ({ db, call, su, inject }) => {
     await connected(call, su);
     await linked(call, ['blocked']);
     await call('POST', '/teams/shop/slack/channels', { channel: 'C0LAUNCH', name: 'launch', kinds: ['budget80'] });
@@ -326,7 +326,7 @@ test('when Slack fails a DM goes by email instead and the health line says so; a
     mail.sent.length = 0;
 
     slack.fail = 'service_unavailable';
-    await call('POST', '/teams/shop/events', { events: [SAMPLES.blocked] });
+    await inject('shop', [SAMPLES.blocked]);
     await drain(db, key, drainOpts(slack, mail));
     assert.deepEqual(mail.sent.map((m) => [m.to, m.subject]), [['owner@shop.example', '[Shop] QA web is waiting on a decision']]);
     let st = (await call('GET', '/teams/shop/slack')).body;
@@ -337,7 +337,7 @@ test('when Slack fails a DM goes by email instead and the health line says so; a
     await db.tenant('acme', ({ q }) => q('update slack_sinks set next_at = now()'));
     await drain(db, key, drainOpts(slack, mail));
     assert.equal(slack.posts.filter((p) => p.text.includes('waiting on a decision')).length, 0);
-    await call('POST', '/teams/shop/events', { events: [again(SAMPLES.blocked, 'ok')] });
+    await inject('shop', [again(SAMPLES.blocked, 'ok')]);
     await drain(db, key, drainOpts(slack, mail));
     assert.equal(slack.posts.at(-1).text, 'Shop: QA web is waiting on a decision');
     assert.equal((await call('GET', '/teams/shop/slack')).body.health.status, 'working');
@@ -346,7 +346,7 @@ test('when Slack fails a DM goes by email instead and the health line says so; a
     // The bot was removed from the channel: logged as failed, the sink moves on, the health line shows it.
     slack.fail = 'not_in_channel';
     slack.failFor = new Set(['C0LAUNCH']);
-    await call('POST', '/teams/shop/events', { events: [SAMPLES.budget80, again(SAMPLES.blocked, 'after')] });
+    await inject('shop', [SAMPLES.budget80, again(SAMPLES.blocked, 'after')]);
     await drain(db, key, drainOpts(slack, mail));
     assert.equal(slack.posts.at(-1).text, 'Shop: QA web is waiting on a decision', 'later events still go out');
     const failed = await db.tenant('acme', ({ q }) => q("select target, status, error from slack_deliveries where status in ('failed', 'emailed') order by id"));
@@ -356,7 +356,7 @@ test('when Slack fails a DM goes by email instead and the health line says so; a
     // A DM that can never go out (here: the same permanent error) still goes by email (backend-dev review).
     slack.failFor = new Set(['U0OWNER']);
     mail.sent.length = 0;
-    await call('POST', '/teams/shop/events', { events: [again(SAMPLES.blocked, 'gone')] });
+    await inject('shop', [again(SAMPLES.blocked, 'gone')]);
     await drain(db, key, drainOpts(slack, mail));
     assert.deepEqual(mail.sent.map((m) => m.to), ['owner@shop.example']);
     st = (await call('GET', '/teams/shop/slack')).body;
@@ -366,7 +366,7 @@ test('when Slack fails a DM goes by email instead and the health line says so; a
 
 test('someone who is no longer a member gets no DMs (security review V1; members.test checks removal deletes the link)', async () => {
   const slack = fakeSlack();
-  await plane(async ({ db, call, su }) => {
+  await plane(async ({ db, call, su, inject }) => {
     await connected(call, su);
     await db.system(`insert into people(id, provider, subject, login) values ('per_staysmember', 'github', '201', 'stays'), ('per_leftmember', 'github', '202', 'left')`);
     await db.system(`insert into members(id, tenant, person, role, removed_at) values ('mem_s', 'acme', 'per_staysmember', 'viewer', null), ('mem_l', 'acme', 'per_leftmember', 'editor', now())`);
@@ -374,7 +374,7 @@ test('someone who is no longer a member gets no DMs (security review V1; members
       ('slk_stays', 'acme', 'shop', 'per_staysmember', 'U0STAYS', 'T0SHOP', '{blocked}', now()),
       ('slk_left', 'acme', 'shop', 'per_leftmember', 'U0LEFT', 'T0SHOP', '{blocked}', now()),
       ('slk_never', 'acme', 'shop', 'per_nevermember', 'U0NEVER', 'T0SHOP', '{blocked}', now())`);
-    await call('POST', '/teams/shop/events', { events: [SAMPLES.blocked] });
+    await inject('shop', [SAMPLES.blocked]);
     await drain(db, key, drainOpts(slack));
     assert.deepEqual(slack.posts.map((p) => p.channel), ['U0STAYS']);
   }, opts(slack));
@@ -383,7 +383,7 @@ test('someone who is no longer a member gets no DMs (security review V1; members
 test('a log write that fails after Slack took the post retries later, and never sends the email fallback too (backend-dev review)', async () => {
   const slack = fakeSlack();
   const mail = fakeEmail();
-  await plane(async ({ db, call, su }) => {
+  await plane(async ({ db, call, su, inject }) => {
     await connected(call, su);
     await linked(call, ['blocked']);
     assert.equal((await call('POST', '/teams/shop/sinks', { format: 'email', provider: 'fake', sender: 'team@shop.example', secret: 'EMAIL_PROVIDER_KEY' })).status, 201);
@@ -406,7 +406,7 @@ test('a log write that fails after Slack took the post retries later, and never 
 
 test('linking Slack again keeps the switches unless new ones are sent, and welcomes once (backend-dev review)', async () => {
   const slack = fakeSlack();
-  await plane(async ({ call, su }) => {
+  await plane(async ({ call, su, inject }) => {
     await connected(call, su);
     await linked(call, ['approval', 'minutes']);
     assert.equal(slack.posts.length, 1, 'welcome');

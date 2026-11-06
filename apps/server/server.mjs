@@ -29,6 +29,14 @@ import { PROVIDERS, createEmail, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 import { createHostedStudio } from './studio.mjs';
 
+/**
+ * The event types POST /v1/teams/{team}/events takes (issue #135): the kit's own reports and messages (report.mjs,
+ * packages/events), usage that a subagents or agent-teams integration reports, and the Studio's fast-path
+ * team.published (it collapses with the CI's report by id).
+ */
+export const POSTABLE_EVENTS = Object.freeze({ prefixes: ['report.', 'message.'], types: ['usage.recorded', 'team.published'] });
+export const postable = (type) => POSTABLE_EVENTS.types.includes(type) || POSTABLE_EVENTS.prefixes.some((pre) => type.startsWith(pre) && type.length > pre.length);
+
 /** The bus hears every stored event (deliveries) and run and approval changes (stops, results). */
 function wireBus(m3, bus) {
   m3.hooks.project = bus.project;
@@ -620,8 +628,11 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         const body = await readJson(req, 2 * 1024 * 1024);
         const events = Array.isArray(body?.events) ? body.events : null;
         if (!events || events.length > 500) throw new Problem(400, 'send { events: [...] }, at most 500');
-        // A merge and its preview are the runner's word only (G-12 security): a Ready to try card links nothing else.
-        if (events.some((e) => /^proposal\./.test(String(e?.type ?? '')))) throw new Problem(403, 'proposal events come only from a runner, over its WebSocket', { type: 'forbidden' });
+        // An allowlist (issue #135): what an integration reports. Everything the server or a runner writes itself
+        // (approvals, cards, chat, runs, sessions, proposals, budgets, meetings, notifications) is refused, so no admin
+        // token can make the chat or the clients show something the system never said.
+        const bad = events.map((e) => String(e?.type ?? '')).filter((ty) => !postable(ty));
+        if (bad.length) throw new Problem(403, `these event types are written by the control plane or a runner, never posted: ${[...new Set(bad)].slice(0, 10).join(', ')}`, { type: 'forbidden', body: { refused: [...new Set(bad)].slice(0, 50) } });
         const stored = await did(m3.appendEvents(t, team, events));
         const sent = new Set(events.map((e) => e?.id));
         const mine = stored.filter(({ id }) => sent.has(id));
