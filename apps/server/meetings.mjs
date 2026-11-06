@@ -297,6 +297,9 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
     // meeting_close: the facilitator, on its closing turn.
     if (sess.role !== m.facilitator) return { problems: [`only ${m.facilitator}, who runs ${m.id}, closes it`] };
     if (m.state !== 'closing') return { problems: [m.state === 'closed' ? `meeting ${m.id} is closed` : `meeting ${m.id} is still going: close it on your closing turn`] };
+    // Action items stay inside the meeting: only its attendees get one, so a reply cannot steer work to anyone else.
+    const outside = [...new Set((i.actionItems ?? []).map((a) => String(a.to ?? '').split('#')[0]).filter((r) => !m.attendees.includes(r)))];
+    if (outside.length) return { problems: [`an action item goes to an attendee of ${m.id} (${m.attendees.join(', ')}); ${outside.join(', ')} did not attend`] };
     const outcome = m.capped ? 'capped' : 'completed';
     const closed = await save(ctx.q, m, { state: 'closed', outcome, minutes: i.minutes, closed_by_session: sess.id, closed_at: ctx.now.toISOString(), turn_due: null });
     const ev = await ctx.emit(sess.team, 'meeting.closed', {
