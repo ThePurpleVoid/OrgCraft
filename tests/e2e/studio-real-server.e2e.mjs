@@ -91,7 +91,7 @@ test('against the real control plane: chat, cards, an approval with step-up, a s
   await su.getByRole('button', { name: 'Confirm' }).click();
   // The real server starts the run (its roster check passes on the published team); no runner picks it up yet.
   await page.locator('#run-state', { hasText: 'Running' }).waitFor();
-  await page.getByText('The team started a run').waitFor();
+  await page.getByText('A run started').waitFor();
   await page.getByText('Today $0.00 of $10.00').waitFor();
 
   // The owner's words, verbatim, through the real chat endpoint; a reply as the chief of staff's tool would write it.
