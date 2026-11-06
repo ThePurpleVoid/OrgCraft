@@ -105,3 +105,27 @@ Emits `decision.requested` (with `cardId` and `session`) and `card.updated` with
 | `links` | no | for example the pull request |
 
 Emits `approval.requested` (with `cardId` and `session`) and `card.updated` with an `approval` card whose approve option has `stepUp: true`. The HTTP call returns `{ "approval": "<id>", "card": "<id>" }`; the runner's tool server then holds the tool result until `approval.result` arrives, and returns `{ "approval": "<id>", "decision": "approved" | "denied" | "expired", "note": "…" }` to the model.
+
+## `meeting_reply`
+
+Only the attendee whose turn it is, in an open meeting of the caller's run, once per turn. Any instance of that role may answer; the actor records which.
+
+| Field | Required | Check |
+| --- | --- | --- |
+| `meeting` | yes | the id from the turn, `mtg_…` |
+| `text` | yes | at most 8,000 characters; stored verbatim and shown to later attendees |
+
+Emits `meeting.replied`, then the next `meeting.turn` (or the facilitator's closing turn). Result: `{ "event": "<id>" }`. Refused with "it is not your turn in …" or "meeting … is not taking replies".
+
+## `meeting_close`
+
+Only the meeting's facilitator, on its closing turn (also when the meeting reached its cap).
+
+| Field | Required | Check |
+| --- | --- | --- |
+| `meeting` | yes | the id from the turn |
+| `minutes` | yes | at most 20,000 characters; partial minutes say so when the meeting was capped |
+| `actionItems` | no | at most 20, each `{ to, task, doneWhen }`: `to` as in the rules, `task` at most 200 characters |
+| `decisions` | no | at most 4, each `{ question, options, recommended, why }`, checked like `ask_owner` |
+
+Emits `meeting.closed` (outcome `completed` or `capped`); the minutes as a `chat.message` from the facilitator when the definition's `owner.minutes` is set (the default); a `report.note` linking the meeting page; a `message.handoff` per action item; and per decision a `decision` card when the facilitator is the front door, otherwise a `message.blocked` to the front door with `needFrom: owner` and the recommendation, because no other role asks the owner directly. All carry `data.meeting`. Minutes are never committed to a repository. Result: `{ "event": "<id>" }`.

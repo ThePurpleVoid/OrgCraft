@@ -22,6 +22,7 @@ servers:
 security:
   - person: []
   - cookie: []
+  - app: []
 tags:
   - { name: teams }
   - { name: events, description: "The event log (events.md) and the board projected from it" }
@@ -29,7 +30,7 @@ tags:
   - { name: chat }
   - { name: approvals }
   - { name: connectors }
-  - { name: notifications, description: "Email a person when something needs them (PRD 6.8): their own verified addresses, the kinds they chose, signed links" }
+  - { name: notifications, description: "Email or Slack a person when something needs them (PRD 6.8): their own verified addresses or linked Slack account, the kinds they chose, channels an admin picked, signed links. Nothing is ever approved or answered from an email or Slack" }
   - { name: runners, description: Registration. The runner protocol itself is runner-protocol.md }
   - { name: me, description: "The signed-in person across teams: inbox, summary, devices (clients.md)" }
 paths:
@@ -139,11 +140,13 @@ paths:
               required: [url]
               properties:
                 url: { type: string, format: uri, description: "https, or http to this machine (not for email)" }
-                format: { enum: [kit-report, event, email], default: kit-report, description: "email sends notification events to the people who opted in (PRD 6.8)" }
+                format: { enum: [kit-report, event, email, slack], default: kit-report, description: "email sends notification events to the people who opted in (PRD 6.8); slack connects the team's Slack workspace, one per team" }
                 provider: { type: string, description: "email only: the provider id, such as resend" }
                 sender: { type: string, description: "email only: the From address" }
                 header: { type: string, description: "Header to send the secret in, such as x-team-token" }
-                secret: { type: string, description: "Name of a stored secret (PUT /secrets/{name})" }
+                secret: { type: string, description: "Name of a stored secret (PUT /secrets/{name}); EMAIL_… for email, SLACK_… (the bot token) for slack" }
+                clientId: { type: string, description: "slack only: the Slack app's client id, for Connect Slack" }
+                clientSecret: { type: string, description: "slack only: name of the stored secret with the app's client secret (SLACK_…)" }
                 from: { enum: [now, start], default: now }
       responses: { "201": { description: The sink } }
   /teams/{team}/sinks/{sink}:
@@ -179,6 +182,51 @@ paths:
     parameters: [ { name: action, in: path, required: true, schema: { enum: [link, unsubscribe, resubscribe] } }, { name: t, in: query, required: true, schema: { type: string } } ]
     get: { tags: [notifications], security: [], summary: "No sign-in, the signed token is the proof. link: redirects into the Studio until it expires (approvals 24 hours, others 7 days). unsubscribe: shows a page asking to turn off one kind for one team (the button POSTs)", responses: { "200": { description: A page }, "302": { description: Into the Studio }, "410": { description: The link expired } } }
     post: { tags: [notifications], security: [], summary: "unsubscribe: turns off one kind for one team (also RFC 8058 one-click); resubscribe: Turn it back on", responses: { "200": { description: A page } } }
+  /teams/{team}/slack:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { x-min-role: viewer, tags: [notifications], summary: "Is Slack connected and working (health), the kinds, and the caller's own link", responses: { "200": { description: "{ connected, ready, canLink, health, kinds, me }" } } }
+  /teams/{team}/slack/connect:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post: { x-min-role: viewer, tags: [notifications], summary: "Start Connect Slack: the Sign in with Slack URL (identity only), with a state bound to the caller and team for 10 minutes", responses: { "200": { description: "{ url }" }, "409": { description: Slack is not connected for this team } } }
+  /teams/{team}/slack/link:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: "Finish Connect Slack from the Studio's /slack/callback page: links the caller's Slack account (same workspace as the team's) and sends the first DM once a kind is on"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, state], properties: { code: { type: string }, state: { type: string }, kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes] } } } } } } }
+      responses: { "201": { description: "{ linked, name, kinds, welcomed }" }, "400": { description: The state is not this caller's }, "409": { description: Another workspace, or Slack not connected }, "410": { description: Started more than 10 minutes ago } }
+  /teams/{team}/slack/me:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    patch:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: Choose the kinds to get as a Slack DM
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes] } } } } } } }
+      responses: { "200": { description: The link }, "404": { description: Not linked } }
+    delete: { x-min-role: viewer, tags: [notifications], summary: "Disconnect Slack: stops every DM from this team (channel posts keep going)", responses: { "200": { description: Removed } } }
+  /teams/{team}/slack/channels:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { x-min-role: admin, tags: [notifications], summary: The channels picked for this team, responses: { "200": { description: "{ channels }" } } }
+    post:
+      x-min-role: admin
+      tags: [notifications]
+      summary: "Pick a channel; kinds default to budget80, budget100 and minutes (approval and BLOCKED start off). The channel gets a first post saying who chose it"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [channel, name], properties: { channel: { type: string, pattern: "^[CG][A-Z0-9]{2,20}$" }, name: { type: string }, kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes] } } } } } } }
+      responses: { "201": { description: "The channel, and posted (or reason)" }, "409": { description: Already picked, or Slack not connected } }
+  /teams/{team}/slack/channels/{channel}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: channel, in: path, required: true, schema: { type: string } } ]
+    patch:
+      x-min-role: admin
+      tags: [notifications]
+      summary: Choose the kinds posted to this channel
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes] } } } } } } }
+      responses: { "200": { description: The channel } }
+    delete: { x-min-role: admin, tags: [notifications], summary: Stop posting to this channel, responses: { "200": { description: Removed } } }
+  /slack/{action}:
+    parameters: [ { name: action, in: path, required: true, schema: { enum: [unsubscribe, resubscribe] } }, { name: t, in: query, required: true, schema: { type: string } } ]
+    get: { tags: [notifications], security: [], summary: "No sign-in, the signed token is the proof. unsubscribe: shows a page asking to turn off one kind of Slack DM for one team (the button POSTs). Studio links in Slack messages use /email/link", responses: { "200": { description: A page } } }
+    post: { tags: [notifications], security: [], summary: "unsubscribe: turns off one kind of Slack DM for one team; resubscribe: Turn it back on", responses: { "200": { description: A page } } }
   /secrets:
     get: { x-min-role: admin, tags: [connectors], summary: Secret names and when they changed (never values), responses: { "200": { description: Names } } }
   /secrets/{name}:
@@ -437,6 +485,7 @@ components:
     runner: { type: http, scheme: bearer, description: Runner key }
     reportToken: { type: apiKey, in: header, name: x-team-token }
     cron: { type: http, scheme: bearer, description: "The deployment's CRON_SECRET, for /internal/* only (its tick and its smoke check); never a person's" }
+    app: { type: http, scheme: DPoP, description: "An app's access token (iPhone, Android, CLI): `Authorization: DPoP <token>` plus a `DPoP` proof header for this request (RFC 9449), signed by the device key the token is bound to: htm and htu of this request (the deployment's origin and path), iat within 60 seconds, ath of the token, a jti used once. The Bearer scheme is refused for these tokens. Roles apply as for the web; passkeys are added and removed on the web only, and an app may step up with one" }
     cookie: { type: apiKey, in: cookie, name: __Host-agent-team, description: "The web's session, set by the issuer's callback (HttpOnly, Secure, SameSite=Lax; 12 hours idle, 7 days in all). An unsafe method sent with it needs this deployment's Origin and content-type application/json, or gets 403 (problem type csrf)" }
   parameters:
     team: { name: team, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }

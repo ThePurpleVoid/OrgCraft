@@ -19,16 +19,49 @@ export function renderSystemsStrip(el, ctx, selectedSystem) {
   const { esc } = ctx;
   const res = ctx.spec().resources?.resources ?? [];
   const bindings = ctx.spec().resources?.bindings ?? [];
+  const suggested = ctx.spec().canvas?.suggestedSystems ?? [];
   el.innerHTML = `${res.map((r) => `<button type="button" class="chip${r.id === selectedSystem ? ' selected' : ''}" draggable="true" data-system="${esc(r.id)}" title="Drag onto a role to let it use ${esc(r.name)}">
       <span class="chip-type">${esc(typeName(r.type))}</span> ${esc(r.name || r.id)} <span class="muted">${bindings.filter((b) => b.resource === r.id).length}</span></button>`).join('')}
+    ${suggested.map((x, i) => `<button type="button" class="chip suggested" data-connect="${i}" title="Suggested by the template. Connect it to add it to the team."><span class="chip-type">${esc(typeName(systemType(x.type)))}</span> ${esc(x.name)} <span class="muted">to connect</span></button>`).join('')}
     <button type="button" class="chip add" id="add-system">+ Add a system</button>
-    <span class="hint">${res.length ? 'Drag a system onto a role to let it use it.' : 'Add the systems your team works with: repositories, databases, hosting, any MCP server.'}</span>`;
+    <span class="hint">${suggested.length ? 'Dashed: suggested by the template, with nothing set. Click one to connect it.' : res.length ? 'Drag a system onto a role to let it use it.' : 'Add the systems your team works with: repositories, databases, hosting, any MCP server.'}</span>`;
   el.onclick = (e) => {
     if (e.target.closest('#add-system')) return addSystem(ctx);
+    const sug = e.target.closest('[data-connect]');
+    if (sug) return connectSuggested(ctx, Number(sug.dataset.connect));
     const chip = e.target.closest('[data-system]');
     if (chip) ctx.selectSystem(chip.dataset.system);
   };
   el.ondragstart = (e) => { const chip = e.target.closest('[data-system]'); if (chip) { e.dataTransfer.setData('text/x-system', chip.dataset.system); e.dataTransfer.effectAllowed = 'link'; } };
+}
+
+/** A template's system types, in the Studio's words: a type the Studio has no word for is "Other", by its name. */
+const TYPE_WORDS = { github: 'repository', gitlab: 'repository', git: 'repository', postgres: 'database', mysql: 'database', supabase: 'database', vercel: 'hosting', netlify: 'hosting', website: 'hosting', sentry: 'observability' };
+export const systemType = (t) => (SYSTEM_TYPES.some(([k]) => k === t) ? t : TYPE_WORDS[t] ?? 'other');
+
+/**
+ * Connects a system the template suggested (templates story criterion 10): it becomes an ordinary system, with the
+ * roles the template named allowed to use it, and leaves the suggestions. Settings and secrets stay empty.
+ */
+export function connectSuggested(ctx, i) {
+  const x = ctx.spec().canvas?.suggestedSystems?.[i];
+  if (!x) return;
+  const taken = new Set((ctx.spec().resources?.resources ?? []).map((r) => r.id));
+  const base = slugify(x.name) || 'system';
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+  const type = systemType(x.type);
+  const on = new Set(ctx.team.map((r) => r.slug));
+  ctx.change((s) => {
+    s.resources ??= { resources: [], bindings: [] };
+    s.resources.resources ??= [];
+    s.resources.bindings ??= [];
+    s.resources.resources.push({ id, type, name: x.name, config: {}, secrets: [] });
+    for (const role of x.for ?? []) if (on.has(role)) s.resources.bindings.push({ role, resource: id, permission: defaultPermission(type) });
+    s.canvas.suggestedSystems.splice(i, 1);
+    if (!s.canvas.suggestedSystems.length) delete s.canvas.suggestedSystems;
+  });
+  ctx.selectSystem(id);
 }
 
 function addSystem(ctx) {

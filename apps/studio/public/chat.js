@@ -76,9 +76,9 @@ const who = (e) => { const b = e.data?.by; const n = typeof b === 'object' ? b?.
 /** Run and budget events, as one line each in the chat. */
 const TIMELINE = {
   'run.started': (e) => `A run started${who(e)}`,
-  'run.paused': (e) => `The run was paused${by(e)}${e.data?.reason ? `: ${e.data.reason}` : ''}`,
-  'run.resumed': (e) => `The run resumed${by(e)}`,
-  'run.stopped': (e) => `The run stopped${by(e)}${e.data?.reason ? `: ${e.data.reason}` : ''}`,
+  'run.paused': (e) => `The run was paused${who(e)}${e.data?.reason ? ` (${e.data.reason})` : ''}`,
+  'run.resumed': (e) => `The run resumed${who(e)}`,
+  'run.stopped': (e) => `The run stopped${who(e)}${e.data?.reason ? ` (${e.data.reason})` : ''}`,
   'budget.warned': () => 'Most of today\'s budget is spent',
   'budget.exhausted': () => 'Today\'s budget is spent, so the team is paused',
   'budget.updated': (e) => `The daily cap is now ${e.data?.perDay == null ? 'unset' : fmtMoney(e.data.perDay, e.data.currency)}${by(e)}`,

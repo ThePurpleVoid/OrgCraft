@@ -452,7 +452,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     if (a.state === 'pending' || a.state === 'approved') {
       await ctx.q("update approvals set state = 'expired', decided_at = now() where id = $1", [a.id]);
       const [c] = await ctx.q("select state from cards where id = $1", [a.card]);
-      if (c?.state === 'open') await m3.changeCard(ctx, sess.team, a.card, { state: 'superseded' });
+      // Open or already answered: either way the card must stop reading as the person's approval (D1).
+      if (c?.state === 'open' || c?.state === 'answered') await m3.changeCard(ctx, sess.team, a.card, { state: 'superseded' });
       await ctx.emit(sess.team, 'approval.decided', { approval: a.id, decision: 'superseded', by: null, note: 'the pull request changed after it was approved', session: sess.id, cardId: a.card }, { subject: `approval/${a.id}`, run: sess.run });
     }
   }

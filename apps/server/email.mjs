@@ -351,6 +351,13 @@ export function page(title, lines, buttons = []) {
 }
 
 /**
+ * SQL: the row's person (alias.principal, in alias.tenant) still has a way in: an active member, or the local admin
+ * until someone owns the workspace. Shared by email and Slack.
+ */
+export const stillIn = (a) => `((${a}.principal = 'admin' and not exists(select 1 from members o where o.tenant = ${a}.tenant and o.role = 'owner' and o.removed_at is null))
+        or exists(select 1 from members m where m.person = ${a}.principal and m.tenant = ${a}.tenant and m.removed_at is null))`;
+
+/**
  * The email side of the sink worker: sends `event` to every verified subscription of the team that has its kind on
  * and whose person is still a member of the workspace, or the local admin until someone owns the workspace (the admin
  * token is retired then, so nobody could see or remove those addresses),
@@ -365,29 +372,53 @@ export async function deliver(db, key, sink, row, { providers = PROVIDERS, readS
   const subs = await db.tenant(tenant, ({ q }) => q(`select s.id, s.email, (select name from teams where id = s.team) as team_name,
       exists(select 1 from email_deliveries d where d.subscription = s.id and d.event = $3 and d.status = 'sent') as done
     from email_subscriptions s where s.team = $1 and s.verified_at is not null and $2 = any(s.kinds)
-      and ((s.principal = 'admin' and not exists(select 1 from members o where o.tenant = s.tenant and o.role = 'owner' and o.removed_at is null))
-        or exists(select 1 from members m where m.person = s.principal and m.tenant = s.tenant and m.removed_at is null))`, [team, kind, event.id]));
+      and ${stillIn('s')}`, [team, kind, event.id]));
   const todo = subs.filter((s) => !s.done);
   if (!todo.length) return null;
+  return (await sendTo(db, key, sink, event, kind, todo, { providers, readSecret, publicUrl, now, fetch: send })).error;
+}
+
+/** Sends one event to the given subscriptions through the sink's provider, logging each try. */
+async function sendTo(db, key, sink, event, kind, todo, { providers = PROVIDERS, readSecret, publicUrl = '', now = new Date(), fetch: send = fetch }) {
+  const { tenant, team } = sink;
   const log = (s, status, extra = {}) => db.tenant(tenant, ({ q }) => q('insert into email_deliveries(tenant, team, subscription, event, kind, status, provider_id, error) values ($1, $2, $3, $4, $5, $6, $7, $8)',
     [tenant, team, s.id, event.id, kind, status, extra.id ?? null, extra.error ?? null]));
   const provider = providers[sink.provider];
   const apiKey = provider && sink.secret ? await readSecret(db, key, tenant, sink.secret) : null;
   if (!provider || !apiKey) {
     for (const s of todo) await log(s, 'skipped', { error: provider ? `no provider key stored as ${sink.secret}` : `unknown provider ${sink.provider}` });
-    return null;
+    return { error: null, sent: 0 };
   }
-  let error = null;
+  let error = null, sent = 0;
   for (const s of todo) {
     const mail = compose(event, { teamName: s.team_name });
     const msg = render(key, mail, { base: publicUrl, tenant, team, teamName: s.team_name, subscription: s.id, now });
     try {
       const r = await provider.send({ apiKey, from: sink.sender, to: s.email, ...msg }, { fetch: send });
       await log(s, 'sent', { id: r?.id });
+      sent++;
     } catch (e) {
       error = String(e.message ?? e).slice(0, 200);
       await log(s, 'failed', { error });
     }
   }
-  return error;
+  return { error, sent };
+}
+
+/**
+ * When Slack fails (CPO story "Slack notifications", criterion 7): sends `event` by email to every verified address
+ * the person has for the team, even one with that kind off for email (they asked for it in Slack, and email only
+ * stands in for Slack here), unless an address already got it. Returns how
+ * many emails went out (0 when the team has no email sink or no key, or the person has no verified address).
+ */
+export async function emailFallback(db, key, { tenant, team, principal, event }, opts = {}) {
+  const kind = kindOfEvent(event?.type);
+  if (!kind) return 0;
+  const [sink] = await db.tenant(tenant, ({ q }) => q('select id, tenant, team, provider, sender, secret from email_sinks where team = $1 order by created_at limit 1', [team]));
+  if (!sink) return 0;
+  const subs = await db.tenant(tenant, ({ q }) => q(`select s.id, s.email, (select name from teams where id = s.team) as team_name
+    from email_subscriptions s where s.team = $1 and s.principal = $2 and s.verified_at is not null and ${stillIn('s')}
+      and not exists(select 1 from email_deliveries d where d.subscription = s.id and d.event = $3 and d.status = 'sent')`, [team, principal, event.id]));
+  if (!subs.length) return 0;
+  return (await sendTo(db, key, sink, event, kind, subs, opts)).sent;
 }

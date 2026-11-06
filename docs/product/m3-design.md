@@ -59,9 +59,12 @@ When the server appends one of these events, the **dispatcher** writes a `delive
 | `chat.message` from a person | the front-door role | The owner's text travels verbatim in `wake` (the dilution rule) |
 | `message.handoff`, `message.bug`, `message.signoff`, `message.blocked` | `data.to` (a role slug, `#instance` allowed) | `blocked` with no `to` goes to the sender's `Reports to` role |
 | `decision.answered`, `approval.decided` | the session that asked (`data.session`) | An approval answer also releases the paused call (section 4) |
+| `meeting.turn` | `data.to`: the role whose turn it is, delivered to its lowest-numbered live instance, otherwise `#1` | Emitted by the server's meeting sequencer (below). With `ifBusy: next-pause` it queues like any message; with `skip` or `proxy` a busy role gets `meeting.skipped` and the next turn goes out. A paused run holds it like any delivery |
 | `run.resumed` | every role whose session is in state `stopped` in this run (a stopped run never resumes, so these are exactly the sessions a pause stopped) | Each gets its own delivery row keyed on the `run.resumed` event and the role, so acks and retries apply, and is resumed from its last checkpoint: `session.start` with `resume: true`, the stored `checkpoint`, and a `wake` naming the resume (`run.resumed`, with its reason). `held` deliveries for the run go back to `pending` and are delivered to the resumed sessions as usual. Applies to an owner's resume and to the budget's next-day resume alike |
 
 Messages from a role to itself, and to a role the team version does not have, are refused at the tool (section 3), so they never reach the bus.
+
+**Meetings** (written round, no new runner op). A run carries its meetings in `RunCreate.team.meetings`, with attendees already resolved by the Studio (`meetingAttendees`, the facilitator left out; a missing facilitator is the front door). `POST /v1/teams/{team}/meetings` opens an instance (`meeting.opened`), refused with 409 when no run is running, the definition is already open, or today's budget has less left than the meeting's cap. The server then sends one `meeting.turn` per attendee in order; each `meeting_reply` sends the next, and after the last the facilitator gets the closing turn and calls `meeting_close` (section 3, team-tools.md). Usage tagged with the meeting counts toward its `cap` (minor units) when the session was given one of its turns. At the cap every turn still to come gets `meeting.skipped` (`capped`) and the closing turn says `capped: true`. A completed or capped close emits `meeting.closed`, the minutes as `chat.message` (when `owner.minutes`), a `report.note`, `meeting.minutes` for the email sink, and the action items and decisions. A stopped run closes an open meeting as `abandoned`. Code: `apps/server/meetings.mjs`; proofs: `apps/server/test/meetings.test.mjs`.
 
 ### Delivering
 
@@ -219,6 +222,7 @@ Owner: **backend-dev**. Everything time-based runs in one idempotent function, `
 - the UTC day rollover for budgets (resume runs whose budget card was answered `tomorrow`)
 - mark sessions `unknown` when their runner missed three pings
 - the existing sink worker's due retries
+- meeting turns past their deadline (30 minutes, counted from delivery): `meeting.skipped` with `missed`, and the next turn goes out
 
 Each step takes its rows with `for update skip locked`, so two ticks at once do no harm. Every long-running server (local, Compose, the hosted container) calls it every 15 seconds in-process. A serverless-only deployment would call `POST /internal/tick` from a scheduler, with `Authorization: Bearer <CRON_SECRET>`. `/internal/` is not part of `/v1/` and never reachable with a person's or runner's token. `CRON_SECRET` is compared in constant time, an unset or empty secret refuses every call, and `/internal/` is never in the Vercel rewrite (section 12, D8).
 

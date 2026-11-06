@@ -7,19 +7,19 @@
 // reads the team from .agent-team/, previews what a publish changes, and publishes: it writes the layer, runs sync
 // and commits the result on a branch. The repository stays the source of truth (docs/adr/0001).
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { build, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
-import { compileLayer, importLayer, resolveSpec, validate } from '../../packages/team-model/index.mjs';
+import { build, DEFAULT_KIT_SPEC, initExtras, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
+import { compileLayer, importLayer, resolveSpec, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
 import { hostGuard } from '../../tools/hosts.mjs';
 import { ownershipFromMarkdown, suggestAreas, suggestChecks } from './suggest.mjs';
-import { loadKit, readLayer, writeLayer } from '../../packages/team-model/node.mjs';
+import { loadKit, loadTemplates, readLayer, writeLayer } from '../../packages/team-model/node.mjs';
 import { liveSource } from './live.mjs';
 import { chatSource } from './chat.mjs';
 import { runRequest, RunRefused } from './runs.mjs';
@@ -28,7 +28,8 @@ import { openPullRequest, prSupport, pullRequestText } from './pr.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(HERE, 'public');
 const MODEL = join(KIT, 'packages/team-model/index.mjs');
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
+const PRICES = join(KIT, 'packages/model-prices/prices.json');
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' };
 /** What a publish commits: the layer and everything sync generates from it. */
 const PUBLISHED = ['.agent-team', 'docs/team', 'scripts/agent-team', '.claude'];
 
@@ -47,12 +48,68 @@ export function gitState(root) {
 
 /** Everything the page needs to start: the team as a TeamSpec, the kit's library, and where it lives. */
 export function state(root) {
-  if (!existsSync(join(root, '.agent-team/team.json'))) throw new HttpError(404, `no .agent-team/team.json in ${root}. Run "agent-team init" first.`);
   const kit = loadKit(KIT);
+  // No team yet: the page opens the template gallery (templates story D32: a team that exists is never offered one).
+  if (!hasTeam(root)) return { root, kitVersion: VERSION, spec: null, noTeam: true, kit, kitRoles: null, git: gitState(root), templates: templateCards(kit), groups: TEMPLATE_GROUPS };
   // The kit roles the team last synced with: a custom agent whose name a newer kit now ships is a clash (A7).
   let kitRoles = null;
   try { kitRoles = JSON.parse(readFileSync(join(root, '.agent-team/kit.lock.json'), 'utf8')).kitRoles ?? null; } catch { /* never synced */ }
   return { root, kitVersion: VERSION, spec: importLayer(readLayer(root), kit), kit, kitRoles, git: gitState(root) };
+}
+
+const INIT_FILES = ['.agent-team/config.sh', '.agent-team/roles/README.md', 'docs/team/ownership.md', 'docs/team/lanes/_template.md'];
+const hasTeam = (root) => existsSync(join(root, '.agent-team/team.json'));
+
+/** "Start almost empty" (D32): a chief of staff only, as a template the gallery does not list. */
+const ALMOST_EMPTY = { schema: TEMPLATE_SCHEMA, id: 'almost-empty', title: 'Almost empty', summary: 'A chief of staff only.', group: 'product', preset: 'minimal', roles: ['chief-of-staff'] };
+
+/** The kit's templates as the gallery shows them (D31, D33), each with nothing written. */
+export function templateCards(kit = loadKit(KIT)) {
+  return Object.values(loadTemplates(KIT)).map((files) => templateCard(files, kit));
+}
+
+/**
+ * The TeamSpec a template makes for the create form's answers (D31): the same spec `agent-team init --template`
+ * compiles, so a publish writes the same files (criterion 9). Refused once the repository has a team (D32).
+ */
+export function fromTemplate(root, { id, project, owner, timezone } = {}) {
+  if (hasTeam(root)) throw new HttpError(409, 'this repository already has a team; open it instead');
+  const kit = loadKit(KIT);
+  const files = id === ALMOST_EMPTY.id ? { 'template.json': JSON.stringify(ALMOST_EMPTY) } : loadTemplates(KIT)[id];
+  if (!files) throw new HttpError(404, `no template "${id}"`);
+  const text = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+  const spec = templateSpec(files, kit, { project: text(project, 80) ?? root.split('/').filter(Boolean).at(-1), owner: text(owner, 80) ?? 'the owner', timezone: text(timezone, 64) ?? 'UTC', kitVersion: VERSION, kitSpec: DEFAULT_KIT_SPEC });
+  if (id === ALMOST_EMPTY.id) delete spec.options.from;
+  return { spec, card: id === ALMOST_EMPTY.id ? null : templateCard(files, kit) };
+}
+
+/** What a first publish may touch, as it was before: which paths existed, and .gitignore's text. */
+function snapshot(root) {
+  const gi = join(root, '.gitignore');
+  const parents = [...new Set(PUBLISHED.filter((p) => p.includes('/')).map((p) => dirname(p)))];
+  return { existed: PUBLISHED.filter((p) => existsSync(join(root, p))), parents: parents.filter((d) => !existsSync(join(root, d))), gitignore: existsSync(gi) ? readFileSync(gi, 'utf8') : null };
+}
+
+/**
+ * Undoes a failed first publish. The publish starts only when the team's paths have no changes, so a path that
+ * existed goes back to what git has, and one that did not is removed.
+ */
+function restore(root, { existed, parents, gitignore }) {
+  tryGit(root, 'reset', '-q', '--', ...PUBLISHED, '.gitignore');
+  for (const p of PUBLISHED) {
+    if (existed.includes(p)) { tryGit(root, 'checkout', '-q', '--', p); tryGit(root, 'clean', '-fdq', '--', p); }
+    else rmSync(join(root, p), { recursive: true, force: true });
+  }
+  for (const d of parents) { try { if (!readdirSync(join(root, d)).length) rmSync(join(root, d), { recursive: true }); } catch { /* already gone */ } }
+  const gi = join(root, '.gitignore');
+  if (gitignore === null) rmSync(gi, { force: true }); else writeFileSync(gi, gitignore);
+}
+
+/** The files `agent-team init` writes once besides the layer (config.sh, ownership.md, the lane template, .gitignore). */
+function extras(dir, layer) {
+  const values = JSON.parse(layer['team.json']).values ?? {};
+  const slug = String(values.PROJECT_NAME ?? '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  initExtras(dir, slug, values, { ownership: !layer['ownership.json'], quiet: true });
 }
 
 /** The files a publish would write, compared with the repository as it is: [{ path, status, before, after }]. */
@@ -62,14 +119,15 @@ export function preview(root, spec) {
   const layer = compileLayer(spec, kit);
   const scratch = mkdtempSync(join(tmpdir(), 'agent-team-studio-'));
   try {
-    cpSync(join(root, '.agent-team'), join(scratch, '.agent-team'), { recursive: true });
+    if (existsSync(join(root, '.agent-team'))) cpSync(join(root, '.agent-team'), join(scratch, '.agent-team'), { recursive: true });
     for (const keep of ['docs/team/ownership.md', 'docs/team/lanes']) if (existsSync(join(root, keep))) cpSync(join(root, keep), join(scratch, keep), { recursive: true });
     writeLayer(scratch, layer);
-    const before = build(root).files;
+    if (!hasTeam(root)) extras(scratch, layer);
+    const before = hasTeam(root) ? build(root).files : new Map();
     const after = build(scratch).files;
     const changes = [];
     const read = (p) => (existsSync(join(root, p)) ? readFileSync(join(root, p), 'utf8') : null);
-    const oldLayer = readLayer(root);
+    const oldLayer = existsSync(join(root, '.agent-team')) ? readLayer(root) : {};
     for (const p of new Set([...Object.keys(oldLayer), ...Object.keys(layer)])) {
       if (oldLayer[p] !== layer[p]) changes.push({ path: `.agent-team/${p}`, status: !(p in oldLayer) ? 'added' : !(p in layer) ? 'removed' : 'changed', before: oldLayer[p] ?? null, after: layer[p] ?? null });
     }
@@ -77,6 +135,10 @@ export function preview(root, spec) {
       const now = read(p);
       const next = after.get(p) ?? null;
       if (now !== next) changes.push({ path: p, status: now === null ? 'added' : next === null ? 'removed' : 'changed', before: now, after: next });
+    }
+    if (!hasTeam(root)) for (const p of INIT_FILES) {
+      if (changes.some((c) => c.path === p) || !existsSync(join(scratch, p)) || existsSync(join(root, p))) continue;
+      changes.push({ path: p, status: 'added', before: null, after: readFileSync(join(scratch, p), 'utf8') });
     }
     changes.sort((a, b) => a.path.localeCompare(b.path));
     return { changes, issues };
@@ -103,14 +165,28 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
     if (tryGit(root, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`)) throw new HttpError(409, `branch ${branch} already exists`);
     git(root, 'checkout', '-q', '-b', branch);
   }
-  const written = writeLayer(root, compileLayer(spec, kit));
-  const code = sync(root, { quiet: true });
-  if (code !== 0) throw new HttpError(500, 'sync reported roster errors; nothing was committed');
-  git(root, 'add', '-A', '--', ...PUBLISHED.filter((p) => existsSync(join(root, p))));
-  const staged = tryGit(root, 'diff', '--cached', '--name-only').split('\n').filter(Boolean);
-  if (!staged.length) return { branch: gitState(root).branch, commit: null, files: [], note: 'nothing changed' };
+  // The first publish of a team: team.json is not in git yet (decided from git, not the disk, so a retry after a
+  // failed first publish is still the first).
+  const fresh = !tryGit(root, 'ls-files', '--', '.agent-team/team.json');
+  const before = fresh ? snapshot(root) : null;
   const text = message?.trim() || 'Update the agent team (Agent Team Studio)';
-  git(root, 'commit', '-q', '-m', text);
+  let written, staged;
+  try {
+    const layer = compileLayer(spec, kit);
+    written = writeLayer(root, layer);
+    // A team made in the Studio gets the files `agent-team init` writes once, so both make the same repository.
+    if (fresh) extras(root, layer);
+    const code = sync(root, { quiet: true });
+    if (code !== 0) throw new HttpError(500, 'sync reported roster errors; nothing was committed');
+    git(root, 'add', '-A', '--', ...PUBLISHED.filter((p) => existsSync(join(root, p))), ...(fresh && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
+    staged = tryGit(root, 'diff', '--cached', '--name-only').split('\n').filter(Boolean);
+    if (staged.length) git(root, 'commit', '-q', '-m', text);
+  } catch (e) {
+    // A first publish that fails leaves the repository as it found it, so the retry starts clean.
+    if (before) restore(root, before);
+    throw e;
+  }
+  if (!staged.length) return { branch: gitState(root).branch, commit: null, files: [], note: 'nothing changed' };
   const out = { branch: gitState(root).branch, commit: git(root, 'rev-parse', '--short', 'HEAD'), files: staged, written };
   if (pr === true) {
     // Into the branch the publish started from; on the branch itself, the remote's default branch.
@@ -234,6 +310,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         for await (const chunk of req) { body += chunk; if (body.length > 5_000_000) throw new HttpError(413, 'too large'); }
         const input = JSON.parse(body || '{}');
         if (url.pathname === '/v1/team/preview') return send(res, 200, preview(root, input.spec));
+        if (url.pathname === '/v1/team/from-template') return send(res, 200, fromTemplate(root, input));
         // Only spec, branch, message and pr are read: credentials are the machine's own, never the page's.
         if (url.pathname === '/v1/team/publish') return send(res, 200, publish(root, input.spec, { branch: input.branch, message: input.message, pr: input.pr === true }, env));
         if (url.pathname === '/v1/team/graph') return send(res, 200, graph(input.spec));
@@ -264,8 +341,9 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         throw new HttpError(404, 'no such endpoint');
       }
       if (req.method === 'GET' || req.method === 'HEAD') {
-        const file = url.pathname === '/team-model.mjs' ? MODEL : join(PUBLIC, url.pathname === '/' ? 'index.html' : url.pathname.slice(1));
-        if (!file.startsWith(PUBLIC) && file !== MODEL) throw new HttpError(404, 'not found');
+        // The kit's model and its price table (meeting estimates) are served next to the page.
+        const file = url.pathname === '/team-model.mjs' ? MODEL : url.pathname === '/model-prices.json' ? PRICES : join(PUBLIC, url.pathname === '/' ? 'index.html' : url.pathname.slice(1));
+        if (!file.startsWith(PUBLIC) && file !== MODEL && file !== PRICES) throw new HttpError(404, 'not found');
         if (!existsSync(file)) throw new HttpError(404, 'not found');
         res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
         return res.end(req.method === 'HEAD' ? undefined : readFileSync(file));

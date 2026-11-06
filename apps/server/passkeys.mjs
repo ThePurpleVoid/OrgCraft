@@ -75,7 +75,7 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
     const existing = await mine(who.principal);
     // The very first passkey: a sign-in no older than 5 minutes (the only place auth_time is a gate). Any other: step-up.
     if (existing.length) await requireStepUp(who, stepUp, 'Adding a passkey');
-    else if (now().getTime() - Date.parse(who.session.authTime) > FIRST_PASSKEY_MS) throw new Problem(401, 'sign in again to add your first passkey (a sign-in under 5 minutes old)', { type: 'step-up-required' });
+    else if (!who.session.authTime || now().getTime() - Date.parse(who.session.authTime) > FIRST_PASSKEY_MS) throw new Problem(401, 'sign in again to add your first passkey (a sign-in under 5 minutes old)', { type: 'step-up-required' });
     const challenge = challengeOf(body?.credential);
     if (!(await challenges.take('register', who.principal, challenge))) throw new Problem(400, 'that challenge is unknown, used or expired; ask for new options', { type: 'webauthn-failed' });
     let out;
@@ -151,7 +151,7 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
     if ((counter > 0 || Number(key.sign_count) > 0) && counter <= Number(key.sign_count)) await audit(who.principal, 'passkey.sign-count-flagged', { passkey: key.id, stored: Number(key.sign_count), got: counter });
     await db.system('update passkeys set sign_count = greatest(sign_count, $2), last_used = now() where id = $1', [key.id, counter]);
     await db.system('delete from identity_audit where id = $1', [attempt]);
-    await db.system('update person_sessions set last_step_up = now(), amr = array(select distinct unnest(amr || $2::text[])) where id_hash = $1', [who.session.session, ['hwk', 'user']]);
+    if (who.session.session) await db.system('update person_sessions set last_step_up = now(), amr = array(select distinct unnest(amr || $2::text[])) where id_hash = $1', [who.session.session, ['hwk', 'user']]);
     return m3.mintStepUp(who.tenant, who.principal, { method: 'passkey', passkey: key.id });
   }
 
