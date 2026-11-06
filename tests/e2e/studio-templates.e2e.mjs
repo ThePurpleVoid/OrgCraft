@@ -64,6 +64,9 @@ test('from the gallery to a published support team, and the repository opens its
     assert.ok(box && box.y + box.height <= 900, `${t} is visible without scrolling`);
   }
   assert.equal(await page.locator('#publish').isVisible(), false);
+  // Neutral protocols criterion 5: each card says which shared rules it uses.
+  await gallery.locator('.g-card', { hasText: 'Startup product team' }).getByText('Shared rules: the core and engineering (pull requests, the merge gate, deploys)').waitFor();
+  await gallery.locator('.g-card', { hasText: 'Customer support team' }).getByText('Shared rules: the core only').waitFor();
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'gallery-light.png') });
   await gallery.getByLabel('Search starting teams').fill('help articles');
   await gallery.locator('.g-card', { hasText: 'Customer support team' }).waitFor();
@@ -91,6 +94,11 @@ test('from the gallery to a published support team, and the repository opens its
   await form.getByRole('button', { name: 'Open the team' }).click();
   await bar.getByText('A new team from the Customer support team template.').waitFor();
   await page.locator('#checks', { hasText: 'No problems' }).waitFor();
+  // The team's settings, read-only, when no role is picked.
+  const facts = page.locator('#inspector .team-facts');
+  await facts.getByText('Europe/Lisbon').waitFor();
+  assert.match(await facts.textContent(), /Shared rules\s*the core only/);
+  assert.match(await facts.textContent(), /Started from\s*Customer support team \(kit /);
   assert.equal(await page.locator('#publish').isVisible(), true);
   assert.equal(await page.locator('#pages [data-page="chat"]').isVisible(), false, 'no chat before the team exists');
 

@@ -54,7 +54,7 @@ export function state(root) {
   // The kit roles the team last synced with: a custom agent whose name a newer kit now ships is a clash (A7).
   let kitRoles = null;
   try { kitRoles = JSON.parse(readFileSync(join(root, '.agent-team/kit.lock.json'), 'utf8')).kitRoles ?? null; } catch { /* never synced */ }
-  return { root, kitVersion: VERSION, spec: importLayer(readLayer(root), kit), kit, kitRoles, git: gitState(root) };
+  return { root, kitVersion: VERSION, spec: importLayer(readLayer(root), kit), kit, kitRoles, git: gitState(root), templates: templateCards(kit) };
 }
 
 const INIT_FILES = ['.agent-team/config.sh', '.agent-team/roles/README.md', 'docs/team/ownership.md', 'docs/team/lanes/_template.md'];

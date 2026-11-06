@@ -17,6 +17,7 @@ Owner of this file: cpo. Last updated 2026-11-06.
 | Neutral protocols for business-function teams (issue #30 follow-up) | Idea: story confirmed below, not yet scheduled |
 | Other coding agents (PRD G3 b, issue #30 follow-up) | Idea: story confirmed below; kit-core-dev after "PR through gh" |
 | Email notifications (PRD 6.8 O1 to O7, phase 3) | Building: story and copy confirmed below; kit-core-dev builds the email sink |
+| Rollout view after a publish (PRD 6.9, demo step 17, G-17) | Building: copy confirmed below; data/API kit-core-dev, view web-dev |
 | Slack notifications (PRD 6.8 O1, O4, phase 4) | Building: story and copy confirmed below; kit-core-dev builds the Slack sink |
 
 ## Priorities, in order
@@ -530,3 +531,36 @@ Placeholders as in the email copy, plus `{channel}` and `{admin}`. Messages use 
 - **web-dev**: the Slack section of the Notifications page with this copy.
 - **security-reviewer**: the Slack app scopes (bot: post messages; user sign-in: identity only) and the vault binding.
 - **CPO**: criterion 8.
+
+## Copy: rollout view after a publish (change safety, demo step 17, G-17)
+
+Follows D12 to D18. The view answers one question: "has the team picked up what I published?"
+
+### Decisions
+
+- **D61. Board-based and honest.** States come only from board reports since the publish merged. A role with no report says so; we never guess "moved". The staleness rule of D14 applies (older than 2 hours: grey, "last heard N h ago").
+- **D62. Unknown is not a failure.** A role whose reports carry no version (an older kit, or another coding agent) is shown as "version not reported", grey, not amber, and is left out of the summary count's numerator and denominator, with its own count after it.
+- **D63. The view is read-only.** It shows the choice made at publish (D13) but changes nothing; changing course means another publish.
+
+### Copy
+
+- Heading: `Rollout of {version}` (versionName, e.g. `abc1234, published 6 Nov`)
+- Summary: `{n} of {m} roles on the new version` · when some are mid-task: `, {k} finishing work first` · when unknown: ` · {u} not reporting a version`. When n = m: `All {m} roles on the new version.`
+- State labels (one per role, with its title):
+  - moved: `On the new version` (green)
+  - idle on the old version: `Picks up the new version at its next task`
+  - mid-task on the old version: `Finishing "{task}" on the old version · {choice}`, where {choice} is the D13 wording: `then switches over` (let it finish), `handing off to {role}` (hand off now), `paused` (pause)
+  - switched off, still finishing: `Switched off · finishing "{task}" first`
+  - off: `Off`
+  - no report since the publish: `No report since the publish` (grey), plus `last heard {n} h ago` when there is an older report
+  - version unknown (D62): `Version not reported` (grey), hint on hover/tap: `This role reports without a version, from an older kit or another coding agent. Its brief changed in the repository; it reads it at its next task.`
+- Footer note: `Based on board reports; may be out of date. Newest report {time}.`
+- Empty state (no publish merged yet): `Nothing to roll out yet. After you publish and the change merges, this shows which roles have picked it up.`
+- Pending merge state (published, PR open): `Waiting for the change to merge. Roles keep running {old_version} until it does.`
+
+### Acceptance criteria
+
+1. Each state above is reachable from fixture board reports and shows its label; a role is "On the new version" only when a report after the merge names the new version (D61).
+2. Version-unknown roles are grey and outside the n of m count (D62).
+3. The mid-task line names the choice made at publish, read from the recorded plan (D12).
+4. The empty and pending-merge states show their copy.

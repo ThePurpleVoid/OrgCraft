@@ -2,7 +2,7 @@
   "schema": "agent-team/team-template@1",
   "id": "startup-product-team",
   "title": "Startup product team",
-  "summary": "A product and engineering organisation: chief of staff, CTO and CPO lanes, builders, QA and reviewers.",
+  "summary": "A product and engineering organization: a chief of staff, a CTO and a CPO with their teams, builders, QA and reviewers.",
   "group": "product",
   "preset": "engineering",
   "systems": [

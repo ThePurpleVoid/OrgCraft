@@ -1,9 +1,9 @@
 // Agent Team Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
-import { checkUpgrade, resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
+import { checkUpgrade, resolveSpec, setEnabled, setField, splitBrief, teamPacks, validate } from './team-model.mjs';
 import { createChat } from './chat.js';
 import { createMeetings } from './meetings.js';
-import { createGallery, rolesLine } from './gallery.js';
+import { createGallery, rolesLine, rulesLine } from './gallery.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
 import { QUIET_S, assess, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
@@ -557,11 +557,26 @@ function nowOnLive(r) {
     <p class="hint">${esc(staleNote(sf.newest))}</p></section>`;
 }
 
+/** The team's settings, read-only, when no role is picked (neutral protocols story criterion 5: no new choice yet). */
+function teamHtml() {
+  const v = spec.values ?? {};
+  const from = spec.options?.from ? /^(.+)@(.*)$/.exec(spec.options.from) : null;
+  const tpl = from && (S.templates ?? []).find((c) => c.id === from[1]);
+  const rows = [
+    ['Project', v.PROJECT_NAME], ['Owner', v.OWNER], ['Time zone', v.TIMEZONE], ['Kit', S.kitVersion],
+    ['Shared rules', rulesLine(teamPacks(spec.options)).replace(/^Shared rules: /, '')],
+    ...(from ? [['Started from', `${tpl?.title ?? from[1]}${from[2] ? ` (kit ${from[2]})` : ''}`]] : []),
+  ].filter(([, x]) => x);
+  return `<h2>Team</h2><dl class="team-facts">${rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('')}</dl>
+    <p class="hint">Every team gets the core rules: one door for the owner's requests, the owner's words passed on unchanged, one writer per area, the four message kinds and the board. A team's template or preset adds the rest.</p>
+    <p class="muted">Pick a role on the canvas or in the library.</p>`;
+}
+
 function renderInspector() {
   const el = $('#inspector');
   if (selectedSystem) return renderSystemInspector(el, ctx, selectedSystem);
   const r = selected && view.bySlug.get(selected);
-  if (!r) { el.innerHTML = '<p class="muted">Pick a role on the canvas or in the library.</p>'; return; }
+  if (!r) { el.innerHTML = teamHtml(); return; }
   const role = spec.roles[r.slug];
   const managers = view.team.filter((m) => m.slug !== r.slug && !under(r.slug, m.slug));
   const ownProject = role.brief !== undefined;
@@ -992,6 +1007,7 @@ function renderTemplateBar() {
       <dl>
         <div><dt>Roles that start on</dt><dd>${esc(byOrder(c.roles.filter((s) => !c.dormant.includes(s))).join(', '))}</dd></div>
         ${c.dormant.length ? `<div><dt>Dormant until you start them</dt><dd>${esc(byOrder(c.dormant).join(', '))}</dd></div>` : ''}
+        <div><dt>Shared rules</dt><dd>${esc(rulesLine(c.packs).replace(/^Shared rules: /, ''))}</dd></div>
         ${c.systems.length ? `<div><dt>Systems to connect</dt><dd>${esc(c.systems.map((s) => s.name).join(', '))}</dd></div>` : ''}
         ${meetingsLine ? `<div><dt>Starter meetings</dt><dd>${esc(meetingsLine)}</dd></div>` : ''}
       </dl></div>
