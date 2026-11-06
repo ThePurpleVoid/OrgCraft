@@ -12,6 +12,10 @@
 //   AGENT_TEAM_SERVER        the control plane's URL (instead of --server)
 //   ANTHROPIC_API_KEY        the model key. It stays in this process: sessions reach the model through a loopback
 //                            proxy with a token of their own
+//   AGENT_TEAM_MERGER_APP_ID  the merger GitHub App; its key is AGENT_TEAM_MERGER_APP_KEY (the PEM), or the file
+//                    --data/merger-app.pem (or AGENT_TEAM_MERGER_APP_KEY_FILE).
+//                    With both, the runner opens each session's pull request and merges it after approval.
+//   AGENT_TEAM_PROPOSALS=local  the dry run: pull requests on a stand-in bare repository instead
 //   AGENT_TEAM_RUNNER_GITCONFIG  a git config with the runner's push credential (a helper for a token that can push
 //                            branches but not the default branch); sessions never see it
 //
@@ -32,6 +36,7 @@ import { parseArgs } from 'node:util';
 import { agentSdkAdapter } from './adapters/agent-sdk.mjs';
 import { startRunner } from './runner.mjs';
 import { checkServer } from './link.mjs';
+import { githubProposals, localProposals } from './proposals.mjs';
 import { useGitConfig } from './worktree.mjs';
 import { privateDir, selfCheck } from './sandbox.mjs';
 
@@ -95,8 +100,20 @@ if (sandbox) {
 }
 useGitConfig(process.env.AGENT_TEAM_RUNNER_GITCONFIG ?? join(data, 'gitconfig'));
 
+// Who opens and merges the session's pull request (runner-protocol, Proposals). The merger GitHub App when its id
+// and key are there (M3 on a Mac installs the key into the data folder), or the stand-in remote of the dry run.
+let proposals = null;
+const appKey = process.env.AGENT_TEAM_MERGER_APP_KEY_FILE ?? join(data, 'merger-app.pem');
+if (process.env.AGENT_TEAM_PROPOSALS === 'local') proposals = localProposals();
+else if (process.env.AGENT_TEAM_MERGER_APP_ID && (process.env.AGENT_TEAM_MERGER_APP_KEY || existsSync(appKey))) {
+  // A hosted runner gets the key as a secret in its environment (sessions cannot read that, F3); on a Mac, a file.
+  proposals = githubProposals({ appId: process.env.AGENT_TEAM_MERGER_APP_ID, privateKey: process.env.AGENT_TEAM_MERGER_APP_KEY || readFileSync(appKey, 'utf8') });
+}
+else if (process.env.AGENT_TEAM_MERGER_APP_ID) fail(`AGENT_TEAM_MERGER_APP_ID is set but there is no key at ${appKey}`);
+console.error(`[runner] pull requests: ${proposals ? `opened and merged by the runner (${proposals.connector})` : 'not opened by the runner (no merger app configured)'}`);
+
 const runner = startRunner({
-  server, key, root: data, work, sandbox, id: saved.id ?? o.name, maxSessions: Number(o['max-sessions']) || 8,
+  server, key, root: data, work, sandbox, proposals, id: saved.id ?? o.name, maxSessions: Number(o['max-sessions']) || 8,
   adapter: agentSdkAdapter({ effort: o.effort }),
   log: (m) => console.error(`[runner] ${m}`),
 });
