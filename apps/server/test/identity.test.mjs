@@ -137,7 +137,11 @@ test('discovery names this deployment as the issuer, with the /oauth endpoints',
 
 test('a person who is not a member or invitee cannot create an account', () => issuer(async ({ db, gh, browser }) => {
   gh.as = { id: '777', login: 'stranger' };
-  assert.equal(await browser().signIn('/#chat'), `${ORIGIN}/sign-in?error=not-invited`);
+  const stranger = browser();
+  assert.equal(await stranger.signIn('/#chat'), `${ORIGIN}/sign-in?error=not-invited`);
+  // Any GitHub account is not enough: no cookie, so no tenant data at all.
+  assert.equal(stranger.jar.has('__Host-agent-team'), false);
+  for (const path of ['/me', '/teams', '/me/summary', '/me/inbox', '/runners', '/secrets']) assert.equal((await stranger.call('GET', path)).status, 401, path);
   assert.equal((await db.system('select count(*)::int as n from people'))[0].n, 0);
   assert.equal((await db.system('select count(*)::int as n from members'))[0].n, 0);
   assert.equal((await db.system("select count(*)::int as n from identity_audit where action = 'sign-in.refused'"))[0].n, 1);
@@ -152,6 +156,11 @@ test('the first sign-in of AGENT_TEAM_OWNER_GITHUB creates the owner, and a seco
   assert.equal(me.body.login, 'octo');
   assert.deepEqual(me.body.workspaces, [{ tenant: 'acme', role: 'owner' }]);
   assert.equal(me.body.passkeys, 0);
+  // Removed from the workspace: the cookie still names them, but nothing of the tenant is theirs any more.
+  await db.system("update members set removed_at = now()");
+  assert.deepEqual((await b.call('GET', '/me')).body.workspaces, []);
+  for (const path of ['/teams', '/me/summary', '/me/inbox', '/runners']) assert.equal((await b.call('GET', path)).status, 404, path);
+  await db.system("update members set removed_at = null");
   assert.ok(Date.now() - Date.parse(me.body.authTime) < 60_000);
   // The cookie is the spec's: __Host-, HttpOnly, Secure, SameSite=Lax, Path=/.
   assert.match(b.jar.get('__Host-agent-team').raw, /^__Host-agent-team=[A-Za-z0-9_-]{43}; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=604800$/);
