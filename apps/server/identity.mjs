@@ -21,6 +21,7 @@ import { safeReturn } from '../studio/public/auth.js';
 import { seal, unseal } from './vault.mjs';
 import { Problem } from './store.mjs';
 import { createHosts, HOST_ID } from './hosts.mjs';
+import { createInstallations } from './github.mjs';
 
 export { safeReturn };
 export const WEB_CLIENT = 'agent-team-web';
@@ -187,6 +188,28 @@ export function githubUpstream({ clientId, clientSecret, url = 'https://github.c
       } catch { /* no email permission: invitations by user id still work */ }
       return { provider: 'github', subject: String(u.id), login: u.login.slice(0, 100), name: typeof u.name === 'string' ? u.name.slice(0, 200) : null, email };
     },
+    /**
+     * The install callback's code (github.mjs): who the person is, `get(path)` as them on the API, and `drop()`, which
+     * revokes the user token. The token never leaves this object.
+     */
+    async installer({ code }) {
+      if (typeof code !== 'string' || !code || code.length > 200) throw new Error('no code');
+      const r = await fetch(`${base}/login/oauth/access_token`, { method: 'POST', signal: AbortSignal.timeout(10_000), headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code }) });
+      const tok = await r.json().catch(() => ({}));
+      if (!r.ok || typeof tok.access_token !== 'string') throw new Error('GitHub did not accept the code');
+      const token = tok.access_token;
+      const headers = { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'agent-team-server' };
+      const get = async (path) => {
+        const res = await fetch(`${api}${path}`, { headers, signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) return null;
+        return res.json().catch(() => null);
+      };
+      const u = await get('/user');
+      if (!u || !Number.isSafeInteger(u.id) || u.id <= 0 || typeof u.login !== 'string') throw new Error('GitHub did not say who installed');
+      const drop = () => fetch(`${api}/applications/${encodeURIComponent(clientId)}/token`, { method: 'DELETE', signal: AbortSignal.timeout(10_000),
+        headers: { authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'agent-team-server' }, body: JSON.stringify({ access_token: token }) });
+      return { subject: String(u.id), login: u.login.slice(0, 100), get, drop };
+    },
   };
 }
 
@@ -249,7 +272,7 @@ function limiter(now) {
  * floods are for the host's concurrency limits and the edge. `configure(config)` returns the library configuration
  * to use instead: only the OpenID conformance harness (conformance/op.mjs) passes it; the server never does.
  */
-export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), proxy = {}, clientIp = (req) => callerIp(req, proxy), configure = null }) {
+export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), proxy = {}, clientIp = (req) => callerIp(req, proxy), configure = null, githubApp = {} }) {
   const issuer = new URL(publicUrl);
   if (issuer.protocol !== 'https:') throw new Error('sign-in needs an https AGENT_TEAM_PUBLIC_URL (the cookie is Secure and __Host-)');
   if (issuer.pathname !== '/' || issuer.search || issuer.hash) throw new Error('AGENT_TEAM_PUBLIC_URL must be an origin with no path for sign-in');
@@ -259,6 +282,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
   const githubRedirect = `${origin}/oauth/callback/github`;
   const limited = limiter(now);
   const hosts = createHosts({ db, key, tenant, publicUrl: origin, now });
+  // GitHub App installations (S9): proven through the install callback, which GitHub sends to the same callback URL.
+  const installations = createInstallations({ db, key, tenant, upstream, appSlug: githubApp.slug ?? null, webhookSecret: githubApp.webhookSecret ?? null, url: githubApp.url, now });
 
   async function audit(person, action, detail = {}) {
     await db.system('insert into identity_audit(person, action, detail) values ($1, $2, $3)', [person, action, detail]);
@@ -494,6 +519,17 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     return provider.interactionFinished(req, res, { consent: { grantId: await grant.save() } }, { mergeWithLastSubmission: true });
   }
 
+  /** GitHub's install callback (github.mjs): a plain page that says what happened, and a link back. */
+  async function installDone(res, url) {
+    const r = await installations.callback(url.searchParams);
+    const esc = (x) => String(x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    res.writeHead(r.ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY',
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'" });
+    return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${r.ok ? 'GitHub connected' : 'GitHub not connected'}</title>`
+      + '<body style="font-family:system-ui,sans-serif;max-width:480px;margin:48px auto;padding:0 16px;line-height:1.5">'
+      + `<h1 style="font-size:22px">${r.ok ? 'GitHub connected' : 'GitHub not connected'}</h1><p>${esc(r.message)}</p><p><a href="/">Back to Agent Team</a></p>`);
+  }
+
   async function upstreamDone(req, res, url) {
     const clear = [setCookie(UPSTREAM_COOKIE, '', 0)];
     const state = url.searchParams.get('state') ?? '', mine = cookies(req).get(UPSTREAM_COOKIE) ?? '';
@@ -582,6 +618,7 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
       if (req.method === 'POST' && !/^application\/x-www-form-urlencoded\b/i.test(req.headers['content-type'] ?? '')) throw new Problem(415, 'send the consent form');
       await consentGranted(req, res, consent[1]); return true;
     }
+    if (p === '/oauth/callback/github' && req.method === 'GET' && url.searchParams.has('setup_action')) { await installDone(res, url); return true; }
     if (p === '/oauth/callback/github' && req.method === 'GET') { await upstreamDone(req, res, url); return true; }
     if (p === '/oauth/web/done' && req.method === 'GET') { await webDone(req, res, url); return true; }
     if (p === '/oauth/revoke' && req.method === 'POST' && /^application\/json\b/i.test(req.headers['content-type'] ?? '')) { await signOut(req, res); return true; }
@@ -605,5 +642,5 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
   /** What the deploy smoke check reads (GET /v1/internal/caller): the caller as the limits see it, and the edge. */
   const caller = (req) => ({ ip: clientIp(req), edge: viaEdge(req, proxy) });
 
-  return { get provider() { return provider; }, hosts, caller, handle, sessionOf, workspaces, csrfOk, endSessions, sweep, origin, admit, lookup: (who) => upstream.lookup(who) };
+  return { get provider() { return provider; }, hosts, installations, caller, handle, sessionOf, workspaces, csrfOk, endSessions, sweep, origin, admit, lookup: (who) => upstream.lookup(who) };
 }

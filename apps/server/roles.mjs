@@ -34,11 +34,16 @@ export const ROUTES = [
   ['POST', '/hosts', 'admin'],
   ['DELETE', '/hosts/{host}', 'admin'],
   // The sites a person allowed on the host consent page: their own, so any member may list and unlink them.
+  // GitHub App installations the workspace proved it owns (S9, github.mjs): binding and unbinding need step-up.
+  ['GET', '/github/installations', 'admin'],
+  ['POST', '/github/installations', 'admin'],
+  ['DELETE', '/github/installations/{installation}', 'admin'],
   ['GET', '/me/hosts', 'viewer'],
   ['DELETE', '/me/hosts/{host}', 'viewer'],
   ['GET', '/teams', 'viewer'],
   ['POST', '/teams', 'admin'],
   ['GET', '/teams/{team}', 'viewer'],
+  ['PUT', '/teams/{team}', 'admin'],
   ['GET', '/teams/{team}/events', 'viewer'],
   ['POST', '/teams/{team}/events', 'admin'],
   ['GET', '/teams/{team}/events/stream', 'viewer'],

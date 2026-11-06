@@ -430,3 +430,21 @@ test('G-12 ready_to_try: front door only, only after a merge, preview from the r
     assert.ok(!runner.frames.slice(before).some((f) => f.op === 'session.message' || f.op === 'session.start'), 'nobody is woken');
   }, { tickMs: 0 });
 });
+
+test('session.start carries repo.installations, the GitHub App installations the workspace proved (S9), and only when there are some', async () => {
+  const asked = [];
+  const installationsFor = async (tenant, url) => { asked.push([tenant, url]); return url.includes('example/shop') ? [42, 7] : []; };
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'Ship the cart' });
+    const f = await start(runner, 'chief-of-staff');
+    assert.deepEqual(f.body.repo, { url: 'https://github.com/example/shop.git', ref: 'main', installations: [42, 7] });
+    assert.deepEqual(asked[0], ['acme', 'https://github.com/example/shop.git']);
+  }, { publicUrl: 'https://plane.example', tickMs: 0, installationsFor });
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'Ship the cart' });
+    const f = await start(runner, 'chief-of-staff');
+    assert.deepEqual(f.body.repo, { url: 'https://github.com/example/shop.git', ref: 'main' }, 'left off when none is bound');
+  }, { publicUrl: 'https://plane.example', tickMs: 0, installationsFor: async () => [] });
+});

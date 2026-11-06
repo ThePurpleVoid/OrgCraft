@@ -24,7 +24,7 @@ const SESSION_STATE = { 'session.started': 'running', 'session.idle': 'idle', 's
 const utcDay = (d) => d.toISOString().slice(0, 10);
 const backoff = (attempts) => BACKOFF[Math.min(Math.max(attempts - 1, 0), BACKOFF.length - 1)];
 
-export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes }) {
+export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null }) {
   const reg = () => (typeof runners === 'function' ? runners() : runners);
   const meetings = createMeetings({ db, m3, publicUrl, ...(meetingTurnMinutes ? { turnMinutes: meetingTurnMinutes } : {}) });
   const toolsUrl = () => String(publicUrl || '').replace(/\/+$/, '');
@@ -175,6 +175,12 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       await m3.tx(tenant, (ctx) => ctx.emit(team, 'session.queued', { role, instance, reason: 'the run is at its session cap', position }, { subject: `role/${role}`, run, actor: { kind: 'system', id: 'control-plane', session: sid, via: 'api' } }));
       await db.tenant(tenant, ({ q }) => q('update deliveries set next_at = now() + make_interval(secs => 10) where id = $1', [plan.d.id]));
       return;
+    }
+    // The GitHub App installations this workspace proved it owns for the repository's account (S9), set by the server
+    // only and left off when there is none: the runner mints tokens for these and no other (#139).
+    if (installationsFor && plan.body.repo?.url) {
+      const ids = await installationsFor(tenant, plan.body.repo.url).catch(() => null);
+      if (ids?.length) plan.body.repo = { ...plan.body.repo, installations: ids };
     }
     try {
       await plan.conn.send(plan.op, plan.body, { timeoutMs: ACK_SECONDS * 1000 });

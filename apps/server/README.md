@@ -277,6 +277,19 @@ OpenID-Certified library: `identity.mjs` holds its storage adapter and our polic
   read-only ticket for one team; the host's page opens `…/events/stream?ticket=…` here directly. That stream answers
   CORS only for the minting host's own origins, never with credentials, and ends when the person leaves the
   workspace or the host is revoked. Keep `ticket` out of the edge's access logs.
+- **GitHub App installations the workspace proved it owns** (`github.mjs`, docs/specs/studio-embed.md S9). The
+  deployment's GitHub App key can mint tokens for every customer, so the hosted Studio and the runner use only
+  installations bound to the tenant here. An admin starts with `POST /v1/github/installations` (step-up), which gives
+  the app's install page with a signed, single-use, ten-minute state. GitHub sends them back to
+  `/oauth/callback/github` with a user code (turn on "Request user authorization (OAuth) during installation" in the
+  app), and the server asks GitHub, as that person: are they the GitHub user they sign in with, is the installation in
+  their `/user/installations` and not suspended, do they administer its account (their own user, or an active org
+  admin), and can they push to every repository it holds. Only then is it bound; the user token is revoked at once.
+  One installation belongs to one workspace. `GET` lists, `DELETE /v1/github/installations/{id}` (step-up) unbinds,
+  and with `GITHUB_WEBHOOK_SECRET` the webhook at `/v1/github/webhook` unbinds an uninstalled or suspended one at
+  once. `PUT /v1/teams/{team} { repo: "owner/name" }` names the team's repository for the hosted Studio. A run on a
+  github.com repository whose account is not proven is refused (409, `type: installation`), and `session.start`
+  carries the proven ids as `repo.installations`. Off without `GITHUB_APP_SLUG`; nothing changes in local mode.
 
 ## Host it in another server
 

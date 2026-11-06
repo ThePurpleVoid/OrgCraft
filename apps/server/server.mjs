@@ -107,7 +107,8 @@ export function createControlPlane(opts) {
   const m3 = opts.m3 ?? createM3({ db: opts.db, now: opts.now, publicUrl: opts.publicUrl });
   let runners = null;
   // The bus: what wakes whom, and sending it to runners (m3-design sections 2 to 4, 7).
-  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl, meetingTurnMinutes: opts.meetingTurnMinutes });
+  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl, meetingTurnMinutes: opts.meetingTurnMinutes,
+    installationsFor: opts.installationsFor ?? (opts.identity?.installations?.enabled ? (tn, url) => opts.identity.installations.forRepo(tn, url) : null) });
   wireBus(m3, bus);
   // Runners connect here over a WebSocket (runner-protocol.md).
   runners = attachRunners(server, { db: opts.db, ops: bus.ops, welcome: bus.welcome, onLost: bus.onLost, ...(opts.runnerOptions ?? {}) });
@@ -142,12 +143,16 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const slack = createSlack({ db, key, publicUrl, redirectUri: studioUrl ? `${studioUrl}/slack/callback` : '', providers: slackOpts.providers ?? SLACK_PROVIDERS, readSecret: store.readSecret, now, fetch: slackOpts.fetch ?? fetch });
   // The deployment's own Studio page (hosted mode, apps/server/studio.mjs): off until the M4 GitHub App is set up.
   const studioOrigin = identity?.origin ?? (publicUrl ? new URL(publicUrl).origin : null);
+  const installations = identity?.installations?.enabled ? identity.installations : null;
   const hostedStudio = createHostedStudio(studioOpts && studioOrigin ? {
-    origin: studioOrigin, ...studioOpts,
+    origin: studioOrigin,
+    // The installations this workspace proved (S9) and the team's repository, unless the caller brings its own.
+    ...(installations ? { teamRepo: (tn, tm) => installations.teamRepo(tn, tm), boundInstallations: (tn) => installations.bound(tn) } : {}),
+    ...studioOpts,
     audit: (row) => m3.tx(row.tenant, (ctx) => ctx.audit({ team: row.team, actorKind: row.actorId ? 'person' : 'system', actorId: row.actorId ?? 'control-plane', action: row.action, target: row.target, decision: row.decision, rule: row.rule ?? null, detail: row.detail ?? null })),
   } : null);
   let tickMisses = [];
-  const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl });
+  const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl, installationsFor: installations ? (tn, url) => installations.forRepo(tn, url) : null });
   if (!givenBus) wireBus(m3, bus);
   // Every write of the m3 module and the bus reaches the live streams and the sinks once it commits.
   m3.onStored((stored) => { const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); });
@@ -391,6 +396,12 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return stream(req, res, tk.tenant, team, url, { headers: cors, still: () => identity.hosts.stillMember(tk.tenant, tk.person, tk.client) });
     }
 
+    // GitHub's webhook for the deployment's App (github.mjs): signed with GITHUB_WEBHOOK_SECRET, no other credential.
+    if (a === 'github' && team === 'webhook' && !b && m === 'POST') {
+      if (!identity?.installations?.enabled) throw new Problem(404, 'not found');
+      return send(res, 200, await identity.installations.webhook(await readRaw(req, 1024 * 1024), req.headers));
+    }
+
     const who = await person(req, url.pathname);
     if (a === 'me' && !team && m === 'GET') return send(res, 200, await meView(who));
     // A host acts for its user in the Studio's own routes only: never step-up or passkeys (those open on this
@@ -566,6 +577,21 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       }
       if (team && !b && m === 'DELETE') return send(res, 200, await identity.hosts.revoke(t, team, me));
     }
+    // GitHub App installations the workspace has proven it owns (S9, github.mjs). Binding one is an admin's, with step-up.
+    if (a === 'github' && team === 'installations') {
+      if (!identity?.installations?.enabled) throw new Problem(404, 'GitHub App installations need sign-in and GITHUB_APP_SLUG on this deployment');
+      if (!b && m === 'GET') return send(res, 200, await identity.installations.list(t));
+      if (!b && m === 'POST') {
+        await readJson(req, 4 * 1024);
+        if (who.via === 'admin') throw new Problem(400, 'connecting GitHub proves a person administers the account: sign in as one');
+        await m3.requireStepUp(t, me, stepUp, 'Connecting a GitHub App installation');
+        return send(res, 201, await identity.installations.start(t, me), {}, { secrets: ['url'] });
+      }
+      if (b && !c && m === 'DELETE') {
+        await m3.requireStepUp(t, me, stepUp, 'Disconnecting a GitHub App installation');
+        return send(res, 200, await identity.installations.unbind(t, b, me));
+      }
+    }
     if (a === 'me' && team === 'hosts' && identity && who.via !== 'admin') {
       if (!b && m === 'GET') return send(res, 200, await identity.hosts.myLinks(me));
       if (b && !c && m === 'DELETE') return send(res, 200, await identity.hosts.unlink(me, b));
@@ -583,6 +609,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     }
     if (a === 'teams' && team) {
       if (!b && m === 'GET') return send(res, 200, await store.getTeam(db, t, team));
+      if (!b && m === 'PUT') return send(res, 200, await store.putTeam(db, t, team, (await readJson(req, 16 * 1024)) ?? {}));
       if (b === 'events' && !c && m === 'GET') {
         const q = Object.fromEntries(url.searchParams);
         const after = q.cursor ? Number(Buffer.from(q.cursor, 'base64url').toString()) || 0 : await store.seqOf(db, t, team, q.after ?? '');
@@ -604,7 +631,14 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'budget' && !c && m === 'GET') return send(res, 200, await m3.getBudget(t, team));
       if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
-      if (b === 'runs' && !c && m === 'POST') return send(res, 201, await did(m3.startRun(t, team, (await readJson(req, MAX_BODY)) ?? {}, me)));
+      if (b === 'runs' && !c && m === 'POST') {
+        const body = (await readJson(req, MAX_BODY)) ?? {};
+        // A run on a GitHub repository needs an installation the workspace has proven it owns (S9): the runner gets
+        // only those, as repo.installations on session.start.
+        const ids = installations?.enabled ? await installations.forRepo(t, body?.team?.repo?.url) : null;
+        if (ids && !ids.length) throw new Problem(409, 'connect the GitHub App for this repository first: POST /v1/github/installations', { type: 'installation' });
+        return send(res, 201, await did(m3.startRun(t, team, body, me)));
+      }
       if (b === 'meetings' && !c && m === 'GET') return send(res, 200, { meetings: await bus.meetings.list(t, team) });
       if (b === 'meetings' && !c && m === 'POST') return send(res, 201, await did(bus.meetings.start(t, team, (await readJson(req, 16 * 1024)) ?? {}, me)));
       if (b === 'meetings' && c && !parts[5] && m === 'GET') return send(res, 200, await bus.meetings.get(t, team, c));

@@ -32,7 +32,25 @@ export async function createTeam(db, tenant, { id: team, name }) {
 export const listTeams = (db, tenant) => db.tenant(tenant, ({ q }) => q('select id, name, created_at from teams order by id'));
 
 export async function getTeam(db, tenant, team) {
-  const [row] = await db.tenant(tenant, ({ q }) => q('select id, name, created_at from teams where id = $1', [team]));
+  const [row] = await db.tenant(tenant, ({ q }) => q('select id, name, created_at, repo from teams where id = $1', [team]));
+  if (!row) throw new Problem(404, 'no such team');
+  return row;
+}
+
+/** PUT /v1/teams/{team}: { name?, repo? }. repo is the team's GitHub repository, owner/name, or null to clear it. */
+export async function putTeam(db, tenant, team, body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const sets = [], args = [team];
+  if (b.name !== undefined) {
+    if (typeof b.name !== 'string' || !b.name.trim() || b.name.length > 100) throw new Problem(400, 'name is 1 to 100 characters');
+    args.push(b.name.trim()); sets.push(`name = $${args.length}`);
+  }
+  if (b.repo !== undefined) {
+    if (b.repo !== null && (typeof b.repo !== 'string' || !/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(b.repo))) throw new Problem(400, 'repo is the GitHub repository as owner/name, or null');
+    args.push(b.repo); sets.push(`repo = $${args.length}`);
+  }
+  if (!sets.length) throw new Problem(400, 'send name or repo');
+  const [row] = await db.tenant(tenant, ({ q }) => q(`update teams set ${sets.join(', ')} where id = $1 returning id, name, created_at, repo`, args));
   if (!row) throw new Problem(404, 'no such team');
   return row;
 }

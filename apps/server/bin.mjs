@@ -24,6 +24,12 @@
 //   GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET   the deployment's GitHub App (its user authorization flow)
 //   AGENT_TEAM_PUBLIC_URL   must then be the https origin people open; it is the issuer and the cookie's origin
 //   AGENT_TEAM_OWNER_GITHUB the first owner's numeric GitHub user id, read only while there are no members
+//   GITHUB_APP_SLUG         the app's URL name (github.com/apps/<slug>): turns on connecting installations (S9). In the
+//                           app's settings, "Request user authorization (OAuth) during installation" must be on
+//   GITHUB_WEBHOOK_SECRET   the app's webhook secret; its webhook URL is <public url>/v1/github/webhook, and an
+//                           uninstalled or suspended installation is then disconnected at once
+//   GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY   the app's id and PEM (\n escapes are fine): turn on the hosted Studio,
+//                           which publishes only through installations the workspace proved
 //   AGENT_TEAM_PROXY_HOPS   how many of our own proxies append to x-forwarded-for in front of the server (Fly.io: 1),
 //                           so sign-in rate limits read the caller's IP from the right and never trust a client's entry
 //   AGENT_TEAM_EDGE_SECRET  a secret the Vercel rewrite sends as x-agent-team-edge; with it, the edge's own entry names
@@ -105,9 +111,13 @@ if (proxy.edgeSecret && proxy.edgeSecret.length < 32) { console.error('agent-tea
 const identity = env.GITHUB_APP_CLIENT_ID ? await createIdentity({
   db, key, tenant, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', ownerGithub: env.AGENT_TEAM_OWNER_GITHUB ?? null,
   upstream: githubUpstream({ clientId: env.GITHUB_APP_CLIENT_ID, clientSecret: env.GITHUB_APP_CLIENT_SECRET }),
-  proxy,
+  proxy, githubApp: { slug: env.GITHUB_APP_SLUG || null, webhookSecret: env.GITHUB_WEBHOOK_SECRET || null },
 }) : null;
-const server = createControlPlane({ db, key, tenant, adminToken, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', sinks, stepUpVerifier: verifier, identity, email });
+if (env.GITHUB_WEBHOOK_SECRET && env.GITHUB_WEBHOOK_SECRET.length < 20) { console.error('agent-team-server: GITHUB_WEBHOOK_SECRET must be at least 20 characters'); process.exit(2); }
+// The hosted Studio: only with sign-in on and installations to prove; studio.mjs stays off without all of them.
+const studio = identity?.installations?.enabled && env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY
+  ? { appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, '\n') } : null;
+const server = createControlPlane({ db, key, tenant, adminToken, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', sinks, stepUpVerifier: verifier, identity, email, studio });
 server.listen(Number(o.port), o.host, () => {
   console.log(`Agent Team control plane on http://${o.host}:${server.address().port}/v1 (${db.kind}${local ? `, data in ${data}` : ''}${identity ? `, sign-in at ${identity.origin}` : ''})`);
   if (local) console.log(`Admin token: ${join(data, 'admin.token')}\nStep-up secret (typed before approving): ${join(data, 'step-up.secret')}`);

@@ -186,6 +186,7 @@ These bind the handler PR, together with E1 to E10.
   - the ticket is redacted from access logs, since it travels in the query string;
   - the stream re-checks membership and ends when the person is removed or loses the team (as in #101).
 - **S9. Step 2 publish through the M4 app** uses only an installation that the tenant has proven it owns: the same multi-customer gate as for runs (sections 6 and 7).
+  - **Built (control plane, backend-dev):** `apps/server/github.mjs`. The proof is the signed install callback: the admin starts it (step-up), GitHub returns them with a user code, and GitHub must say, as that person, that they are the same GitHub user, the installation is theirs to see and not suspended, they administer its account, and they can push to every repository in it. One tenant per installation; uninstall or suspend unbinds (webhook), and a reinstall is proven again. The hosted Studio's `boundInstallations` and `teamRepo` read it, and `session.start` carries `repo.installations`.
 
 ## 6. Step 2: chat, runs and the live board through the control plane
 
