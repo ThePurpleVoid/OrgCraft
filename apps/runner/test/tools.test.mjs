@@ -8,8 +8,8 @@ const ctx = { role: 'web-dev', frontDoor: false, frontDoorRole: 'chief-of-staff'
 const ok = (name, input, c = ctx) => { const r = checkTool(name, input, c); assert.equal(r.problems, undefined, `${name}: ${r.problems}`); return r.input; };
 const no = (name, input, re, c = ctx) => { const r = checkTool(name, input, c); assert.ok(r.problems, `${name} should be refused`); assert.match(r.problems.join(' | '), re); };
 
-test('the seven tools of tools/1 and the two meeting tools, and nothing else', () => {
-  assert.deepEqual(Object.keys(TOOLS).sort(), ['ask_owner', 'blocked', 'bug', 'handoff', 'meeting_close', 'meeting_reply', 'report', 'request_approval', 'signoff']);
+test('the seven tools of tools/1 and the three meeting tools, and nothing else', () => {
+  assert.deepEqual(Object.keys(TOOLS).sort(), ['ask_owner', 'blocked', 'bug', 'handoff', 'meeting_close', 'meeting_reply', 'meeting_start', 'report', 'request_approval', 'signoff']);
   no('merge', {}, /no team tool called merge/);
 });
 
@@ -80,4 +80,13 @@ test('meeting_reply and meeting_close', () => {
   no('meeting_close', { meeting: 'mtg_1', minutes: 'm', actionItems: [{ to: 'web-dev', task: 't', doneWhen: 'd' }] }, /never to yourself/);
   no('meeting_close', { meeting: 'mtg_1', minutes: 'm', actionItems: [{ to: 'qa-web', task: 't' }] }, /doneWhen/);
   no('meeting_close', { meeting: 'mtg_1', minutes: 'm', decisions: [{ question: 'q', options: [{ id: 'a', label: 'A', consequence: 'c' }, { id: 'b', label: 'B', consequence: 'c' }], recommended: 'z' }] }, /recommended/);
+});
+
+test('meeting_start: the front door only', () => {
+  const door = { ...ctx, role: 'chief-of-staff', frontDoor: true };
+  ok('meeting_start', { title: 'Checkout errors', attendees: ['web-dev', 'qa-web'] }, door);
+  ok('meeting_start', { title: 'Checkout errors', attendees: ['web-dev'], cap: { amount: 50, currency: 'USD' } }, door);
+  no('meeting_start', { title: 'x', attendees: ['web-dev'] }, /Only the front door/);
+  no('meeting_start', { title: 'x', attendees: ['nobody'] }, /not a role/, door);
+  no('meeting_start', { title: 'x', attendees: [] }, /at least one/, door);
 });

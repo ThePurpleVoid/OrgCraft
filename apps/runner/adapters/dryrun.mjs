@@ -36,6 +36,19 @@ export function dryrunAdapter({ control, qaRole = 'qa-web', frontDoor = 'chief-o
     // The front door: answers the owner and hands the request to the builder; tells the owner when it lands.
     [frontDoor]: async (t) => {
       const asked = request(t.prompt);
+      // G-15: "Web dev and QA web on the checkout errors, now" starts an ad hoc meeting with those roles.
+      const now = asked && /^(.+?)\s+on\s+(.+?),?\s+now\.?$/i.exec(asked.trim());
+      if (now) {
+        const who = now[1].toLowerCase();
+        const attendees = [builder().role, qaRole].filter((r) => who.includes(r) || who.includes(r.replace(/-/g, ' ')));
+        const topic = now[2].trim();
+        const r = await t.call('meeting_start', { title: topic.charAt(0).toUpperCase() + topic.slice(1), agenda: `What you know about ${topic}, and what you would do next.`, attendees });
+        t.say(r.isError ? `I could not start that meeting: ${r.text}` : `Starting a meeting now with ${attendees.join(' and ')} on ${topic}. The minutes will be here.`);
+        let meeting;
+        try { meeting = JSON.parse(r.text).meeting; } catch { /* refused: the text says why */ }
+        log(t, 'chief-of-staff:meeting-started', { attendees, meeting, ok: !r.isError, detail: r.isError ? r.text.slice(0, 300) : undefined });
+        return { usage: usage() };
+      }
       if (asked !== null) {
         const b = builder();
         const task = asked.split('\n')[0].slice(0, 200) || 'the owner\'s request';
