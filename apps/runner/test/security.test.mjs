@@ -239,3 +239,84 @@ test('an added line that starts with "++ " is still scanned', async () => {
   assert.equal(r.refused?.rule, 'secret-scan');
   release(w.cwd, 'pp');
 });
+
+test('binary files are scanned too: a session credential inside one is not pushed', async () => {
+  const { bare, root } = origin();
+  const w = await prepare({ root, repo: { url: bare }, worktree: 'web/bin', session: 'bin' });
+  mkdirSync(join(w.cwd, 'web'));
+  writeFileSync(join(w.cwd, 'web', 'logo.png'), Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]), Buffer.from('sess-proxytoken-abc123456'), Buffer.alloc(64)]));
+  agentGit(w.cwd, 'add', '-A'); agentGit(w.cwd, 'commit', '-qm', 'logo');
+  let r = await checkpoint({ cwd: w.cwd, branch: 'web/bin', role: 'web-dev', reason: 't', areas: ['web/'], secrets: ['sess-proxytoken-abc123456'] });
+  assert.equal(r.refused?.rule, 'secret-scan');
+  assert.match(r.error, /web\/logo\.png: a session credential/);
+  // A clean binary goes.
+  agentGit(w.cwd, 'reset', '-q', '--hard', 'HEAD~1');
+  mkdirSync(join(w.cwd, 'web'), { recursive: true });
+  writeFileSync(join(w.cwd, 'web', 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 1, 2, 3]));
+  r = await checkpoint({ cwd: w.cwd, branch: 'web/bin', role: 'web-dev', reason: 't', areas: ['web/'], secrets: ['sess-proxytoken-abc123456'] });
+  assert.equal(r.pushed, true, r.error);
+  release(w.cwd, 'bin');
+});
+
+test('when the remote cannot be reached, the push is refused and the session is told not to push another way', async () => {
+  const { bare, root } = origin();
+  const w = await prepare({ root, repo: { url: bare }, worktree: 'web/off', session: 'off' });
+  mkdirSync(join(w.cwd, 'web'));
+  writeFileSync(join(w.cwd, 'web', 'a.txt'), 'a\n');
+  execFileSync('mv', [bare, `${bare}.gone`]);
+  const r = await checkpoint({ cwd: w.cwd, branch: 'web/off', role: 'web-dev', reason: 't', areas: ['web/'] });
+  execFileSync('mv', [`${bare}.gone`, bare]);
+  assert.equal(r.pushed, false);
+  assert.equal(r.refused?.rule, 'remote-unreachable');
+  assert.match(r.error, /Do not push another way/);
+  release(w.cwd, 'off');
+});
+
+// Needs root (to switch uid without the container's capability-carrying setpriv) and setpriv; skips otherwise.
+const canSwitch = process.getuid?.() === 0 && (() => { try { execFileSync('setpriv', ['--version']); return true; } catch { return false; } })();
+test('F3: a session runs as another user and cannot read the runner\'s environment or data folder', { skip: canSwitch ? false : 'needs root and setpriv to switch users (the container image has both)' }, async () => {
+  const { Session } = await import('../session.mjs');
+  const { sandboxSpawn, privateDir } = await import('../sandbox.mjs');
+  const { mkdtempSync, chmodSync: chmod, readFileSync: read } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { bare } = origin();
+  const top = mkdtempSync(join(tmpdir(), 'runner-f3-'));
+  chmod(top, 0o711);
+  const root = join(top, 'data'), work = join(top, 'work');
+  privateDir(root);
+  writeFileSync(join(root, 'runner.json'), '{"key":"rk_live_secret"}', { mode: 0o600 });
+  const sandbox = { uid: 10002, gid: 10010, exec: 'setpriv' };
+  const umask = process.umask(0o007);
+  process.env.RUNNER_F3_MARKER = 'sk-ant-f3-marker-0123456789abcdef';
+  try {
+    const s = new Session({ session: 'ses_f3', role: 'web-dev', team: 't', repo: { url: bare }, worktree: 'web/f3', areas: ['web/'] }, { root, work, sandbox, emit: async () => {}, adapter: { turn: async () => ({}) } });
+    s.pump = () => {};
+    await s.start();
+    const asAgent = (script) => new Promise((done) => {
+      const c = sandboxSpawn(sandbox)({ command: '/bin/sh', args: ['-c', script], cwd: s.copy.cwd, env: s.env });
+      let out = ''; c.stdout.on('data', (d) => (out += d)); c.stderr.on('data', (d) => (out += d));
+      c.stdin.end(); c.on('close', (code) => done({ code, out }));
+    });
+    const who = await asAgent('id -u');
+    assert.equal(who.out.trim(), '10002');
+    assert.match((await asAgent('grep CapEff /proc/self/status')).out, /CapEff:\s+0+\n/, 'no capabilities');
+    const env = await asAgent(`cat /proc/${process.pid}/environ; cat /proc/1/environ`);
+    assert.ok(!env.out.includes('sk-ant-f3-marker'), 'the runner\'s environment is out of reach');
+    const data = await asAgent(`cat ${join(root, 'runner.json')}; ls ${root}`);
+    assert.notEqual(data.code, 0);
+    assert.ok(!data.out.includes('rk_live_secret'));
+    // It can work in its copy and commit with git; the runner then checks and pushes what it made.
+    const wrote = await asAgent('mkdir -p web && echo hi > web/a.txt && git add web/a.txt && git commit -qm "from the agent" && git log --oneline -1');
+    assert.equal(wrote.code, 0, wrote.out);
+    const r = await s.checkpoint('t');
+    assert.equal(r.pushed, true, r.problem);
+    assert.equal(sh(bare, 'show', 'web/f3:web/a.txt'), 'hi');
+    // A .git the agent replaces is not trusted.
+    await asAgent('mv .git .git-old && cp -r .git-old .git');
+    assert.match((await s.checkpoint('t')).problem ?? '', /replaced by the session/);
+    assert.equal(read(join(root, 'runner.json'), 'utf8').includes('rk_live'), true);
+  } finally {
+    process.umask(umask);
+    delete process.env.RUNNER_F3_MARKER;
+  }
+});
