@@ -360,9 +360,8 @@ export class Session {
   /** Checkpoint and push through the runner's checks (ownership, symlinks, secrets); never throws. */
   async save(reason) {
     // Before any push to GitHub: the repository's installation, looked up fresh, must be bound to the tenant (#28).
-    const refused = await this.unbound('push');
-    if (refused) return { pushed: false, error: refused };
-    const r = await saveWork({ cwd: this.copy.cwd, branch: this.copy.branch, base: this.copy.base, role: this.role, reason, areas: this.body.areas ?? [], secrets: this.secretValues() })
+    // A refusal (or a lookup that fails) stops the push only; the work is still committed locally.
+    const r = await saveWork({ cwd: this.copy.cwd, branch: this.copy.branch, base: this.copy.base, role: this.role, reason, areas: this.body.areas ?? [], secrets: this.secretValues(), beforePush: () => this.unbound('push') })
       .catch((e) => ({ pushed: false, error: e.message }));
     // A branch that changes nothing against its base has nothing to propose (a role that only talked).
     if (r.pushed && this.proposes() && (r.changes || this.proposal)) await this.propose(r.commit).catch(async (e) => { r.proposalError = e.message; if (e.reason === 'installation') await this.refusedInstallation('open', String(e.message).slice(0, 500)); this.deps.log?.(`proposal for ${this.copy.branch}: ${e.message}`); });

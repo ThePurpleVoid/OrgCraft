@@ -299,14 +299,32 @@ test('#28 installation binding in a session: no push, proposal or merge for a re
   });
   // The local connector with GitHub's binding check in front: installation 7 is the repository's.
   const checked = [];
+  let outage = true;
   const proposals = { ...localProposals(), async bound({ installations }) {
     checked.push(installations);
+    if (outage) throw new Error('the installation of acme/shop could not be read (502)');
     if (!installations?.includes(7)) throw new ProposalError('installation', 'acme/shop is under GitHub App installation 7, which is not bound to this team\'s tenant');
     return 7;
   } };
   const runner = startRunner({ server: cp.url, key: cp.key, root, adapter, proposals, previewDelays: [], log: () => {} });
   try {
     await runner.ready;
+    // GitHub's API is down: nothing is pushed (fail closed), but the work is still committed in the copy.
+    const o = cp.start({ role: 'web-dev', run: 'run_7', repo: { url: bare, installations: [7] }, worktree: 'web/7-out', areas: ['form.txt'] });
+    await cp.until(() => results.length === 1);
+    assert.ok(results[0].isError);
+    assert.match(results[0].text, /could not be pushed.*502/);
+    cp.send('session.stop', { session: o.body.session, mode: 'finish-step', reason: 'owner' });
+    await cp.until(() => cp.events.some((e) => e.type === 'session.ended'));
+    const out = cp.events.find((e) => e.type === 'session.ended').data;
+    const copy = cp.events.find((e) => e.type === 'session.started').data.worktree;
+    assert.equal(out.pushed, false);
+    assert.match(out.commit ?? '', /^[0-9a-f]{40}$/, 'the work is committed even though the push was refused');
+    assert.equal(sh(copy, 'show', `${out.commit}:form.txt`), 'form');
+    assert.throws(() => sh(bare, 'rev-parse', '--verify', '--quiet', 'refs/heads/web/7-out'), 'and nothing was pushed');
+    assert.ok(!cp.events.some((e) => e.type === 'proposal.failed'), 'an outage is not an installation refusal');
+    outage = false;
+    results.length = 0; cp.events.length = 0;
     const a = cp.start({ role: 'web-dev', run: 'run_7', repo: { url: bare, installations: [8] }, worktree: 'web/7-form', areas: ['form.txt'] });
     await cp.until(() => results.length === 1 && cp.events.some((e) => e.type === 'proposal.failed'));
     assert.ok(results[0].isError);
