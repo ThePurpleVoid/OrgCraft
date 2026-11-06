@@ -205,7 +205,7 @@ export function createAgentEditor(root, app) {
                 ${p.note ? `<p class="hint area-note">${esc(p.note)}</p>` : ''}
                 ${clash.length ? conflictHtml(String(i), p.path, clash) : ''}`;
             }).join('') || (pending ? '' : '<p class="muted">No areas yet.</p>')}
-            ${pending ? `<div class="area-row pending"><code>${esc(pending.path)}</code><span class="muted">not added yet</span><span></span></div>${conflictHtml('new', pending.path, pending.clashes)}` : ''}
+            ${pending ? `<div class="area-row pending"><code>${esc(pending.path)}</code><span class="muted">${pending.held ? 'writes: not changed yet' : 'not added yet'}</span><span></span></div>${conflictHtml('new', pending.path, pending.clashes)}` : ''}
             <div class="add-row"><input id="e-area" placeholder="for example contracts/ or docs/handbook.md" aria-label="Area to add" autocomplete="off" spellcheck="false"><button type="button" id="e-area-add">Add an area</button></div>
             ${ownProse(owns.prose) ? `<p class="hint">Also in this section: ${esc(owns.prose)}</p>` : ''}
           </section>
@@ -396,7 +396,8 @@ export function createAgentEditor(root, app) {
       const p = ownsPaths(brief()).paths[i];
       // Turning a "reads" into "writes" on someone else's area is held, like a new area: never two writers in the draft.
       const clashes = sel.value === 'writes' ? pathConflicts(app.spec(), slug, p.path) : [];
-      if (clashes.length) { pending = { path: p.path, clashes }; narrow = confirmMove = null; return setPaths((ps) => ps.filter((_, j) => j !== i)); }
+      // The row stays as it is (reads) until a choice is made, so Cancel loses nothing.
+      if (clashes.length) { pending = { path: p.path, clashes, held: true }; narrow = confirmMove = null; return draw(); }
       setPaths((ps) => ps.map((q, j) => (j === i ? { ...q, mode: sel.value, note: sel.value === 'writes' ? '' : q.note } : q)));
     };
     for (const b of root.querySelectorAll('[data-remove-area]')) b.onclick = () => setPaths((ps) => ps.filter((_, i) => i !== Number(b.dataset.removeArea)));
@@ -446,9 +447,15 @@ export function createAgentEditor(root, app) {
             const other = sp.roles[x.writer];
             if (other?.brief !== undefined) { const o = ownsPaths(other.brief); other.brief = setOwnsPaths(other.brief, o.paths.filter((p) => !(p.path === x.path && p.mode === 'writes')), o.prose); }
           }
+          // "The whole area": this agent gets every area it took over, plus what was typed when that is wider; a path
+          // inside another it now writes is dropped, so ownership.json and the brief say the same thing.
+          const norm = (q) => q.replace(/\*+$/, '');
+          const all = [...new Set([c.path, ...moved.map((x) => x.path)])];
+          const wide = all.filter((q) => !all.some((r) => r !== q && norm(q).startsWith(norm(r))));
+          const entries = wide.map((q) => ({ path: q, mode: 'writes', note: '' }));
           const o = ownsPaths(sp.roles[slug].brief);
-          const entry = { path: c.path, mode: 'writes', note: '' };
-          const paths = key === 'new' ? [...o.paths.filter((p) => p.path !== c.path), entry] : o.paths.map((p, i) => (i === Number(key) ? entry : p));
+          const rest = o.paths.filter((p, i) => (key === 'new' || i !== Number(key)) && !wide.some((q) => norm(p.path).startsWith(norm(q))));
+          const paths = [...rest, ...entries];
           sp.roles[slug].brief = setOwnsPaths(sp.roles[slug].brief, paths, ownProse(o.prose));
         });
       }

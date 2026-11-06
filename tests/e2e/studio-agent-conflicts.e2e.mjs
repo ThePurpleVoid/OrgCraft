@@ -78,9 +78,10 @@ test('a clashing area is held until one of three choices, and moving an area in 
   // Making it "writes" again is held the same way.
   await ed.getByLabel('What it does with contracts/templates/').selectOption('writes');
   await box.getByText('Docs keeper already writes contracts/').waitFor();
-  assert.doesNotMatch(await owns(page), /contracts/);
+  assert.match(await owns(page), /^- reads `contracts\/templates\/`/m, 'the row stays "reads" while the clash is open');
   await box.getByRole('button', { name: 'Cancel' }).click();
   assert.equal(await box.count(), 0);
+  assert.match(await owns(page), /^- reads `contracts\/templates\/` \(fixes go to docs-keeper as BUG\)$/m, 'Cancel loses nothing');
 
   // 2. A narrower area, checked again: one inside the other writer's area is refused, one beside it is taken.
   await area.fill('reports/');
@@ -98,6 +99,14 @@ test('a clashing area is held until one of three choices, and moving an area in 
   assert.doesNotMatch(await owns(page), /Nothing yet/, 'an emptied list does not leave its placeholder behind');
   assert.equal(await box.count(), 0);
 
+  // A move of an area typed inside the writer's: the agent gets the writer's whole area, so the table and brief agree.
+  await area.fill('reports/finance/q2/');
+  await area.press('Enter');
+  await box.getByRole('button', { name: 'Move the whole area to this agent…' }).click();
+  await box.waitFor({ state: 'detached' }); // the product manager is not working on it, so one click moves it
+  assert.match(await owns(page), /^- `reports\/finance\/`$/m);
+  assert.doesNotMatch(await owns(page), /reports\/finance\/q2/);
+
   // 3. Move the whole area: the docs keeper is working on it now, so the first click says so and a second one moves it.
   await area.fill('contracts/');
   await area.press('Enter');
@@ -107,6 +116,7 @@ test('a clashing area is held until one of three choices, and moving an area in 
   if (SHOTS) { mkdirSync(SHOTS, { recursive: true }); await ed.locator('#sec-owns').scrollIntoViewIfNeeded(); await page.screenshot({ path: join(SHOTS, 'agent-editor-conflict.png') }); }
   await box.getByRole('button', { name: 'Move it anyway' }).click();
   assert.match(await owns(page), /^- `contracts\/`$/m);
+  assert.doesNotMatch(await owns(page), /contracts\/templates/, 'a reads line inside an area it now writes is folded in');
   assert.equal(await box.count(), 0);
   await ed.locator('#e-checks li.pass', { hasText: 'Every area has one writer' }).waitFor();
   // The ownership table follows: the area's writer is now this agent, and undo puts it back in one step.
