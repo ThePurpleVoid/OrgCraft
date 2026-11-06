@@ -138,6 +138,6 @@ export function selfCheck(sandbox, { pid = process.pid, data }) {
   const cap = /^CapEff:\s*([0-9a-f]+)/m.exec(out);
   if (!cap || /[1-9a-f]/.test(cap[1])) problems.push(`the agent has capabilities (${cap?.[1] ?? 'unknown'})`);
   const uid = /^(\d+)$/m.exec(out)?.[1];
-  if (uid !== undefined && Number(uid) !== sandbox.uid) problems.push(`the agent runs as uid ${uid}, not ${sandbox.uid}`);
+  if (Number(uid) !== sandbox.uid) problems.push(`the agent runs as uid ${uid ?? "unknown"}, not ${sandbox.uid}`);
   return { ok: problems.length === 0, problems };
 }
