@@ -2,6 +2,7 @@
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
 import { checkUpgrade, resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
 import { createChat } from './chat.js';
+import { createMeetings } from './meetings.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
 import { QUIET_S, assess, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
@@ -36,6 +37,8 @@ let sugg = null; // owned area and check suggestions from the repository
 let scale = 1;
 let live = null; // { on, source, where, board, error, es } when the live board is shown
 let chat = null; // the chief-of-staff chat, made the first time it is opened
+let meetings = null; // the Meetings view, made the first time it is opened
+let prices = null; // packages/model-prices/prices.json, for meeting estimates
 let editor = null; // the custom agent editor (agent-editor.js)
 let lastEdit = { key: '', at: 0 }; // typing in one field folds into one undo step
 // Change safety part 1: the team as last published (what is running), the board, and the open popover.
@@ -704,6 +707,7 @@ function openEditor(slug, origin) {
 
 function render() {
   view = derive();
+  if (document.body.dataset.page === 'meetings') { renderIssues(); syncUndo(); meetings?.render(); return; }
   if (editor?.slug) { renderLibrary(); renderIssues(); syncUndo(); editor.draw(); return; }
   renderCanvas();
   renderLibrary();
@@ -852,13 +856,29 @@ async function confirmPublish() {
 // ------------------------------------------------------------------------------------------------ start
 
 function setPage(page) {
-  const p = page === 'chat' ? 'chat' : 'team';
+  const p = ['chat', 'meetings'].includes(page) ? page : 'team';
+  if (meetings?.dirty && document.body.dataset.page === 'meetings' && p !== 'meetings' && !confirm('Discard the changes to this meeting?')) { history.replaceState(null, '', '#meetings'); return; }
   document.body.dataset.page = p;
   for (const b of document.querySelectorAll('#pages [data-page]')) b.setAttribute('aria-pressed', String(b.dataset.page === p));
   if (p === 'chat') { chat ??= createChat({ root: $('#chat-page') }); chat.open(); }
-  else render();
-  if (location.hash !== `#${p}`) history.replaceState(null, '', p === 'team' ? location.pathname : '#chat');
+  else {
+    if (p === 'meetings') meetings ??= createMeetings({ root: $('#meetings-page'), ctx: meetingsCtx });
+    render();
+  }
+  if (location.hash !== `#${p}`) history.replaceState(null, '', p === 'team' ? location.pathname : `#${p}`);
 }
+
+/** What the Meetings view reads from the team and how it edits the draft. */
+const meetingsCtx = {
+  spec: () => spec,
+  team: () => view.team,
+  resolved: () => resolveSpec(spec, S.kit).roles,
+  change: (fn) => change(fn, { quiet: true }),
+  prices: () => prices,
+  small: () => small.matches,
+  dailyCapUsd: () => spec.options?.budgets?.dailyUsd,
+  timezone: () => spec.values?.TIMEZONE || 'UTC',
+};
 
 async function start() {
   try {
@@ -869,6 +889,7 @@ async function start() {
   }
   spec = S.spec;
   published = structuredClone(S.spec);
+  fetch('/model-prices.json').then((r) => (r.ok ? r.json() : null)).then((t) => { prices = t; if (document.body.dataset.page === 'meetings') meetings?.render(); }).catch(() => {});
   loadFollowUps();
   // A move published to happen after its open work merges lives on in the draft, even across a reload or a restart.
   for (const f of followUps) reapplyFollowUp(spec, f);
