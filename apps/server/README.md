@@ -218,7 +218,13 @@ OpenID-Certified library: `identity.mjs` holds its storage adapter and our polic
   when no owner can sign in is `agent-team-server admin reset-owner <github-user-id>` (on Fly:
   `fly ssh console -C "agent-team-server admin reset-owner 1234"`), an owner invitation valid for one day.
 
-Still to come (order 2): bearer tokens from the apps on `/v1`, and the `oidc-conformance` CI job.
+- **Apps on `/v1`** (`dpop.mjs`). An app sends `Authorization: DPoP <access token>` and a `DPoP` proof for each
+  request (RFC 9449), signed by the device key its token is bound to: this method and URL, a fresh `iat`, `ath` of
+  this token, a `jti` used once. The token is oidc-provider's (`AccessToken.find`); the proof is checked with `jose`,
+  the library oidc-provider uses for its own. Roles apply as for the web. Passkeys are added and removed on the web;
+  an app may step up with one. Removing a person's last membership revokes their app tokens at once.
+
+Still to come (order 3): the `oidc-conformance` CI job.
 
 ## Host it in another server
 
