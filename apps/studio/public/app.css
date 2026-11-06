@@ -221,7 +221,7 @@ a { color: var(--accent); }
   .chat-head { padding: 8px 12px; }
   .chat-title, .meter { display: none; }
   /* touch targets: 44px tall, and the run controls stay on one line */
-  .pages button, .chat-run button, .chat-form button { min-height: 44px; }
+  .pages button, .chat-run button, .chat-form button, .runner-code button { min-height: 44px; }
   .chat-head { flex-wrap: nowrap; }
   .chat-run { flex-wrap: nowrap; width: 100%; justify-content: flex-end; gap: 6px; }
   .chat-run .cost { margin-right: auto; white-space: normal; }
@@ -411,3 +411,19 @@ body.editing .layout, body.editing .readonly-note { display: none; }
 .runner-list p { margin: 0 0 8px; }
 .notices ul { margin: 4px 0 8px; padding-left: 18px; }
 .notices p { margin: 0 0 6px; }
+
+/* The impact step in Publish (change safety criteria 8 to 11). */
+.impact { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; margin: 0 0 10px; max-height: 40vh; overflow: auto; }
+.impact-head { justify-content: space-between; gap: 8px; }
+.impact h3 { margin: 0; font-size: 14px; }
+.impact h4 { margin: 10px 0 4px; font-size: 13px; }
+.impact-item { border: 0; border-left: 3px solid var(--warn); margin: 6px 0; padding: 4px 10px; }
+.impact-item legend { font-weight: 600; padding: 0; }
+.dialog .impact-item .choice { flex-direction: row; align-items: center; gap: 8px; margin: 4px 0; color: var(--ink); font-size: 13.5px; cursor: pointer; }
+.dialog .impact-item .choice input { width: auto; margin: 0; }
+.dialog .impact-item .target { flex-direction: row; align-items: center; gap: 6px; margin: 4px 0 0 24px; color: var(--ink); }
+.dialog .impact-item .target select { width: auto; }
+.impact .hint { margin: 6px 0 0; }
+.plan-preview pre { white-space: pre-wrap; font-size: 12px; margin: 0; padding: 8px 10px; }
+.plan-preview details { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 10px; }
+.plan-preview summary { padding: 6px 10px; cursor: pointer; font-size: 12.5px; }
