@@ -15,6 +15,7 @@
     "./studio/handler": "./apps/studio/handler.mjs",
     "./studio/github-app-token": "./apps/studio/github-app-token.mjs",
     "./team-model": "./packages/team-model/index.mjs",
+    "./github-app": "./packages/github-app/index.mjs",
     "./package.json": "./package.json",
     "./*": "./*"
   },
@@ -22,6 +23,7 @@
     "apps/studio/",
     "bin/",
     "packages/events/",
+    "packages/github-app/",
     "packages/model-prices/",
     "packages/team-model/",
     "presets/",

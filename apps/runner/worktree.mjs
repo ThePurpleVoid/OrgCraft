@@ -354,9 +354,11 @@ function escapes(cwd, path) {
  * owned areas are committed as a checkpoint; changes outside them are left uncommitted and reported. Nothing is
  * pushed when the branch's commits touch paths outside the areas, hold an escaping symlink, or hold a secret.
  * `secrets` are extra exact values to look for (the session's proxy token).
+ * `beforePush` (optional) runs after the commit and its checks, just before the push: a string it returns refuses
+ * the push only (the commit stays, locally), for example the GitHub installation check (#28).
  * Returns { commit, pushed, held: [paths left out], refused?: { rule, items }, error? }.
  */
-export async function checkpoint({ cwd, branch, role, reason, areas = [], secrets = [] }) {
+export async function checkpoint({ cwd, branch, role, reason, areas = [], secrets = [], beforePush = null }) {
   harden(cwd);
   if (!branch) return { commit: await git(cwd, 'rev-parse', 'HEAD'), pushed: false, held: [] };
   const changed = await dirty(cwd);
@@ -376,6 +378,8 @@ export async function checkpoint({ cwd, branch, role, reason, areas = [], secret
   // is pushed. Any git failure here refuses the push (F1: fail closed).
   const { h, problem } = await checkRange(cwd, 'HEAD', areas, secrets, 'not pushed');
   if (problem) return { ...stop(problem.rule, problem.items, problem.text), commit };
+  const no = beforePush ? await beforePush().catch((e) => `not pushed: ${e.message}`) : null;
+  if (no) return { commit, pushed: false, held, error: no };
   try {
     await git(cwd, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`);
     // `changes`: the paths the branch changes against its base (none: there is nothing to propose yet).

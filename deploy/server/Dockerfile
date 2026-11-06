@@ -19,6 +19,7 @@ COPY package.json package.json
 COPY apps/studio/ apps/studio/
 COPY bin/ bin/
 COPY packages/events/ packages/events/
+COPY packages/github-app/ packages/github-app/
 COPY packages/model-prices/ packages/model-prices/
 COPY packages/team-model/ packages/team-model/
 COPY presets/ presets/
