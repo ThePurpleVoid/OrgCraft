@@ -4,6 +4,13 @@
 
 - **M3 design fix:** `run.resumed` now restarts every session a pause stopped, from its last checkpoint, after an owner's resume or the budget's next-day resume. Pause and resume handlers act only if the run's state and version still match (found in review of #54).
 
+### Runner
+
+- **Merge approvals name the pull request and the full head commit** (#56, D1). A merge is pinned only as exactly one `gh pr merge <N> [--squash|--merge|--rebase|--delete-branch] --match-head-commit <40 or 64 hex>`, or the GitHub merge tool with `owner`, `repo`, `pullNumber` and `expectedHeadSha`. Anything else that would land on the main line is refused, including a direct push. The tool's `owner/repo` must be the session's own repository, and `approval.wait` carries `pr`, `headSha` and `repo`.
+- **Resume from a checkpoint.** A `run.resumed` wake tells the role the run was resumed, and why. `session.started` for a resume says whether the checkpoint commit is on the branch (`checkpoint: { commit, found }`), and a missing one is named in the role's first prompt.
+- **Plain http only to a local host.** `register` and `start` accept https anywhere, and http only to `localhost`, `127.0.0.1`, `::1` and `host.docker.internal`.
+- **M3 on a Mac** (apps/runner/README.md): the control plane, Studio and runner on one Mac. The deploy key and merger app key are installed into the runner's closed folder from a one-off container, and the git config pushes over ssh with a pinned GitHub host key.
+
 ### Studio (nothing changes on sync)
 
 - **Sign-in and passkey pages for a hosted Studio** (milestone M4, docs/specs/m4-sign-in.md section 8, order 1). These are static pages that only a hosted deployment uses, so the local Studio does not change.

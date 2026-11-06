@@ -31,6 +31,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { agentSdkAdapter } from './adapters/agent-sdk.mjs';
 import { startRunner } from './runner.mjs';
+import { checkServer } from './link.mjs';
 import { useGitConfig } from './worktree.mjs';
 import { privateDir, selfCheck } from './sandbox.mjs';
 
@@ -52,7 +53,9 @@ const fail = (m) => { console.error(`agent-team-runner: ${m}`); process.exit(2);
 
 if (cmd === 'register') {
   if (!o.server || !o.code) fail('register needs --server and --code');
-  const res = await fetch(`${o.server.replace(/\/+$/, '')}/v1/runners`, {
+  let base;
+  try { base = checkServer(o.server); } catch (e) { fail(e.message); }
+  const res = await fetch(`${base}/v1/runners`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code: o.code, name: o.name, capabilities: { sandboxes: ['process'], runtimes: ['agent-sdk'] } }),
   }).catch((e) => fail(`could not reach ${o.server}: ${e.message}`));
@@ -69,6 +72,7 @@ const saved = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
 const server = o.server ?? saved.server;
 const key = process.env.AGENT_TEAM_RUNNER_KEY ?? saved.key;
 if (!server || !key) fail('not registered: run agent-team-runner register --server <url> --code <code> first');
+try { checkServer(server); } catch (e) { fail(e.message); }
 mkdirSync(data, { recursive: true, mode: 0o700 });
 const id = (v) => (v === undefined || v === '' ? undefined : Number(v));
 const sandbox = process.env.AGENT_TEAM_SANDBOX_UID ? { uid: id(process.env.AGENT_TEAM_SANDBOX_UID), gid: id(process.env.AGENT_TEAM_SANDBOX_GID), exec: process.env.AGENT_TEAM_SANDBOX_EXEC || 'setpriv' } : null;

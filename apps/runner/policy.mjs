@@ -72,7 +72,13 @@ const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 // repository, bypasses protection (--admin) or takes a free-text value.
 const MERGE_FLAGS = new Set(['--squash', '-s', '--merge', '-m', '--rebase', '-r', '--delete-branch', '-d']);
 // Merge tools whose structured input names the pull request and the expected head.
-const MERGE_TOOLS = { mcp__github__merge_pull_request: { pr: 'pullNumber', sha: 'expectedHeadSha' } };
+const MERGE_TOOLS = { mcp__github__merge_pull_request: { pr: 'pullNumber', sha: 'expectedHeadSha', owner: 'owner', repo: 'repo' } };
+
+/** `owner/name` of a GitHub repository URL (https or ssh form), or null. */
+export function repoSlug(url) {
+  const m = /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(String(url ?? ''));
+  return m ? `${m[1]}/${m[2]}` : null;
+}
 
 /**
  * The pull request number and full head commit a merge names, or null (security V1). A shell merge must be exactly
@@ -81,7 +87,7 @@ const MERGE_TOOLS = { mcp__github__merge_pull_request: { pr: 'pullNumber', sha: 
  * Any other merge (REST, curl, other CLIs, a compound command) is refused. A tool merge must be a known merge tool
  * with both structured fields.
  */
-export function mergeTarget(tool, input = {}, text = '') {
+export function mergeTarget(tool, input = {}, text = '', repo = null) {
   let pr = null, headSha = null;
   if (tool === 'Bash') {
     if (!/^[A-Za-z0-9 ._:=@+\/-]+$/.test(text)) return null;
@@ -102,10 +108,13 @@ export function mergeTarget(tool, input = {}, text = '') {
     if (!f) return null;
     pr = input[f.pr] ?? null;
     headSha = input[f.sha] ?? null;
+    // The tool names its repository: it must be the session's own, so an approval cannot be spent elsewhere.
+    const slug = repoSlug(repo);
+    if (!slug || `${input[f.owner]}/${input[f.repo]}`.toLowerCase() !== slug.toLowerCase()) return null;
   }
   if (typeof headSha !== 'string' || !FULL_SHA.test(headSha)) return null;
   const n = Number(pr);
-  return Number.isSafeInteger(n) && n > 0 && headSha ? { pr: n, headSha: String(headSha) } : null;
+  return Number.isSafeInteger(n) && n > 0 && headSha ? { pr: n, headSha: String(headSha), ...(repoSlug(repo) ? { repo: repoSlug(repo) } : {}) } : null;
 }
 
 /**
@@ -113,7 +122,7 @@ export function mergeTarget(tool, input = {}, text = '') {
  * `cwd` is the session's working copy, `areas` the role's owned areas (none: the role writes nothing), `rules` the
  * owner-steps-in rules, `also` absolute paths outside the copy the session may write (its memory file), and `teamTools` the name prefix of the team tool server (its calls are checked there).
  */
-export function decide({ tool, input = {}, cwd, areas = [], also = [], rules = DEFAULT_RULES, teamTools = 'mcp__team__' }) {
+export function decide({ tool, input = {}, cwd, repo = null, areas = [], also = [], rules = DEFAULT_RULES, teamTools = 'mcp__team__' }) {
   if (tool.startsWith(teamTools)) return { decision: 'allowed', rule: 'team-tool', target: tool };
   if (WRITERS[tool]) {
     const raw = String(input[WRITERS[tool]] ?? '');
@@ -138,8 +147,8 @@ export function decide({ tool, input = {}, cwd, areas = [], also = [], rules = D
       // A merge is approved for one pull request at one head commit (R5, D1): the call must name both, so a later
       // push cannot ride along. Anything accepted without them (a push straight to the main line) is refused.
       if (r.action === 'accept') {
-        const m = mergeTarget(tool, input, text);
-        if (!m) return { decision: 'refused', rule: 'match-head-commit', target: isShell ? text : tool, why: 'a merge must name the pull request and the commit it merges (exactly gh pr merge <N> --squash --match-head-commit <full sha of the head that was reviewed>, as one command on its own); the main line is never pushed to directly' };
+        const m = mergeTarget(tool, input, text, repo);
+        if (!m) return { decision: 'refused', rule: 'match-head-commit', target: isShell ? text : tool, why: 'a merge must name the pull request and the commit it merges, in the repository the session works on (exactly gh pr merge <N> --squash --match-head-commit <full sha of the head that was reviewed>, as one command on its own); the main line is never pushed to directly' };
         return { decision: 'needs-approval', rule: r.action, why: r.why, target: isShell ? text : tool, ...m };
       }
       return { decision: 'needs-approval', rule: r.action, why: r.why, target: isShell ? text : tool };

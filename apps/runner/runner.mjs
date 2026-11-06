@@ -75,7 +75,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, ad
 
   /** The policy path: approval.wait, whose ack names the approval the control plane minted. */
   async function approve(s, req) {
-    const ack = await link.send('approval.wait', { session: s.id, approval: { action: req.action, call: req.call, why: req.why, ...(req.pr ? { pr: req.pr, headSha: req.headSha } : {}) } });
+    const ack = await link.send('approval.wait', { session: s.id, approval: { action: req.action, call: req.call, why: req.why, ...(req.pr ? { pr: req.pr, headSha: req.headSha, ...(req.repo ? { repo: req.repo } : {}) } : {}) } });
     if (ack.nack || !ack.approval) return { decision: 'denied', note: ack.nack ?? 'the control plane did not record the approval' };
     return awaitApproval(ack.approval, s.id, { action: req.action, call: req.call, why: req.why });
   }

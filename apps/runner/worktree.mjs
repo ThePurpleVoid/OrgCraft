@@ -36,6 +36,12 @@ export async function git(cwd, ...args) {
   return stdout.trim();
 }
 
+/** Whether `sha` (a commit id) is HEAD or behind it in this working copy: a resume found its checkpoint. */
+export async function onBranch(cwd, sha) {
+  if (!/^[0-9a-f]{7,64}$/.test(String(sha ?? ''))) return false;
+  return git(cwd, 'merge-base', '--is-ancestor', `${sha}^{commit}`, 'HEAD').then(() => true, () => false);
+}
+
 const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 60);
 const short = (s) => createHash('sha256').update(String(s)).digest('hex').slice(0, 10);
 const BRANCH = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._/#-]{1,200}(?<![./])$/;
