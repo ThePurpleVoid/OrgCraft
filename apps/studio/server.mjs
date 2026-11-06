@@ -31,7 +31,7 @@ const MODEL = join(KIT, 'packages/team-model/index.mjs');
 const PRICES = join(KIT, 'packages/model-prices/prices.json');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' };
 /** What a publish commits: the layer and everything sync generates from it. */
-const PUBLISHED = ['.agent-team', 'docs/team', 'scripts/agent-team', '.claude'];
+const PUBLISHED = ['.agent-team', 'docs/team', 'scripts/agent-team', '.claude', 'AGENTS.md'];
 
 const git = (root, ...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const tryGit = (root, ...args) => { try { return git(root, ...args); } catch { return ''; } };
@@ -169,6 +169,9 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
   // failed first publish is still the first).
   const fresh = !tryGit(root, 'ls-files', '--', '.agent-team/team.json');
   const before = fresh ? snapshot(root) : null;
+  // sync may add lines to .gitignore (a first team, or AGENTS.md's memory folder): commit them, unless the owner
+  // already had their own uncommitted changes there.
+  const ignoreClean = !tryGit(root, 'status', '--porcelain', '--', '.gitignore');
   const text = message?.trim() || 'Update the agent team (Agent Team Studio)';
   let written, staged;
   try {
@@ -178,7 +181,7 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
     if (fresh) extras(root, layer);
     const code = sync(root, { quiet: true });
     if (code !== 0) throw new HttpError(500, 'sync reported roster errors; nothing was committed');
-    git(root, 'add', '-A', '--', ...PUBLISHED.filter((p) => existsSync(join(root, p))), ...(fresh && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
+    git(root, 'add', '-A', '--', ...PUBLISHED.filter((p) => existsSync(join(root, p))), ...(ignoreClean && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
     staged = tryGit(root, 'diff', '--cached', '--name-only').split('\n').filter(Boolean);
     if (staged.length) git(root, 'commit', '-q', '-m', text);
   } catch (e) {

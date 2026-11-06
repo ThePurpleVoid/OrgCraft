@@ -1,6 +1,6 @@
 // Agent Team Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
-import { checkUpgrade, resolveSpec, setEnabled, setField, splitBrief, teamPacks, validate } from './team-model.mjs';
+import { checkUpgrade, DEFAULT_TARGETS, resolveSpec, setEnabled, setField, splitBrief, TARGETS, teamPacks, teamTargets, validate } from './team-model.mjs';
 import { createChat } from './chat.js';
 import { createMeetings } from './meetings.js';
 import { createGallery, rolesLine, rulesLine } from './gallery.js';
@@ -274,10 +274,12 @@ function liveOf(slug) {
   return { ...rows[0], threads: active.length };
 }
 
+const SELF_REPORTED = 'self-reported: no automatic reports from hooks, so this changes only when the role reports';
+
 function liveLine(l) {
   if (!l) return 'no reports yet';
   const what = l.waiting_on ? `${l.status} on ${l.waiting_on}` : l.status;
-  return `${what}${l.stale ? ' (quiet)' : ''}${l.task ? ` · ${l.task}` : ''}`;
+  return `${what}${l.stale ? ' (quiet)' : ''}${l.self_reported ? ' · self-reported' : ''}${l.task ? ` · ${l.task}` : ''}`;
 }
 
 function nodeSvg(r, p, extra = '') {
@@ -292,11 +294,12 @@ function nodeSvg(r, p, extra = '') {
   if (three) extra += `${hot ? ' amber' : ''}${own ? ` live s-${own.status}${(own.age_s ?? 0) > QUIET_S ? ' quiet' : ''}` : ' live none'}${r.enabled ? '' : ' ghost'}`;
   else if (live?.on && mode !== 'systems') extra += l ? ` live s-${l.status}${l.stale ? ' stale' : ''}` : ' live none';
   // The reason replaces the tier on an amber card: it is what the owner needs to read there (criterion 3).
-  const tier = three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : ''].filter(Boolean).join(' · '))
+  // A role that reports for itself, with no hook events (another coding agent): its card says so (D46).
+  const tier = three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : own?.self_reported ? 'self-reported' : ''].filter(Boolean).join(' · '))
     : l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}${replaces ? ' · replaces kit' : ''}` : '';
   const state = three ? (own ? [stateWord(own), taskOf(own)].filter(Boolean).join(' · ') : '') : '';
   const flag = view.issues.some((i) => i.level === 'error' && i.where === `roles/${r.slug}`) ? ' ⚠' : r.changed ? ' •' : '';
-  const tip = three && own ? `${r.title}: ${stateWord(own)}${taskOf(own) ? ` · ${taskOf(own)}` : ''}${own.branch ? ` · branch ${own.branch}` : ''}${own.pr ? ` · PR #${own.pr}` : ''}${hot ? ` · ${hot.map(reasonOf).join(', ')}` : ''}` : '';
+  const tip = three && own ? `${r.title}: ${stateWord(own)}${taskOf(own) ? ` · ${taskOf(own)}` : ''}${own.branch ? ` · branch ${own.branch}` : ''}${own.pr ? ` · PR #${own.pr}` : ''}${hot ? ` · ${hot.map(reasonOf).join(', ')}` : ''}${own.self_reported ? ` · ${SELF_REPORTED}` : ''}` : '';
   return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${extra}" data-slug="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}${hot ? `, ${esc(hot.map(reasonOf).join(', '))}, work in progress` : ''}">
     <rect class="card" width="${W}" height="${H}"></rect>
     <rect class="stripe" width="4" height="${H - 16}" x="8" y="8" fill="${groupColor(r.group)}"></rect>
@@ -554,7 +557,18 @@ function nowOnLive(r) {
   return `<section class="now-live${hot ? ' amber' : ''}"><h2>Now, on the live version${sf.version ? ` (${esc(sf.version.split(',')[0])})` : ''}</h2>
     <ul>${inFlightList(row, spec, view.team.map((x) => ({ slug: x.slug, md: x.md })), r.slug).map((l) => `<li>${l}</li>`).join('')}</ul>
     ${hot ? `<p class="reason">${esc(hot.map(reasonOf).join(', '))}: you choose what happens to this work when you publish.</p>` : ''}
+    ${row.self_reported ? '<p class="hint">Self-reported: no automatic reports from hooks, so this changes only when the role reports.</p>' : ''}
     <p class="hint">${esc(staleNote(sf.newest))}</p></section>`;
+}
+
+/** Switches one of the files sync writes for coding agents (other coding agents story, criterion 8). */
+function setTarget(target, on) {
+  change((sp) => {
+    const next = TARGETS.filter((t) => (t === target ? on : teamTargets(sp.options).includes(t)));
+    sp.options = { ...(sp.options ?? {}) };
+    // Back to the default: no key, so the team's files are byte-identical to before (D45).
+    if (next.join() === DEFAULT_TARGETS.join()) delete sp.options.targets; else sp.options.targets = next;
+  });
 }
 
 /** The team's settings, read-only, when no role is picked (neutral protocols story criterion 5: no new choice yet). */
@@ -568,6 +582,9 @@ function teamHtml() {
     ...(from ? [['Started from', `${tpl?.title ?? from[1]}${from[2] ? ` (kit ${from[2]})` : ''}`]] : []),
   ].filter(([, x]) => x);
   return `<h2>Team</h2><dl class="team-facts">${rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('')}</dl>
+    <h2>Coding agents</h2>
+    <label class="switch"><input type="checkbox" id="t-agents-md"${teamTargets(spec.options).includes('agents-md') ? ' checked' : ''}> Also write AGENTS.md, for coding agents other than Claude Code</label>
+    <p class="hint">Publish writes the team's instructions into AGENTS.md at the top of the repository. Text you wrote in that file yourself stays. Their board cards read "self-reported": without hooks, a card changes only when the role reports.</p>
     <p class="hint">Every team gets the core rules: one door for the owner's requests, the owner's words passed on unchanged, one writer per area, the four message kinds and the board. A team's template or preset adds the rest.</p>
     <p class="muted">Pick a role on the canvas or in the library.</p>`;
 }
@@ -576,7 +593,11 @@ function renderInspector() {
   const el = $('#inspector');
   if (selectedSystem) return renderSystemInspector(el, ctx, selectedSystem);
   const r = selected && view.bySlug.get(selected);
-  if (!r) { el.innerHTML = teamHtml(); return; }
+  if (!r) {
+    el.innerHTML = teamHtml();
+    el.querySelector('#t-agents-md').onchange = (e) => setTarget('agents-md', e.target.checked);
+    return;
+  }
   const role = spec.roles[r.slug];
   const managers = view.team.filter((m) => m.slug !== r.slug && !under(r.slug, m.slug));
   const ownProject = role.brief !== undefined;
