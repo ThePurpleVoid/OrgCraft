@@ -119,8 +119,13 @@ test('against the real control plane: chat, cards, an approval with step-up, a s
   await second.locator('.answer', { hasText: 'Appearance' }).waitFor();
 
   // An approval: approving needs step-up, which the card asks for inline.
-  const { result: apr } = await role.approval({ action: 'accept', call: 'gh pr merge 12', why: 'QA signed off with evidence.', role: 'release-manager', risk: 'low', links: [{ rel: 'pr', url: 'https://example.com/pull/12' }] });
+  const sha = 'c0ffee1234567890abcdef1234567890abcdef12';
+  const { result: apr } = await role.approval({ action: 'accept', call: { command: 'gh pr merge 12', pr: 12, headSha: sha }, why: 'QA signed off with evidence.', role: 'release-manager', risk: 'low', links: [{ rel: 'pr', url: 'https://example.com/pull/12' }] });
   const approval = page.locator(`.card-msg[data-card-id="${apr.card.id}"]`);
+  // D1: the card is bound to the PR and its head commit; the short sha shows, the full one on tap.
+  await approval.getByText('release-manager asks to merge #12 at c0ffee1').waitFor();
+  await approval.locator('summary', { hasText: 'commit c0ffee1' }).click();
+  await approval.locator('.bound .sha', { hasText: sha }).waitFor();
   await approval.getByRole('button', { name: 'Approve' }).click();
   await approval.getByLabel('Step-up secret').fill('not the secret');
   await approval.getByRole('button', { name: 'Confirm' }).click();

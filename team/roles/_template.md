@@ -15,10 +15,14 @@ The paths this role writes. Add the same rows to `docs/team/ownership.md`.
 Skills, plugins, MCP servers and CLIs this role uses.
 
 ## Wakes on
-The events that start a task for this role.
+The events that start a task for this role, one per line. The runner reads lines in these forms: `- handoff`, `- meeting`, `- pr-paths: apps/web/**, tests/a11y/`, `- label: a11y`, `- issue-label: bug`, `- schedule: mon-fri 09:30` (days `mon`..`sun`, ranges, lists, `daily` or `weekdays`, in the team's time zone). Any other line is a note for people.
+- handoff
 
 ## Hands to
 The roles this role sends work to, by title or slug.
+
+## Sign-off evidence
+Only for a role that sends SIGNOFF: one `- ` line per artefact a sign-off must carry (a screenshot of each changed screen, the test log, a link to the run). A SIGNOFF without them is sent back. Delete this section otherwise.
 
 ## Rules
 - Two to five rules that are specific to this role. Shared rules live in `docs/team/protocols.md`; do not repeat them here.

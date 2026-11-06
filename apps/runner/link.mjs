@@ -25,6 +25,21 @@ export function ulid(now = Date.now()) {
   return head + tail;
 }
 
+// Hosts a runner may reach over plain http: this machine, and the host as Docker Desktop names it (M3 on a Mac).
+// Anything else carries the runner key and the session tokens, so it must be https.
+const LOCAL_HTTP = new Set(['localhost', '127.0.0.1', '[::1]', 'host.docker.internal']);
+
+/** The control plane's base URL, checked: https anywhere, http only to a local host. Throws with the reason. */
+export function checkServer(server) {
+  let u;
+  try { u = new URL(String(server)); } catch { throw new Error(`"${server}" is not a URL`); }
+  if (u.username || u.password) throw new Error('the server URL must not carry a user or password');
+  if (u.protocol === 'https:') return u.origin + u.pathname.replace(/\/+$/, '');
+  if (u.protocol === 'http:' && LOCAL_HTTP.has(u.hostname)) return u.origin + u.pathname.replace(/\/+$/, '');
+  if (u.protocol === 'http:') throw new Error(`refusing plain http to ${u.hostname}: the runner key and session tokens would cross the network unencrypted. Use https, or http only to localhost, 127.0.0.1, ::1 or host.docker.internal`);
+  throw new Error(`the server URL must be https (or http to a local host), not ${u.protocol.replace(':', '')}`);
+}
+
 /**
  * Connect to `${server}/v1/runners/connect` with the runner key, and keep connected. Emits `frame` for every request
  * op from the control plane (already acknowledged and de-duplicated), `welcome`, `open` and `close`.
@@ -32,7 +47,7 @@ export function ulid(now = Date.now()) {
  */
 export function connect({ server, key, hello, backoff = [500, 1000, 2000, 5000, 15000, 30000], log = () => {} }) {
   const out = new EventEmitter();
-  const url = `${server.replace(/^http/, 'ws').replace(/\/+$/, '')}/v1/runners/connect`;
+  const url = `${checkServer(server).replace(/^http/, 'ws')}/v1/runners/connect`;
   const unacked = new Map(); // id -> { frame, resolve }
   const seen = new Set();
   const answers = new Map(); // late acks already given, for resends

@@ -1,8 +1,25 @@
 # Changelog
 
+## 0.10.0
+
+Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD 6.9 part 1). Everything is additive: a layer without the new sections or files behaves as before.
+
+- **`## Sign-off evidence` and a structured `## Wakes on`** in briefs ([customizing](docs/customizing.md#wakes-on-and-sign-off-evidence)). Wakes lines the runner reads: `handoff`, `meeting`, `pr-paths: …`, `label: …`, `issue-label: …`, `schedule: <days> HH:MM`; anything else stays free text. The role template documents both. `validate` warns on a malformed wake line for any role, and on lines the runner does not read for custom agents only. The sign-off check now counts only `- ` lines of evidence.
+- **Role packs** ([customizing](docs/customizing.md#share-an-agent-role-packs)): `pack.json` stays `agent-team/role-pack@1`, with optional `kit` and `needs.wakes`. New in `packages/team-model`: `checkPack`, `renameRole`, `checkUpgrade`, `signoffEvidence`/`setSignoffEvidence`, `wakesOn`/`setWakesOn`, `scheduleProblem`.
+- **A new kit role never silently replaces your custom agent.** `kit.lock.json` now records the kit's roles (`kitRoles`). When a later kit adds a role with the same name as one of your `.agent-team/roles/<slug>.md`, `sync` stops with an error that says how to fix it and `check` reports it. Keep yours on purpose with `"replaces": ["<slug>"]` in `team.json`.
+- **Change safety library:** `diffTeams`, `impact`, `inventoryFromBoard` and `versionName` in `packages/team-model`, for the Studio's amber marks and the impact step in Publish. They describe; they never act or block a publish. From board data they offer only what a thread can do itself (let it finish, hand off now, pause; for a moved area, move after its PR merges or hand the files over) and mark every item as possibly stale.
+- **What existing teams see on sync:** `docs/team/role-template.md` gains the two sections, `kit.lock.json` gains `kitRoles`, and the version stamps change. No brief or team file changes. `validate` may show new warnings for custom agents whose `Wakes on` is free text.
+
 ## Unreleased
 
 - **M3 design fix:** `run.resumed` now restarts every session a pause stopped, from its last checkpoint, after an owner's resume or the budget's next-day resume. Pause and resume handlers act only if the run's state and version still match (found in review of #54).
+
+### Runner
+
+- **Merge approvals name the pull request and the full head commit** (#56, D1). A merge is pinned only as exactly one `gh pr merge <N> [--squash|--merge|--rebase|--delete-branch] --match-head-commit <40 or 64 hex>`, or the GitHub merge tool with `owner`, `repo`, `pullNumber` and `expectedHeadSha`. Anything else that would land on the main line is refused, including a direct push. The tool's `owner/repo` must be the session's own repository, and `approval.wait` carries `pr`, `headSha` and `repo`.
+- **Resume from a checkpoint.** A `run.resumed` wake tells the role the run was resumed, and why. `session.started` for a resume says whether the checkpoint commit is on the branch (`checkpoint: { commit, found }`), and a missing one is named in the role's first prompt.
+- **Plain http only to a local host.** `register` and `start` accept https anywhere, and http only to `localhost`, `127.0.0.1`, `::1` and `host.docker.internal`.
+- **M3 on a Mac** (apps/runner/README.md): the control plane, Studio and runner on one Mac. The deploy key and merger app key are installed into the runner's closed folder from a one-off container, and the git config pushes over ssh with a pinned GitHub host key.
 
 ### Studio (nothing changes on sync)
 
@@ -13,6 +30,7 @@
   - The page and issuer seams are in `/mnt/project-files/plans/m4-sign-in-pages-seams.md` until the issuer lands.
   - A browser test runs it against a stub issuer and a stub GitHub, with Chromium's virtual passkey, at desktop and 360px.
 - A live update no longer empties a step-up secret while it is being typed in the chat (#57).
+- A merge approval card shows what it is bound to (M3 design D1): the pull request and the short commit under its title. Tapping it shows the full commit, and it stays open across live updates.
 
 - **Start a run from the Studio's Chat page** (milestone M3, issue #28). With no run going, the header offers **Start a run…**. The dialog says what will run: the team as last published (the commit, not the unsaved canvas), how many roles, and which one reports to you. **Start** stays off until a daily cap is set; setting or raising the cap asks for the step-up secret, lowering it never does. The Studio's server builds the run request from the repository: the commit SHA, the origin URL with any credentials stripped, a summary, and for each role its manager, the paths it writes, its model and its rendered brief (at most 20 KB). It refuses with "publish first" when the team's files have changes nobody published, and with "push first" when the published commit is not on the branch's upstream (publish commits but does not push, and the team's sessions check out from the remote); the run's `repo.ref` is that upstream branch. The control plane's 409s are shown as it words them, for example a run that is already going or today's cap being spent.
 - Cards follow their state from the control plane: answered, expired and superseded cards lose their buttons and say why, and budget cards ("Today's budget is spent") appear in the chat with Resume tomorrow and Add half again. Amounts use each currency's own minor unit (cents, yen, fils).

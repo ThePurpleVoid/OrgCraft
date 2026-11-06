@@ -87,6 +87,26 @@ jobs:
             agent-team-runner:ci node --test apps/runner/test/security.test.mjs | tee runner-image.tap
           # Every test must have run in the image: a skip here means the sandbox was not exercised.
           grep -q '^# fail 0$' runner-image.tap && grep -q '^# skipped 0$' runner-image.tap
+      - name: Keys from the M3-on-a-Mac mount land in the runner's closed folder
+        if: hashFiles('apps/runner/Dockerfile') != ''
+        run: |
+          # A throwaway key pair made here; nothing secret. The one-off container installs them, as in the README.
+          mkdir -p "$RUNNER_TEMP/secrets"
+          ssh-keygen -q -t ed25519 -N "" -f "$RUNNER_TEMP/secrets/runner-deploy-key"
+          echo not-a-key > "$RUNNER_TEMP/secrets/merger-app.pem"
+          chmod 0644 "$RUNNER_TEMP/secrets/"*
+          docker volume create runner-keys-ci
+          docker run --rm -v "$RUNNER_TEMP/secrets:/run/agent-team:ro" -v runner-keys-ci:/data agent-team-runner:ci true
+          docker run --rm -v runner-keys-ci:/data agent-team-runner:ci \
+            stat -c '%U %a %n' /data/runner/deploy-key /data/runner/merger-app.pem /data/runner/gitconfig | tee keys.txt
+          test "$(grep -c '^runner 600 ' keys.txt)" = 3
+          docker run --rm -v runner-keys-ci:/data agent-team-runner:ci \
+            sh -c 'GIT_CONFIG_GLOBAL=/data/runner/gitconfig git config --global core.sshCommand' | grep -q 'StrictHostKeyChecking=yes'
+          # A session's user cannot read the copied key.
+          if docker run --rm -v runner-keys-ci:/data agent-team-runner:ci \
+            /usr/local/libexec/agent-team/setpriv --reuid=10002 --regid=10010 --clear-groups cat /data/runner/deploy-key; then
+            echo "the agent user read the deploy key"; exit 1
+          fi
 
   deploy-path:
     # The hosted deploy path on a Postgres shaped like Supabase (anon and authenticated roles with default grants on

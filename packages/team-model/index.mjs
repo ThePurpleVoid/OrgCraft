@@ -414,6 +414,7 @@ export function validate(spec, kit) {
     for (const s of steps) if (s.pool && spec.gates.pools && !(s.pool in spec.gates.pools)) add('warning', `gates/${target}`, `"${s.name}" uses pool "${s.pool}", which gates.json does not size`);
   }
   for (const i of checkCustomRoles(spec, kit, installed)) add(i.level, i.where, i.message);
+  for (const [slug, r] of installed) if (!isCustom(spec.roles[slug])) for (const i of checkBriefData(slug, r.md)) add(i.level, i.where, i.message);
   // No secrets anywhere in the team's text.
   const texts = [['values', JSON.stringify(spec.values ?? {})], ['rules', JSON.stringify(spec.rules ?? {})], ['resources', JSON.stringify(spec.resources ?? {})],
     ['gates', JSON.stringify(spec.gates ?? {})], ...Object.entries(spec.roles).map(([s, r]) => [`roles/${s}`, JSON.stringify([r.brief ?? '', r.extension ?? {}])])];
@@ -539,8 +540,11 @@ export function addAgent(spec, slug, md) {
   return spec;
 }
 
-/** A role pack for one agent: { '<slug>.md': brief, 'pack.json': what it needs }. Never secrets: only names and paths. */
-export function rolePack(spec, slug) {
+/**
+ * A role pack for one agent: { '<slug>.md': brief, 'pack.json': what it needs }. Never secrets: only names and paths.
+ * pack.json: { schema, roles, kit?, needs: { tools, resources, paths, wakes } } (kit and needs.wakes since kit 0.10).
+ */
+export function rolePack(spec, slug, { kit } = {}) {
   const r = spec.roles[slug];
   if (!isCustom(r)) throw new Error(`${slug} is not a custom agent`);
   const bindings = (spec.resources?.bindings ?? []).filter((b) => b.role === slug);
@@ -549,8 +553,10 @@ export function rolePack(spec, slug) {
     tools: briefSection(r.brief, 'tools').split(/[,\n]/).map((t) => t.replace(/^-\s*/, '').trim()).filter(Boolean),
     resources: [...new Set(types)],
     paths: ownsPaths(r.brief).paths.filter((p) => p.mode === 'writes').map((p) => p.path),
+    wakes: wakesOn(r.brief).triggers,
   };
-  return { [`${slug}.md`]: r.brief, 'pack.json': JSON.stringify({ schema: 'agent-team/role-pack@1', roles: [slug], needs }, null, 2) + '\n' };
+  const pack = { schema: 'agent-team/role-pack@1', roles: [slug], ...(kit ? { kit } : {}), needs };
+  return { [`${slug}.md`]: r.brief, 'pack.json': JSON.stringify(pack, null, 2) + '\n' };
 }
 
 /** Reads a role pack or loose role files (name → text) into agents to import: [{ slug, md, needs }]. */
@@ -579,9 +585,326 @@ function checkCustomRoles(spec, kit, installed) {
         if (installed.has(c.writer) || !SLUG.test(c.writer)) issues.push({ level: 'error', where, message: `${p.path} overlaps ${c.path}, which ${c.writer} writes; one writer per area` });
       }
     }
-    if (/signoff/i.test(briefSection(r.brief, 'hands to')) && !briefSection(r.brief, 'sign-off evidence').trim()) {
+    for (const i of checkBriefData(slug, r.brief, { requireTrigger: true })) issues.push(i);
+    if (/signoff/i.test(briefSection(r.brief, 'hands to')) && !signoffEvidence(r.brief).length) {
       issues.push({ level: 'warning', where, message: 'sends SIGNOFF but lists no sign-off evidence (screenshots, logs, links)' });
     }
   }
   return issues;
+}
+
+// ------------------------------------------------------------------------------------------------ sign-off evidence and wakes (kit 0.10)
+//
+// Two brief sections the runner reads as data (architecture section 12.1). Both are optional, and free text keeps
+// working: only lines in the forms below are structured.
+//
+//   ## Sign-off evidence             ## Wakes on
+//   - screenshot of each screen      - handoff
+//   - test log                       - pr-paths: apps/web/**, tests/a11y/
+//                                    - label: a11y           (an issue or PR label)
+//                                    - issue-label: bug      (issues only)
+//                                    - schedule: mon-fri 09:30   (days: mon..sun, ranges, lists, daily, weekdays; TIMEZONE)
+//                                    - meeting
+//                                    Anything else (prose, other bullets) is free text.
+
+const bullets = (text) => text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+/** The artefacts a SIGNOFF from this role must carry, from "## Sign-off evidence": one string per "- " bullet (prose is ignored). */
+export function signoffEvidence(md) {
+  return bullets(briefSection(md, 'sign-off evidence')).filter((l) => /^[-*]\s/.test(l)).map((l) => l.replace(/^[-*]\s*/, '').trim()).filter(Boolean);
+}
+
+/** Sets "## Sign-off evidence" to these items (an empty list removes the section). */
+export function setSignoffEvidence(md, items) {
+  return setBriefSection(md, 'Sign-off evidence', (items ?? []).map((i) => String(i).trim()).filter(Boolean).map((i) => `- ${i}`).join('\n'), '## Sign-off evidence');
+}
+
+export const WAKE_TYPES = ['handoff', 'meeting', 'pr-paths', 'label', 'issue-label', 'schedule'];
+const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const NEEDS_VALUE = new Set(['pr-paths', 'label', 'issue-label', 'schedule']);
+
+/** Why a schedule value is not understood, or '' when it is fine ("mon-fri 09:30", "daily 08:00", "tue,thu 14:00"). */
+export function scheduleProblem(value) {
+  const m = /^(\S+)\s+(\d{1,2}):(\d{2})$/.exec(String(value ?? '').trim().toLowerCase());
+  if (!m) return 'use "<days> HH:MM", for example "mon-fri 09:30"';
+  if (Number(m[2]) > 23 || Number(m[3]) > 59) return `${m[2]}:${m[3]} is not a time of day`;
+  if (m[1] === 'daily' || m[1] === 'weekdays') return '';
+  for (const part of m[1].split(',')) {
+    const [a, b, extra] = part.split('-');
+    if (extra !== undefined || !DAYS.includes(a) || (b !== undefined && !DAYS.includes(b))) return `"${part}" is not a day or a range of days (mon..sun, daily, weekdays)`;
+  }
+  return '';
+}
+
+/**
+ * The structured triggers of "## Wakes on": { triggers: [{ type, value }], text: [lines], problems: [{ line, message }] }.
+ * A bullet whose first word is a trigger type is structured (and checked); every other line is free text.
+ */
+export function wakesOn(md) {
+  const triggers = [];
+  const text = [];
+  const problems = [];
+  for (const line of bullets(briefSection(md, 'wakes on'))) {
+    const m = /^[-*]\s*([a-z-]+)\s*(?::\s*(.*))?$/i.exec(line);
+    const type = m?.[1].toLowerCase();
+    if (!m || !WAKE_TYPES.includes(type)) { text.push(line); continue; }
+    const value = (m[2] ?? '').trim();
+    if (NEEDS_VALUE.has(type) && !value) { problems.push({ line, message: `"${type}" needs a value` }); continue; }
+    if (!NEEDS_VALUE.has(type) && value) { text.push(line); continue; } // "handoff: from the CTO" reads as prose
+    if (type === 'schedule') { const p = scheduleProblem(value); if (p) { problems.push({ line, message: p }); continue; } }
+    triggers.push(type === 'pr-paths' ? { type, value: value.split(',').map((p) => p.trim()).filter(Boolean).join(', ') } : value ? { type, value } : { type });
+  }
+  return { triggers, text, problems };
+}
+
+/** Writes "## Wakes on" from { triggers, text }: structured bullets first, then the free text as it was. */
+export function setWakesOn(md, { triggers = [], text = [] } = {}) {
+  const lines = [
+    ...triggers.filter((t) => WAKE_TYPES.includes(t.type)).map((t) => (t.value ? `- ${t.type}: ${t.value}` : `- ${t.type}`)),
+    ...text.map((l) => String(l)).filter((l) => l.trim()),
+  ];
+  return setBriefSection(md, 'Wakes on', lines.join('\n'), '## Wakes on');
+}
+
+/**
+ * Checks of the two sections for one brief: [{ level, where, message }]. A malformed structured line is always a warning.
+ * `requireTrigger` (custom agents: validate, the agent editor, pack import) also warns about lines the runner does not read.
+ */
+export function checkBriefData(slug, md, { requireTrigger = false } = {}) {
+  const where = `roles/${slug}`;
+  const out = [];
+  const w = wakesOn(md);
+  for (const p of w.problems) out.push({ level: 'warning', where, message: `Wakes on: ${p.line.replace(/^[-*]\s*/, '')}: ${p.message}` });
+  // Custom agents: the runner reads only structured lines, so say which lines it will not read.
+  if (requireTrigger && w.text.length) {
+    const first = w.text[0].replace(/^[-*]\s*/, '');
+    out.push({ level: 'warning', where, message: `Wakes on: ${w.text.length === 1 ? 'a line' : `${w.text.length} lines`} the runner does not read ("${first.length > 60 ? `${first.slice(0, 57)}...` : first}"); use ${WAKE_TYPES.join(', ')}` });
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------------------------------------ role packs and renames (kit 0.10)
+
+export const PACK_SCHEMA = 'agent-team/role-pack@1';
+const PACK_NEEDS = ['tools', 'resources', 'paths', 'wakes'];
+
+/** Checks a role pack before import, in validate's shape: [{ level, where, message }], where = roles/<slug>. */
+export function checkPack(files, spec, kit) {
+  const out = [];
+  let pack = null;
+  if (files['pack.json'] !== undefined) {
+    try { pack = JSON.parse(files['pack.json']); } catch (e) { return [{ level: 'error', where: 'pack.json', message: `is not JSON: ${e.message}` }]; }
+    if (pack.schema && pack.schema !== PACK_SCHEMA) out.push({ level: 'error', where: 'pack.json', message: `schema "${pack.schema}" is not ${PACK_SCHEMA}` });
+    if (pack.roles !== undefined && (!Array.isArray(pack.roles) || !pack.roles.length)) out.push({ level: 'error', where: 'pack.json', message: 'roles must be a list of slugs' });
+    for (const k of Object.keys(pack.needs ?? {})) if (!PACK_NEEDS.includes(k)) out.push({ level: 'warning', where: 'pack.json', message: `needs.${k} is not something the kit knows; it is ignored` });
+  }
+  let agents;
+  try { agents = readPack(files); } catch (e) { return [...out, { level: 'error', where: 'pack.json', message: e.message }]; }
+  if (!agents.length) out.push({ level: 'error', where: 'pack', message: 'has no role .md file' });
+  for (const a of agents) {
+    const where = `roles/${a.slug}`;
+    if (!SLUG.test(a.slug)) { out.push({ level: 'error', where, message: `"${a.slug}" is not a valid slug (lower-case letters, digits and hyphens)` }); continue; }
+    if (spec?.roles?.[a.slug] && isCustom(spec.roles[a.slug])) out.push({ level: 'error', where, message: `this team already has an agent called ${a.slug}; rename one of them` });
+    else if (kit?.roles && a.slug in kit.roles) out.push({ level: 'warning', where, message: `the kit has a role called ${a.slug}; importing it replaces the kit role on this team unless you rename it` });
+    if (!/^#\s+\S/m.test(a.md)) out.push({ level: 'error', where, message: 'has no "# Title" line' });
+    if (SECRET_PATTERNS.some((p) => p.test(a.md))) out.push({ level: 'error', where, message: 'looks like it contains a secret value; a pack never brings secrets' });
+    for (const i of checkBriefData(a.slug, a.md, { requireTrigger: true })) out.push(i);
+  }
+  return out;
+}
+
+/** Renames a custom agent: the role, its brief's own slug references, and every binding, ownership row and reporting line. */
+export function renameRole(spec, from, to, kit) {
+  const r = spec.roles[from];
+  if (!isCustom(r)) throw new Error(`${from} is not a custom agent`);
+  if (!SLUG.test(to)) throw new Error(`"${to}" is not a valid slug`);
+  if (spec.roles[to] && isCustom(spec.roles[to])) throw new Error(`this team already has an agent called ${to}`);
+  const brief = r.brief.replaceAll(`team-status.sh ${from} `, `team-status.sh ${to} `).replaceAll(`roles/${from}.md`, `roles/${to}.md`);
+  delete spec.roles[from];
+  // A kit role of the old name (the reason for most renames) comes back as the kit's own, switched off.
+  if (kit?.roles && from in kit.roles) spec.roles[from] = { source: 'kit', enabled: false };
+  spec.roles[to] = { ...r, source: 'project', brief };
+  for (const b of spec.resources?.bindings ?? []) if (b.role === from) b.role = to;
+  for (const row of spec.ownership?.rows ?? []) if (row.writer === from) row.writer = to;
+  for (const [slug, other] of Object.entries(spec.roles)) {
+    if (slug === to || !isCustom(other)) continue;
+    const field = /^\*\*Reports to:\*\*\s*(\S+)/m.exec(other.brief);
+    if (field && field[1].toLowerCase() === from) other.brief = setBriefField(other.brief, 'Reports to', to);
+  }
+  return spec;
+}
+
+/**
+ * A7: custom agents a kit upgrade would shadow. `oldKitRoles` is the kit's role list the team last synced with
+ * (kit.lock.json "kitRoles"); a slug the old kit already had was a deliberate replacement and is left alone.
+ * Returns [{ slug, message, fixes: ['rename', 'use-kit'] }].
+ */
+export function checkUpgrade(spec, newKit, oldKitRoles) {
+  if (!Array.isArray(oldKitRoles)) return [];
+  const before = new Set(oldKitRoles);
+  const out = [];
+  for (const [slug, r] of Object.entries(spec.roles)) {
+    if (!isCustom(r) || !(slug in newKit.roles) || before.has(slug)) continue;
+    out.push({ slug, message: `the new kit adds a role called ${slug}, the same name as your custom agent; rename yours, or switch to the kit's`, fixes: ['rename', 'use-kit'] });
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------------------------------------ change safety (kit 0.10)
+//
+// diffTeams(published, draft, kit) → changes[]: what a draft changes, role by role (architecture section 12.4).
+// impact(changes, inventory) → items[]: those changes joined with the work in flight, each with a severity and the
+// choices the owner has. Both are pure, so the Studio runs them on every edit and the runner when a publish merges.
+//
+// inventory: { source: 'runner' | 'board', roles: { <slug>: { state, task, branch, pr, files: [paths touched],
+//              queued: <hand-offs waiting for it>, approvals: <pending approvals it raised> } } }
+// From board events only (threads mode, no runner), inventoryFromBoard(summarize(...)) builds one; it is marked
+// source 'board', and every item from it carries stale: true (PRD 6.9 X9).
+
+const tierOf = (md) => (/^[a-z]+/i.exec(field(md, 'Model'))?.[0] ?? '').toLowerCase();
+const statusOf = (md) => field(md, 'Status');
+const dormant = (md) => /^dormant/i.test(statusOf(md).trim());
+const managerOf = (md) => (field(md, 'Reports to').split(/\s/)[0] ?? '').toLowerCase();
+const RANK = { read: 1, write: 2, deploy: 3 };
+
+function sectionsOf(md) {
+  const out = new Map();
+  for (const s of splitBrief(md).sections) out.set(sectionName(s.heading), trimBlank(s.body).join('\n'));
+  return out;
+}
+
+/** Every change between two TeamSpecs, as [{ kind, role?, path?, from?, to?, detail }], in a stable order. */
+export function diffTeams(published, draft, kit) {
+  // Each role's own text (brief plus extension), before sync fits reporting lists to the team and adds Systems: a role
+  // switching off must not show up as a brief change on every manager, and bindings are compared on their own below.
+  const own = (spec) => new Map(Object.entries(spec.roles).filter(([s, r]) => r.enabled && (r.brief ?? kit.roles[s]) !== undefined)
+    .map(([s, r]) => [s, { slug: s, md: emptyExtension(r.extension) ? (r.brief ?? kit.roles[s]) : applyExtension(r.brief ?? kit.roles[s], r.extension) }]));
+  const before = own(published);
+  const after = own(draft);
+  const changes = [];
+  const add = (c) => changes.push(c);
+  for (const [slug, r] of before) {
+    if (!after.has(slug)) { add({ kind: draft.roles[slug] ? 'role-off' : 'role-removed', role: slug, detail: `${slug} is ${draft.roles[slug] ? 'switched off' : 'removed'}` }); continue; }
+    const a = after.get(slug);
+    if (!dormant(r.md) && dormant(a.md)) add({ kind: 'role-dormant', role: slug, from: statusOf(r.md), to: statusOf(a.md), detail: `${slug} becomes dormant` });
+    if (managerOf(r.md) !== managerOf(a.md)) add({ kind: 'reports-to', role: slug, from: managerOf(r.md), to: managerOf(a.md), detail: `${slug} reports to ${managerOf(a.md)} instead of ${managerOf(r.md)}` });
+    if (tierOf(r.md) !== tierOf(a.md)) add({ kind: 'tier', role: slug, from: tierOf(r.md), to: tierOf(a.md), detail: `${slug} model tier ${tierOf(r.md)} → ${tierOf(a.md)}` });
+    const sb = sectionsOf(r.md);
+    const sa = sectionsOf(a.md);
+    const names = [...new Set([...sb.keys(), ...sa.keys()])].filter((n) => sb.get(n) !== sa.get(n));
+    if (names.length || splitBrief(r.md).header[0] !== splitBrief(a.md).header[0]) {
+      add({ kind: 'brief', role: slug, sections: names, detail: `${slug} brief changes${names.length ? `: ${names.join(', ')}` : ' (title)'}` });
+    }
+  }
+  for (const slug of after.keys()) if (!before.has(slug)) add({ kind: 'role-added', role: slug, detail: `${slug} joins the team` });
+
+  // Ownership: a path whose writer changes, or that loses or gains a writer.
+  const rows = (spec) => new Map((spec.ownership?.rows ?? []).map((r) => [r.path, r.writer]));
+  const ob = rows(published);
+  const oa = rows(draft);
+  for (const [path, w] of ob) {
+    if (!oa.has(path)) add({ kind: 'path-removed', role: w, path, from: w, detail: `${path} no longer has a writer (was ${w})` });
+    else if (oa.get(path) !== w) add({ kind: 'path-moved', role: w, path, from: w, to: oa.get(path), detail: `${path} moves from ${w} to ${oa.get(path)}` });
+  }
+  for (const [path, w] of oa) if (!ob.has(path)) add({ kind: 'path-added', role: w, path, to: w, detail: `${path} is now written by ${w}` });
+
+  // Bindings: removed or narrowed (deploy → write → read) is a change for a working role; added or widened is safe.
+  const bind = (spec) => new Map((spec.resources?.bindings ?? []).map((b) => [`${b.role}\u0000${b.resource}`, b]));
+  const bb = bind(published);
+  const ba = bind(draft);
+  for (const [k, b] of bb) {
+    const n = ba.get(k);
+    if (!n) add({ kind: 'binding-removed', role: b.role, resource: b.resource, from: b.permission, detail: `${b.role} loses ${b.resource}` });
+    else if ((RANK[n.permission] ?? 0) < (RANK[b.permission] ?? 0)) add({ kind: 'binding-narrowed', role: b.role, resource: b.resource, from: b.permission, to: n.permission, detail: `${b.role} on ${b.resource}: ${b.permission} → ${n.permission}` });
+    else if (n.permission !== b.permission) add({ kind: 'binding-widened', role: b.role, resource: b.resource, from: b.permission, to: n.permission, detail: `${b.role} on ${b.resource}: ${b.permission} → ${n.permission}` });
+  }
+  for (const [k, b] of ba) if (!bb.has(k)) add({ kind: 'binding-added', role: b.role, resource: b.resource, to: b.permission, detail: `${b.role} gets ${b.resource} (${b.permission})` });
+
+  // Gates, per target; meetings, per id (meetings.json, when the team has one); rules and values as a whole.
+  const tb = published.gates?.targets ?? {};
+  const ta = draft.gates?.targets ?? {};
+  for (const t of [...new Set([...Object.keys(tb), ...Object.keys(ta)])].sort()) if (JSON.stringify(tb[t]) !== JSON.stringify(ta[t])) add({ kind: 'gate', target: t, detail: `the ${t} gate changes` });
+  if (JSON.stringify(published.gates?.all) !== JSON.stringify(draft.gates?.all)) add({ kind: 'gate', target: 'all', detail: 'the gates for every target change' });
+  const meetings = (spec) => new Map((spec.meetings?.meetings ?? []).map((m) => [m.id, m]));
+  const mb = meetings(published);
+  const ma = meetings(draft);
+  for (const id of [...new Set([...mb.keys(), ...ma.keys()])].sort()) if (JSON.stringify(mb.get(id)) !== JSON.stringify(ma.get(id))) add({ kind: 'meeting', meeting: id, detail: `meeting ${id} ${!ma.has(id) ? 'is removed' : !mb.has(id) ? 'is added' : 'changes'}` });
+  if (JSON.stringify(published.rules ?? {}) !== JSON.stringify(draft.rules ?? {})) add({ kind: 'rules', detail: 'the team rules change' });
+  if (JSON.stringify(published.values ?? {}) !== JSON.stringify(draft.values ?? {})) add({ kind: 'values', detail: 'project values change' });
+  return changes;
+}
+
+const BUSY = new Set(['working', 'waiting', 'blocked', 'review']);
+const busy = (w) => !!w && BUSY.has(w.state);
+const touches = (w, path) => (w?.files ?? []).some((f) => f === path || f.startsWith(path.replace(/\*+$/, '').replace(/\/?$/, '/')) || path.replace(/\*+$/, '') === f);
+
+/** An inventory from the board (summarize() output): each role's latest status, task, branch and PR. Marked stale. */
+export function inventoryFromBoard(board) {
+  const roles = {};
+  for (const c of board?.current ?? []) {
+    if (c.instance) continue; // per-PR instances (code-reviewer#57) are not the role's own work
+    roles[c.role] = { state: c.status, task: c.task ?? '', branch: c.branch ?? '', pr: c.pr ?? null, files: [], queued: 0, approvals: 0, stale: !!c.stale };
+  }
+  return { source: 'board', roles };
+}
+
+/** A team version by its commit, as the Studio names it: "abc1234" or "abc1234, published 5 Nov" (CPO story D16). */
+export function versionName(sha, publishedAt) {
+  const short = String(sha ?? '').slice(0, 7);
+  if (!publishedAt) return short;
+  const d = new Date(publishedAt);
+  return Number.isNaN(d.getTime()) ? short : `${short}, published ${d.getUTCDate()} ${d.toLocaleString('en', { month: 'short', timeZone: 'UTC' })}`;
+}
+
+/**
+ * Each change joined with the work in flight: [{ id, kind, role, detail, severity: 'safe' | 'choice' | 'blocking',
+ * inFlight, choices, recommended, stale }]. Choices are ids the runner knows (architecture section 12.4).
+ *
+ * The result only describes: nothing here acts, and no item stops a publish (CPO story D15; only check errors do).
+ * From board data (source 'board', threads mode) the choices are the ones a thread can carry out itself (D13):
+ * finish, handoff, pause, and for a moved area move-after-merge or move-and-handover; "finish" is the default.
+ * With a runner inventory the full 12.4 set is offered, and a pending approval that would be left with no one to run
+ * it is 'blocking' (the runner will not apply the change until it is reassigned or cancelled).
+ */
+export function impact(changes, inventory = { roles: {} }) {
+  const runner = inventory.source === 'runner';
+  const stale = !runner;
+  const at = (slug) => inventory.roles?.[slug];
+  const items = [];
+  changes.forEach((c, n) => {
+    const w = c.role ? at(c.role) : undefined;
+    const item = { id: `${c.kind}:${c.role ?? c.path ?? c.target ?? c.meeting ?? n}${c.path && c.role ? `:${c.path}` : ''}${c.resource ? `:${c.resource}` : ''}`, kind: c.kind, role: c.role, detail: c.detail, stale };
+    const inFlight = busy(w) ? { state: w.state, task: w.task ?? '', branch: w.branch ?? '', pr: w.pr ?? null } : null;
+    const set = (severity, choices, recommended, note) => items.push({ ...item, severity, inFlight, choices, recommended, ...(note ? { note } : {}) });
+    switch (c.kind) {
+      case 'role-off': case 'role-removed': case 'role-dormant': {
+        if (runner && w?.approvals) return set('blocking', ['reassign-approvals', 'cancel-approvals'], 'reassign-approvals', `${w.approvals} pending approval(s) would have no one to run them`);
+        if (!inFlight) return set('safe', ['off-at-merge'], 'off-at-merge');
+        if (!runner) return set('choice', ['finish', 'handoff', 'pause'], 'finish');
+        // Near done: in review or waiting with a PR open. Otherwise hand the work to someone who stays.
+        const near = w.pr && ['review', 'waiting'].includes(w.state);
+        return set('choice', ['finish', 'handoff', 'pause', 'apply-now', 'stop-drop'], near ? 'finish' : 'handoff');
+      }
+      case 'path-moved': case 'path-removed': {
+        const owner = at(c.from);
+        const hot = busy(owner) && (touches(owner, c.path) || !owner.files?.length);
+        if (!hot) return set('safe', ['move-at-merge'], 'move-at-merge');
+        const choices = runner ? ['move-after-merge', 'move-with-exception', 'move-and-handover'] : ['move-after-merge', 'move-and-handover'];
+        return items.push({ ...item, role: c.from, severity: 'choice', inFlight: { state: owner.state, task: owner.task ?? '', branch: owner.branch ?? '', pr: owner.pr ?? null }, choices, recommended: 'move-after-merge', ...(owner.files?.length ? {} : { note: 'which files the work touches is not known; it may touch this area' }) });
+      }
+      case 'binding-removed': case 'binding-narrowed':
+        return inFlight && runner ? set('choice', ['next-task', 'revoke-now'], 'next-task') : set('safe', ['next-task'], 'next-task');
+      case 'tier': case 'brief':
+        return inFlight && runner ? set('choice', ['next-task', 'apply-now'], 'next-task') : set('safe', ['next-task'], 'next-task');
+      case 'reports-to': {
+        const old = at(c.from);
+        return old?.queued ? set('choice', ['reroute-queued', 'keep-queued'], 'reroute-queued', `${old.queued} hand-off(s) queued for ${c.from}`) : set('safe', ['next-task'], 'next-task');
+      }
+      case 'gate': return runner ? set('choice', ['old-gate-open-prs', 'new-gate-all'], 'old-gate-open-prs') : set('safe', ['next-task'], 'next-task');
+      case 'meeting': return set('safe', ['finish-meeting'], 'finish-meeting');
+      default: return set('safe', ['next-task'], 'next-task'); // role-added, path-added, binding-added/widened, rules, values
+    }
+  });
+  const order = { blocking: 0, choice: 1, safe: 2 };
+  return items.sort((a, b) => order[a.severity] - order[b.severity]);
 }
