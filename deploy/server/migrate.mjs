@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Brings a Postgres up to the control plane's schema, the same migrations apps/server runs on start, but first:
 //   - creates the schema named by the login's search_path (agent_team on Supabase, see deploy/supabase/bootstrap.sql) if missing
+//   - refuses a login that still has CREATEROLE once agent_team_app exists
 //   - lists pending migrations and refuses any that look destructive unless ALLOW_DESTRUCTIVE=1
 //   - after migrating, fails if the anon or authenticated roles (Supabase's Data API) can reach any of our tables
 //
@@ -29,6 +30,10 @@ const c = new pg.Client({ connectionString: url });
 await c.connect();
 const fail = async (msg) => { console.error(`migrate: ${msg}`); await c.end(); process.exit(1); };
 const [{ schema, me, path }] = (await c.query("select current_schema() as schema, current_user as me, current_setting('search_path') as path")).rows;
+// The server's login only needs CREATEROLE to make agent_team_app once. When that role already exists, CREATEROLE is
+// pure risk (on Supabase it lets the login grant itself built-in roles), so refuse to run with it.
+const [{ createrole, app }] = (await c.query("select (select rolcreaterole from pg_roles where rolname = current_user) as createrole, exists (select 1 from pg_roles where rolname = 'agent_team_app') as app")).rows;
+if (createrole && app) await fail(`${me} has CREATEROLE, which it no longer needs: run "alter role ${me} nocreaterole" as an administrator (deploy/supabase/bootstrap.sql does this)`);
 let target = schema;
 if (!target) {
   target = path.split(',')[0].trim().replace(/^"|"$/g, '');

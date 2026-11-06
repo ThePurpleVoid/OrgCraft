@@ -8,13 +8,14 @@ ENV NODE_ENV=production HOST=0.0.0.0 PORT=8080
 WORKDIR /app
 
 COPY apps/server/package.json apps/server/package-lock.json apps/server/
-RUN npm ci --omit=dev --prefix apps/server && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts --prefix apps/server && npm cache clean --force
 
 # The server imports the event envelope package and the board summariser by relative path.
 COPY packages/events/ packages/events/
 COPY tools/board.mjs tools/board.mjs
 COPY apps/server/ apps/server/
 COPY deploy/server/ deploy/server/
+COPY deploy/supabase/prod-ca-2021.crt deploy/supabase/prod-ca-2021.crt
 
 USER node
 EXPOSE 8080

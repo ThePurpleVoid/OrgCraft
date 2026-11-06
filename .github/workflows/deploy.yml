@@ -28,8 +28,10 @@ jobs:
   deploy:
     if: >-
       vars.AGENT_TEAM_DEPLOY == 'on' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
@@ -41,18 +43,19 @@ jobs:
       VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
       TENANT: ${{ vars.AGENT_TEAM_TENANT || 'main' }}
       PUBLIC_URL: ${{ vars.AGENT_TEAM_PUBLIC_URL || format('https://{0}.vercel.app', vars.VERCEL_PROJECT) }}
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
       - name: Check that every secret and variable is set (names only)
         env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           AGENT_TEAM_MASTER_KEY: ${{ secrets.AGENT_TEAM_MASTER_KEY }}
           AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
@@ -66,18 +69,23 @@ jobs:
             exit 1
           fi
           case "$DATABASE_URL" in *":6543/"*) echo "::error::DATABASE_URL is the transaction pooler (6543); use the session pooler (5432)"; exit 1;; esac
+          case "$DATABASE_URL" in *"sslmode=verify-full"*) ;; *) echo "::error::DATABASE_URL must use sslmode=verify-full (see docs/deploy/vercel-supabase.md)"; exit 1;; esac
 
-      - name: Install flyctl and the Vercel CLI
-        run: |
-          curl -fsSL https://fly.io/install.sh | sh
-          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
-          npm install --global vercel@65.12.0
+      # Pinned by commit, and installed before any token is in scope: no token is visible to install scripts.
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+        with:
+          version: 0.5.5
+      - name: Install the Vercel CLI
+        run: npm install --global --ignore-scripts vercel@65.12.0
 
       - name: Create the Fly app if it does not exist yet
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl status --app "$FLY_APP" >/dev/null 2>&1 || flyctl apps create "$FLY_APP" --org "$FLY_ORG"
 
       - name: Stage the control plane's secrets on Fly
         env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           AGENT_TEAM_MASTER_KEY: ${{ secrets.AGENT_TEAM_MASTER_KEY }}
           AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
@@ -92,16 +100,20 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ALLOW_DESTRUCTIVE: "1"
         run: |
-          npm ci --prefix apps/server
+          npm ci --ignore-scripts --prefix apps/server
           node deploy/server/migrate.mjs
 
       - name: Deploy the control plane (its release command migrates first and refuses anything destructive)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           flyctl deploy . --app "$FLY_APP" --config deploy/fly/server.toml --dockerfile deploy/server/Dockerfile \
             --remote-only --ha=false --primary-region "$FLY_REGION" --wait-timeout 5m \
             --env AGENT_TEAM_PUBLIC_URL="$PUBLIC_URL" --env AGENT_TEAM_TENANT="$TENANT" --env DATABASE_POOL=5
 
-      - name: Deploy the Studio site on Vercel
+      - name: Deploy the site on Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
           site="$RUNNER_TEMP/site"
           node deploy/vercel/build.mjs --api "https://$FLY_APP.fly.dev" --out "$site"
