@@ -128,7 +128,7 @@ tests/                          tests for the CLI, scripts and tools, smoke scen
 ## Build the team visually: Agent Team Studio
 
 ```sh
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.9.1 studio --open   # http://localhost:4848
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.9.1 studio --open   # opens http://localhost:4848/?t=<launch token>
 ```
 
 Switch roles on and off from the library, drag a card onto another to change who it reports to, and set each role's model tier, status and duties in the inspector. **Flow** shows who hands work to whom. In **Systems**, add your database, hosting or any MCP server and drag it onto the roles that may use it. **Owned areas** and **Checks** are suggested from your repository's folders and build files. The kit's rules run on every change. **Publish** shows every file that would change, then commits the team and its generated files on a new branch for you to push and review.

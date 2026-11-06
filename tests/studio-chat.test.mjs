@@ -22,7 +22,8 @@ async function serve(env, fn) {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = async (path, body) => {
-    const res = await fetch(base + path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify(body) });
+    const cookie = `studio_session=${server.launchToken}`;
+    const res = await fetch(base + path, body === undefined ? { headers: { cookie } } : { method: 'POST', headers: { 'content-type': 'application/json', origin: base, cookie }, body: JSON.stringify(body) });
     return { status: res.status, body: await res.json() };
   };
   try { await fn(call, base); } finally { server.closeAllConnections?.(); server.close(); }
@@ -88,6 +89,11 @@ test('answers carry the card version; a stale one comes back as 409 with the cur
       assert.equal(JSON.stringify(su.body).includes('su_'), false, 'the step-up token stays on the Studio server');
       const appr = await call(`/v1/team/cards/${approval.id}`, { kind: 'approval', subject: approval.subject, option: 'approve', version: 1, key: 'k4' });
       assert.equal(appr.body.type, 'approval.decided');
+      // One step-up, one answer: the next approval asks again.
+      cp.card({ id: 'card_second', kind: 'approval', subject: 'approval/apr_second', title: 'Raise today\'s cap', options: [{ id: 'approve', label: 'Approve', stepUp: true }, { id: 'deny', label: 'Deny' }] });
+      const second = await call('/v1/team/cards/card_second', { kind: 'approval', subject: 'approval/apr_second', option: 'approve', version: 1, key: 'k5' });
+      assert.equal(second.status, 401);
+      assert.equal(second.body.type, 'step-up-required');
       assert.equal(appr.body.data.decision, 'approved');
       assert.equal(appr.body.subject, approval.subject);
     });

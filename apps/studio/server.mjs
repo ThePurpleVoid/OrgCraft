@@ -8,6 +8,7 @@
 // and commits the result on a branch. The repository stays the source of truth (docs/adr/0001).
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -117,7 +118,17 @@ export function suggestions(root, spec) {
 
 const send = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 
-export function createStudio({ root, env = process.env }) {
+/**
+ * The Studio's own sign-in, Jupyter style: a launch token printed in the URL it opens. The first visit with ?t=<token>
+ * sets an HttpOnly, SameSite=Strict cookie, and every other request must carry it. Without it, anything that can reach the
+ * port (another process, a machine on the network, a rebinding page) could read the chat or answer as the owner, since
+ * this server holds the control plane's token and, for a few minutes, a step-up token.
+ */
+const COOKIE = 'studio_session';
+const same = (a, b) => { const x = Buffer.from(String(a ?? '')), y = Buffer.from(String(b ?? '')); return x.length === y.length && timingSafeEqual(x, y); };
+const cookieOf = (req) => (String(req.headers.cookie ?? '').split(';').map((c) => c.trim().split('=')).find(([k]) => k === COOKIE) ?? [])[1];
+
+export function createStudio({ root, env = process.env, launchToken = randomBytes(24).toString('base64url') }) {
   const live = liveSource(root, env);
   const chat = chatSource(env);
   /** Chat calls: the control plane's answer, or its error with its status (a stale card's 409 carries the card). */
@@ -128,9 +139,20 @@ export function createStudio({ root, env = process.env }) {
       return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
     }
   };
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
+      if (req.method === 'GET' && url.searchParams.has('t')) {
+        if (!same(url.searchParams.get('t'), launchToken)) throw new HttpError(401, 'that link is out of date: open the one the Studio printed when it started');
+        url.searchParams.delete('t');
+        res.writeHead(302, { location: url.pathname + url.search, 'set-cookie': `${COOKIE}=${launchToken}; HttpOnly; SameSite=Strict; Path=/`, 'cache-control': 'no-store' });
+        return res.end();
+      }
+      if (!same(cookieOf(req), launchToken)) {
+        if (url.pathname.startsWith('/v1/')) throw new HttpError(401, 'open the Studio with the link it printed when it started (it ends in ?t=…)');
+        res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end('<!doctype html><meta charset="utf-8"><title>Agent Team Studio</title><p style="font:15px system-ui;margin:2em">Open the Studio with the link it printed when it started. It ends in <code>?t=…</code>.</p>');
+      }
       // The Studio's API, versioned like the public API it will become (ADR 0005): additive changes only within /v1/.
       if (req.method === 'GET' && url.pathname === '/v1/team') return send(res, 200, state(root));
       // The live board, and a stream that says when it changed (the page then fetches the board again).
@@ -198,6 +220,8 @@ export function createStudio({ root, env = process.env }) {
       return send(res, status, { error: e.message });
     }
   });
+  server.launchToken = launchToken;
+  return server;
 }
 
 export function run(argv) {
@@ -209,7 +233,7 @@ export function run(argv) {
   const server = createStudio({ root });
   return new Promise((done) => {
     server.listen(port, host, () => {
-      const where = `http://${host === '0.0.0.0' ? 'localhost' : host}:${server.address().port}`;
+      const where = `http://${host === '0.0.0.0' ? 'localhost' : host}:${server.address().port}/?t=${server.launchToken}`;
       console.log(`Agent Team Studio for ${root}\n  ${where}\nCtrl-C stops it.`);
       if (argv.includes('--open')) { try { execFileSync(process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open', [where], { stdio: 'ignore' }); } catch { /* no browser */ } }
     });

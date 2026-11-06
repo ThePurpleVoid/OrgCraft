@@ -13,7 +13,8 @@ export function chatSource(env = process.env) {
   const team = env.AGENT_TEAM_SERVER_TEAM;
   const t = encodeURIComponent(team);
   const auth = { authorization: `Bearer ${env.AGENT_TEAM_SERVER_TOKEN}` };
-  // A step-up token (5 minutes) for approvals and stepUp options. It stays on this server, never in the page.
+  // A step-up token for approvals and stepUp options: it stays on this server, never in the page, lasts at most its
+  // 5 minutes and is spent by the next answer, whatever its outcome. Only the Studio's own session can use it (server.mjs checks the cookie).
   let stepUp = null; // { token, expires }
   const stepUpHeader = () => (stepUp && Date.parse(stepUp.expires) > Date.now() + 5_000 ? { 'x-step-up': stepUp.token } : {});
 
@@ -49,12 +50,20 @@ export function chatSource(env = process.env) {
     /** The owner's words, verbatim. The client id makes a retry land once. */
     say: ({ text, clientId, replyTo }) => call('POST', `/teams/${t}/chat`, { text, clientId, ...(replyTo ? { replyTo } : {}) }, clientId ? { 'idempotency-key': clientId } : {}),
     /** Answers a card with the version the person saw. Approvals go to /approvals/{id}, every other card to /cards/{id}. */
-    answer: ({ card, kind, subject, option, version, key }) => {
-      const headers = { ...(key ? { 'idempotency-key': key } : {}), ...stepUpHeader() };
+    async answer({ card, kind, subject, option, version, key }) {
+      const su = stepUpHeader();
+      const headers = { ...(key ? { 'idempotency-key': key } : {}), ...su };
       // An approval card's answer goes to its approval: the id from its subject, else the card id.
       const approval = kind === 'approval' && (/^approval\/(.+)$/.exec(subject ?? '')?.[1] ?? card);
-      if (approval) return call('POST', `/approvals/${encodeURIComponent(approval)}`, { decision: option === 'deny' ? 'denied' : option === 'approve' ? 'approved' : option, version }, headers);
-      return call('POST', `/cards/${encodeURIComponent(card)}`, { option, version }, headers);
+      try {
+        const r = approval
+          ? await call('POST', `/approvals/${encodeURIComponent(approval)}`, { decision: option === 'deny' ? 'denied' : option === 'approve' ? 'approved' : option, version }, headers)
+          : await call('POST', `/cards/${encodeURIComponent(card)}`, { option, version }, headers);
+        return r;
+      } finally {
+        // A step-up covers one answer, whatever came of it: the next approval asks again.
+        if (su['x-step-up']) stepUp = null;
+      }
     },
     /** This team's line from /me/summary (cost today against the cap, run state) and the run itself. */
     async run() {

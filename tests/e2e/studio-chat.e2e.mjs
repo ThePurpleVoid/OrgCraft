@@ -42,7 +42,7 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto(base);
+  await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.getByRole('button', { name: 'Chat' }).click();
   await page.getByText('Ask the chief of staff for something').waitFor();
   await page.getByText('Today $6.20 of $50.00').waitFor();
@@ -103,6 +103,7 @@ test('at 360px the chat fits, the cards answer, and the team is read-only', { sk
   for (const scheme of ['light', 'dark']) {
     const ctx = await browser.newContext({ viewport: { width: 360, height: 760 }, colorScheme: scheme, isMobile: true, hasTouch: true, deviceScaleFactor: SHOTS ? 2 : 1 });
     const page = await ctx.newPage();
+    await page.goto(`${base}/?t=${studio.launchToken}`);
     await page.goto(`${base}/#chat`);
     await page.locator('.card-msg.k-approval').first().waitFor();
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
