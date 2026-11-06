@@ -3,7 +3,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { destructiveStatements } from '../deploy/server/guard.mjs';
-import { siteConfig, STATUS_PAGE, STATUS_SCRIPT, CSP } from '../deploy/vercel/build.mjs';
+import { siteConfig, STATUS_PAGE, STATUS_SCRIPT, CSP, MIDDLEWARE } from '../deploy/vercel/build.mjs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { scryptSync } from 'node:crypto';
 import { hashStepUp } from '../deploy/server/step-up-hash.mjs';
 
@@ -63,4 +67,35 @@ test('the site sends the agreed CSP', () => {
   const h = siteConfig('https://api.example.org').headers[0].headers.find((x) => x.key === 'content-security-policy');
   assert.equal(h.value, CSP);
   assert.equal(CSP, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'");
+});
+
+test('the edge middleware replaces a client x-agent-team-edge with the secret, keeps the rest, and only runs on the API paths', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mw-'));
+  const file = join(dir, 'middleware.mjs');
+  writeFileSync(file, MIDDLEWARE);
+  const mw = await import(pathToFileURL(file).href);
+  assert.deepEqual(mw.config.matcher, ['/v1/:path*', '/.well-known/agent-team']);
+  assert.equal(mw.config.runtime, 'nodejs');
+  const req = () => new Request('https://site.example/v1/health?x=1', {
+    headers: { host: 'site.example', 'x-agent-team-edge': 'forged', 'x-forwarded-for': '203.0.113.9', authorization: 'Bearer t' },
+  });
+  const was = process.env.AGENT_TEAM_EDGE_SECRET;
+  try {
+    process.env.AGENT_TEAM_EDGE_SECRET = 's3cret-edge-value';
+    let h = mw.default(req()).headers;
+    assert.equal(h.get('x-middleware-next'), '1');
+    assert.equal(h.get('x-middleware-rewrite'), null, 'the vercel.json rewrite stays the only destination');
+    assert.equal(h.get('x-middleware-request-x-agent-team-edge'), 's3cret-edge-value');
+    assert.equal(h.get('x-middleware-request-x-forwarded-for'), '203.0.113.9');
+    assert.equal(h.get('x-middleware-request-authorization'), 'Bearer t');
+    assert.equal(h.get('x-middleware-request-host'), null);
+    const keys = h.get('x-middleware-override-headers').split(',');
+    assert.ok(keys.includes('x-agent-team-edge') && keys.includes('authorization') && !keys.includes('host'));
+    delete process.env.AGENT_TEAM_EDGE_SECRET;
+    h = mw.default(req()).headers;
+    assert.equal(h.get('x-middleware-request-x-agent-team-edge'), null, 'without the secret, a forged header is dropped');
+    assert.ok(!h.get('x-middleware-override-headers').split(',').includes('x-agent-team-edge'));
+  } finally {
+    if (was === undefined) delete process.env.AGENT_TEAM_EDGE_SECRET; else process.env.AGENT_TEAM_EDGE_SECRET = was;
+  }
 });

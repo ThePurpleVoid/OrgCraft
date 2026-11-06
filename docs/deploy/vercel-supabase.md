@@ -10,11 +10,13 @@ The split is the architect's (m3-design.md §8), accepted by the CTO.
 
 | Part | Where | Why |
 |---|---|---|
-| Site page | **Vercel**, static files only | For now a status page that calls `/v1/health`. The Studio page talks to the local Studio server's own routes, so the hosted Studio is an M4 item (architect, web-dev). Then `build.mjs --studio` ships it. No Vercel Functions, no Vercel Cron |
-| `/v1/*` and `/.well-known/agent-team` | Vercel **rewrites** them to the container | People, phones and the kit's report scripts use one host |
+| Site page | **Vercel**, static files only | For now a status page that calls `/v1/health`. The Studio page talks to the local Studio server's own routes, so the hosted Studio is an M4 item (architect, web-dev). Then `build.mjs --studio` ships it. No Vercel Cron, and no Vercel Functions except one Routing Middleware (below) |
+| `/v1/*` and `/.well-known/agent-team` | Vercel **rewrites** them to the container | People, phones and the kit's report scripts use one host. A Routing Middleware on these paths only adds `x-agent-team-edge` (below) |
 | The whole API, live streams, the sink worker, timers (a 15-second in-process tick), the runner's WebSocket | **One always-on `apps/server` container on Fly.io** | Serverless functions end; streams, sockets and timers are long-lived. One instance, so live fan-out needs nothing extra |
 | Runner (Agent SDK sessions in git worktrees) | **A second Fly.io app** (`<FLY_APP>-runner`) in the same organization and region, with one volume at `/data`, deployed by the same workflow once `AGENT_TEAM_RUNNER=on` | Long sessions, a filesystem and git. It connects out to the container's public URL by WebSocket, never through Vercel. Sessions run as a separate user inside it (apps/runner/Dockerfile) |
 | Postgres | **Supabase**, in a dedicated `agent_team` schema | Migrations run as they are. Row-level security per tenant, unchanged |
+
+**The one function on Vercel** (CTO decision 9, the exception for #73). Rate limits are per caller, so the server must know the caller's IP, and behind the site every request reaches Fly from a Vercel address. A rewrite cannot add a request header, so a Routing Middleware (`middleware.js`, written by `build.mjs`, Node runtime, no dependencies) runs on `/v1/*` and `/.well-known/agent-team` only. It drops any `x-agent-team-edge` the client sent, sets it to `AGENT_TEAM_EDGE_SECRET`, and lets the `vercel.json` rewrite carry on. It does nothing else: no routing, no auth, no state. On Fly, `AGENT_TEAM_PROXY_HOPS=1` (`deploy/fly/server.toml`) makes the server read `x-forwarded-for` from the right. When the edge secret matches, it takes the entry Vercel wrote, so nothing a client writes into the header is ever read. The smoke test checks it after every deploy: through the site, `GET /v1/admin/caller` must report the edge and the same IP the container sees directly. If it does not (exit 4), sign-in stays off. The endpoint takes `CRON_SECRET`, which the workflow makes fresh for each deploy and stages on Fly, so you never handle it; while sign-in is off it answers 404 and the check is skipped.
 
 Streams pass through the Vercel rewrite. The deploy's smoke test proves they arrive unbuffered (first bytes at once, the server's 20-second keep-alive while open). If that check ever fails, clients must open streams on the container host directly, and discovery names that host for streams.
 
@@ -54,10 +56,10 @@ Thirteen steps, about 30 minutes. Values go only where a step says. Never into c
 5. Sign up at vercel.com (Hobby is fine while this is non-commercial). Go to Account Settings → Tokens → Create, with full account scope. This is **`VERCEL_TOKEN`**. Do not import the repository into Vercel: the workflow deploys after CI and creates the project itself.
 
 **Two keys you make yourself**
-6. Run `openssl rand -base64 32` twice. The first is **`AGENT_TEAM_MASTER_KEY`**: it seals the vault, so losing it loses every stored secret. Keep it in your password manager. The second is **`AGENT_TEAM_ADMIN_TOKEN`**: it is how you sign in until GitHub sign-in lands. Keep it too. Third, marked **M3 exit** (step 10 deploys without it): choose a step-up secret, the phrase you will type each time you approve something, at least 12 characters. Keep it in your password manager, then run `node deploy/server/step-up-hash.mjs` in a clone of the repository (Node 20+). It asks for the phrase without showing it and prints **`AGENT_TEAM_STEP_UP_SECRET_HASH`**. Only the hash goes into GitHub.
+6. Run `openssl rand -base64 32` three times. The first is **`AGENT_TEAM_MASTER_KEY`**: it seals the vault, so losing it loses every stored secret. Keep it in your password manager. The second is **`AGENT_TEAM_ADMIN_TOKEN`**: it is how you sign in until GitHub sign-in lands. Keep it too. The third is **`AGENT_TEAM_EDGE_SECRET`**: the site sends it to the server so the server can trust the caller's address. You paste it only into GitHub; the workflow puts it on Fly and in the Vercel project, and you can make a new one at any time. Last, marked **M3 exit** (step 10 deploys without it): choose a step-up secret, the phrase you will type each time you approve something, at least 12 characters. Keep it in your password manager, then run `node deploy/server/step-up-hash.mjs` in a clone of the repository (Node 20+). It asks for the phrase without showing it and prints **`AGENT_TEAM_STEP_UP_SECRET_HASH`**. Only the hash goes into GitHub.
 
 **GitHub** (repository Settings)
-7. Go to Environments → New environment → `production`. Set **Deployment branches and tags** to Selected → `main`, and tick **Required reviewers** → yourself, so that every deploy waits for your click. Both are required: they keep production secrets away from any other branch. Then, under Environment secrets, add the six values: `DATABASE_URL`, `FLY_API_TOKEN`, `FLY_RUNNER_API_TOKEN`, `VERCEL_TOKEN`, `AGENT_TEAM_MASTER_KEY`, `AGENT_TEAM_ADMIN_TOKEN`. At the M3 exit, add a sixth: `AGENT_TEAM_STEP_UP_SECRET_HASH`.
+7. Go to Environments → New environment → `production`. Set **Deployment branches and tags** to Selected → `main`, and tick **Required reviewers** → yourself, so that every deploy waits for your click. Both are required: they keep production secrets away from any other branch. Then, under Environment secrets, add the seven values: `DATABASE_URL`, `FLY_API_TOKEN`, `FLY_RUNNER_API_TOKEN`, `VERCEL_TOKEN`, `AGENT_TEAM_MASTER_KEY`, `AGENT_TEAM_ADMIN_TOKEN`, `AGENT_TEAM_EDGE_SECRET`. At the M3 exit, add an eighth: `AGENT_TEAM_STEP_UP_SECRET_HASH`.
 8. Go to Secrets and variables → Actions → Variables and add `FLY_APP` = a globally unique name such as `purplegiragge-agent-team` (the API becomes `https://<FLY_APP>.fly.dev`) and `VERCEL_PROJECT` = `agent-team-kit`. If that Vercel name is taken, also set `AGENT_TEAM_PUBLIC_URL` to the address Vercel gives the project. Optional: `FLY_REGION` (default `iad`), `VERCEL_SCOPE` (a Vercel team slug), `AGENT_TEAM_TENANT` (default `main`).
 9. Add the variable `AGENT_TEAM_DEPLOY` = `on`. Until it exists, the Deploy workflow does nothing.
 
@@ -67,7 +69,7 @@ Thirteen steps, about 30 minutes. Values go only where a step says. Never into c
 
 **Later, when the chief of staff asks (M3 and M4)**
 12. **The runner, only after step 13.** Without step 13's push credential, every checkpoint push fails while the runner still spends from your model budget, so leave `AGENT_TEAM_RUNNER` unset until then. Set a daily spend cap in the Anthropic console, then add the environment secret `ANTHROPIC_API_KEY`. Run `node deploy/fly/register-runner.mjs --server https://<FLY_APP>.fly.dev` in a clone. It asks for your admin token and step-up secret without showing them, registers the runner, and prints its key once. Add that as the environment secret **`AGENT_TEAM_RUNNER_KEY`**, then clear your terminal. Set the variable `AGENT_TEAM_RUNNER` = `on` and run Deploy again: it gives `<FLY_APP>-runner` a 20 GB volume and starts the runner, about $25 a month.
-13. The GitHub App (sign-in and pushes): its app id, private key and client secret, by the names the chief of staff gives.
+13. The GitHub App (sign-in and pushes): its app id, private key and client secret, by the names the chief of staff gives. Before sign-in is switched on, add **`oidc-conformance`** to the required status checks of the `main` ruleset, next to `test` and `server` (ruleset setup: [m3-design.md](../product/m3-design.md), owner checklist step 3), and check that the last Deploy's smoke test passed its caller IP check.
 
 ## Costs to expect
 
@@ -89,6 +91,7 @@ Prices are as of November 2026; check each provider's page.
 | Supabase | The container fails its release command (`migrate:` errors in the Fly logs), so the old version keeps serving. A running server answers 500 on data calls and `/v1/health` still answers |
 | Vercel | The status page is gone, but the API still works at `https://<FLY_APP>.fly.dev`. People, phones and report URLs that name the Vercel host fail |
 | The runner | The board, reports and approvals work. Chat and runs wait in the queue until a runner connects |
+| The edge middleware, or `AGENT_TEAM_EDGE_SECRET` differs between Vercel and Fly | Everyone behind the site shares one rate-limit bucket (the Vercel address), so a busy caller can slow sign-in for others. The smoke test exits 4. Re-run Deploy: it stages the same value in both places |
 | `AGENT_TEAM_MASTER_KEY` changed | Stored secrets cannot be opened. Put the old key back, or re-enter every secret |
 
 ## Files
@@ -101,7 +104,7 @@ Prices are as of November 2026; check each provider's page.
 | [`deploy/supabase/bootstrap.sql`](../../deploy/supabase/bootstrap.sql) | The one-time login and schema setup |
 | [`deploy/fly/server.toml`](../../deploy/fly/server.toml), [`runner.toml`](../../deploy/fly/runner.toml) | Fly configs |
 | [`apps/runner/Dockerfile`](../../apps/runner/Dockerfile) | The runner image: the runner as one user, sessions as another |
-| [`deploy/vercel/build.mjs`](../../deploy/vercel/build.mjs) | Writes the static site and its rewrites |
+| [`deploy/vercel/build.mjs`](../../deploy/vercel/build.mjs) | Writes the static site, its rewrites and the edge-header middleware |
 | [`deploy/smoke.mjs`](../../deploy/smoke.mjs) | The read-only post-deploy check |
 | [`deploy/fly/register-runner.mjs`](../../deploy/fly/register-runner.mjs) | The owner's one-time runner registration (needs their step-up) |
 | [`deploy/env/`](../../deploy/env/) | Every secret and variable, by name only |
