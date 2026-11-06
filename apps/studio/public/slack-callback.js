@@ -21,7 +21,8 @@ export function callbackOf(search, storedTeam) {
 export function linkError(status, error) {
   if (status === 410) return 'That took more than 10 minutes. Choose Connect Slack again.';
   if (status === 400 && (!error || /not started here/.test(error))) return 'This sign-in with Slack was started somewhere else. Choose Connect Slack again from Notifications.';
-  return error || `Slack could not be connected (HTTP ${status}).`;
+  const t = String(error ?? '').trim();
+  return t ? `${t[0].toUpperCase()}${t.slice(1)}${/[.!?]$/.test(t) ? '' : '.'}` : `Slack could not be connected (HTTP ${status}).`;
 }
 
 const back = (team) => (team ? `/teams/${encodeURIComponent(team)}/notifications` : '/');
@@ -40,7 +41,7 @@ async function start() {
   const c = callbackOf(search, stored);
   const fail = (text) => {
     document.getElementById('slack-title').textContent = 'Slack is not connected';
-    root.innerHTML = `<p class="result error" role="alert">${esc(text)}</p><p><a href="${esc(back(c.team))}">Back to Notifications</a></p>`;
+    root.innerHTML = `<p class="result error" role="alert">${esc(text)}</p><p><a href="${esc(back(c.team))}">${c.team ? 'Back to Notifications' : 'Back to your teams'}</a></p>`;
   };
   const done = () => { try { sessionStorage.removeItem('agent-team-slack-cb'); } catch { /* fine */ } };
   if (c.error) { done(); return fail(c.error); }

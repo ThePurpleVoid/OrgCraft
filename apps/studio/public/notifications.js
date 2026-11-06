@@ -133,9 +133,9 @@ export function slackHtml(st) {
     const add = st.addingChannel
       ? `<form id="channel-add" class="n-address">
           <p class="row"><label>Channel name <input name="name" required maxlength="80" placeholder="team-updates" autocomplete="off"></label>
-          <label>Channel ID <input name="channel" required pattern="[CG][A-Z0-9]{2,20}" placeholder="C0123ABCD" autocomplete="off"></label></p>
+          <label>Channel ID <input name="channel" required pattern="[CGcg][A-Za-z0-9]{2,20}" placeholder="C0123ABCD" autocomplete="off"></label></p>
           <p class="hint">In Slack, open the channel's details: the ID is at the bottom. Invite the team's Slack app to the channel first (type /invite @ and the app's name in the channel).</p>
-          <ul class="plain n-kinds">${kindRows('data-new-channel', channelDefaults(s.kinds), { ready: READY_HINT })}</ul>
+          <ul class="plain n-kinds">${kindRows('data-new-channel', st.channelDraft ? new Set(st.channelDraft.kinds) : channelDefaults(s.kinds), { ready: READY_HINT })}</ul>
           <p class="row"><button type="submit" class="primary">Add the channel</button> <button type="button" id="channel-cancel">Cancel</button></p>
           ${note('channel-add')}</form>`
       : `<p><button type="button" id="channel-new">Add a channel</button></p>${note('channel-add')}`;
@@ -146,13 +146,33 @@ export function slackHtml(st) {
   return `<section class="n-section" aria-labelledby="slack-title">${head}${health}${me}${channels}</section>`;
 }
 
+/**
+ * A channel name as Slack writes it: no #, lowercase, spaces as dashes. Null when it still is not one Slack allows
+ * (letters, digits, dots, dashes and underscores, up to 80, starting with a letter or digit).
+ */
+export function channelName(raw) {
+  const name = String(raw ?? '').trim().replace(/^#+/, '').toLowerCase().replace(/\s+/g, '-');
+  return /^[a-z0-9][a-z0-9._-]{0,79}$/.test(name) ? name : null;
+}
+
+/** Why a channel could not be added, in words a person can act on. */
+export function channelError(status, error) {
+  if (status === 409 && /already/.test(error ?? '')) return 'That channel is already added. Change its switches below instead.';
+  if (status === 400) return 'Check the channel ID: it starts with C or G, like C0123ABCD.';
+  if (status === 403) return 'Only an owner or admin can add a channel.';
+  return sentence(error) || `The channel could not be added (HTTP ${status}).`;
+}
+
+/** Server text as a sentence: a capital first letter and a full stop. */
+export const sentence = (t) => { const s = String(t ?? '').trim(); return s ? `${s[0].toUpperCase()}${s.slice(1)}${/[.!?]$/.test(s) ? '' : '.'}` : ''; };
+
 const errorOf = (r) => r.data?.error ?? r.data?.title ?? `HTTP ${r.status}`;
 
 function start() {
   const root = document.getElementById('notifications');
   const team = teamFromPath(location.pathname);
   const st = { me: null, teamName: team, ready: true, owner: false, kinds: [], emails: [], adding: false, cleared: new Set(), notes: new Map(),
-    slack: null, channels: null, slackCleared: false, addingChannel: false, redirectUrl: `${location.origin}/slack/callback` };
+    slack: null, channels: null, slackCleared: false, addingChannel: false, channelDraft: null, redirectUrl: `${location.origin}/slack/callback` };
   const base = () => `/v1/teams/${encodeURIComponent(team)}/emails`;
   const slackBase = () => `/v1/teams/${encodeURIComponent(team)}/slack`;
 
@@ -161,6 +181,9 @@ function start() {
       <p class="muted">For ${esc(st.teamName)}. Only you see these settings.</p>
       ${emailsHtml(st)}
       ${slackHtml(st)}`;
+    // What was typed in Add a channel survives a re-render (an error), set through the DOM, not markup.
+    const add = root.querySelector('#channel-add');
+    if (add && st.channelDraft) { add.name.value = st.channelDraft.name; add.channel.value = st.channelDraft.channel; }
   }
   /** The Slack section's state: the status, and the channels when the caller is an owner or admin (403 otherwise). */
   async function loadSlack() {
@@ -202,10 +225,16 @@ function start() {
     }
     if (form.id === 'channel-add') {
       const kinds = [...form.querySelectorAll('input[data-new-channel]:checked')].map((i) => i.dataset.kind);
-      const r = await call('POST', `${slackBase()}/channels`, { channel: form.channel.value.trim(), name: form.name.value.trim().replace(/^#/, ''), kinds });
+      st.channelDraft = { name: form.name.value, channel: form.channel.value, kinds };
+      const name = channelName(form.name.value);
+      const stop = (text) => { button.disabled = false; say('channel-add', 'error', text); render(); root.querySelector('#channel-add input[name="name"]')?.focus(); };
+      if (!name) return stop('A channel name can have lowercase letters, numbers, dashes, dots and underscores, up to 80. Copy it from Slack, without the #.');
+      if (!kinds.length) return stop('Choose at least one thing to post to this channel.');
+      const r = await call('POST', `${slackBase()}/channels`, { channel: form.channel.value.trim().toUpperCase(), name, kinds });
       button.disabled = false;
-      if (!r.ok) { say('channel-add', 'error', errorOf(r)); return render(); }
+      if (!r.ok) return stop(channelError(r.status, r.data?.error ?? r.data?.title));
       st.addingChannel = false;
+      st.channelDraft = null;
       await loadSlack();
       say(`ch:${r.data.id}`, r.data.posted ? 'ok' : 'error', r.data.posted ? `Added. A first post in #${r.data.name} says who chose it.` : `Added, but the first post did not go through: ${r.data.reason}. Invite the Slack app to the channel.`);
       return render();
@@ -263,8 +292,8 @@ function start() {
       say('slack', 'ok', 'Disconnected. No more Slack DMs from this team.');
       return render();
     }
-    if (b.id === 'channel-new') { st.addingChannel = true; say('channel-add', 'ok', ''); render(); return root.querySelector('#channel-add input')?.focus(); }
-    if (b.id === 'channel-cancel') { st.addingChannel = false; return render(); }
+    if (b.id === 'channel-new') { st.addingChannel = true; st.channelDraft = null; say('channel-add', 'ok', ''); render(); return root.querySelector('#channel-add input')?.focus(); }
+    if (b.id === 'channel-cancel') { st.addingChannel = false; st.channelDraft = null; return render(); }
     if (b.dataset.channelRemove) {
       const c = st.channels?.find((x) => x.id === b.dataset.channelRemove);
       if (!confirm(`Stop posting ${st.teamName} updates to #${c?.name ?? 'this channel'}?`)) return;
@@ -276,10 +305,17 @@ function start() {
     }
   });
 
+  /** Add a channel's typed values and switches, so another section's re-render does not wipe them. */
+  function keepDraft() {
+    const f = root.querySelector('#channel-add');
+    if (f) st.channelDraft = { name: f.name.value, channel: f.channel.value, kinds: [...f.querySelectorAll('input[data-new-channel]:checked')].map((i) => i.dataset.kind) };
+  }
+  root.addEventListener('input', (e) => { if (e.target.closest('#channel-add')) keepDraft(); });
+
   root.addEventListener('change', async (e) => {
     const box = e.target.closest('input[data-kind]');
     if (!box) return;
-    if (box.hasAttribute('data-new-channel')) return; // saved with Add the channel
+    if (box.hasAttribute('data-new-channel')) return keepDraft(); // saved with Add the channel
     if (box.hasAttribute('data-slack-me')) {
       // As for email: the first time, ticks wait for Save; after that each switch saves at once.
       if (st.slack?.me?.kinds?.length || st.slackCleared) saveSlack('Saved.');

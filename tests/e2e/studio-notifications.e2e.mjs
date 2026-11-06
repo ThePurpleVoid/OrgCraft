@@ -11,7 +11,8 @@ import { mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { stubIssuer } from '../fixtures/stub-issuer.mjs';
-import { emailsHtml, shownKinds, teamFromPath } from '../../apps/studio/public/notifications.js';
+import { channelError, channelName, emailsHtml, shownKinds, teamFromPath } from '../../apps/studio/public/notifications.js';
+import { linkError } from '../../apps/studio/public/slack-callback.js';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -33,6 +34,16 @@ test('the team comes from the path, and nothing else passes', () => {
   assert.equal(teamFromPath('/teams/sample-app/notifications'), 'sample-app');
   assert.equal(teamFromPath('/teams/sample-app/notifications/'), 'sample-app');
   for (const p of ['/teams//notifications', '/teams/a%2Fb/notifications', '/teams/x/inbox', '/notifications', '/teams/%E0%A4%A/notifications']) assert.equal(teamFromPath(p), null, p);
+});
+
+test('a channel name is cleaned the way Slack writes it, and channel and link errors read as sentences', () => {
+  assert.equal(channelName(' #Team Updates '), 'team-updates');
+  assert.equal(channelName('ops.alerts_2'), 'ops.alerts_2');
+  for (const bad of ['', '#', '-x', 'team updates!', 'a'.repeat(81)]) assert.equal(channelName(bad), null, bad);
+  assert.equal(channelError(409, 'this channel is already picked; change its kinds instead'), 'That channel is already added. Change its switches below instead.');
+  assert.match(channelError(400, 'send { channel, name } with…'), /^Check the channel ID/);
+  assert.equal(channelError(409, "Slack isn't connected for this team yet"), "Slack isn't connected for this team yet.");
+  assert.equal(linkError(409, 'sign in to the Acme Slack workspace, the one this team is connected to'), 'Sign in to the Acme Slack workspace, the one this team is connected to.');
 });
 
 test('suggested kinds show only until something is saved, and never after every kind is switched off', () => {
@@ -149,8 +160,7 @@ test('Slack: the callback reads what Slack sent back, and says what to do when i
   assert.match(linkError(410), /more than 10 minutes/);
   assert.match(linkError(400), /started somewhere else/);
   assert.match(linkError(400, 'this sign-in with Slack was not started here; start again'), /started somewhere else/);
-  assert.equal(linkError(400, 'send { code, state } from Slack'), 'send { code, state } from Slack');
-  assert.equal(linkError(409, 'sign in to the Acme Slack workspace, the one this team is connected to'), 'sign in to the Acme Slack workspace, the one this team is connected to');
+  assert.equal(linkError(400, 'send { code, state } from Slack'), 'Send { code, state } from Slack.');
   const { slackSignInUrl, slackHealth, slackHtml } = await import('../../apps/studio/public/notifications.js');
   assert.equal(slackSignInUrl('https://slack.com/openid/connect/authorize?x=1'), 'https://slack.com/openid/connect/authorize?x=1');
   for (const bad of ['http://slack.com/x', 'https://slack.com.evil.example/x', 'javascript:alert(1)', 'https://evil.example/slack.com']) assert.equal(slackSignInUrl(bad), null, bad);
@@ -218,6 +228,26 @@ test('Slack: connect by signing in to Slack, save the suggested DMs, pick a chan
   await add.getByRole('button', { name: 'Add the channel' }).click();
   await slack.getByText('Added. A first post in #team-updates says who chose it.').waitFor();
   assert.deepEqual(iss.slack.channels.map((c) => [c.channel, c.name, c.kinds]), [['C0123ABCD', 'team-updates', ['budget80', 'budget100', 'minutes']]]);
+  // Mistakes keep what was typed (QA, #144): a name with a space is cleaned, a bad one and a duplicate say why in words.
+  await slack.getByRole('button', { name: 'Add a channel' }).click();
+  await add.getByLabel('Channel name').fill('Team Updates!');
+  await add.getByLabel('Channel ID').fill('c0123abcd');
+  await add.getByRole('button', { name: 'Add the channel' }).click();
+  await add.getByText('A channel name can have lowercase letters, numbers, dashes, dots and underscores, up to 80. Copy it from Slack, without the #.').waitFor();
+  assert.equal(await add.getByLabel('Channel name').inputValue(), 'Team Updates!');
+  assert.equal(await add.getByLabel('Channel ID').inputValue(), 'c0123abcd');
+  await add.getByLabel('Channel name').fill('Team Updates');
+  await add.getByLabel('Meeting minutes', { exact: true }).uncheck();
+  await add.getByRole('button', { name: 'Add the channel' }).click();
+  await add.getByText('That channel is already added. Change its switches below instead.').waitFor();
+  assert.equal(await add.getByLabel('Channel name').inputValue(), 'Team Updates');
+  assert.equal(await add.getByLabel('Channel ID').inputValue(), 'c0123abcd');
+  assert.equal(await add.getByLabel('Meeting minutes', { exact: true }).isChecked(), false, 'the switches are kept too');
+  for (const label of ['Budget at 80%', 'Budget at 100%']) await add.getByLabel(label, { exact: true }).uncheck();
+  await add.getByRole('button', { name: 'Add the channel' }).click();
+  await add.getByText('Choose at least one thing to post to this channel.').waitFor();
+  assert.equal(iss.slack.channels.length, 1);
+  await add.getByRole('button', { name: 'Cancel' }).click();
   const ch = slack.locator('.n-channel', { hasText: '#team-updates' });
   await ch.getByLabel('A role is blocked', { exact: true }).check();
   await ch.getByText('Saved.', { exact: true }).waitFor();
