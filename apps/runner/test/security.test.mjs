@@ -189,3 +189,53 @@ test('F4: the model proxy forwards only the messages API', async () => {
     assert.deepEqual(seen, ['POST /v1/messages', 'POST /v1/messages/count_tokens?beta=true']);
   } finally { await proxy.close(); upstream.close(); }
 });
+
+/** Someone else lands a change on the origin's main. */
+function landOnMain(bare, path, text) {
+  const dir = join(bare, '..', `other-${Math.random().toString(36).slice(2)}`);
+  execFileSync('git', ['clone', '--quiet', bare, dir]);
+  mkdirSync(join(dir, path, '..'), { recursive: true });
+  writeFileSync(join(dir, path), text);
+  sh(dir, 'add', '-A'); sh(dir, 'commit', '--quiet', '-m', `land ${path}`); sh(dir, 'push', '--quiet', 'origin', 'main');
+}
+
+test('base moves: what lands on main mid-session or before a resume is not counted as the branch\'s change', async () => {
+  const { bare, root } = origin();
+  let w = await prepare({ root, repo: { url: bare }, worktree: 'web/mv', session: 'mv1' });
+  mkdirSync(join(w.cwd, 'web'));
+  writeFileSync(join(w.cwd, 'web', 'a.txt'), 'a\n');
+  assert.equal((await checkpoint({ cwd: w.cwd, branch: 'web/mv', role: 'web-dev', reason: 't', areas: ['web/'] })).pushed, true);
+  // main moves while the session runs; the agent merges it in.
+  landOnMain(bare, 'server/b.txt', 'b\n');
+  writeFileSync(join(w.cwd, 'web', 'a.txt'), 'a2\n');
+  let r = await checkpoint({ cwd: w.cwd, branch: 'web/mv', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.pushed, true, r.error);
+  agentGit(w.cwd, 'fetch', '-q', bare, 'main'); agentGit(w.cwd, 'merge', '-q', '--no-edit', 'FETCH_HEAD');
+  r = await checkpoint({ cwd: w.cwd, branch: 'web/mv', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.pushed, true, r.error);
+  release(w.cwd, 'mv1');
+  // main moves again; a later session resumes the branch without merging it.
+  landOnMain(bare, 'server/c.txt', 'c\n');
+  w = await prepare({ root, repo: { url: bare }, worktree: 'web/mv', session: 'mv2' });
+  assert.equal(w.resumed, true);
+  writeFileSync(join(w.cwd, 'web', 'a.txt'), 'a3\n');
+  r = await checkpoint({ cwd: w.cwd, branch: 'web/mv', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.pushed, true, r.error);
+  // A change of its own outside the areas is still refused.
+  writeFileSync(join(w.cwd, 'server', 'b.txt'), 'mine now\n');
+  agentGit(w.cwd, 'add', '-A'); agentGit(w.cwd, 'commit', '-qm', 'outside');
+  r = await checkpoint({ cwd: w.cwd, branch: 'web/mv', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.deepEqual(r.refused?.items, ['server/b.txt']);
+  release(w.cwd, 'mv2');
+});
+
+test('an added line that starts with "++ " is still scanned', async () => {
+  const { bare, root } = origin();
+  const w = await prepare({ root, repo: { url: bare }, worktree: 'web/pp', session: 'pp' });
+  mkdirSync(join(w.cwd, 'web'));
+  writeFileSync(join(w.cwd, 'web', 'n.md'), 'intro\n++ sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123\n');
+  agentGit(w.cwd, 'add', '-A'); agentGit(w.cwd, 'commit', '-qm', 'notes');
+  const r = await checkpoint({ cwd: w.cwd, branch: 'web/pp', role: 'web-dev', reason: 't', areas: ['web/'] });
+  assert.equal(r.refused?.rule, 'secret-scan');
+  release(w.cwd, 'pp');
+});

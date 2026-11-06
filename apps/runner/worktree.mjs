@@ -53,7 +53,7 @@ async function locked(key, fn) {
 /** Which session holds each working copy in this process, so two live sessions never share one. */
 const holders = new Map();
 export const release = (cwd, session) => { if (holders.get(cwd) === session) holders.delete(cwd); };
-const meta = new Map(); // cwd -> { url, branch, baseSha }: runner memory, never read back from the working copy
+const meta = new Map(); // cwd -> { url, branch, base, cache, bases: [sha] }: runner memory, never read back from the working copy
 
 /** Reset what the agent could have planted in .git: the config (from the runner's template) and the hooks. */
 export function harden(cwd) {
@@ -101,7 +101,7 @@ export async function prepare({ root, repo, worktree, session }) {
     // checked at a checkpoint is everything between it and HEAD, so the agent cannot shrink the range by moving a
     // ref in its own clone (security review F1).
     const baseSha = await git(cache, 'rev-parse', '--verify', `refs/heads/${base}^{commit}`);
-    meta.set(cwd, { url: repo.url, branch, baseSha });
+    meta.set(cwd, { url: repo.url, branch, base, cache, bases: [baseSha] });
     if (existsSync(cwd)) {
       // Resume: keep the copy and whatever the last session left in it, once it is checked to be the same
       // repository and the same branch.
@@ -153,29 +153,51 @@ export async function outOfArea({ cwd, areas }) {
  * { names: every path any commit touched, added: [{ path, text }] lines each commit added, messages, links:
  * [{ path, target }] symlinks in the result }. Throws when git fails, so callers fail closed.
  */
+/**
+ * Fetch the base branch again, in the runner's own cache (with the runner's credential, outside the session), and
+ * add its head to the bases this copy is checked against. So when the base moves during a session, or the agent
+ * merges it in, what landed there is not counted as this branch's change. Only shas the runner read itself are
+ * used; no ref in the clone is trusted.
+ */
+async function refreshBase(cwd) {
+  const m = meta.get(cwd);
+  const sha = await locked(m.cache, async () => {
+    await git(m.cache, 'fetch', '--quiet', '--prune', m.url, '+refs/heads/*:refs/heads/*');
+    return git(m.cache, 'rev-parse', '--verify', `refs/heads/${m.base}^{commit}`);
+  });
+  if (!m.bases.includes(sha)) {
+    await git(cwd, 'fetch', '--quiet', m.cache, `+refs/heads/${m.base}:refs/remotes/origin/${m.base}`);
+    await git(cwd, 'cat-file', '-e', `${sha}^{commit}`);
+    m.bases.push(sha);
+  }
+}
+
 async function history(cwd) {
-  const { baseSha } = meta.get(cwd) ?? {};
-  if (!baseSha) throw new Error('no recorded base for this working copy');
-  const range = `${baseSha}..HEAD`;
+  const { bases } = meta.get(cwd) ?? {};
+  if (!bases?.length) throw new Error('no recorded base for this working copy');
+  await refreshBase(cwd);
+  const range = ['HEAD', '--not', ...bases];
   const names = new Set([
-    ...(await git(cwd, 'log', '--format=', '--name-only', '--no-renames', '--cc', range)).split('\n'),
-    ...(await git(cwd, 'diff', '--name-only', '--no-renames', baseSha, 'HEAD')).split('\n'),
+    ...(await git(cwd, 'log', '--format=', '--name-only', '--no-renames', '--cc', ...range)).split('\n'),
+    ...(await git(cwd, 'diff', '--name-only', '--no-renames', `${bases.at(-1)}...HEAD`)).split('\n'),
   ].filter(Boolean));
-  const patch = await git(cwd, 'log', '--format=', '-p', '--cc', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', range);
+  const patch = await git(cwd, 'log', '--format=', '-p', '--cc', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', ...range);
   const added = new Map();
-  let file = null, cols = 1;
+  // File headers come only between a `diff --` line and its first hunk; inside a hunk, a line starting with
+  // `+++ ` or `--- ` is content (an added `++ x` line), so it is scanned like any other.
+  let file = null, cols = 1, header = false;
   for (const line of patch.split('\n')) {
-    if (line.startsWith('diff --')) { file = null; cols = line.startsWith('diff --cc ') || line.startsWith('diff --combined ') ? 2 : 1; continue; }
-    if (line.startsWith('+++ ')) { file = line.slice(4).replace(/^b\//, ''); continue; }
+    if (line.startsWith('diff --')) { file = null; header = true; continue; }
     const hunk = /^(@{2,}) /.exec(line);
-    if (hunk) { cols = hunk[1].length - 1; continue; }
-    if (!file || line.startsWith('--- ')) continue;
+    if (hunk && (header || file)) { header = false; cols = hunk[1].length - 1; continue; }
+    if (header) { if (line.startsWith('+++ ')) file = line.slice(4).replace(/^b\//, ''); continue; }
+    if (!file) continue;
     const pre = line.slice(0, cols);
     if (pre.includes('+') && !pre.includes('-')) added.set(file, (added.get(file) ?? '') + line.slice(cols) + '\n');
   }
-  const messages = await git(cwd, 'log', '--format=%B%x00', range);
+  const messages = await git(cwd, 'log', '--format=%B%x00', ...range);
   const links = [];
-  for (const l of (await git(cwd, 'diff', '--raw', '--no-renames', '--no-abbrev', baseSha, 'HEAD')).split('\n')) {
+  for (const l of (await git(cwd, 'diff', '--raw', '--no-renames', '--no-abbrev', `${bases.at(-1)}...HEAD`)).split('\n')) {
     const m = /^:\d+ 120000 \S+ (\S+) \S+\t(.+)$/.exec(l);
     if (m) links.push({ path: m[2], target: await git(cwd, 'cat-file', 'blob', m[1]) });
   }
