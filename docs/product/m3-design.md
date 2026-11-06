@@ -59,7 +59,7 @@ When the server appends one of these events, the **dispatcher** writes a `delive
 | `chat.message` from a person | the front-door role | The owner's text travels verbatim in `wake` (the dilution rule) |
 | `message.handoff`, `message.bug`, `message.signoff`, `message.blocked` | `data.to` (a role slug, `#instance` allowed) | `blocked` with no `to` goes to the sender's `Reports to` role |
 | `decision.answered`, `approval.decided` | the session that asked (`data.session`) | An approval answer also releases the paused call (section 4) |
-| `run.resumed` | nothing new: `held` deliveries for that run go back to `pending` | |
+| `run.resumed` | every role whose session the pause stopped (state `stopped` with reason owner or budget, in this run) | Each is resumed from its last checkpoint: `session.start` with `resume: true`, the stored `checkpoint`, and a `wake` naming the resume (`run.resumed`, with its reason). `held` deliveries for the run go back to `pending` and are delivered to the resumed sessions as usual. Applies to an owner's resume and to the budget's next-day resume alike |
 
 Messages from a role to itself, and to a role the team version does not have, are refused at the tool (section 3), so they never reach the bus.
 
@@ -86,7 +86,7 @@ At-least-once: the runner deduplicates by the waking event id, so a resent frame
 | Runner | session.start, session.message, session.stop, session.checkpoint, approval.result | events frames, tool calls |
 | Studio chat | chat.message, decision.*, approval.*, card.updated, run.*, budget.*, usage.recorded | chat, cards, runs |
 
-**Proof:** backend-dev: `a handoff wakes the target role, and a second delivery of the same event is ignored`, `a paused run holds deliveries and resume releases them`, `the session cap queues the next session and starts it when a slot frees`. ai-engineer (stub model, see section 3): `a chief-of-staff session sends a HANDOFF, which wakes a second role, which sends a SIGNOFF; every event has the run and session ids`.
+**Proof:** backend-dev: `a handoff wakes the target role, and a second delivery of the same event is ignored`, `a paused run holds deliveries and resume releases them`, `after a budget pause, run.resumed restarts every stopped session from its checkpoint`, `a pause handler that finds the run already resumed (a newer runs.version) stops nothing`, `the session cap queues the next session and starts it when a slot frees`. ai-engineer (stub model, see section 3): `a chief-of-staff session sends a HANDOFF, which wakes a second role, which sends a SIGNOFF; every event has the run and session ids`.
 
 ## 3. The team tool server
 
@@ -203,6 +203,7 @@ Owner: **backend-dev** (enforcement), **ai-engineer** (usage reporting and the l
 - **Usage.** The runner reports `usage.recorded` after every model turn: `inputTokens`, `outputTokens`, and `cost` in whole minor units. It carries the fraction over to the next report, and rounds up on the session's last report, so the day's total is exact to one minor unit per session.
 - **Where it is enforced.** On the server, in the transaction that appends `usage.recorded`: it adds to `budget_days.spent` and compares with `per_day + raised`. The runner also gets `caps.remainingToday` and `caps.remainingRun` in `session.start`, and stops a session on its own when its count reaches them (second line, and the only line while it is offline).
 - **At 80%**: once a day, `budget.warned` (`spent`, `cap`, `currency`, `day`). A timeline line in the chat and a notification, nothing stops.
+- **Pause and resume handlers check the run first.** Anything that stops sessions for a pause (owner, budget) reads the run's current `state` and `version` in the same transaction and acts only if the run is still paused at the version that paused it. A pause whose run has since been resumed, or paused again for another reason, stops nothing. The same check guards `run.resumed`, so a late resume never restarts sessions of a run that was paused again or stopped.
 - **At 100%**: once a day, `budget.exhausted`. The run is paused with `reason: budget` (`run.paused`), every live session gets `session.checkpoint` and then `session.stop` `finish-step`, and new deliveries are `held`. A `budget` card goes to the owner: `tomorrow` (recommended: resume at 00:00 UTC) or `raise` (add half the daily cap again for today; `stepUp: true`, because it spends money). Unanswered, the run stays paused past midnight: nothing spends without the owner. Spend can overshoot by at most the turn each live session was in. Raising or clearing a cap, and resuming a run paused for budget, need step-up (section 12, D4).
 - **Known limit (D7).** Usage is reported by the runner, which holds the model key, so a compromised runner could under-report. Accepted for M3; M4's secret release and a server-side metering proxy for the model key close it.
 - **Per run**: the same at the run's `perRun`, scoped to that run.
