@@ -5,6 +5,13 @@
 - **Chat with the chief of staff in the Studio** (milestone M3, issue #28). A Chat page next to the team: your messages are sent and shown exactly as you type them, with a client id so a retry lands once; the team's replies appear as they arrive, in a small Markdown subset; decision and approval cards are built from their fields (never HTML) and every answer sends the card version it saw, so a card that changed first comes back refreshed instead of being answered blind. The header shows the run's state, today's cost against the daily cap, and Pause, Resume and Stop. Like the live board, the Studio's server calls the control plane, so the token never reaches the page. It works at 360px wide; on a small screen the team itself is read-only.
 - A browser test (Playwright) drives the chat against a stand-in control plane with a stubbed runner, and CI runs it.
 
+- **M3 seams** ([docs/product/m3-design.md](docs/product/m3-design.md)): the tables for runs, sessions, the message bus, cards, approvals, chat, budgets and audit; how a message wakes a role; the runner and server ops M3 builds and who may send what; chat cards built from `card.updated` events; the daily budget at 80% and 100%; and the hosting split for a Vercel and Supabase deployment. Contracts, all additive: a new [team tools](docs/contracts/team-tools.md) contract (`tools/1`), new event types (`card.updated`, `budget.warned`, `budget.exhausted`, `session.queued`), `session.renew`, `session.token` and `nack` in `runner/1`, and the tool, step-up, budget and runner-code endpoints in `/v1/`.
+
+## 0.9.1
+
+- **A custom agent switched off keeps its definition.** Switching off a project role (`.agent-team/roles/<slug>.md`, including one that replaces a kit role) in the Studio, or through `compileLayer` in `packages/team-model`, used to delete its file on publish. Now the file stays and the role is listed in `team.json` `exclude`; switching it back on gives the identical brief. Import and compile round-trip a switched-off role unchanged.
+- **What existing teams see on sync:** `exclude` now also applies to the project's own roles. Before, a role with a file in `.agent-team/roles/` was installed even when `exclude` listed it; now it is not. A team that lists none of its own roles in `exclude` sees no change.
+
 ## 0.9.0
 
 Running a team from project threads, where every thread has its own machine (issue #29). Existing teams see these changes on their next sync:

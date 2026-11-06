@@ -16,7 +16,7 @@
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.9.0 init --preset engineering --project "My App"
+//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.9.1 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -90,7 +90,7 @@ export function extendBrief(base, ext) {
   return extendBriefText(base, ext);
 }
 
-/** Resolves the roles: the preset plus include, minus exclude, plus the project's own roles; then overrides and extensions. */
+/** Resolves the roles: the preset plus include, plus the project's own roles, minus exclude; then overrides and extensions. */
 export function resolveRoles(root, project) {
   const dir = join(root, LAYER, 'roles');
   const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.md') && !f.startsWith('_') && f !== 'README.md') : [];
@@ -99,7 +99,8 @@ export function resolveRoles(root, project) {
   const kitSlugs = new Set(kitRoleSlugs());
   const wanted = new Set([...presetRoles(project.preset), ...project.include]);
   for (const x of project.exclude) wanted.delete(x);
-  for (const s of own) wanted.add(s);
+  // A project role is installed unless exclude lists it (a custom agent switched off keeps its file).
+  for (const s of own) if (!project.exclude.includes(s)) wanted.add(s);
   const roles = [];
   const warnings = [];
   for (const slug of [...wanted].sort()) {

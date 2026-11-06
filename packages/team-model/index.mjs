@@ -79,8 +79,10 @@ export function importLayer(files, kit) {
   const extended = roleFiles.filter((p) => p.endsWith('.extend.md')).map((p) => p.slice('roles/'.length, -'.extend.md'.length));
 
   const wanted = new Set([...kit.presets[preset], ...(team.include ?? [])]);
-  for (const x of team.exclude ?? []) wanted.delete(x);
-  for (const s of own) wanted.add(s);
+  // A project role is on unless exclude lists it: that is how a switched-off custom agent keeps its file.
+  const excluded = new Set(team.exclude ?? []);
+  for (const x of excluded) wanted.delete(x);
+  for (const s of own) if (!excluded.has(s)) wanted.add(s);
 
   const roles = {};
   const slugs = new Set([...Object.keys(kit.roles), ...own, ...extended, ...(team.include ?? [])]);
@@ -105,14 +107,16 @@ export function importLayer(files, kit) {
 
 // ------------------------------------------------------------------------------------------------ compile
 
-/** The project layer for a TeamSpec, as relative path → content. The include/exclude lists are the smallest diff from the preset. */
+/** The project layer for a TeamSpec, as relative path → content. The include/exclude lists are the smallest diff from the preset.
+ *  A project role that is switched off keeps its file and is listed in exclude, so switching it back on restores it. */
 export function compileLayer(spec, kit) {
   const preset = kit.presets[spec.preset];
   if (!preset) throw new Error(`the kit has no preset "${spec.preset}"`);
   const inPreset = new Set(preset);
   const enabledKit = (slug, r) => r.enabled && (r.source === 'kit' || r.source === 'missing');
   let include = Object.entries(spec.roles).filter(([s, r]) => enabledKit(s, r) && !inPreset.has(s)).map(([s]) => s);
-  let exclude = preset.filter((s) => spec.roles[s] && !spec.roles[s].enabled);
+  const isOwn = (r) => r.source === 'project' || r.source === 'project-replaces-kit';
+  let exclude = Object.entries(spec.roles).filter(([s, r]) => !r.enabled && (inPreset.has(s) || isOwn(r))).map(([s]) => s);
   // Keep the order the layer had, then add anything new in name order.
   const keepOrder = (list, before = []) => [...before.filter((s) => list.includes(s)), ...list.filter((s) => !before.includes(s)).sort()];
   include = keepOrder(include, spec.layout?.include);
@@ -128,8 +132,7 @@ export function compileLayer(spec, kit) {
   const files = { 'team.json': JSON.stringify(team, null, 2) + '\n' };
 
   for (const [slug, r] of Object.entries(spec.roles)) {
-    if (r.source === 'project' || r.source === 'project-replaces-kit') {
-      if (!r.enabled) continue; // a project role that is switched off is removed from the layer
+    if (isOwn(r)) {
       files[`roles/${slug}.md`] = r.brief.endsWith('\n') ? r.brief : r.brief + '\n';
     }
     // An unchanged extension keeps its file's own text (blank lines and all), so opening and publishing a team

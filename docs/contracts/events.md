@@ -51,6 +51,8 @@ These are the reports teams on the kit send today. `data` holds the kit report f
 | `report.note` | `note` | `detail`, plus any of the above |
 | `message.handoff`, `message.bug`, `message.signoff`, `message.blocked` | `handoff`, `bug`, `signoff`, `blocked` | `to` (role slug, `#instance` allowed), `task`, `issue`, `pr`, `branch`, `severity` (bug, 1 to 4), `evidence` (links, at most 20), `detail` |
 
+Messages sent with the team tools ([team-tools.md](team-tools.md)) also carry their structured fields in `data`, next to the kit fields and a composed `detail`: `changed`, `verify`, `doneWhen`, `artifact` (handoff); `where`, `steps`, `expected`, `actual`, `build` (bug); `testedOn`, `walked`, `result` (signoff); `need`, `needFrom`, `meanwhile`, `recommendation` (blocked). Readers that only know the kit fields lose nothing they need.
+
 The mapping is exact in both directions. That is how the webhook sink forwards these events to a board that already exists, such as a team's own `team-report` function, in the old shape with nothing lost.
 
 ### Runs and sessions (the runner)
@@ -58,18 +60,21 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | `type` | `data` |
 | --- | --- |
 | `run.started`, `run.paused`, `run.resumed`, `run.stopped` | `mode` (subagents, runner, agent-teams), `by` (member), `caps` (cost per run and per day, concurrency), `reason` |
+| `session.queued` | `role`, `instance`, `reason` (the run's session cap), `position` |
 | `session.started`, `session.idle`, `session.ended` | `role`, `instance`, `worktree`, `branch`, `model` (provider and name, as values), `reason` |
 | `session.tool` | `tool`, `target` (path, command or MCP server and tool), `decision` (allowed, refused, needs-approval), `rule` |
 | `usage.recorded` | `inputTokens`, `outputTokens`, `cost` (in the currency's minor unit), `currency` |
+| `budget.warned`, `budget.exhausted` | `scope` (day, run), `day` (UTC date), `spent`, `cap` (minor units), `currency`, `cardId` (string: the budget card's id, on exhausted) |
 
 ### Owner, chat and approvals
 
 | `type` | `data` |
 | --- | --- |
-| `chat.message` | `from` (member or role), `text` (verbatim for the owner; the dilution rule), `replyTo`, `attachments` (links) |
-| `decision.requested`, `decision.answered` | `question`, `options`, `recommended`, `answer`, `by` |
-| `approval.requested` | `action` (a classification from the policy), `command` or `call`, `why`, `risk`, `expires` |
-| `approval.decided` | `approval`, `decision` (approved, denied, expired), `by` (member), `note` |
+| `chat.message` | `from` (member or role), `text` (verbatim for the owner; the dilution rule), `replyTo`, `attachments` (links), `clientId` (the id the client made, so a resend is stored once) |
+| `decision.requested`, `decision.answered` | `question`, `options`, `recommended`, `answer`, `by`, `cardId` (string), `session` (the session that asked, which the answer wakes) |
+| `approval.requested` | `action` (a classification from the policy), `command` or `call`, `why`, `risk`, `expires`, `cardId` (string), `session` |
+| `approval.decided` | `approval`, `decision` (approved, denied, expired), `by` (member), `note`, `session` |
+| `card.updated` | `card` (object): the whole card at its new `version` ([clients.md](clients.md) section 6). Emitted on every change (created, answered, expired, superseded); a client keeps the latest per card id |
 
 ### Team and connectors
 
