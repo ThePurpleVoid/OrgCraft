@@ -215,7 +215,7 @@ paths:
   /auth/step-up:
     post:
       tags: [me]
-      summary: "A step-up token for approvals (5 minutes). Until OIDC lands: send the admin token again in the body. M4 adds auth_time and device-key step-up; this endpoint stays"
+      summary: "A step-up token for approvals (5 minutes). Until OIDC lands: send the step-up secret (AGENT_TEAM_STEP_UP_SECRET, typed by the person, never the bearer token) in the body. M4 adds auth_time and device-key step-up; this endpoint stays"
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [secret], properties: { secret: { type: string, writeOnly: true } } } } } }
       responses: { "201": { description: The step-up token, content: { application/json: { schema: { type: object, properties: { token: { type: string }, expires: { type: string, format: date-time } } } } } }, "401": { $ref: "#/components/responses/Problem" } }
   /teams/{team}/budget:

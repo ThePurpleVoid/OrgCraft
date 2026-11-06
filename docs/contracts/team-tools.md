@@ -92,7 +92,7 @@ Only the team's **front door** (the role whose `Reports to` is `owner`) may call
 | `context` | no | Markdown subset (clients.md section 6) |
 | `expires` | no | ISO 8601; default 7 days |
 
-Emits `decision.requested` (with `card` and `session`) and `card.updated` with a `decision` card. Returns at once with `{ "card": "<id>" }`: the role keeps working on its recommendation. The answer arrives as `decision.answered`, which wakes the session.
+Emits `decision.requested` (with `cardId` and `session`) and `card.updated` with a `decision` card. Returns at once with `{ "card": "<id>" }`: the role keeps working on its recommendation. The answer arrives as `decision.answered`, which wakes the session.
 
 ## `request_approval`
 
@@ -104,4 +104,4 @@ Emits `decision.requested` (with `card` and `session`) and `card.updated` with a
 | `risk` | no | `low`, `medium`, `high` |
 | `links` | no | for example the pull request |
 
-Emits `approval.requested` (with `card` and `session`) and `card.updated` with an `approval` card whose approve option has `stepUp: true`. The HTTP call returns `{ "approval": "<id>", "card": "<id>" }`; the runner's tool server then holds the tool result until `approval.result` arrives, and returns `{ "approval": "<id>", "decision": "approved" | "denied" | "expired", "note": "…" }` to the model.
+Emits `approval.requested` (with `cardId` and `session`) and `card.updated` with an `approval` card whose approve option has `stepUp: true`. The HTTP call returns `{ "approval": "<id>", "card": "<id>" }`; the runner's tool server then holds the tool result until `approval.result` arrives, and returns `{ "approval": "<id>", "decision": "approved" | "denied" | "expired", "note": "…" }` to the model.

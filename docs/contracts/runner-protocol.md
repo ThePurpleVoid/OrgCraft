@@ -42,7 +42,7 @@ The control plane answers anything else with `nack` and audits it.
 
 | Credential | May send |
 | --- | --- |
-| Runner key (the WebSocket) | the ops above, and `events` whose types are `session.*`, `usage.recorded`, `report.heartbeat`, or `chat.message` from the front-door role of a session this runner runs |
+| Runner key (the WebSocket) | the ops above, and `events` whose types are `session.*`, `usage.recorded`, `report.heartbeat`, or `chat.message` from the front-door role of a session this runner runs. The control plane sets that message's `from` and `actor` from the session and ignores what the frame says |
 | Session token (HTTP) | `POST /v1/sessions/{its session}/tools/{tool}` only ([team-tools.md](team-tools.md)) |
 
 Messages between roles, decisions, approvals, cards and run changes are always minted by the control plane, never sent by a runner.
