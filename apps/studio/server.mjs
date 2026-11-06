@@ -131,6 +131,9 @@ const cookieOf = (req) => (String(req.headers.cookie ?? '').split(';').map((c) =
 export function createStudio({ root, env = process.env, launchToken = randomBytes(24).toString('base64url') }) {
   const live = liveSource(root, env);
   const chat = chatSource(env);
+  // The cookie holds a session id of its own, not the launch token: browsers send localhost cookies to every port, so
+  // another local dev server could read it, and it should not be a link that signs in.
+  const session = randomBytes(24).toString('base64url');
   /** Chat calls: the control plane's answer, or its error with its status (a stale card's 409 carries the card). */
   const relay = async (res, fn) => {
     if (!chat.connected) return send(res, 503, { connected: false, error: 'connect a control plane: set AGENT_TEAM_SERVER, AGENT_TEAM_SERVER_TOKEN and AGENT_TEAM_SERVER_TEAM' });
@@ -145,10 +148,10 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       if (req.method === 'GET' && url.searchParams.has('t')) {
         if (!same(url.searchParams.get('t'), launchToken)) throw new HttpError(401, 'that link is out of date: open the one the Studio printed when it started');
         url.searchParams.delete('t');
-        res.writeHead(302, { location: url.pathname + url.search, 'set-cookie': `${COOKIE}=${launchToken}; HttpOnly; SameSite=Strict; Path=/`, 'cache-control': 'no-store' });
+        res.writeHead(302, { location: url.pathname + url.search, 'set-cookie': `${COOKIE}=${session}; HttpOnly; SameSite=Strict; Path=/`, 'cache-control': 'no-store' });
         return res.end();
       }
-      if (!same(cookieOf(req), launchToken)) {
+      if (!same(cookieOf(req), session)) {
         if (url.pathname.startsWith('/v1/')) throw new HttpError(401, 'open the Studio with the link it printed when it started (it ends in ?t=…)');
         res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         return res.end('<!doctype html><meta charset="utf-8"><title>Agent Team Studio</title><p style="font:15px system-ui;margin:2em">Open the Studio with the link it printed when it started. It ends in <code>?t=…</code>.</p>');
@@ -239,7 +242,7 @@ export function run(argv) {
       const lan = host === '0.0.0.0' || host === '::'
         ? Object.values(networkInterfaces()).flat().filter((i) => i && !i.internal && i.family === 'IPv4').map((i) => `http://${i.address}:${p}${t}`)
         : [];
-      console.log(`Agent Team Studio for ${root}\n  ${where}${lan.map((u) => `\n  ${u}   (from a phone or another machine on this network)`).join('')}\nOpen a link to sign in to this Studio. Ctrl-C stops it.`);
+      console.log(`Agent Team Studio for ${root}\n  ${where}${lan.map((u) => `\n  ${u}   (from a phone on this network; plain HTTP, so trusted networks only)`).join('')}\nOpen a link to sign in to this Studio. Ctrl-C stops it.`);
       if (argv.includes('--open')) { try { execFileSync(process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open', [where], { stdio: 'ignore' }); } catch { /* no browser */ } }
     });
     server.on('close', () => done(0));

@@ -17,12 +17,14 @@ function repo() {
   return root;
 }
 
+const signIn = async (base, server) => (await fetch(`${base}/?t=${server.launchToken}`, { redirect: 'manual' })).headers.get('set-cookie').split(';')[0];
+
 async function serve(env, fn) {
   const server = createStudio({ root: repo(), env });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
+  const cookie = await signIn(base, server);
   const call = async (path, body) => {
-    const cookie = `studio_session=${server.launchToken}`;
     const res = await fetch(base + path, body === undefined ? { headers: { cookie } } : { method: 'POST', headers: { 'content-type': 'application/json', origin: base, cookie }, body: JSON.stringify(body) });
     return { status: res.status, body: await res.json() };
   };

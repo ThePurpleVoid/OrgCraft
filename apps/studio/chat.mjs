@@ -51,19 +51,16 @@ export function chatSource(env = process.env) {
     say: ({ text, clientId, replyTo }) => call('POST', `/teams/${t}/chat`, { text, clientId, ...(replyTo ? { replyTo } : {}) }, clientId ? { 'idempotency-key': clientId } : {}),
     /** Answers a card with the version the person saw. Approvals go to /approvals/{id}, every other card to /cards/{id}. */
     async answer({ card, kind, subject, option, version, key }) {
+      // Taken before the call, so two answers in flight cannot both use one step-up.
       const su = stepUpHeader();
+      stepUp = null;
       const headers = { ...(key ? { 'idempotency-key': key } : {}), ...su };
       // An approval card's answer goes to its approval: the id from its subject, else the card id.
       const approval = kind === 'approval' && (/^approval\/(.+)$/.exec(subject ?? '')?.[1] ?? card);
-      try {
-        const r = approval
-          ? await call('POST', `/approvals/${encodeURIComponent(approval)}`, { decision: option === 'deny' ? 'denied' : option === 'approve' ? 'approved' : option, version }, headers)
-          : await call('POST', `/cards/${encodeURIComponent(card)}`, { option, version }, headers);
-        return r;
-      } finally {
-        // A step-up covers one answer, whatever came of it: the next approval asks again.
-        if (su['x-step-up']) stepUp = null;
-      }
+      // One step-up, one answer, whatever comes of it: the next approval asks again.
+      return approval
+        ? call('POST', `/approvals/${encodeURIComponent(approval)}`, { decision: option === 'deny' ? 'denied' : option === 'approve' ? 'approved' : option, version }, headers)
+        : call('POST', `/cards/${encodeURIComponent(card)}`, { option, version }, headers);
     },
     /** This team's line from /me/summary (cost today against the cap, run state) and the run itself. */
     async run() {

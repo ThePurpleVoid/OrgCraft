@@ -135,6 +135,8 @@ Switch roles on and off from the library, drag a card onto another to change who
 
 ![Agent Team Studio: the role library, the org chart and the inspector](docs/images/studio.png)
 
+**Chat** talks to your team's chief of staff through the control plane (set `AGENT_TEAM_SERVER`, `AGENT_TEAM_SERVER_TOKEN` and `AGENT_TEAM_SERVER_TEAM`). The Studio signs you in with the link it prints. To open it from a phone, start it with `--host 0.0.0.0` and open the network link it prints. That link is plain HTTP, so use it on trusted networks only.
+
 ## The board and the live dashboard
 
 Every task starts with a report and every message is reported with the same fields:

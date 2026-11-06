@@ -23,12 +23,14 @@ function repo() {
   return root;
 }
 
+const signIn = async (base, server) => (await fetch(`${base}/?t=${server.launchToken}`, { redirect: 'manual' })).headers.get('set-cookie').split(';')[0];
+
 async function serve(root, fn) {
   const server = createStudio({ root });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
+  const cookie = await signIn(base, server);
   const call = async (path, body, headers = {}) => {
-    const cookie = `studio_session=${server.launchToken}`;
     const res = await fetch(base + path, body === undefined ? { headers: { cookie, ...headers } } : { method: 'POST', headers: { 'content-type': 'application/json', origin: base, cookie, ...headers }, body: JSON.stringify(body) });
     return { status: res.status, type: res.headers.get('content-type'), body: res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text() };
   };
@@ -181,7 +183,7 @@ test('the live board comes from the local event log, and the stream says when it
   const base = `http://127.0.0.1:${server.address().port}`;
   const report = (...a) => execFileSync('bash', [join(root, 'scripts/agent-team/team-status.sh'), ...a], { env, stdio: 'ignore' });
   try {
-    const headers = { cookie: `studio_session=${server.launchToken}` };
+    const headers = { cookie: await signIn(base, server) };
     const empty = await (await fetch(`${base}/v1/team/board`, { headers })).json();
     assert.equal(empty.source, 'log');
     assert.deepEqual(empty.board.current, []);
@@ -221,9 +223,11 @@ test('only the launch link opens the Studio: it sets an HttpOnly cookie that eve
     assert.equal(launch.status, 302);
     assert.equal(launch.headers.get('location'), '/');
     const set = launch.headers.get('set-cookie');
-    assert.match(set, /^studio_session=launch-123;/);
+    assert.match(set, /^studio_session=[A-Za-z0-9_-]{20,};/);
+    assert.doesNotMatch(set, /launch-123/, 'the cookie is a session id of its own, not the launch token');
     assert.match(set, /HttpOnly/);
     assert.match(set, /SameSite=Strict/);
-    assert.equal((await fetch(`${base}/v1/team`, { headers: { cookie: 'studio_session=launch-123' } })).status, 200);
+    assert.equal((await fetch(`${base}/v1/team`, { headers: { cookie: 'studio_session=launch-123' } })).status, 401, 'the launch token is not a session');
+    assert.equal((await fetch(`${base}/v1/team`, { headers: { cookie: set.split(';')[0] } })).status, 200);
   } finally { server.close(); }
 });
