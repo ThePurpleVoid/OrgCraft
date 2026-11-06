@@ -1,16 +1,16 @@
 # Agent Team Studio: delivery plan
 
-Owner: CTO. Status: draft 1, 2026-11-05. Each phase ends with a demo checkpoint against the [customer demo](prd.md#4-the-customer-demo-the-end-to-end-acceptance-test) and names the roles that carry it (see [how the team builds it](team.md)). Phases overlap where their owners differ.
+Owner: CTO. Status: draft 2, 2026-11-06 (online first, [ADR 0005](../adr/0005-online-first-built-to-last.md)). Each phase ends with a demo checkpoint against the [customer demo](prd.md#4-the-customer-demo-the-end-to-end-acceptance-test) and names the roles that carry it (see [how the team builds it](team.md)). Phases overlap where their owners differ.
 
 | Phase | Outcome | Demo steps working | Gaps closed | Kit release |
 | --- | --- | --- | --- | --- |
 | 0 | Plan and our own team | none (this repository runs its own team) | none | none |
 | 1 | Team model and lossless round trip | 7, 8 from the CLI | G1, G2 (with the kit thread) | 0.4 |
 | 2 | Local editor, publish, live board, custom agents | 1 to 8, 13, 14 | G1 on the canvas | 0.4.x |
-| 3 | Runner and chief-of-staff chat, safe changes while running, meetings, email | 9 to 12: **the full demo, locally**, plus 15 to 17 | G2 run modes, G4 evals harness | 0.5 |
-| 4 | Systems and parallel roles, discussion meetings, Slack | 5 and 6 with real connectors, parallel work in 10 | G3 Node scripts and Windows | 0.5.x |
-| 5 | Self-hosted, multi-user | the demo on a shared server | G3 adapters for other agents (first one) | 0.6 |
-| 6 | Hosted beta (only if wanted) | the demo with no install | none | none |
+| 3 | Online foundation (control and data plane, Postgres, events, workflows, tenancy, OIDC), runner and chat, safe changes, meetings, email | 1 to 12: **the full demo on an online deployment**, plus 15 to 17 | G2 run modes, G4 evals harness | 0.7 |
+| 4 | Systems and parallel roles, discussion meetings, Slack, cloud modules | 5 and 6 with real connectors, parallel work in 10 | G3 Node scripts and Windows | 0.8 |
+| 5 | Enterprise and scale: SAML, private data plane, regions, tenant export | the demo with runners in a customer VPC | G3 adapters for other agents (first one) | 0.9 |
+| 6 | Our hosted service, launched (owner's go on billing and terms) | the demo with no install | none | 1.0 |
 
 ## Phase 0: plan and our own team (this PR)
 
@@ -34,7 +34,7 @@ Roles: kit core dev (lead), architect (schema review), test automation engineer 
 
 Roles: web dev (lead), design director and style threads (canvas visual language: 3 to 5 directions, the owner and the CTO pick), UX writer (copy table), design critic, backend dev (local server), QA web, code reviewer.
 
-- `npx agent-team studio`: the local server (SQLite, file access, WebSocket, `/api/report`) and the editor.
+- `npx agent-team studio`: the local server (file access, WebSocket, `/api/report`) and the editor. Its code moves into the online Studio in phase 3.
 - Canvas with Org and Flow views, palette, inspector, toggles, reporting lines by drag, live checks, undo/redo, auto-layout, templates from presets.
 - Import any repository's `.agent-team/`; ownership table with suggestions from the repository tree; gates read from `config.sh` (read-only) and `gates.json` (editable).
 - Publish: diff preview, local commit on a branch, PR through `gh`.
@@ -45,9 +45,19 @@ Roles: web dev (lead), design director and style threads (canvas visual language
 - Progress: kit 0.6.0 shipped `agent-team studio` with the library, the org canvas (drag to re-parent), the inspector, live checks, undo/redo and publish (diff preview, commit on a branch). It is plain ES modules with no build ([ADR 0003](../adr/0003-studio-local-mode-without-a-build.md)). Still to do: Flow and Systems views, ownership and gates editors, PR through `gh`, and the live board on the canvas.
 - **Exit:** demo steps 1 to 8, 13 and 14 on a sample repository, walked by QA web with screenshots; a usability test with 3 people that includes making one custom agent.
 
-## Phase 3: runner and chief-of-staff chat (the MVP)
+## Phase 3: online foundation, runner and chief-of-staff chat (the MVP)
 
-Roles: AI engineer (lead), backend dev (bus, approvals, storage), web dev (chat and approval cards), security reviewer (approval policy and sandboxing), QA web, head of quality.
+Roles: architect (contracts), backend dev (control plane, lead for the foundation), AI engineer (runner, lead for runs), infra (images, Compose, one-click templates, staging), web dev (chat, approval cards, sign-in), security reviewer (tenancy, identity, approval policy, sandboxing), QA web, head of quality.
+
+**Foundation, built in its final shape at small scale** ([ADR 0005](../adr/0005-online-first-built-to-last.md), architecture section 13):
+
+- Contracts first, written and reviewed before code: the event envelope, the runner protocol, the connector capability manifest, the neutral work contract (`area`, `check`, `propose`, `accept`, `evidence`; ADR 0005 §8) with the repository connector as its first implementation, and `/v1/` of the public API (OpenAPI).
+- Control plane (`apps/server`): Postgres with `tenant` on every row and row-level security; the event log as the system of record with projections; durable workflows (Postgres jobs and timers behind one interface); OIDC sign-in with GitHub; organisations, workspaces, members and roles.
+- Data plane (`apps/runner`): runners connect outbound, authenticate, pull work and stream events; sandbox driver with process and container implementations.
+- Connectors framework with one lifecycle and the vault; first connectors GitHub (App), email (provider API, SMTP fallback) and webhook.
+- Shipping: signed `studio` and `runner` images, the Compose stack, a one-click template for one platform, `studio doctor`, a staging deployment in a real cloud account, and local mode as the same build with bundled Postgres. The phase 2 editor moves into the online Studio unchanged.
+
+**Runs, on top of the foundation:**
 
 - `apps/runner` on the Claude Agent SDK: run modes subagents and Studio runner; the built-in agent teams export runnable from the Studio ("open in terminal").
 - Team tool server (report, handoff, bug, signoff, blocked, ask_owner, request_approval, memory, open_issue, merge) with field checks.
@@ -58,34 +68,39 @@ Roles: AI engineer (lead), backend dev (bus, approvals, storage), web dev (chat 
 - **Notifications** (PRD 6.8 O1 to O7 with email and webhook; architecture 12.3; mockup 05): the notifier, rules, quiet hours, delivery log, test sends, signed decision links. Slack waits for phase 4.
 - **Try it on a task** for custom agents (PRD A8).
 - Evals harness v1 on one sample repository: single agent vs subagents vs Studio runner, same model and budget.
-- **Exit:** the full demo (steps 1 to 12) live on a fresh sample repository, three times in a row; steps 15 to 17 walked once with no work lost (every stopped session's branch and memory checked); first evals report published in the repository, whatever it shows.
+- **Exit:** the full demo (steps 1 to 12) live on a fresh sample repository, on a fresh online deployment in a cloud account (Compose or the one-click template) by someone who did not build it, following only the docs, three times in a row; the same build run locally; steps 15 to 17 walked once with no work lost (every stopped session's branch and memory checked); first evals report published in the repository, whatever it shows.
 
 ## Phase 4: systems and parallel roles
 
 Roles: backend dev (connectors, vault), AI engineer (parallel sessions, worktrees), infra (Windows and macOS CI), kit core dev (Node scripts), security reviewer.
 
-- Connectors: GitHub App, Supabase, Postgres, Vercel, generic MCP server; the Systems view with bindings; secrets in the OS keychain.
+- Connectors: Supabase, Postgres, Vercel, generic MCP server, Slack (tools and notify); the Systems view with bindings.
+- Terraform modules for AWS, GCP and Azure; the Helm chart; rolling upgrades that drain and checkpoint runners.
 - Parallel role sessions with worktrees and hardware pools; concurrency cap.
 - Kit 0.5: Node equivalents of `team-status`, `team-board`, `merge-gate`, `with-lock`, `janitor`; Windows CI.
 - Discussion-format meetings and event-triggered meetings; Slack as a notification channel with buttons on decision cards; "freeze the team" (PRD X8).
 - Evals on three sample repositories.
 - **Exit:** demo steps 5 and 6 with real connectors; two builders working in parallel during step 10; the kit's tests green on Windows.
 
-## Phase 5: self-hosted and multi-user
+## Phase 5: enterprise and scale
 
-Roles: infra (lead), backend dev (Postgres driver, auth, workspaces), security reviewer, release manager, docs keeper.
+Roles: infra (lead), backend dev (identity, tenancy), AI engineer (runner protocol at scale), security reviewer, release manager, docs keeper.
 
-- Docker images, Compose stack, GitHub App manifest flow, `studio doctor`, GitHub OAuth, workspace roles, Postgres driver, S3 evidence storage.
-- Notification settings and channels per workspace member; Microsoft Teams, Discord and push channels.
+- Private data plane: `agent-team runner join` for runners in a customer's VPC, outbound only; a laptop joining as a runner for its devices.
+- SAML and other OIDC providers; per-tenant encryption keys; regions; tenant export and deletion; audit export.
+- A second workflow engine adapter (Temporal-class) and a second model or agent runtime adapter, proving the interfaces hold.
+- Microsoft Teams, Discord and push channels.
+- The first business pack on the neutral core (from the kit's marketing, sales and support roles), with Drive and a CRM or helpdesk connector, and a Studio-managed team repository for customers who never use Git.
 - First adapter for another coding agent (an `AGENTS.md`-style export of the briefs and protocols), with governance kept by CI and, where the agent supports it, the runner.
-- **Exit:** the demo on a fresh Compose install by someone who did not build it, following only the docs.
+- **Exit:** the demo with the control plane in one account and runners in another (a stand-in customer VPC), with no source code or secret value crossing to the control plane, checked from the event log and network logs.
 
-## Phase 6: hosted beta (only on the owner's go)
+## Phase 6: our hosted service, launched (on the owner's go)
 
 Roles: infra (lead), backend dev, security reviewer, general counsel and finance lead (opened from dormant if the owner wants a paid service).
 
-- The same images on a managed platform, microVM sandboxes, KMS, RLS, regions, billing if decided.
-- **Exit:** the owner's decision; nothing in phases 0 to 5 depends on it.
+- The same images, run by us: microVM sandboxes per run, managed Postgres with RLS, KMS, two regions, status page, on-call.
+- Billing and terms if decided; SOC 2 when customers ask.
+- **Exit:** the owner's decision. The architecture does not change for it; phases 3 to 5 already built every part in its final shape.
 
 ## How we keep the plan honest
 

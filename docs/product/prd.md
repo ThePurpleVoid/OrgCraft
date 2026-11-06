@@ -8,6 +8,10 @@ Owner: product manager. Status: draft 1, 2026-11-05. Working name: **Agent Team 
 
 > The downfalls and cons you listed in the thread, account for those and build for these gaps.
 
+> Let's be honest, customers of this product would be deploying this system online always, so let's think end game here. Remember I want an architecture that holds up a decade later. (2026-11-06; [ADR 0005](../adr/0005-online-first-built-to-last.md))
+
+> Also keep in mind this is not just for engineering companies. For now our roles will be centered around my own use cases and personal products, but eventually any industry should be able to use this tool. (2026-11-06; [ADR 0005](../adr/0005-online-first-built-to-last.md) §8)
+
 > There should be a way to define custom agents and add new ones that are not predefined. There should be a way for the owner to schedule meetings with select team members, sort of like daily standup, ad hoc meetings. There should be a way to connect emails/communication systems with the owner so if they want to receive emails for certain triggers or team members they can. When making changes to the team structure/details/or any team member actively working on something or in its lane, we need to be sure that the new changes don't break any ongoing work. If something is ongoing there should be explicit UI asking the user how they want to handle the ongoing work. (2026-11-06; sections 6.6 to 6.9)
 
 ## 1. Vision
@@ -31,6 +35,7 @@ Positioning, from the comparison work: **the operating manual and control room f
 | **Engineering lead** | Runs 3 to 30 engineers and wants agents next to the humans | Agents that follow the team's ownership, review and CI rules | Agents that bypass review or touch code they shouldn't |
 | **Agency or consultant** (demo persona) | Sets up delivery teams for clients | To show a client the whole setup in 15 minutes, then hand it over | A setup that only works on their own laptop |
 | **Open-source maintainer** | Maintains a busy repository | Triage, docs and release roles that respect the project's process | Noise, and pull requests that look legitimate but are low quality |
+| **Any-industry operator** (later) | Runs a marketing agency, a law practice, a support desk, a finance office or a shop | A team of agents that works in their own tools (Drive, CRM, helpdesk, email) with the same governance | A developer tool that assumes Git, code and CI |
 | **Platform / AI-enablement team** (later) | Rolls agents out across a company | Standard team templates, policies, audit, SSO | Shadow agents with production credentials |
 
 ## 3. Jobs to be done
@@ -52,7 +57,7 @@ This is the script for the demo the owner wants to give. Every story in the back
 
 | Step | The presenter does | The customer sees | Under the hood |
 | --- | --- | --- | --- |
-| 1. Start | Opens the Studio (`npx agent-team studio` locally, or the hosted app) and signs in with GitHub | An empty workspace with "New team" | Local: no account at all. Hosted: GitHub OAuth |
+| 1. Start | Opens the team's Studio at its URL (the customer's own deployment, or the hosted app) and signs in with GitHub | An empty workspace with "New team" | OIDC sign-in; the same build runs locally with `npx agent-team studio` for trying it out |
 | 2. Template | Picks "Startup product team" | A canvas with the org chart: chief of staff on top, CTO and CPO lanes, builders, QA and reviewers, laid out automatically | A template is a kit preset plus Studio defaults |
 | 3. Shape the team | Drags **AI engineer** from the palette under the CTO, switches **mobile dev** off, drags **QA web** to report to the head of quality | Nodes snap in, a switched-off node dims, edges redraw. A warning badge appears and clears: "QA web has no manager" | The team model in the browser, checked live by the same roster rules the CLI uses |
 | 4. Edit a role | Clicks **Backend dev**, adds a rule "every migration has a rollback note", changes the tier to deep | Inspector with Identity, Owns, Tools, Wakes on, Hands to, Rules, and a "kit default / your change" indicator per section | An edit to a kit role becomes a `backend-dev.extend.md`, never a fork |
@@ -125,11 +130,14 @@ The comparison of the kit with other agent-team projects (README "How this compa
 
 ### 6.5 Non-functional
 
-- N1. Local first: the full demo runs on one laptop with `npx`, no account, no cloud service except the model API.
+- N1. Online first ([ADR 0005](../adr/0005-online-first-built-to-last.md)): the product is deployed online, in the customer's cloud (one command or a one-click template) or as our hosted service, from the same images. The same build also runs on one laptop with `npx` for trying it and for development, with no feature that works only there.
 - N2. No lock-in: everything the team needs is in the repository; the Studio is optional after publish.
 - N3. Open source (MIT) for the editor, the runner and the self-hosted server. A hosted service, if we build one, runs the same code.
 - N4. Security: least privilege per role, a full audit log of tool calls and approvals, prompt-injection defences on anything read from issues, PRs and web pages (see architecture §8).
 - N5. Platforms: macOS, Linux and Windows (native, without WSL) for the Studio and the CLI.
+- N6. Built to last a decade: versioned contracts (team files, TeamSpec schema, event envelope, connector manifest over MCP, public API, runner protocol) with migration paths; every vendor behind an interface. See architecture section 13.
+- N7. Multi-tenant and multi-user from the first release: organisations, workspaces, members with roles, OIDC sign-in.
+- N8. Industry-neutral core: ownership over areas in any connector, checks of any kind, propose and accept, evidence, a policy per pack, and role packs per industry. Engineering (the owner's use today) is the first pack; business packs from the kit's existing roles come next. No core feature may require Git, code or CI from the customer; a team that never touches Git gets a Studio-managed team repository.
 
 ### 6.6 Custom agents
 
@@ -161,13 +169,13 @@ A meeting is a structured conversation the runner holds between chosen roles, ru
 
 The owner chooses where the team reaches them and for what. Mockup: [05](mockups/05-notifications.png).
 
-- O1. Channels: email first (verified by a code), then Slack, a generic webhook, and later Microsoft Teams, Discord and phone push. Each channel shows its health; a failing channel falls back to the next one and says so.
+- O1. Channels are **connectors** (architecture section 7), connected the same way on a laptop and online: email first (through the workspace's email provider, or a person's own Gmail or Microsoft 365 account; each address verified by a code) and a webhook, then Slack, then Microsoft Teams, Discord and phone push. Each channel shows its health; a failing channel falls back to the next one and says so.
 - O2. Rules: **when** (approval needed, decision waiting, ongoing work needs a choice, ready to try, blocked longer than N minutes, stuck or silent role, gate failed, budget at 80% and 100%, run failed, meeting minutes, daily digest, team version published or rolled out), **about** (anyone, a lane, specific roles), **to** (channels), **how** (at once, batched every N minutes, hourly or daily summary).
 - O3. Quiet hours in the owner's time zone; approvals and budget stops can break through, everything else waits for the digest.
 - O4. Replies: a reversible decision card can be answered by replying to the email or with Slack buttons. **An approval is never taken from an email reply**: the message links to the Studio, which asks the owner to sign in. Links expire.
 - O5. Agents cannot send notifications or add recipients. The Studio sends them from team events, only to verified addresses. A notification never contains secrets, and text from outside the team (issue titles, PR comments) is quoted and shortened.
 - O6. A delivery log with status and retries, and "send a test" for each rule.
-- O7. Notification settings belong to a person, not to the team: they are kept by the Studio (local: next to the board in `~/.agent-team/<project>/`; hosted: per member), never in the repository.
+- O7. Notification settings belong to a person, not to the team: each member's rules and channels are kept by the Studio's control plane, never in the repository.
 
 ### 6.9 Changing a team that is working
 
@@ -186,16 +194,17 @@ A published team version is a commit. The runner knows which version every live 
 
 ## 7. MVP scope and later
 
-**MVP = the demo, steps 1 to 12, locally, on GitHub, with Claude Code.**
+**MVP = the demo, steps 1 to 12, on an online deployment (the customer's cloud through the Compose stack or a one-click template), on GitHub, with Claude Code.** The same build runs locally for trying it and for development.
 
 | In the MVP | Later |
 | --- | --- |
-| Local Studio (`npx agent-team studio`), single user, no account | Hosted SaaS, workspaces, members, SSO |
+| Online Studio from day one: organisations, workspaces, members, OIDC (GitHub), control plane and data plane, Postgres; local mode from the same build | Our hosted service, SAML SSO, regions, customer-run data plane in their VPC |
 | Org and Flow views, palette, inspector, toggles, reporting lines, live checks, import | Systems auto-discovery beyond GitHub, visual gate builder, design-system theming |
 | Systems: GitHub repository, Supabase, Postgres, Vercel, generic MCP server | Netlify, Cloudflare, Sentry, Linear, Slack, Jira and more |
 | Publish via PR or local commit; versions as SHAs | Scheduled publishes, policy checks ("no role may deploy without QA") |
 | Run modes: subagents and Studio runner (chief of staff + on-demand role sessions); built-in agent teams export | Other coding agents as adapters; remote run machines |
 | Hook-based reporting, approvals, budgets, cost line | Per-role usage optimisation suggestions |
+| Engineering pack on the neutral core (areas, checks, propose and accept) | Business packs (marketing, sales, support, finance, legal) with Drive, CRM and helpdesk connectors; then other industries |
 | Evals harness, internal only, on 3 sample repositories | Public leaderboard, customer-defined eval sets |
 | Custom agents: new, copy a kit role, import a file; live checks; path conflicts | Role pack sharing site, "try it on a task" in the hosted service |
 | Meetings: written round, recurring and ad hoc, minutes and action items | Discussion format beyond 3 rounds, voice, calendar sync (ICS) |
@@ -234,5 +243,5 @@ A published team version is a commit. The runner knows which version every live 
 1. ~~Runtime for the MVP's "let it run".~~ **Decided 2026-11-05: our own runner on the Claude Agent SDK.** The reasoning: our own runner on the Claude Agent SDK, with built-in agent teams and subagents as zero-infrastructure modes. The other option, driving claude.ai projects and cloud sessions as today, can't be controlled from our own app. See [ADR 0002](../adr/0002-runtime-agent-sdk-runner.md). The owner chose it.
 2. Hosted service: whether, when and how to charge. Not needed for the MVP; [deployment](deployment.md) keeps the door open.
 3. Name: "Agent Team Studio" is a working name.
-4. Notification sending in local mode: the owner's own SMTP or a provider key (Resend, Postmark, SES). Proposed: provider key in the vault, SMTP as an option; no hosted relay until a hosted service exists.
-5. Should meeting minutes ever be committed (for example a weekly planning record under `docs/team/meetings/`)? Proposed: off by default, a per-meeting switch.
+4. ~~How notifications are sent in local mode.~~ **Decided 2026-11-06:** there is no local special case. Email and Slack are connectors, connected the same way locally and online: the workspace's email provider by API key (SMTP as a fallback), or a person's own mail account through OAuth.
+5. ~~Committing meeting minutes.~~ **Decided 2026-11-06:** off by default, with a per-meeting switch to commit them under `docs/team/meetings/`.

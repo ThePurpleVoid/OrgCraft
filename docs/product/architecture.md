@@ -9,28 +9,32 @@ Owner: architect. Status: draft 1, 2026-11-05. Reads with the [PRD](prd.md). Dec
 3. **Lossless round trip.** `compile(import(layer))` yields the same sync output as `layer`, for every layer we know. This is tested, not hoped for.
 4. **Governance is enforced, not only prompted.** Ownership, approvals, budgets and merge gates are checked by the runner and by CI, so they hold whatever model or agent is inside.
 5. **Runtime-neutral team, runtime-specific adapters.** The team model says *who* does *what* and *may touch what*. Adapters turn it into Claude Code threads, subagents, built-in agent teams, Agent SDK sessions, or other agents' formats.
-6. **Local first.** Everything runs on one laptop. Self-hosted and hosted are the same code with other storage and sandbox drivers.
+6. **Online first, built to last a decade** ([ADR 0005](../adr/0005-online-first-built-to-last.md)). The product is an online service: the customer's cloud or our hosted service, from the same images. Local is that same build on one machine, for development, evaluation and demos. No feature works only locally.
+7. **Durable contracts, replaceable parts.** The team files, the TeamSpec schema, the event envelope, the connector manifest (over MCP), the public API and the runner protocol are versioned contracts with migration paths. Every vendor behind them (model, agent SDK, sandbox, workflow engine, email provider, cloud) can be replaced. See section 13.
+8. **Industry-neutral core.** Work is not assumed to be code. Ownership is over *areas* in any connector (repository paths, folders, CRM records, helpdesk queues), gates are *checks* of any kind, a PR is one form of *propose and accept*, and roles come in industry *packs*. Engineering is the first pack and the repository connector is its implementation ([ADR 0005](../adr/0005-online-first-built-to-last.md) §8).
 
 ## 2. System overview
 
 ```
-                      ┌──────────────────────── Studio (one Node process locally) ───────────────────────┐
- Browser              │                                                                                  │
- ┌──────────────┐     │  apps/server  (HTTP + WebSocket)                                                 │
- │ apps/studio  │◄───►│   ├─ teams API ── packages/team-model (import · edit · validate · compile)       │
- │  canvas      │     │   ├─ publish ──── kit CLI (pinned) sync ── git / GitHub App ── PR                │
- │  inspector   │     │   ├─ systems ──── connectors (GitHub, Supabase, Postgres, Vercel, MCP) + vault   │
- │  chat        │     │   ├─ board ────── POST /api/report (same shape as team-status.sh and hooks)      │
- │  live board  │     │   └─ runs ─────── apps/runner                                                    │
- └──────────────┘     │                    ├─ chief-of-staff session (always on while a run is live)     │
-                      │                    ├─ role sessions (on demand, one worktree each)               │
-                      │                    ├─ team tool server (MCP): report, handoff, ask_owner, ...    │
-                      │                    ├─ message bus · approvals · budgets · audit                   │
-                      │                    └─ sandbox driver: local process | Docker | microVM            │
-                      │  storage driver: SQLite (local) | Postgres (self-hosted, hosted)                 │
-                      └──────────────────────────────────────────────────────────────────────────────────┘
-                                    │ model API (Anthropic)        │ product systems (bound per role)
+ People (browser, phone, email, Slack)
+        │  OIDC sign-in, HTTPS, WebSocket
+┌───────▼──────────────────────────── CONTROL PLANE (stateless services + Postgres) ─────────────────────────┐
+│  apps/studio   editor · control room · chat · meetings · notifications · rollout                           │
+│  apps/server   public API /v1 (OpenAPI) · identity and tenancy · team model · publish (Git, PRs)            │
+│                connectors and vault · scheduler · notifier · approvals · event log (system of record)      │
+│                durable workflows (meetings, transitions, approvals, retries, timers)                       │
+│  Postgres (row-level tenancy) · object storage (S3 API) · OpenTelemetry                                    │
+└───────▲─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+        │  runner protocol: runners connect OUTBOUND, authenticate, pull work, stream events
+┌───────┴──────────────────────────── DATA PLANE (ours, or in the customer's network) ───────────────────────┐
+│  apps/runner   chief-of-staff and role sessions · team tool server (MCP) · bus delivery · checkpoints      │
+│                ownership hook · repository worktrees · released secrets for bound connectors only          │
+│  sandbox driver: process (local) | container (self-hosted) | microVM (hosted)                              │
+└───────┬──────────────────────────────────────┬─────────────────────────────────────────────────────────────┘
+        │ model API (adapter: Anthropic first)  │ connectors: GitHub, databases, hosting, email, Slack, any MCP
 ```
+
+One build, four shapes: everything in one process on a laptop; control and data plane in one cluster (self-hosted); our control plane with the customer's runners in their VPC; or fully hosted.
 
 Repository layout (monorepo, npm workspaces). The kit's root package stays as it is, so `npx github:PurpleGiragge/Agent-Team-Kit#vX` keeps working. The `files` whitelist in the root `package.json` keeps the apps out of the kit package.
 
@@ -38,8 +42,8 @@ Repository layout (monorepo, npm workspaces). The kit's root package stays as it
 bin/ team/ presets/ scripts/ tools/ templates/ board/   the kit (unchanged role: CLI, briefs, scripts, dashboard)
 packages/team-model/       schema, import, validate, compile; used by the CLI, the server and the browser
 apps/studio/               the editor and control room (React)
-apps/server/               API, auth, publish, systems, board endpoint, storage
-apps/runner/               run modes, sessions, team tool server, bus, approvals, budgets
+apps/server/               control plane: API, identity, tenancy, publish, connectors, scheduler, notifier, event log
+apps/runner/               data plane: run modes, sessions, team tool server, sandboxes, checkpoints
 evals/                     task sets, harness, scoring
 deploy/                    Dockerfiles, Compose, Helm
 ```
@@ -133,7 +137,7 @@ The package is plain ES modules with no Node-only APIs in its core, so the brows
 
 ## 5. The server (`apps/server`)
 
-- **Stack:** Node 20+, TypeScript, Hono (runs on Node, Bun and edge runtimes), WebSocket for live board and chat, Drizzle ORM. Storage driver: SQLite in local mode, Postgres in self-hosted and hosted mode.
+- **Stack:** Node 20+, TypeScript, Hono (runs on Node, Bun and edge runtimes), WebSocket for live board and chat, Drizzle ORM. Storage: Postgres in every deployment, including local (bundled), with row-level tenancy ([ADR 0005](../adr/0005-online-first-built-to-last.md)).
 - **Main records:** `workspace`, `member`, `team` (repository link), `draft` (a TeamSpec under edit), `version` (published: commit SHA + spec snapshot), `resource`, `binding`, `secret` (encrypted value, name), `run`, `session` (one per role per run), `message` (owner and inter-role, with shape and verbatim owner text), `event` (board, same columns as `board/supabase`'s `team_events`), `approval`, `usage`, `audit`.
 - **Board endpoint:** `POST /api/report` accepts exactly what `team-status.sh` and the kit hooks send today, so threads outside the Studio (claude.ai projects, a teammate's laptop) report into the same board.
 - **Publish pipeline:** `validate` → `compile` → run the pinned kit CLI in a scratch checkout (`sync`, then `check`) → commit on `agent-team/publish-<n>` → PR through the GitHub App (or a local commit) → watch CI → on merge, record the version. The pinned CLI is fetched once per kit version and cached.
@@ -176,7 +180,7 @@ An MCP server the runner gives every session. Each tool is a protocol the briefs
 
 ### 6.4 Message bus, approvals, budgets
 
-- **Bus:** a table-backed queue (SQLite or Postgres). A message to a role whose session is idle wakes it with "Resume from roles/<slug>.md" plus the message. The owner's messages are stored verbatim and travel quoted (the dilution rule).
+- **Bus:** a table-backed queue in Postgres, delivered to runners over the runner protocol. A message to a role whose session is idle wakes it with "Resume from roles/<slug>.md" plus the message. The owner's messages are stored verbatim and travel quoted (the dilution rule).
 - **Approvals:** the owner-steps-in list from `docs/team/protocols.md` becomes a policy the runner enforces. A pre-tool hook classifies commands and MCP calls (destructive SQL, production deploy, secret writes, payments, outbound email). Classified calls pause the session and raise an approval card.
 - **Budgets:** per-run and per-day cost caps from token usage; a concurrency cap on live sessions; the kit's priority order when capped; pause and stop for the whole run or one role.
 - **Audit:** every tool call, approval and message is recorded with the session and the role.
@@ -195,7 +199,11 @@ The sandbox driver decides where sessions run: a local process (local mode; the 
 
 ## 7. Systems: repositories, backends, databases, frontends
 
-Every resource type is a **connector** with the same four parts. This is how the Studio links a team to "the whole deal".
+Everything outside the team is a **connector**: product systems (repositories, databases, backends, hosting) and the people's channels (email, Slack, Teams). One lifecycle for all of them: connect (OAuth or key), store the secret in the vault, health check, scope, revoke. Local and online work the same way ([ADR 0005](../adr/0005-online-first-built-to-last.md) §6).
+
+A connector declares **capabilities** in a small manifest next to its MCP server: `tools` (roles get them through bindings), `notify` (people get them through notification rules), `inbound` (replies and button presses come back, signed), `discover` (suggestions for ownership, gates and bindings). Most product systems have `tools` and `discover`; email has `notify` and `inbound`; Slack has all four.
+
+Each connector has the same four parts. This is how the Studio links a team to "the whole deal".
 
 | Part | What it does | Example: Postgres |
 | --- | --- | --- |
@@ -204,16 +212,16 @@ Every resource type is a **connector** with the same four parts. This is how the
 | Tools | An MCP server or CLI the bound roles get, scoped by permission | read → a read-only role and query tool; write → migrations through the repository only |
 | Discovery | Suggestions for ownership, gates and bindings | `supabase/migrations/` → backend dev; a gate step for migration tests |
 
-MVP connectors: **GitHub** (GitHub App: contents, pull requests, issues, checks; per-repository installation), **Supabase** (database, functions, storage, via its MCP server), **Postgres** (any URL), **Vercel** (preview URLs for QA's SIGNOFF, production deploys behind an approval), **generic MCP server** (any server, attached to chosen roles). Later: GitLab, Netlify, Cloudflare, Sentry, Linear, Slack.
+MVP connectors: **GitHub** (GitHub App: contents, pull requests, issues, checks; per-repository installation), **Supabase** (database, functions, storage, via its MCP server), **Postgres** (any URL), **Vercel** (preview URLs for QA's SIGNOFF, production deploys behind an approval), **generic MCP server** (any server, attached to chosen roles). Channels in the MVP: **email** (the customer's provider through its API: Resend, Postmark, SES, SendGrid; SMTP as a fallback; Gmail or Microsoft 365 through OAuth when a person wants mail from their own address) and **webhook**. Then **Slack**, Teams, Discord, push. Later: GitLab, Netlify, Cloudflare, Sentry, Linear.
 
 Rules that hold for every connector: writes to a database schema happen only through migrations in the repository and the deploy workflow; production deploys and destructive operations always need an approval; a role without a binding gets no tools and no secrets for that resource.
 
 ## 8. Auth and security
 
-- **People:** local mode has no accounts (the person at the keyboard is the owner). Self-hosted and hosted use GitHub OAuth for sign-in, with workspace roles owner, editor, viewer. SSO (OIDC/SAML) later.
+- **People:** sign-in through OIDC in every deployment: GitHub first, then Google and Microsoft, then any OIDC or SAML provider. Local mode uses one built-in owner account through the same code path. Roles: owner, admin, editor, viewer, approver. Approvals check the person's role.
 - **Repositories:** a GitHub App with per-repository installation and short-lived installation tokens. The app identity, not the user's token, opens PRs, so branch protection and required reviews still apply.
 - **Model access:** bring your own Anthropic API key (or a cloud provider's Claude endpoint), stored in the vault. In local mode the Agent SDK can also use the user's existing Claude Code login.
-- **Secrets:** envelope encryption (local: OS keychain; self-hosted: a master key from the environment; hosted: KMS). Secrets are released to a session only for bound resources, never written to the repository, briefs, memory or the chat (a kit rule, now enforced by redaction in the audit log and chat).
+- **Secrets:** envelope encryption (local: OS keychain; self-hosted: the customer's KMS or a master key from the environment; hosted: our KMS, or the customer's KMS key when their data plane runs in their network). Secrets are released to a session only for bound resources, never written to the repository, briefs, memory or the chat (a kit rule, now enforced by redaction in the audit log and chat).
 - **Untrusted content:** issue bodies, PR comments, web pages and tool output are wrapped as untrusted in prompts. Actions outside the repository need approval. The egress allowlist limits what an injected instruction can reach.
 - **Isolation:** one sandbox per run (hosted: per session), no shared credentials between tenants, and an audit log the owner can export.
 
@@ -264,7 +272,7 @@ A custom agent is a project role. Nothing new is needed in the kit to hold one: 
 
 Meetings are a runner feature built on the bus and the team tool server. There is no new agent behaviour that is not a protocol: a meeting turn is a message, and the minutes are a report.
 
-- **Scheduler.** A persisted job table in the runner's storage (SQLite or Postgres) computed from `meetings.json` of the live team version, in `values.TIMEZONE` (DST-safe: times are wall-clock in that zone). If the runner was down at a meeting's time, it runs once on start if less than 2 hours late, otherwise records "missed" and notifies; it never runs a backlog of missed meetings. Event-triggered meetings subscribe to board and GitHub events.
+- **Scheduler.** A persisted job table in the control plane (a durable workflow per meeting definition) computed from `meetings.json` of the live team version, in `values.TIMEZONE` (DST-safe: times are wall-clock in that zone). If the runner was down at a meeting's time, it runs once on start if less than 2 hours late, otherwise records "missed" and notifies; it never runs a backlog of missed meetings. Event-triggered meetings subscribe to board and GitHub events.
 - **Meeting run.** A `meeting` record (id, definition, team version, attendees resolved at start, status, cost). The facilitator's session gets a `meeting_open` message; each attendee gets a `meeting_turn` message with the agenda and, in discussion format, the transcript so far.
 - **Busy attendees.** A role session that is working is never interrupted. The bus marks `meeting_turn` as deliverable at the next pause: the supervisor delivers it when the session's current turn ends (between tool calls, after a Stop or a SIGNOFF/HANDOFF). With `ifBusy: proxy`, the facilitator answers from the role's board events and memory file and the minutes mark it. With `skip`, it is left out. Dormant roles are woken only when named explicitly. A role in two meetings answers them in order.
 - **Discussion format.** Rounds are bounded (`rounds`, default 3). The facilitator decides after each round whether to close. The owner's messages in a meeting are stored verbatim like chat messages.
@@ -278,8 +286,8 @@ Meetings are a runner feature built on the bus and the team tool server. There i
 A runner service, not an agent. It reads the same event stream as the board and the chat.
 
 - **Inputs:** board events (hook and role), approvals, decision cards, budget events, run events, meeting events, publish and rollout events (12.4), channel failures.
-- **Rules:** `{ when: <event kind + filter>, about: { roles, lanes }, to: [channel ids], how: { mode: now|batch|summary, every, quiet: breakthrough|hold } }`. Stored per person in the Studio's storage (local: `~/.agent-team/<project>/notify.json` with secret values in the OS keychain; server: a `notification_rule` and `channel` table per member).
-- **Channel drivers:** email (provider API key or SMTP), Slack (a Slack app, bot token per workspace), webhook (signed with an HMAC secret), later Teams, Discord, push. A driver has `send(message) → delivery` and `verify()`. Deliveries are retried with backoff (3 tries), then the rule's fallback channel is used and the owner is told in the Studio.
+- **Rules:** `{ when: <event kind + filter>, about: { roles, lanes }, to: [channel ids], how: { mode: now|batch|summary, every, quiet: breakthrough|hold } }`. Stored per member in the control plane (`notification_rule`, `member_channel`), in every deployment, never in the repository.
+- **Channels are connectors** with the `notify` capability (section 7), connected once per workspace (Slack app, email provider) and then claimed by each member (their verified address, their Slack user). The notifier calls `notify.send(message) → delivery` and `notify.verify()`; it knows no vendor. Each delivery is a durable workflow: retries with backoff (3 tries), then the rule's fallback channel, and the member is told in the Studio.
 - **Rendering:** a template per event kind with a subject, a short body, a recommendation when there is one, and a deep link into the Studio. Text from outside the team is quoted and cut to 120 characters. Secrets are redacted by the same redactor as the audit log.
 - **Replies:** a decision link or a Slack button carries a signed, single-use token tied to the card and the person. Email replies are parsed only for decision cards (the first line must match an option). Approvals always require the signed-in Studio; the email holds a link, never an approve action.
 - **Dedup and batching:** a key per (rule, event subject) suppresses repeats for 10 minutes; batched rules flush on a timer; quiet hours hold non-breakthrough messages for the digest.
@@ -324,3 +332,23 @@ The core rule ([ADR 0004](../adr/0004-team-versions-and-transitions.md)): **ever
 | `meeting_reply(meeting, text)` | attendees | the role's turn; refused outside an open meeting |
 | `meeting_close(meeting, minutes, action_items, decisions)` | facilitator | minutes to the chat, action items to issues or HANDOFFs, decisions to cards |
 | `checkpoint()` | every role (runner-invoked) | push, write the memory file, report; the runner calls it before any stop |
+
+## 13. Built to last: the decade checklist
+
+[ADR 0005](../adr/0005-online-first-built-to-last.md) holds the decision. This is the checklist every design and PR is held to.
+
+| Concern | Rule | What it protects against |
+| --- | --- | --- |
+| Team definition | Plain files in Git; TeamSpec schema `@N` with an upgrade function from every earlier version; golden tests | Losing teams to a database migration or to us going away |
+| Runtime history | One append-only event log; current-state tables are projections that can be rebuilt; events are versioned (`type` + `version`) and upcast on read | Schema changes that rewrite history; new views that need old data |
+| Long-running work | Durable workflows behind one interface (Postgres jobs and timers first; Temporal-class later); every step idempotent with a key | Restarts, deploys and crashes losing a meeting, an approval wait or a transition halfway |
+| Tenancy | `tenant` on every row from the first migration; row-level security; per-tenant encryption keys | A painful retrofit when the first second customer arrives |
+| Identity | OIDC everywhere, local included; people have roles; agents have their own identities (per session, short-lived tokens) | Shared credentials; approvals by the wrong person |
+| Integrations | Connectors over MCP with a capability manifest; no vendor SDK in the core | Vendors changing or disappearing |
+| Agents and models | Runner protocol is ours; agent runtimes and model providers are adapters (at least two planned) | One vendor's SDK or model shaping the product |
+| Deployment | Control plane and data plane separate; runners connect outbound; same images everywhere | Customers who cannot let code or secrets leave their network |
+| API | `/v1/` OpenAPI; additive changes only within a version; 12 months' notice before removal; the CLI and the Studio use only the public API | Breaking integrations and scripts |
+| Data | Postgres and an S3-compatible store; export of a whole tenant (team files, events, evidence) as an archive | Lock-in; compliance requests |
+| Operations | OpenTelemetry; kill switches per run, workspace and globally; runbooks | Running a service for years, not a demo |
+| Industry | Neutral core concepts (workspace store, areas, checks, propose and accept, evidence, policy); engineering is the repository connector's implementation and the first role pack; vocabulary comes from the pack | Being stuck as a developer tool when any team (marketing, legal, support, finance) could use it |
+| Security | Least privilege per role and per person; secrets only to bound sessions; everything from outside marked untrusted; audit from the event log | Injected instructions, leaked keys, silent actions |

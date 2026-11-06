@@ -1,6 +1,6 @@
 # Agent Team Studio
 
-The plan for turning Agent Team Kit into a visual product. You lay out your team on a canvas, connect your repositories, backends, databases and frontends, publish to your repository, and then talk to your chief of staff and let the team run.
+The plan for turning Agent Team Kit into a visual product, deployed online and built to last ([ADR 0005](../adr/0005-online-first-built-to-last.md)). You lay out your team on a canvas, connect your repositories, backends, databases and frontends, publish to your repository, and then talk to your chief of staff and let the team run.
 
 | Doc | What it answers | Owner |
 | --- | --- | --- |
@@ -10,4 +10,4 @@ The plan for turning Agent Team Kit into a visual product. You lay out your team
 | [Delivery plan](delivery-plan.md) | Phases, exits, who builds what | CTO |
 | [Our own team](team.md) | How this repository's kit-defined team builds the Studio | CTO |
 | [Mockups](mockups/) | Screens for custom agents, meetings, notifications and changing a running team | design director |
-| [ADRs](../adr/) | 0001 repository is the source of truth; 0002 runtime; 0003 local Studio without a build; 0004 team versions and transitions | architect |
+| [ADRs](../adr/) | 0001 repository is the source of truth; 0002 runtime; 0003 local Studio without a build; 0004 team versions and transitions; 0005 online first, built to last | architect |
