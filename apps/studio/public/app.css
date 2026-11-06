@@ -587,6 +587,7 @@
 .ats .ro-warn .ro-dot { background: var(--warn); }
 .ats .ro-grey .ro-state, .ats .ro-grey .ro-title { color: var(--muted); }
 .ats .ro-why { min-height: 44px; padding: 0 4px; }
+.ats .ro-change { display: inline-flex; align-items: center; min-height: 44px; }
 @media (max-width: 640px) { .ats .ro-row { grid-template-columns: 12px 1fr; } .ats .ro-state { grid-column: 2; } }
 .ats .ro-head { text-transform: none; letter-spacing: 0; font-size: 18px; color: var(--ink); }
 .ats .ro-plain .ro-dot { background: var(--line); }

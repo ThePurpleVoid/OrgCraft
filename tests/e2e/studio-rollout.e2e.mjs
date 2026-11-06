@@ -179,6 +179,7 @@ test('360px: the lines stack, nothing scrolls sideways; and the empty and waitin
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no sideways scroll');
   const why = await page.locator('.ro-row[data-role="cto"] .ro-why').boundingBox();
   assert.ok(why.height >= 44, 'a 44px tap target');
+  assert.ok((await page.locator('#rollout-page .ro-change').boundingBox()).height >= 44, 'the change link is a 44px tap target too');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'rollout-phone.png'), fullPage: true });
 
   await page.goto(`http://127.0.0.1:${s2.address().port}/?t=${s2.launchToken}`);
