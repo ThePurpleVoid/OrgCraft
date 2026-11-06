@@ -82,6 +82,7 @@ Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD
 
 ### Runner
 
+- **A head the runner did not push is checked before any card names it** (#93). When a pull request's head moves after an approval, the runner fetches the new head itself and runs the checkpoint checks over every commit from it back to the bases it fetched: ownership, symlinks, large files and the secret scan. Only then does it ask again. If the checks fail, there is no card: the run gets `proposal.failed` with reason `checks` and the rule in `detail`, and the session is told not to merge another way.
 - **Merge approvals name the pull request and the full head commit** (#56, D1). A merge is pinned only as exactly one `gh pr merge <N> [--squash|--merge|--rebase|--delete-branch] --match-head-commit <40 or 64 hex>`, or the GitHub merge tool with `owner`, `repo`, `pullNumber` and `expectedHeadSha`. Anything else that would land on the main line is refused, including a direct push. The tool's `owner/repo` must be the session's own repository, and `approval.wait` carries `pr`, `headSha` and `repo`.
 - **Resume from a checkpoint.** A `run.resumed` wake tells the role the run was resumed, and why. `session.started` for a resume says whether the checkpoint commit is on the branch (`checkpoint: { commit, found }`), and a missing one is named in the role's first prompt.
 - **Plain http only to a local host.** `register` and `start` accept https anywhere, and http only to `localhost`, `127.0.0.1`, `::1` and `host.docker.internal`.

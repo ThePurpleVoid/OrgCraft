@@ -8,7 +8,7 @@ import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
 import { safeRead, safeWrite, sharedDir } from './sandbox.mjs';
-import { checkpoint as saveWork, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
+import { checkHead, checkpoint as saveWork, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
 export const DEFAULT_TIERS = { deep: 'claude-opus-5-5', standard: 'claude-opus-5-5', routine: 'claude-sonnet-5-5', light: 'claude-haiku-5-5' };
@@ -397,6 +397,16 @@ export class Session {
         if (reason === 'head-moved' && round < MAX_REASKS) {
           const now = await this.deps.proposals.head({ repo: this.body.repo.url, ref: this.proposal.ref }).catch(() => null);
           if (now && now !== approved) {
+            // Commits the runner did not push have not been through its checks: they must pass the same ones
+            // (ownership against the bases the runner fetched, symlinks, large files, the secret scan over every
+            // commit in the range) before any card can name them. If they fail, no card.
+            const c = await checkHead(this.copy.cwd, { branch: this.copy.branch, sha: now, areas: this.body.areas ?? [], secrets: this.secretValues() })
+              .catch((err) => ({ ok: false, problem: { rule: 'history', items: [], text: `not asked: ${err.message}` } }));
+            if (!c.ok) {
+              const moved = c.problem.rule === 'head-moved';
+              await this.emit('proposal.failed', { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: now, approval, reason: moved ? 'head-moved' : 'checks', detail: c.problem.text.slice(0, 500) });
+              return { text: JSON.stringify({ approval, decision: 'approved', merged: false, reason: moved ? 'head-moved' : 'checks', rule: c.problem.rule }) + ` Approved, but not merged: the pull request's head moved to ${now}, which this session did not push, and it was not asked again (${c.problem.text}). Tell your manager; do not merge another way.`, isError: true };
+            }
             headSha = now;
             this.proposal.headSha = now;
             await this.emit('proposal.updated', { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: now });
