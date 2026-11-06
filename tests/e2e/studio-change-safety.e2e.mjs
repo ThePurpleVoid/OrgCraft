@@ -24,13 +24,14 @@ const skip = !chromium && 'the playwright package is not installed';
 const SHOTS = process.env.SCREENSHOTS;
 
 /** A team in a temporary repository; `reports` (board rows) go to its event log when given. */
-function team(reports) {
+function team(reports, ownership) {
   const root = mkdtempSync(join(tmpdir(), 'studio-safety-'));
   const home = mkdtempSync(join(tmpdir(), 'studio-safety-home-'));
   execFileSync('git', ['-C', root, 'init', '-q']);
   execFileSync('git', ['-C', root, 'config', 'user.name', 'Studio test']);
   execFileSync('git', ['-C', root, 'config', 'user.email', 'studio-test@example.com']);
   execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
+  if (ownership) writeFileSync(join(root, '.agent-team/ownership.json'), JSON.stringify({ rows: ownership }, null, 2) + '\n');
   execFileSync('git', ['-C', root, 'add', '-A']);
   execFileSync('git', ['-C', root, 'commit', '-qm', 'team']);
   const env = { AGENT_TEAM_HOME: home };
@@ -50,7 +51,7 @@ before(async () => {
   busy = team([
     { at: at(34), role: 'web-dev', status: 'working', issue: '142', task: 'Dark mode', branch: 'web/142-dark-mode', pr: '142' },
     { at: at(180), role: 'qa-web', status: 'idle', task: '' },
-  ]);
+  ], [{ path: 'web/', writer: 'web-dev', notes: '' }]);
   quiet = team(null);
   for (const s of [busy, quiet]) await new Promise((r) => s.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${busy.address().port}`;
@@ -134,5 +135,38 @@ test('nothing running, nothing shown: no states, no marks, no count (criterion 1
   assert.equal(await page.locator('#impact-pill').isHidden(), true);
   assert.equal(await page.locator('#draft-banner').isHidden(), true);
   assert.equal(await page.locator('#library .lib-role .state').count(), 0);
+  await page.close();
+});
+
+test('Undo area move after the editor\'s Move leaves one writer: the table row and both briefs go back', { skip }, async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${base}/?t=${busy.launchToken}`);
+  await page.locator('#canvas .node[data-slug="web-dev"] .state').waitFor();
+  await page.getByRole('button', { name: 'New agent' }).click();
+  const dlg = page.locator('#agent-dialog');
+  await dlg.locator('#a-name').fill('Site builder');
+  await dlg.locator('#a-group').selectOption('engineering');
+  await dlg.getByRole('button', { name: 'Continue to the brief' }).click();
+  const ed = page.locator('#agent-editor');
+  const box = ed.locator('.conflict');
+  await ed.getByLabel('Area to add').fill('web/');
+  await ed.getByLabel('Area to add').press('Enter');
+  await box.getByRole('button', { name: 'Move the whole area to this agent…' }).click();
+  await box.getByRole('button', { name: 'Move it anyway' }).click();
+  await box.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: 'Back to the team' }).click();
+
+  const card = page.locator('#canvas .node[data-slug="web-dev"]');
+  await page.locator('#impact-pill', { hasText: 'touches work in progress' }).waitFor();
+  assert.match(await card.locator('.meta').textContent(), /area moves away/);
+  if (!(await page.locator('.impact-pop').count())) await card.click();
+  await page.locator('.impact-pop').getByRole('button', { name: 'Undo area move' }).click();
+  await page.locator('#impact-pill').waitFor({ state: 'hidden' });
+  await page.locator('#checks', { hasText: /^No problems/ }).waitFor();
+  await page.locator('#library .lib-role', { hasText: 'Site builder' }).locator('.name').click();
+  assert.doesNotMatch(await page.locator('#e-raw').inputValue(), /`web\/`/, 'the new agent no longer writes the area');
+  assert.deepEqual(errors, []);
   await page.close();
 });

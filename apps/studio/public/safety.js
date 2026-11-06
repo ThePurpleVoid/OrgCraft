@@ -2,7 +2,7 @@
 // warns and records, it never stops or restarts anything (D12). Which roles are in flight comes from the board (the
 // local event log or the control plane), so every list here says how old that is (D14). A team with no board reports
 // shows none of it (D15, criterion 12).
-import { diffTeams, impact, inventoryFromBoard, meetingAttendees, versionName } from './team-model.mjs';
+import { diffTeams, impact, inventoryFromBoard, meetingAttendees, ownsPaths, setOwnsPaths, versionName } from './team-model.mjs';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const QUIET_S = 2 * 3600; // D14: a report older than this is shown with its age, in grey
@@ -114,11 +114,61 @@ export function popoverHtml({ slug, title, items, row, spec, roles, newest }) {
   </div>`;
 }
 
-/** Puts one change back as it is in the published team (the popover's Undo). */
+const clone = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
+const FIELD = { tier: 'Model', 'reports-to': 'Reports to', 'role-dormant': 'Status' };
+const fieldRe = (name) => new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.*)$`, 'm');
+
+/** Puts one header field of a role back as published, leaving the rest of its draft alone. */
+function revertField(spec, published, slug, name) {
+  const r = spec.roles[slug], p = published.roles[slug];
+  if (!r || !p) return;
+  if (r.brief !== undefined && !r.extension) {
+    const was = fieldRe(name).exec(p.brief ?? '');
+    const re = fieldRe(name);
+    if (was) r.brief = re.test(r.brief) ? r.brief.replace(re, was[0]) : r.brief.replace(/^(#\s+.*\n)/, `$1\n${was[0]}\n`);
+    else r.brief = r.brief.replace(new RegExp(`${re.source}\\n?`, 'm'), '');
+    return;
+  }
+  const fields = r.extension?.fields ?? [];
+  const was = p.extension?.fields?.find((f) => f.name === name);
+  const rest = fields.filter((f) => f.name !== name);
+  if (r.extension) r.extension.fields = was ? [...rest, clone(was)] : rest;
+}
+
+/** Puts every role's own Owns lines for `path` (and paths inside it or around it) back as published. */
+function revertOwns(spec, published, path) {
+  const norm = (x) => x.replace(/\*+$/, '');
+  const overlap = (a, b) => norm(a).startsWith(norm(b)) || norm(b).startsWith(norm(a));
+  for (const [slug, r] of Object.entries(spec.roles)) {
+    if (r.brief === undefined) continue;
+    const p = published.roles[slug];
+    const now = ownsPaths(r.brief);
+    const was = p?.brief !== undefined ? ownsPaths(p.brief).paths.filter((x) => overlap(x.path, path)) : [];
+    if (!was.length && !now.paths.some((x) => overlap(x.path, path))) continue;
+    r.brief = setOwnsPaths(r.brief, [...now.paths.filter((x) => !overlap(x.path, path)), ...was], now.prose);
+  }
+}
+
+/**
+ * Puts one change back as it is in the published team (the popover's Undo). It undoes only that change: a tier undo
+ * keeps the role's rule edits, and an area undo restores both the ownership row and the roles' own Owns lines.
+ */
 export function revert(spec, published, item) {
-  const clone = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
-  if (['role-off', 'role-removed', 'role-dormant', 'brief', 'tier', 'reports-to'].includes(item.kind)) {
-    spec.roles[item.role] = clone(published.roles[item.role]);
+  const p = published.roles[item.role];
+  if (item.kind === 'role-removed' || (item.kind === 'role-off' && !spec.roles[item.role])) { spec.roles[item.role] = clone(p); return; }
+  if (item.kind === 'role-off') { spec.roles[item.role].enabled = p?.enabled ?? true; return; }
+  if (FIELD[item.kind]) return revertField(spec, published, item.role, FIELD[item.kind]);
+  if (item.kind === 'brief') {
+    // The rules and sections go back; the header fields the draft changed stay (they have their own undo).
+    const keep = Object.values(FIELD).map((name) => [name, fieldRe(name).exec(spec.roles[item.role]?.brief ?? '')?.[0], spec.roles[item.role]?.extension?.fields?.find((f) => f.name === name)]);
+    const enabled = spec.roles[item.role]?.enabled;
+    spec.roles[item.role] = clone(p);
+    const r = spec.roles[item.role];
+    if (enabled !== undefined) r.enabled = enabled;
+    for (const [name, line, ext] of keep) {
+      if (r.brief !== undefined && !r.extension && line) r.brief = fieldRe(name).test(r.brief) ? r.brief.replace(fieldRe(name), line) : r.brief.replace(/^(#\s+.*\n)/, `$1\n${line}\n`);
+      else if (r.extension && ext) r.extension.fields = [...(r.extension.fields ?? []).filter((f) => f.name !== name), clone(ext)];
+    }
     return;
   }
   if (item.kind === 'path-moved' || item.kind === 'path-removed') {
@@ -126,6 +176,7 @@ export function revert(spec, published, item) {
     const was = (published.ownership?.rows ?? []).find((r) => r.path === path);
     spec.ownership ??= { rows: [] };
     spec.ownership.rows = [...(spec.ownership.rows ?? []).filter((r) => r.path !== path), ...(was ? [clone(was)] : [])];
+    revertOwns(spec, published, path);
     return;
   }
   if (item.kind === 'binding-removed' || item.kind === 'binding-narrowed') {
