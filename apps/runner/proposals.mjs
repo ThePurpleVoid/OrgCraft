@@ -15,7 +15,14 @@
 //   head({ repo, ref }) -> the proposal's head on the remote now
 //   preview({ repo, sha }) -> { deployment, environment, url } for a successful deployment of that commit, or null
 //                    (G-12, "Ready to try": the link comes from the host's deployment status, never from the model)
+//   bound({ repo, installations }) -> the installation id, checked fresh (before a checkpoint push)
 // and an accept that cannot land throws a ProposalError with `reason` head-moved, checks or conflict.
+//
+// Installation binding (#28, studio-embed S9): every call also takes `installations`, the GitHub App installation
+// ids the server has bound to the run's tenant (session.start repo.installations; the server proved each one). The
+// repository's installation must be one of them, or the call is refused with a ProposalError of reason
+// `installation`, and no other installation is ever tried. Writes (open, accept, bound) look the installation up
+// fresh every time; reads (head, preview) may use a lookup up to five minutes old.
 import { createSign } from 'node:crypto';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -72,7 +79,9 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
     const host = new URL(url).hostname.toLowerCase();
     return hosts.some((h) => host === h || host.endsWith(`.${h}`));
   };
-  const tokens = new Map(); // slug -> { token, until }
+  const tokens = new Map(); // slug#installation#permissions -> { token, until }
+  const lookups = new Map(); // slug -> { id, at }: the repository's installation, for reads only
+  const READ_FOR = 5 * 60_000;
   async function call(path, { token, ...init } = {}) {
     const res = await fetch(`${api}${path}`, { ...init, headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'agent-team-runner', authorization: `Bearer ${token}`, ...(init.body ? { 'content-type': 'application/json' } : {}) } });
     const body = await res.json().catch(() => ({}));
@@ -80,14 +89,30 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
   }
   // Each token carries only what its calls need: the merge path writes, the preview path only reads deployments.
   const WRITE = { contents: 'write', pull_requests: 'write' };
-  async function tokenFor(slug, permissions = WRITE) {
-    const key = `${slug}#${Object.entries(permissions).map(([k, v]) => `${k}:${v}`).join(',')}`;
+  // The repository's installation, checked against the tenant's bound installations. `fresh` (every write) never
+  // uses an earlier lookup; a read may use one up to five minutes old.
+  async function installationFor(slug, installations, { fresh }) {
+    const bound = Array.isArray(installations) ? installations.filter((i) => Number.isSafeInteger(i) && i > 0) : [];
+    if (!bound.length) throw new ProposalError('installation', `no GitHub App installation is bound to this team's tenant, so nothing is written to or read from ${slug}; connect the GitHub App for this repository first`);
+    const seen = lookups.get(slug);
+    let id = !fresh && seen && Date.now() - seen.at < READ_FOR ? seen.id : null;
+    if (id === null) {
+      const inst = await call(`/repos/${slug}/installation`, { token: appJwt(appId, privateKey) });
+      if (inst.status === 404) { lookups.delete(slug); throw new ProposalError('installation', `the merger app is not installed on ${slug}`); }
+      if (inst.status !== 200 || !Number.isSafeInteger(inst.body?.id)) { lookups.delete(slug); throw new Error(`the installation of ${slug} could not be read (${inst.status})`); }
+      id = inst.body.id;
+      lookups.set(slug, { id, at: Date.now() });
+    }
+    if (!bound.includes(id)) throw new ProposalError('installation', `${slug} is under GitHub App installation ${id}, which is not bound to this team's tenant; refused, and no other installation is tried`);
+    return id;
+  }
+  async function tokenFor(slug, installations, { permissions = WRITE, fresh = true } = {}) {
+    const id = await installationFor(slug, installations, { fresh });
+    const key = `${slug}#${id}#${Object.entries(permissions).map(([k, v]) => `${k}:${v}`).join(',')}`;
     const t = tokens.get(key);
     if (t && t.until > Date.now()) return t.token;
     const jwt = appJwt(appId, privateKey);
-    const inst = await call(`/repos/${slug}/installation`, { token: jwt });
-    if (inst.status !== 200) throw new Error(`the merger app is not installed on ${slug} (${inst.status})`);
-    const tok = await call(`/app/installations/${inst.body.id}/access_tokens`, { token: jwt, method: 'POST', body: JSON.stringify({ repositories: [slug.split('/')[1]], permissions }) });
+    const tok = await call(`/app/installations/${id}/access_tokens`, { token: jwt, method: 'POST', body: JSON.stringify({ repositories: [slug.split('/')[1]], permissions }) });
     if (tok.status !== 201 || !tok.body.token) throw new Error(`no installation token for ${slug} (${tok.status})`);
     tokens.set(key, { token: tok.body.token, until: Date.parse(tok.body.expires_at) - 5 * 60_000 });
     return tok.body.token;
@@ -97,9 +122,14 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
     connector: 'github',
     /** Values the checkpoint scan and the memory redaction look for (the key's base64 body and the live tokens). */
     secrets: () => [...pemLines(privateKey), ...[...tokens.values()].map((t) => t.token)],
-    async open({ repo, branch, base, title, body = '' }) {
+    /** Before a checkpoint push: the repository's installation, looked up fresh, must be bound to the tenant. */
+    async bound({ repo, installations }) {
+      const slug = repoSlug(repo);
+      return slug ? installationFor(slug, installations, { fresh: true }) : null;
+    },
+    async open({ repo, branch, base, title, body = '', installations }) {
       const slug = slugOf(repo);
-      const token = await tokenFor(slug);
+      const token = await tokenFor(slug, installations);
       const owner = slug.split('/')[0];
       const found = await call(`/repos/${slug}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}&base=${encodeURIComponent(base)}`, { token });
       const pr = found.status === 200 && Array.isArray(found.body) ? found.body[0] : null;
@@ -109,9 +139,9 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
       return { connector: 'github', ref: made.body.number, url: made.body.html_url, headSha: made.body.head?.sha ?? null, existed: false };
     },
     /** The proposal's head on the remote now (after a head-moved, the commit a new approval must name). */
-    async head({ repo, ref }) {
+    async head({ repo, ref, installations }) {
       const slug = slugOf(repo);
-      const r = await call(`/repos/${slug}/pulls/${Number(ref)}`, { token: await tokenFor(slug) });
+      const r = await call(`/repos/${slug}/pulls/${Number(ref)}`, { token: await tokenFor(slug, installations, { fresh: false }) });
       if (r.status !== 200 || !FULL_SHA.test(r.body.head?.sha ?? '')) throw new Error(`could not read the head of pull request ${ref} (${r.status})`);
       return r.body.head.sha;
     },
@@ -120,11 +150,11 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
      * Vercel and Netlify write), written by a host app on `previewCreators` (and, if set, on a `previewHosts` domain).
      * Needs the app's Deployments read permission; without it, null (no link, no error).
      */
-    async preview({ repo, sha }) {
+    async preview({ repo, sha, installations }) {
       if (!FULL_SHA.test(String(sha ?? ''))) return null;
       const slug = slugOf(repo);
       let token;
-      try { token = await tokenFor(slug, { deployments: 'read' }); } catch { return null; }
+      try { token = await tokenFor(slug, installations, { permissions: { deployments: 'read' }, fresh: false }); } catch (e) { if (e instanceof ProposalError) throw e; return null; }
       const list = await call(`/repos/${slug}/deployments?sha=${sha}&per_page=10`, { token });
       if (list.status !== 200 || !Array.isArray(list.body)) return null;
       for (const d of list.body) {
@@ -135,10 +165,10 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
       }
       return null;
     },
-    async accept({ repo, ref, branch, headSha }) {
+    async accept({ repo, ref, branch, headSha, installations }) {
       need(headSha);
       const slug = slugOf(repo);
-      const token = await tokenFor(slug);
+      const token = await tokenFor(slug, installations);
       // GitHub refuses with 409 when the head is no longer `sha`, and 405 when the pull request cannot be merged.
       const r = await call(`/repos/${slug}/pulls/${Number(ref)}/merge`, { token, method: 'PUT', body: JSON.stringify({ sha: headSha, merge_method: method }) });
       if (r.status === 200 && r.body.merged) {

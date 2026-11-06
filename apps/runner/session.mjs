@@ -359,11 +359,37 @@ export class Session {
 
   /** Checkpoint and push through the runner's checks (ownership, symlinks, secrets); never throws. */
   async save(reason) {
+    // Before any push to GitHub: the repository's installation, looked up fresh, must be bound to the tenant (#28).
+    const refused = await this.unbound('push');
+    if (refused) return { pushed: false, error: refused };
     const r = await saveWork({ cwd: this.copy.cwd, branch: this.copy.branch, base: this.copy.base, role: this.role, reason, areas: this.body.areas ?? [], secrets: this.secretValues() })
       .catch((e) => ({ pushed: false, error: e.message }));
     // A branch that changes nothing against its base has nothing to propose (a role that only talked).
-    if (r.pushed && this.proposes() && (r.changes || this.proposal)) await this.propose(r.commit).catch((e) => { r.proposalError = e.message; this.deps.log?.(`proposal for ${this.copy.branch}: ${e.message}`); });
+    if (r.pushed && this.proposes() && (r.changes || this.proposal)) await this.propose(r.commit).catch(async (e) => { r.proposalError = e.message; if (e.reason === 'installation') await this.refusedInstallation('open', String(e.message).slice(0, 500)); this.deps.log?.(`proposal for ${this.copy.branch}: ${e.message}`); });
     return r;
+  }
+
+  /**
+   * The installation check before a push (#28): null when the push may go (no GitHub connector, or the installation
+   * is bound to the run's tenant); otherwise the reason, after proposal.failed with reason `installation` (the audit).
+   */
+  async unbound(phase) {
+    const check = this.deps.proposals?.bound;
+    if (!check || !this.body.repo?.url) return null;
+    try {
+      await check.call(this.deps.proposals, { repo: this.body.repo.url, installations: this.body.repo.installations });
+      return null;
+    } catch (e) {
+      const text = String(e.message).slice(0, 500);
+      if (e.reason === 'installation') await this.refusedInstallation(phase, text);
+      return text;
+    }
+  }
+
+  refusedInstallation(phase, detail, extra = {}) {
+    this.deps.log?.(`refused (${phase}): ${detail}`);
+    return this.emit('proposal.failed', { connector: this.proposal?.connector ?? 'github', ref: this.proposal?.ref ?? null, url: this.proposal?.url ?? null, branch: this.copy?.branch ?? null, headSha: this.proposal?.headSha ?? null, ...extra, reason: 'installation', phase, detail })
+      .catch((e) => this.deps.log?.(`proposal.failed (installation): ${e.message}`));
   }
 
   /** Whether this session's branch gets a proposal: a branch of its own, and a runner with a proposal connector. */
@@ -378,7 +404,7 @@ export class Session {
   async propose(commit) {
     if (this.proposal?.headSha === commit) return this.proposal;
     const b = this.body;
-    const p = await this.deps.proposals.open({ repo: b.repo.url, branch: this.copy.branch, base: this.copy.base, title: `${this.role}: ${this.copy.branch}`, body: `Opened by the runner for ${this.role}${b.run ? ` (run ${b.run})` : ''}. It is merged only after the owner approves this exact head.` });
+    const p = await this.deps.proposals.open({ repo: b.repo.url, installations: b.repo.installations, branch: this.copy.branch, base: this.copy.base, title: `${this.role}: ${this.copy.branch}`, body: `Opened by the runner for ${this.role}${b.run ? ` (run ${b.run})` : ''}. It is merged only after the owner approves this exact head.` });
     const first = !this.proposal && !p.existed;
     this.proposal = { connector: p.connector, ref: p.ref, url: p.url, headSha: commit };
     await this.emit(first ? 'proposal.opened' : 'proposal.updated', { connector: p.connector, ref: p.ref, url: p.url, branch: this.copy.branch, headSha: commit });
@@ -415,7 +441,7 @@ export class Session {
       const approved = d.headSha ?? headSha;
       const base = { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: approved, approval };
       try {
-        const m = await this.deps.proposals.accept({ repo: this.body.repo.url, ref: this.proposal.ref, branch: this.copy.branch, base: this.copy.base, headSha: approved, approval });
+        const m = await this.deps.proposals.accept({ repo: this.body.repo.url, installations: this.body.repo.installations, ref: this.proposal.ref, branch: this.copy.branch, base: this.copy.base, headSha: approved, approval });
         await this.emit('proposal.accepted', { ...base, result: m.result });
         this.watchPreview({ connector: base.connector, ref: base.ref, sha: m.result });
         // The base has it now (squashed): later work starts from there, on a fresh pull request.
@@ -425,10 +451,11 @@ export class Session {
         else this.deps.log?.(`${this.copy.branch} was merged but not deleted on the remote; the session stays on it`);
         return { text: JSON.stringify({ approval, decision: 'approved', merged: m.result, pr: base.ref, headSha: approved }) + ' Approved and merged by the runner.' };
       } catch (e) {
-        const reason = ['head-moved', 'checks', 'conflict'].includes(e.reason) ? e.reason : 'checks';
-        await this.emit('proposal.failed', { ...base, reason, detail: String(e.message).slice(0, 500) });
+        const reason = ['head-moved', 'checks', 'conflict', 'installation'].includes(e.reason) ? e.reason : 'checks';
+        await this.emit('proposal.failed', { ...base, reason, ...(reason === 'installation' ? { phase: 'merge' } : {}), detail: String(e.message).slice(0, 500) });
+        if (reason === 'installation') return { text: JSON.stringify({ approval, decision: 'approved', merged: false, reason }) + ` Approved, but not merged: ${e.message}. Tell your manager; do not merge another way.`, isError: true };
         if (reason === 'head-moved' && round < MAX_REASKS) {
-          const now = await this.deps.proposals.head({ repo: this.body.repo.url, ref: this.proposal.ref }).catch(() => null);
+          const now = await this.deps.proposals.head({ repo: this.body.repo.url, installations: this.body.repo.installations, ref: this.proposal.ref }).catch(() => null);
           if (now && now !== approved) {
             // Commits the runner did not push have not been through its checks: they must pass the same ones
             // (ownership against the bases the runner fetched, symlinks, large files, the secret scan over every
@@ -513,7 +540,11 @@ export class Session {
       for (const ms of delays) {
         const stop = await Promise.race([new Promise((r) => setTimeout(() => r(false), ms).unref?.()), this.ended.then(() => true)]);
         if (stop || this.state === 'ended') return null;
-        const p = await look.call(this.deps.proposals, { repo: this.body.repo.url, sha }).catch((e) => { this.deps.log?.(`preview of ${sha}: ${e.message}`); return null; });
+        let refused = null;
+        const p = await look.call(this.deps.proposals, { repo: this.body.repo.url, installations: this.body.repo.installations, sha })
+          .catch((e) => { if (e.reason === 'installation') refused = e; else this.deps.log?.(`preview of ${sha}: ${e.message}`); return null; });
+        // A repository whose installation is not the tenant's: no link is read from it, and the watch stops there.
+        if (refused) { await this.refusedInstallation('preview', String(refused.message).slice(0, 500), { ref, headSha: sha }); return null; }
         if (p) {
           await this.emit('proposal.previewed', { connector, ref, sha, url: p.url, environment: p.environment, state: 'success', deployment: p.deployment })
             .catch((e) => this.deps.log?.(`proposal.previewed for ${ref}: ${e.message}`));
