@@ -99,6 +99,16 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   assert.doesNotMatch(copy, /team-status\.sh qa-web /);
   assert.equal(await page.locator('#library .lib-role[data-slug="qa-web"] input').isChecked(), true, 'the role copied is still on');
 
+  // Taking a kit role's place on purpose: the card says so, with the check's warning on it (criterion 3).
+  await page.getByRole('button', { name: 'New agent' }).click();
+  await dlg.getByLabel('Name', { exact: true }).fill('Docs keeper');
+  await dlg.getByLabel(/Replace the kit's role/).check();
+  await dlg.getByRole('button', { name: 'Continue to the brief' }).click();
+  const card = page.locator('#canvas .node', { hasText: 'Docs keeper' });
+  await card.locator('text.meta', { hasText: 'replaces kit' }).waitFor();
+  assert.match(await card.locator('title').textContent(), /replaces the kit's docs-keeper/);
+  assert.match(await page.locator('#library .lib-role', { hasText: 'Docs keeper' }).locator('.tag').textContent(), /replaces kit/);
+
   // A role pack: two agents, added switched off and tagged imported. One has a model tier the kit does not know, so it
   // cannot be switched on until that is fixed; the other can.
   await page.getByRole('button', { name: 'New agent' }).click();
@@ -125,7 +135,12 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   const downloads = [];
   page.on('download', (d) => downloads.push(d));
   await page.evaluate(() => { delete window.showDirectoryPicker; });
-  await page.getByRole('button', { name: 'Export Translator as a role pack' }).click();
+  const translator = page.locator('#library .lib-role', { hasText: 'Translator' });
+  await page.locator('#search').focus();
+  await page.mouse.move(800, 600);
+  assert.equal(await translator.getByRole('button', { name: /^Export/ }).isVisible(), false, 'Export shows on hover or focus, not over the tag');
+  await translator.hover();
+  await translator.getByRole('button', { name: 'Export Translator as a role pack' }).click();
   await page.locator('#checks', { hasText: 'Downloaded translator.md and pack.json' }).waitFor();
   assert.deepEqual(downloads.map((d) => d.suggestedFilename()).sort(), ['pack.json', 'translator.md']);
   const pack = JSON.parse(await readFile(await downloads.find((d) => d.suggestedFilename() === 'pack.json').path(), 'utf8'));
@@ -189,8 +204,8 @@ test('at 390px there is no New agent button, and an agent says to edit it on a l
   assert.equal(await page.getByRole('button', { name: 'New agent' }).isVisible(), false);
   // Your agents is a list on a phone (CPO story D9): it reads, and the agent says where to edit it.
   await page.locator('#library .group-title', { hasText: 'Your agents' }).waitFor();
-  await page.locator('#library .lib-role', { hasText: 'Accessibility auditor' }).waitFor();
-  await page.locator('#canvas .node', { hasText: 'Accessibility auditor' }).click();
+  // Tapping the row shows the agent (the inspector is below the canvas on a phone, so it scrolls there).
+  await page.locator('#library .lib-role', { hasText: 'Accessibility auditor' }).dispatchEvent('click');
   await page.getByText('Open the Studio on a larger screen to edit this agent.').waitFor();
   assert.equal(await page.locator('#i-brief').count(), 0);
   const w = await page.evaluate(() => document.documentElement.scrollWidth);

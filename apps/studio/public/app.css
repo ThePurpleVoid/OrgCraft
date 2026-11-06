@@ -269,10 +269,11 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-directio
 .palette-head input { flex: 1; min-width: 0; }
 .palette-head button { white-space: nowrap; }
 .group-title.yours { margin-top: 4px; }
-.lib-role { position: relative; }
-.lib-role .export { font-size: 11px; position: absolute; right: 6px; padding: 2px 4px; background: var(--off); border-radius: 4px; opacity: 0; }
-.lib-role:hover .export, .lib-role.selected .export, .lib-role:focus-within .export { opacity: 1; }
-.lib-role.selected .export { background: var(--panel); }
+.lib-role .export { font-size: 11px; display: none; }
+.lib-role:is(:hover, :focus-within) .export { display: inline; }
+.lib-role:is(:hover, :focus-within) .tag.has-export { display: none; }
+body.small .lib-role .export { display: none; }
+body.small .lib-role .tag.has-export { display: inline; }
 .agent-dialog { padding: 0; gap: 0; }
 .agent-dialog > h2, .agent-dialog > .muted { padding: 0 20px; }
 .agent-dialog > h2 { padding-top: 18px; }
