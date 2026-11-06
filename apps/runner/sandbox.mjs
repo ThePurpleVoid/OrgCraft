@@ -105,7 +105,7 @@ export function sharedDir(path, sandbox, { leaf = false } = {}) {
     if (!st.isDirectory()) throw new Error(`${path} is not a folder`);
     if (process.getuid && st.uid !== process.getuid()) throw new Error(`${path} is not the runner's`);
     if (!sandbox) return;
-    if (process.getuid?.() === 0) fchownSync(fd, 0, sandbox.gid); // only in tests run as root
+    if (st.gid !== sandbox.gid) fchownSync(fd, st.uid, sandbox.gid); // the runner is in that group
     fchmodSync(fd, leaf ? 0o2770 : 0o2750);
   } finally { closeSync(fd); }
 }
