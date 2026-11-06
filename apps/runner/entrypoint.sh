@@ -16,15 +16,18 @@ if [ "$(id -u)" = 0 ]; then
   # copied into the runner's own folder, owned by it and 0600, so ssh accepts them and sessions cannot read them.
   SECRETS="${AGENT_TEAM_RUNNER_SECRETS:-/run/agent-team}"
   if [ -f "$SECRETS/runner-deploy-key" ]; then
+    # $DATA belongs to the runner user, which could leave a link at any of these names: remove first, never follow.
+    rm -f "$DATA/deploy-key" "$DATA/gitconfig"
     install -o runner -g runner -m 0600 "$SECRETS/runner-deploy-key" "$DATA/deploy-key"
     # Push over ssh with the deploy key, checking GitHub's published host key (never trust on first use). Written
     # only when no git config of the owner's own is in place.
     if [ -z "${AGENT_TEAM_RUNNER_GITCONFIG:-}" ]; then
-      (umask 077; printf '[core]\n\tsshCommand = ssh -i %s/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/app/apps/runner/known_hosts\n[url "git@github.com:"]\n\tinsteadOf = https://github.com/\n' "$DATA" > "$DATA/gitconfig")
-      chown runner:runner "$DATA/gitconfig"
+      (umask 077; set -C; printf '[core]\n\tsshCommand = ssh -i %s/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/app/apps/runner/known_hosts\n[url "git@github.com:"]\n\tinsteadOf = https://github.com/\n' "$DATA" > "$DATA/gitconfig")
+      chown -h runner:runner "$DATA/gitconfig"
     fi
   fi
   if [ -f "$SECRETS/merger-app.pem" ]; then
+    rm -f "$DATA/merger-app.pem"
     install -o runner -g runner -m 0600 "$SECRETS/merger-app.pem" "$DATA/merger-app.pem"
   fi
   exec setpriv --reuid=runner --regid=runner --init-groups --inh-caps=-all -- env HOME=/home/runner "$@"

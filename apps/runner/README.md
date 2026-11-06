@@ -44,7 +44,8 @@ Once, before the first start (the owner checklist, part A, made these):
 ```sh
 mkdir -p ~/.agent-team/runner-secrets && chmod 700 ~/.agent-team/runner-secrets
 ssh-keygen -t ed25519 -f ~/.agent-team/runner-secrets/runner-deploy-key -N ""   # paste only the .pub as a deploy key
-# the merger app's private key, downloaded from GitHub, saved as:
+# the merger GitHub App: install it only on the team's own repositories, with Contents and Pull requests
+# read and write (and Metadata read) and nothing else. Its private key, downloaded from GitHub, saved as:
 mv ~/Downloads/<app>.private-key.pem ~/.agent-team/runner-secrets/merger-app.pem
 ```
 
