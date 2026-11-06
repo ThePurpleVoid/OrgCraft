@@ -52,7 +52,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.16.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.17.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -223,6 +223,49 @@ gate_web() {
 ## Upgrade the kit
 
 Change `"kit"` in `team.json` to the new tag, run `scripts/agent-team/sync.sh`, and review the diff of `docs/team/` and `scripts/agent-team/` like any dependency upgrade. `sync.sh check` in CI fails if someone edits a generated file by hand or forgets to sync.
+
+## CI
+
+Two steps belong in the team's CI. `sync.sh check` fails a pull request that edits a generated file by hand or forgets to sync. `report.mjs published` runs on the main branch after a change to `.agent-team/` and tells the control plane (`TEAM_REPORT_URL`, and the mirror when one is set) which team version is now live, so the rollout view can say which roles have picked it up. It does not depend on anyone having the Studio open when the pull request merges.
+
+```yaml
+# .github/workflows/team-sync.yml
+name: team sync
+on: [pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/agent-team/sync.sh check
+```
+
+```yaml
+# .github/workflows/team-published.yml
+name: team published
+on:
+  push:
+    branches: [main]
+    paths: ['.agent-team/**']
+jobs:
+  published:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }   # the version is the last commit that changed .agent-team/
+      - run: node scripts/agent-team/report.mjs published
+        env:
+          TEAM_REPORT_URL: ${{ secrets.TEAM_REPORT_URL }}
+          TEAM_REPORT_TOKEN: ${{ secrets.TEAM_REPORT_TOKEN }}
+          # TEAM_REPORT_MIRROR_URL and TEAM_REPORT_MIRROR_TOKEN too, for a second board.
+```
+
+What `published` sends:
+
+- **The version** is the last commit on the main line that changed `.agent-team/`: the merge commit for a merged pull request, the same version each role reports from its checkout. `--sha <commit>` names another one.
+- **The event id** is `published-<that commit>`. Running the step twice, re-running the job, or the Studio posting the same publish stores it once.
+- **What else it reads from git:** when the commit was made, the pull request number from the subject ("Title (#12)" or "Merge pull request #12"; `--pr N` overrides), the roles in `docs/team/roles/`, the ones the commit removed, the changed team paths, who published (`GITHUB_ACTOR`, else the commit's author), and the Studio's "Work in progress" plan from the commit message.
+- **It never fails the build.** With no URL set, or when a board refuses it (a board that is not a control plane answers 400), it prints why on stderr and exits 0. It writes nothing to the local log.
 
 ## Improve the kit for everyone
 
