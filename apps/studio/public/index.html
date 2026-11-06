@@ -24,7 +24,7 @@
   <main class="layout team-only">
     <aside class="palette" aria-label="Role library">
       <input id="search" type="search" placeholder="Search roles" aria-label="Search roles">
-      <p class="hint">Switch roles on and off, or drag one onto a manager on the canvas.</p>
+      <p class="hint"><span class="edit-only">Switch roles on and off, or drag one onto a manager on the canvas.</span><span class="small-only">The roles in this team. Change them on a larger screen.</span></p>
       <div id="library"></div>
     </aside>
     <section class="canvas-wrap" aria-label="Org chart">
@@ -40,7 +40,7 @@
         <button id="live" class="canvas-only live-toggle" type="button" aria-pressed="false" title="Show where every role stands, from the team's reports">Live</button>
         <span class="row zoom canvas-only"><button id="zoom-out" type="button" aria-label="Zoom out">−</button><button id="zoom-fit" type="button" title="Fit or actual size"><span id="zoom-level">100%</span></button><button id="zoom-in" type="button" aria-label="Zoom in">+</button></span>
       </div>
-      <p class="mode-hint hint" data-for="org">Drag a card onto another to change who it reports to. Click a card to edit it.</p>
+      <p class="mode-hint hint" data-for="org"><span class="edit-only">Drag a card onto another to change who it reports to. Click a card to edit it.</span><span class="small-only">Who reports to whom. Tap a card to see the role.</span></p>
       <p class="mode-hint hint" data-for="flow">Who hands work to whom, from each role's "Hands to". Click a role to see its hand-offs: blue goes out, green comes in.</p>
       <div id="systems-strip" class="systems-strip" data-for="systems"></div>
       <div id="canvas" class="canvas"></div>

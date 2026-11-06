@@ -6,13 +6,15 @@
 // When the real endpoints land (issue #28, backend dev), the chat tests also run against apps/server.
 import { createServer } from 'node:http';
 
-export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 'step-up-secret', team = 'demo', runner = defaultRunner } = {}) {
+export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 'step-up-secret', team = 'demo', runner = defaultRunner, running = true, perDay = 5000 } = {}) {
   const events = [];
   const cards = new Map(); // id -> card
   const replays = new Map(); // idempotency key -> [status, body]
   const streams = new Set();
-  const runs = [{ id: 'run_1', state: 'running', started: new Date().toISOString() }];
-  const cost = { today: 620, capPerDay: 5000, currency: 'USD', state: 'ok' };
+  const runs = running ? [{ id: 'run_1', state: 'running', started: new Date().toISOString() }] : [];
+  const budget = { currency: 'USD', perDay, perRun: null, sessions: 3 };
+  const cost = { today: 620, capPerDay: perDay, currency: 'USD', state: 'ok' };
+  const started = []; // the RunCreate bodies, for the tests
   const stepUps = new Map(); // su_ token -> expiry (ms)
   let n = 0;
   const id = () => `ev_${String(++n).padStart(6, '0')}`;
@@ -44,8 +46,12 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       return c;
     },
     usage(amount) { cost.today += amount; append('usage.recorded', role('chief-of-staff'), { inputTokens: 1000, outputTokens: 200, cost: amount, currency: cost.currency }); },
-    events, cards, runs, cost,
+    /** Spends today's budget: the runs pause with reason budget, as the real control plane does at 100%. */
+    exhaust() { cost.state = 'exhausted'; for (const r of runs) if (r.state === 'running') { r.state = 'paused'; r.reason = 'budget'; append('run.paused', { kind: 'system', id: 'budget' }, { reason: 'budget' }, `run/${r.id}`); } },
+    events, cards, runs, cost, budget, started,
   };
+  const stepped = (req) => { const su = req.headers['x-step-up']; if (!su || !(stepUps.get(su) > Date.now())) return false; stepUps.delete(su); return true; };
+  const needStepUp = (res, what) => send(res, 401, { type: 'step-up-required', title: `${what} needs a recent sign-in`, status: 401 });
 
   const send = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
   const read = async (req) => { let b = ''; for await (const c of req) b += c; return b ? JSON.parse(b) : {}; };
@@ -105,11 +111,41 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       return send(res, 201, { token: su, expires: new Date(Date.now() + 5 * 60_000).toISOString() });
     }
     if (p === `/v1/teams/${team}/runs` && req.method === 'GET') return send(res, 200, { runs });
+    if (p === `/v1/teams/${team}/runs` && req.method === 'POST') {
+      const body = await read(req);
+      const roles = body.team?.roles;
+      if (!Array.isArray(roles) || !roles.length) return send(res, 409, { title: "send the team's roles", status: 409 });
+      if (roles.filter((r) => r.reportsTo === 'owner').length !== 1) return send(res, 409, { title: 'exactly one role reports to the owner', status: 409 });
+      if (budget.perDay === null) return send(res, 409, { title: 'set a daily cap first: PUT /v1/teams/{team}/budget with perDay', status: 409 });
+      const going = runs.find((r) => r.state !== 'stopped');
+      if (going) return send(res, 409, { title: `run ${going.id} is still going; stop it first`, status: 409 });
+      if (cost.state === 'exhausted') return send(res, 409, { title: "today's budget is spent; raise it or start tomorrow", status: 409 });
+      const r = { id: `run_${runs.length + 1}`, state: 'running', started: new Date().toISOString(), teamVersion: body.team.version };
+      runs.push(r);
+      started.push(body);
+      append('run.started', { kind: 'person', id: 'owner', via: 'studio' }, { mode: body.mode, by: 'owner', roles: roles.length }, `run/${r.id}`);
+      return done(201, { id: r.id, team, mode: body.mode, state: 'running', teamVersion: r.teamVersion, version: 1 });
+    }
+    if (p === `/v1/teams/${team}/budget` && req.method === 'GET') return send(res, 200, { ...budget, today: { spent: cost.today, state: cost.state } });
+    if (p === `/v1/teams/${team}/budget` && req.method === 'PUT') {
+      const body = await read(req);
+      const next = { ...budget, ...body };
+      const raises = (o, n, nullIsUnlimited) => (o === null ? (nullIsUnlimited ? false : n !== null) : n === null ? true : n > o);
+      if ((raises(budget.perDay, next.perDay, false) || raises(budget.perRun, next.perRun, true) || next.sessions > budget.sessions) && !stepped(req)) return needStepUp(res, 'Raising a budget');
+      Object.assign(budget, next);
+      cost.capPerDay = budget.perDay;
+      if (cost.state === 'exhausted' && budget.perDay !== null && cost.today < budget.perDay) cost.state = 'ok';
+      append('budget.updated', { kind: 'person', id: 'owner', via: 'studio' }, { ...budget, by: 'owner' }, 'budget');
+      return done(200, { ...budget, today: { spent: cost.today, state: cost.state } });
+    }
     const act = /^\/v1\/runs\/([^/]+)\/(pause|resume|stop)$/.exec(p);
     if (act && req.method === 'POST') {
       const r = runs.find((x) => x.id === act[1]);
       if (!r) return send(res, 404, { error: 'no such run' });
+      if (act[2] === 'resume' && cost.state === 'exhausted') return send(res, 409, { title: "today's budget is spent; raise it or wait for tomorrow", status: 409 });
+      if (act[2] === 'resume' && r.reason === 'budget' && !stepped(req)) return needStepUp(res, 'Resuming a run the budget paused');
       r.state = { pause: 'paused', resume: 'running', stop: 'stopped' }[act[2]];
+      r.reason = act[2] === 'pause' ? 'owner' : null;
       return done(200, append(`run.${r.state === 'running' ? 'resumed' : r.state}`, { kind: 'person', id: 'owner', via: 'studio' }, { by: 'owner' }, `run/${r.id}`));
     }
     if (p === '/v1/me/summary') {

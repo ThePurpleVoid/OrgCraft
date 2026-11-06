@@ -17,6 +17,8 @@ export function chatSource(env = process.env) {
   // 5 minutes and is spent by the next answer, whatever its outcome. Only the Studio's own session can use it (server.mjs checks the cookie).
   let stepUp = null; // { token, expires }
   const stepUpHeader = () => (stepUp && Date.parse(stepUp.expires) > Date.now() + 5_000 ? { 'x-step-up': stepUp.token } : {});
+  /** The step-up header for one call, taken before it, so two calls in flight cannot both use one step-up. */
+  const spendStepUp = () => { const h = stepUpHeader(); stepUp = null; return h; };
 
   async function call(method, path, body, headers = {}) {
     const res = await fetch(`${server}/v1${path}`, {
@@ -51,9 +53,7 @@ export function chatSource(env = process.env) {
     say: ({ text, clientId, replyTo }) => call('POST', `/teams/${t}/chat`, { text, clientId, ...(replyTo ? { replyTo } : {}) }, clientId ? { 'idempotency-key': clientId } : {}),
     /** Answers a card with the version the person saw. Approvals go to /approvals/{id}, every other card to /cards/{id}. */
     async answer({ card, kind, subject, option, version, key }) {
-      // Taken before the call, so two answers in flight cannot both use one step-up.
-      const su = stepUpHeader();
-      stepUp = null;
+      const su = spendStepUp();
       const headers = { ...(key ? { 'idempotency-key': key } : {}), ...su };
       // An approval card's answer goes to its approval: the id from its subject, else the card id.
       const approval = kind === 'approval' && (/^approval\/(.+)$/.exec(subject ?? '')?.[1] ?? card);
@@ -74,11 +74,22 @@ export function chatSource(env = process.env) {
       stepUp = { token: r.token, expires: r.expires ?? new Date(Date.now() + 5 * 60_000).toISOString() };
       return { ok: true, expires: stepUp.expires };
     },
+    /** Pause and stop never need step-up. Resuming a run the budget paused does, so a resume spends one if there is one. */
     async control(action, key, runId) {
       if (!['pause', 'resume', 'stop'].includes(action)) throw new Upstream(400, { error: 'pause, resume or stop' });
       const run = typeof runId === 'string' && runId ? { id: runId } : await currentRun();
       if (!run) throw new Upstream(409, { error: 'no run is going' });
-      return call('POST', `/runs/${encodeURIComponent(run.id)}/${action}`, {}, key ? { 'idempotency-key': key } : {});
+      const su = action === 'resume' ? spendStepUp() : {};
+      return call('POST', `/runs/${encodeURIComponent(run.id)}/${action}`, {}, { ...(key ? { 'idempotency-key': key } : {}), ...su });
     },
+    /** The team's caps, in whole minor units (cents for USD), and today's spend. perDay null means no run may start. */
+    budget: () => call('GET', `/teams/${t}/budget`),
+    /** Sets caps. Lowering never needs step-up; raising or clearing one does, so it spends one if there is one. */
+    setBudget(body, key) {
+      const pick = Object.fromEntries(['perDay', 'perRun', 'sessions', 'currency'].filter((k) => body?.[k] !== undefined).map((k) => [k, body[k]]));
+      return call('PUT', `/teams/${t}/budget`, pick, { ...(key ? { 'idempotency-key': key } : {}), ...spendStepUp() });
+    },
+    /** Starts a run on the published team (runs.mjs builds the body). One run per team: a second one is a 409. */
+    start: (body, key) => call('POST', `/teams/${t}/runs`, body, key ? { 'idempotency-key': key } : {}),
   };
 }

@@ -1,8 +1,8 @@
 # Fly.io config for the runner, a second app in the same Fly organization and region as the control plane.
-# DRAFT until apps/runner lands. No public service: the runner only connects out, to the control plane's private
+# No public service: the runner only connects out, to the control plane's private
 # address (http://<FLY_APP>.internal:8080) or its public one.
 #   flyctl volumes create runner_data --app <FLY_APP>-runner --region iad --size 20
-#   flyctl deploy . --config deploy/fly/runner.toml --dockerfile deploy/runner/Dockerfile --app <FLY_APP>-runner --ha=false
+#   flyctl deploy . --config deploy/fly/runner.toml --dockerfile apps/runner/Dockerfile --app <FLY_APP>-runner --ha=false
 
 [mounts]
   source = "runner_data"
