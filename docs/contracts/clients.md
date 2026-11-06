@@ -34,6 +34,7 @@ A person connects a client to a deployment by typing its address (`studio.exampl
 ## 3. Sign-in
 
 - **OIDC authorization code flow with PKCE** for every public client (phones, the CLI, desktop apps), through the system browser ([RFC 8252](https://www.rfc-editor.org/rfc/rfc8252)). No passwords typed into an app, no embedded web views.
+- People and apps send a bearer token on every endpoint. The one exception is report intake (`POST /v1/teams/{team}/reports`), which keeps the per-team `x-team-token` the kit's existing scripts send. That token can only append reports for one team, and no client uses it.
 - The deployment's identity layer is the OIDC issuer the clients talk to, whatever upstream provider the workspace uses (GitHub, Google, Microsoft, SAML). The apps never talk to GitHub directly.
 - Tokens: a short-lived access token (15 minutes or less) and a rotating refresh token bound to the device registration. Signing out on the phone, removing the device in the Studio, or an admin removing the member revokes them.
 - **Step-up for approvals.** `POST /v1/approvals/{id}` requires a sign-in proof no older than 5 minutes (`auth_time` in the token, or a fresh step-up token). Apps get it with Face ID, Touch ID or the Android biometric prompt unlocking a device key registered at sign-in; the web gets it by re-authenticating. A stale token gets `401` with `"type": "step-up-required"`, never a silent approval.
@@ -57,10 +58,10 @@ Clients render projections the server computes. They do not rebuild state from r
 | One role's recent work | `GET /v1/teams/{team}/roles/{role}` | Current task, branch, PR, last reports, evidence links, meetings |
 | The chat | `GET /v1/teams/{team}/chat` | Pages backwards from newest with `before` |
 | Live updates | `GET /v1/teams/{team}/events/stream` and `GET /v1/me/stream` | Server-sent events, resumable with `Last-Event-ID` |
-| Catching up after being away | `GET /v1/teams/{team}/events?after={eventId}` | Cursor is an event id, so "since I last looked" is exact |
+| Catching up after being away | `GET /v1/teams/{team}/events?after={eventId}` | `after` takes an event id, so "since I last looked" is exact |
 
 - Every projection response carries an `ETag` and the id of the last event it includes (`"asOf": "<event id>"`). A client can fetch a projection, then open the stream from `asOf`, and miss nothing.
-- `If-None-Match` returns `304`. Lists page with `cursor` and `limit`. Responses are compressed.
+- `If-None-Match` returns `304`. Lists page with `cursor` and `limit`. A `cursor` is an opaque string: clients pass back what they were given and never parse or build one. Stream ids (`Last-Event-ID`) and `asOf` are event ids. Responses are compressed.
 - A phone does not hold a stream open in the background. It catches up on open, and push wakes it in between.
 
 ## 6. Cards: structured, never HTML
