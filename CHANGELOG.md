@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.15.0
+
+Other coding agents (CPO story "Other coding agents", criteria 1 to 5 and 7, and the dashboard side of 6; D42 to D48).
+
+- **`team.json` `targets`** ([customizing](docs/customizing.md#other-coding-agents-targets)). A team without it gets `["claude-code"]` and sync writes exactly what it wrote before. `["claude-code", "agents-md"]` also writes a root **`AGENTS.md`**: how a session finds its role (`AGENT_TEAM_ROLE` in `.agent-team/local.env`, or the first message), what to do first in every task, every board report as a `node scripts/agent-team/report.mjs` command (no bash, no `jq`), and the project instructions. It names no vendor or model; a test checks this. `validate` and `sync` refuse an unknown target.
+- **Role memory for agents without project memory** (issue #90): `AGENTS.md` points them to `memory/<role>.md` in the board folder, or `.agent-team/memory/<role>.md` in the checkout, which sync adds to `.gitignore` when `agents-md` is on.
+- **A hand-written `AGENTS.md` is kept.** The kit writes between `<!-- agent-team:start ... -->` and `<!-- agent-team:end -->` and leaves every other line alone. `check` fails only when the kit's block is stale or edited. Switching the target off removes only the block.
+- **The board marks a thread "Self-reported"** when it has reports and no hook events: `summarize` gives each current row `self_reported`, and the dashboard shows it on the card and in the panel. The Studio's live board gets the same field.
+- **What works with Claude Code and with other agents** is a table in the README, `docs/hooks-and-agent-teams.md` and the new [docs/other-coding-agents.md](docs/other-coding-agents.md), which also records the offline proof with Codex CLI 0.167.0 and opencode 1.19.5. The live walk is pending an owner model key.
+- New in `packages/team-model`: `TARGETS`, `DEFAULT_TARGETS`, `teamTargets`, `neutralInstructions`, `spliceBlock`, `withoutBlock`.
+- **What existing teams see on sync:** the version stamps, and the board and dashboard scripts in `scripts/agent-team/` (the Self-reported mark). Nothing else, unless they add `agents-md`.
+
 ## 0.14.0
 
 - **Studio Publish can open a pull request** (issue #30, "PR through gh"). `POST /v1/team/publish` with `"pr": true` first commits as before. It then pushes the branch to `origin`, never forced, and opens a pull request into the branch the publish started from. With `gh` installed and signed in, that is `gh pr create`, with the commit's first line as the title and the rest (the change-safety plan, "Work in progress") as the body. Without gh, the result has the branch, the compare link for a GitHub remote and the command to run. The result's `pr.state` is `opened`, `exists`, `pushed`, `not-pushed`, `no-remote` or `same-branch`. `GET /v1/team/pr-support` says whether there is a remote and whether gh is signed in. The server reads only `spec`, `branch`, `message` and `pr` from the page, never a token. `AGENT_TEAM_GH` points at another gh binary. The code is in `apps/studio/pr.mjs`.

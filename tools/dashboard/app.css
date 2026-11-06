@@ -23,6 +23,7 @@ html:has(> body > .atd), body:has(> .atd) { margin: 0; background: var(--bg, #f5
 .atd a { color: var(--accent); text-decoration: none } .atd a:hover { text-decoration: underline }
 .atd .small { font-size: 13px } .atd .muted { color: var(--ink2) } .atd .nowrap { white-space: nowrap }
 .atd .one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block }
+.atd .team-self { display: block; font-style: italic }
 .atd .row { display: flex; align-items: center; gap: 8px } .atd .wrap { flex-wrap: wrap } .atd .stack { display: flex; flex-direction: column; gap: 4px }
 .atd .pre { white-space: pre-wrap; overflow-wrap: anywhere }
 .atd .link { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left }

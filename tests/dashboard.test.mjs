@@ -92,6 +92,26 @@ test('the page code lays out the kit roster without a browser', () => {
   assert.equal(B.lightOf(T.bySlug.get('cto')), 'working', 'default limit is 30 minutes');
   assert.equal(api.isQuiet({ status: 'working', age_s: 31 * 60 }), true);
   assert.equal(api.isQuiet({ status: 'done', age_s: 9999 * 60 }), false);
+
+  // D46: a role with reports and no hook events is marked "Self-reported" on its card.
+  assert.equal(api.isSelfReported({ status: 'working', self_reported: true }), true);
+  assert.equal(api.isSelfReported({ status: 'working', self_reported: false }), false);
+  assert.equal(api.isSelfReported(undefined), false);
+  assert.match(api.card({ title: 'Web dev' }, 'working', 'Add a footer', false, 'web-dev', true), /Self-reported/);
+  assert.doesNotMatch(api.card({ title: 'Web dev' }, 'working', 'Add a footer', false, 'web-dev', false), /Self-reported/);
+});
+
+test('the board marks a thread self-reported until a hook event arrives from it (D46)', () => {
+  const at = (m) => new Date(Date.UTC(2026, 10, 6, 5, m)).toISOString();
+  const rows = [
+    { role: 'web-dev', kind: 'status', status: 'working', task: 'Add a footer', at: at(0), source: 'report.mjs' },
+    { role: 'qa-web', kind: 'status', status: 'working', task: 'Check', at: at(0), source: 'team-status.sh' },
+    { role: 'qa-web', kind: 'heartbeat', at: at(1), source: 'hook' },
+  ];
+  const { current } = summarize(rows, { now: new Date(at(2)) });
+  const by = Object.fromEntries(current.map((c) => [c.role, c]));
+  assert.equal(by['web-dev'].self_reported, true);
+  assert.equal(by['qa-web'].self_reported, false);
 });
 
 test('the server takes reports, keeps one copy of each, and serves the board', async () => {

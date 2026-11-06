@@ -78,10 +78,11 @@ export function summarize(rows, { now = new Date(), days = 7, role = '', staleMi
   const limits = { ...STALE_MINUTES, ...staleMinutes };
   const t = now.getTime();
   const key = (r) => `${r.role}#${r.instance ?? ''}`;
-  const lastAny = new Map(), lastStatus = new Map(), lastMsg = new Map();
+  const lastAny = new Map(), lastStatus = new Map(), lastMsg = new Map(), hooked = new Set();
   for (const r of rows) {
     const k = key(r);
     lastAny.set(k, r.at);
+    if (r.source === 'hook') hooked.add(k);
     if (r.status) lastStatus.set(k, r);
     if ((r.kind === 'handoff' || r.kind === 'blocked') && r.to_role) lastMsg.set(k, r);
   }
@@ -95,6 +96,8 @@ export function summarize(rows, { now = new Date(), days = 7, role = '', staleMi
       status_at: s.at, last_at: last,
       age_s: Math.max(0, Math.round((t - Date.parse(last)) / 1000)),
       stale: s.status in limits && t - Date.parse(last) > limits[s.status] * 60_000,
+      // No hook event from this thread: it reports only for itself (another coding agent, or hooks off), so it can go quiet.
+      self_reported: !hooked.has(k),
       waiting_on: (s.status === 'waiting' || s.status === 'blocked') && m && Date.parse(m.at) >= Date.parse(s.at) - 5000 ? m.to_role : null,
     });
   }
