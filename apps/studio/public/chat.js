@@ -242,7 +242,26 @@ export function createChat({ root, onOpen } = {}) {
     return `${label ?? human(what)}${by ? ` · ${by}` : ''}${e.time ? ` at ${fmtTime(e.time)}` : ''}${d.note ? `: ${d.note}` : ''}`;
   }
 
+  /** Draws the chat, then brings a linked card or the budget into view once it is there (a notification's link). */
   function render() {
+    draw();
+    if (st.focusMiss) flashNote(st.focusMiss);
+    if (!st.focus || !st.loaded) return;
+    const el = st.focus.card ? log.querySelector(`[data-card-id="${CSS.escape(st.focus.card)}"]`) : st.focus.budget ? $('#cost', root) : null;
+    if (!el) { const budget = st.focus.budget; st.focus = null; if (budget) return; st.focusMiss = 'The card that link points to is not in the recent chat. It may be older, or already answered.'; return flashNote(st.focusMiss); }
+    st.focus = null;
+    el.classList.add('focused');
+    el.scrollIntoView({ block: 'center' });
+    setTimeout(() => el.classList.remove('focused'), 4000);
+  }
+  function flashNote(text) {
+    const n = document.createElement('p');
+    n.className = 'timeline muted focus-miss';
+    n.textContent = text;
+    log.append(n);
+  }
+
+  function draw() {
     if (st.connected === false) {
       log.innerHTML = `<div class="chat-empty"><p><strong>No control plane connected.</strong></p><p class="muted">The chat talks to your team's chief of staff through the control plane. Start the Studio with <code>AGENT_TEAM_SERVER</code>, <code>AGENT_TEAM_SERVER_TOKEN</code> and <code>AGENT_TEAM_SERVER_TEAM</code> set, as for the live board.</p></div>`;
       text.disabled = true; $('#chat-send', root).disabled = true;
@@ -610,6 +629,8 @@ export function createChat({ root, onOpen } = {}) {
   $('#run-stop', root).onclick = () => control('stop');
 
   return {
+    /** Shows one card (`card`: its id) or today's budget (`budget: true`) when the chat has loaded: a link from an email or Slack. */
+    focus(what) { st.focusMiss = null; st.focus = what && (what.card || what.budget) ? { ...what } : null; if (st.loaded) render(); },
     /** Starts loading and listening the first time the chat is shown. */
     open() {
       if (st.es) return;

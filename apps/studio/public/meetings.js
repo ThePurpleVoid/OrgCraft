@@ -340,6 +340,8 @@ export function createMeetings({ root, ctx }) {
 
   return {
     render,
+    /** Opens one meeting (a notification's link to its minutes); false when the team has no such meeting. */
+    show(id) { if (!list().some((m) => m.id === id) || dirty) return false; open(id); return true; },
     /** True while a meeting has unsaved edits (the page asks before leaving). */
     get dirty() { return dirty; },
   };

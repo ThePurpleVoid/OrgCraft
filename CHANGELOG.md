@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Studio: Notifications page, emails** (CPO story "email notifications", opt-in copy, D49). Hosted pages at `/teams/{team}/notifications`: a person adds an address, types the code it gets, and picks kinds. The first time, "Approval needed" and "Budget at 100%" are ticked but nothing is saved until Save. After that each switch saves at once. A code that could not be sent says why (for example, no email sink yet). Uses the kit #101 API (`/v1/teams/{team}/emails`) and shows the account notices banner.
+- **Studio: links from emails and Slack** (kit #101 link paths). `/teams/{team}/inbox?card=`, `/budget`, `/board?role=` and `/meetings/{id}` land on the chat with the card marked, today's cost line, the role picked on the canvas, or that meeting (`apps/studio/public/links.js`). The local Studio redirects them. The hosted site (`build.mjs --studio`) rewrites them to `link.html`, and serves the Notifications page.
 - **Studio: AGENTS.md switch and "self-reported" cards** (CPO story "other coding agents", criteria 6 and 8; D45, D46). The team settings (no role picked) have "Also write AGENTS.md, for coding agents other than Claude Code". It sets `targets` in team.json, and switching it back off removes the key, so the team's files are byte-identical to before. Publish then shows and commits `AGENTS.md`, keeping the repository's own text outside the kit's markers, and the `.gitignore` line for role memory. Publish now commits `.gitignore` changes from sync whenever the file had no changes of the owner's own. A role that reports with no hook events reads "self-reported" on its card, in its tooltip and under "Now, on the live version".
 
 ## 0.17.0

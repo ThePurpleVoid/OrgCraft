@@ -906,16 +906,33 @@ async function confirmPublish() {
 
 // ------------------------------------------------------------------------------------------------ start
 
-function setPage(page) {
+/**
+ * A page and what to show on it: "chat?card=ID", "chat?budget", "team?role=SLUG", "meetings?id=ID". The links in
+ * emails and Slack messages (kit #101: /teams/{team}/inbox?card=…, /budget, /board?role=…, /meetings/{id}) arrive
+ * here as these, through linkHash.
+ */
+export function parsePage(raw) {
+  const [page, q = ''] = String(raw ?? '').split('?');
+  return { page, params: new URLSearchParams(q) };
+}
+
+function setPage(raw) {
   if (!spec) return showGallery();
+  const { page, params } = parsePage(raw);
   const p = ['chat', 'meetings'].includes(page) && !(page === 'chat' && S.noTeam) && !previewing ? page : 'team';
   if (meetings?.dirty && document.body.dataset.page === 'meetings' && p !== 'meetings' && !confirm('Discard the changes to this meeting?')) { history.replaceState(null, '', '#meetings'); return; }
   document.body.dataset.page = p;
   for (const b of document.querySelectorAll('#pages [data-page]')) b.setAttribute('aria-pressed', String(b.dataset.page === p));
-  if (p === 'chat') { chat ??= createChat({ root: $('#chat-page') }); chat.open(); }
-  else {
+  if (p === 'chat') {
+    chat ??= createChat({ root: $('#chat-page') });
+    if (params.has('card') || params.has('budget')) chat.focus({ card: params.get('card'), budget: params.has('budget') });
+    chat.open();
+  } else {
     if (p === 'meetings') meetings ??= createMeetings({ root: $('#meetings-page'), ctx: meetingsCtx });
+    const role = params.get('role');
+    if (p === 'team' && role && spec.roles?.[role]) { selected = role; selectedSystem = null; }
     render();
+    if (p === 'meetings' && params.get('id') && !meetings.show(params.get('id'))) flash('That meeting is not in this team any more.');
   }
   if (location.hash !== `#${p}`) history.replaceState(null, '', p === 'team' ? location.pathname : `#${p}`);
 }
