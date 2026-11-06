@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkpoint, git, outOfArea, prepare, release } from '../worktree.mjs';
+import { checkpoint, git, outOfArea, prepare, release, restart } from '../worktree.mjs';
 
 function origin() {
   const dir = mkdtempSync(join(tmpdir(), 'wt-'));
@@ -77,4 +77,31 @@ test('a checkpoint commits only inside the owned areas, and never pushes commits
   const again = await checkpoint({ cwd: w.cwd, branch: 'web/5', base: 'main', role: 'web-dev', reason: 't', areas: ['web/'] });
   assert.equal(again.pushed, false);
   assert.match(again.error, /outside this role's owned areas \(server.txt\)/);
+});
+
+test('restart onto the new base only when everything was merged and nothing is left uncommitted', async () => {
+  const { bare, root } = origin();
+  const w = await prepare({ root, repo: { url: bare, ref: 'main' }, worktree: 'web/9-r', session: 's9' });
+  writeFileSync(join(w.cwd, 'b.txt'), 'b\n');
+  const saved = await checkpoint({ cwd: w.cwd, branch: 'web/9-r', role: 'web', reason: 't', areas: ['b.txt'] });
+  assert.ok(saved.pushed);
+  // The base moves on (as a squash of the branch would).
+  const tmp = mkdtempSync(join(tmpdir(), 'wt-base-'));
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  execFileSync('git', ['clone', '--quiet', bare, tmp]);
+  writeFileSync(join(tmp, 'b.txt'), 'b\n');
+  for (const a of [['add', '-A'], ['commit', '--quiet', '-m', 'squash'], ['push', '--quiet', 'origin', 'main']]) execFileSync('git', a, { cwd: tmp, env });
+  const main = execFileSync('git', ['-C', bare, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
+
+  // A held file (outside the role's areas, left for its owner) is the agent's work: no reset.
+  writeFileSync(join(w.cwd, 'held.txt'), 'not mine to commit\n');
+  assert.equal(await restart(w.cwd, saved.commit), null);
+  assert.equal(readFileSync(join(w.cwd, 'held.txt'), 'utf8'), 'not mine to commit\n');
+  execFileSync('rm', [join(w.cwd, 'held.txt')]);
+  // A head that is not in what was merged: no reset.
+  assert.equal(await restart(w.cwd, main), null);
+  // Everything merged, nothing held: the copy starts again from the new base.
+  assert.equal(await restart(w.cwd, saved.commit), main);
+  assert.equal(await git(w.cwd, 'rev-parse', 'HEAD'), main);
+  release(w.cwd, 's9');
 });

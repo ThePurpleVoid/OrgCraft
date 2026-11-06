@@ -10,7 +10,8 @@
 //
 // Both answer the same calls:
 //   open({ repo, branch, base, title, body })  -> { connector, ref, url, headSha, existed }
-//   accept({ repo, ref, branch, base, headSha, approval }) -> { result } (the merge commit); the branch is deleted
+//   accept({ repo, ref, branch, base, headSha, approval }) -> { result, deleted } (the merge commit; whether the
+//                    branch is gone, so the session may start again from the base)
 //   head({ repo, ref }) -> the proposal's head on the remote now
 // and an accept that cannot land throws a ProposalError with `reason` head-moved, checks or conflict.
 import { createSign } from 'node:crypto';
@@ -92,10 +93,15 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
       // GitHub refuses with 409 when the head is no longer `sha`, and 405 when the pull request cannot be merged.
       const r = await call(`/repos/${slug}/pulls/${Number(ref)}/merge`, { token, method: 'PUT', body: JSON.stringify({ sha: headSha, merge_method: method }) });
       if (r.status === 200 && r.body.merged) {
-        // The branch goes, so the session's next push starts a new pull request from the new base. Best effort: a
-        // repository that deletes merged branches itself answers 422.
-        if (branch) await call(`/repos/${slug}/git/refs/heads/${branch.split('/').map(encodeURIComponent).join('/')}`, { token, method: 'DELETE' }).catch(() => {});
-        return { result: r.body.sha };
+        // The branch goes, so the session's next push starts a new pull request from the new base. A repository
+        // that deletes merged branches itself answers 422 (already gone). Anything else: the branch is still there,
+        // and the session must not restart onto it (its next push would not be a fast-forward).
+        let deleted = false;
+        if (branch) {
+          const d = await call(`/repos/${slug}/git/refs/heads/${branch.split('/').map(encodeURIComponent).join('/')}`, { token, method: 'DELETE' }).catch(() => ({ status: 0 }));
+          deleted = d.status === 204 || d.status === 422;
+        }
+        return { result: r.body.sha, deleted };
       }
       const why = r.body.message ?? `status ${r.status}`;
       if (r.status === 409) throw new ProposalError('head-moved', why);
@@ -161,7 +167,7 @@ export function localProposals({ checks = async () => true, before = async () =>
         await git(dir(repo), 'update-ref', '-d', `refs/heads/${p.branch}`, headSha);
         Object.assign(p, { state: 'merged', result, mergedHead: headSha, approval: approval ?? null });
         store(repo, s);
-        return { result };
+        return { result, deleted: true };
       } finally {
         rmSync(tmp, { recursive: true, force: true });
       }

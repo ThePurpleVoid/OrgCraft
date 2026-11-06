@@ -60,7 +60,7 @@ test('GitHub proposals: an app JWT, an installation token, the pull request foun
   const H = 'a'.repeat(40);
   const calls = [];
   let merge = { status: 200, body: { merged: true, sha: 'b'.repeat(40) } };
-  let existing = [];
+  let existing = [], del = 204;
   const fetch = async (url, init = {}) => {
     const path = url.replace('https://api.github.com', '');
     calls.push({ method: init.method ?? 'GET', path, auth: init.headers.authorization, body: init.body ? JSON.parse(init.body) : undefined });
@@ -70,6 +70,7 @@ test('GitHub proposals: an app JWT, an installation token, the pull request foun
     if (path.startsWith('/repos/acme/shop/pulls?')) return json(200, existing);
     if (path === '/repos/acme/shop/pulls') return json(201, { number: 9, html_url: 'https://github.com/acme/shop/pull/9', head: { sha: H } });
     if (path === '/repos/acme/shop/pulls/9/merge') return json(merge.status, merge.body);
+    if (path === '/repos/acme/shop/git/refs/heads/web/9-x' && init.method === 'DELETE') return json(del, {});
     return json(404, { message: 'not found' });
   };
   const g = githubProposals({ appId: 123, privateKey, fetch });
@@ -86,8 +87,14 @@ test('GitHub proposals: an app JWT, an installation token, the pull request foun
   assert.ok(secrets.includes('ghs_installation'), 'the installation token is a secret value for the scans');
   assert.ok(secrets.some((l) => privateKey.includes(l) && l.length >= 40), 'so are the key\'s lines');
 
-  assert.deepEqual(await g.accept({ repo: 'https://github.com/acme/shop', ref: 9, headSha: H }), { result: 'b'.repeat(40) });
+  assert.deepEqual(await g.accept({ repo: 'https://github.com/acme/shop', ref: 9, headSha: H }), { result: 'b'.repeat(40), deleted: false }, 'no branch named: nothing deleted');
   assert.deepEqual(calls.at(-1).body, { sha: H, merge_method: 'squash' }, 'GitHub refuses the merge if the head is not this sha');
+  assert.deepEqual(await g.accept({ repo: 'https://github.com/acme/shop', ref: 9, branch: 'web/9-x', headSha: H }), { result: 'b'.repeat(40), deleted: true });
+  assert.equal(calls.at(-1).method, 'DELETE', 'the merged branch is deleted after the merge');
+  del = 422; // already deleted by the repository's own setting
+  assert.equal((await g.accept({ repo: 'https://github.com/acme/shop', ref: 9, branch: 'web/9-x', headSha: H })).deleted, true);
+  del = 403; // a ruleset protects it: the session must stay on the branch
+  assert.equal((await g.accept({ repo: 'https://github.com/acme/shop', ref: 9, branch: 'web/9-x', headSha: H })).deleted, false);
   for (const [status, message, reason] of [[409, 'Head branch was modified. Review and try the merge again.', 'head-moved'], [405, 'Merge conflict', 'conflict'], [405, 'Required status check "test" is expected.', 'checks']]) {
     merge = { status, body: { message } };
     await assert.rejects(g.accept({ repo: 'https://github.com/acme/shop', ref: 9, headSha: H }), (e) => e.reason === reason, message);

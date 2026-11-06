@@ -386,8 +386,10 @@ export class Session {
         const m = await this.deps.proposals.accept({ repo: this.body.repo.url, ref: this.proposal.ref, branch: this.copy.branch, base: this.copy.base, headSha: approved, approval });
         await this.emit('proposal.accepted', { ...base, result: m.result });
         // The base has it now (squashed): later work starts from there, on a fresh pull request.
+        // Only when the remote branch is gone: otherwise the next push onto it would be refused (not a fast-forward).
         this.proposal = null;
-        await restart(this.copy.cwd, approved).catch((e) => this.deps.log?.(`restart ${this.copy.branch} on ${this.copy.base}: ${e.message}`));
+        if (m.deleted) await restart(this.copy.cwd, approved).catch((e) => this.deps.log?.(`restart ${this.copy.branch} on ${this.copy.base}: ${e.message}`));
+        else this.deps.log?.(`${this.copy.branch} was merged but not deleted on the remote; the session stays on it`);
         return { text: JSON.stringify({ approval, decision: 'approved', merged: m.result, pr: base.ref, headSha: approved }) + ' Approved and merged by the runner.' };
       } catch (e) {
         const reason = ['head-moved', 'checks', 'conflict'].includes(e.reason) ? e.reason : 'checks';
