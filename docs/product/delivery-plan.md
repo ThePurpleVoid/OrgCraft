@@ -57,6 +57,8 @@ Roles: architect (contracts), backend dev (control plane, lead for the foundatio
 - Connectors framework with one lifecycle and the vault; first connectors GitHub (App), email (provider API, SMTP fallback) and webhook.
 - Shipping: signed `studio` and `runner` images, the Compose stack, a one-click template for one platform, `studio doctor`, a staging deployment in a real cloud account, and local mode as the same build with bundled Postgres. The phase 2 editor moves into the online Studio unchanged.
 
+- Progress (2026-11-06): the owner started the MVP build, with an existing production kit team as the first real team on it. M1, the contracts, is in [docs/contracts/](../contracts/README.md), and `packages/events` maps the kit's reports to and from the event envelope exactly.
+
 **Runs, on top of the foundation:**
 
 - `apps/runner` on the Claude Agent SDK: run modes subagents and Studio runner; the built-in agent teams export runnable from the Studio ("open in terminal").

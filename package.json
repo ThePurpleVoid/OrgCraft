@@ -14,6 +14,7 @@
   "files": [
     "apps/studio/",
     "bin/",
+    "packages/events/",
     "packages/team-model/",
     "presets/",
     "scripts/*.sh",

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PurpleGiragge/Agent-Team-Kit/docs/contracts/schema/connector.v1.json",
+  "title": "Connector manifest, connector/1",
+  "type": "object",
+  "required": ["schema", "id", "name", "version", "capabilities"],
+  "properties": {
+    "schema": { "const": "connector/1" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "name": { "type": "string" },
+    "version": { "type": "string" },
+    "types": { "type": "array", "items": { "type": "string" } },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "description": "oauth, api-key, header-secret, none; readers accept unknown values" },
+        "secrets": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" } }
+      }
+    },
+    "config": { "type": "object" },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "tools": { "type": "object" },
+        "notify": { "type": "object" },
+        "sink": { "type": "object" },
+        "inbound": { "type": "object" },
+        "discover": { "type": "object" },
+        "work": { "type": "object" }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "properties": {
+        "read": { "type": "array", "items": { "type": "string" } },
+        "write": { "type": "array", "items": { "type": "string" } },
+        "deploy": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PurpleGiragge/Agent-Team-Kit/docs/contracts/schema/event.v1.json",
+  "title": "Agent Team event envelope, version 1 (CloudEvents 1.0 compatible)",
+  "type": "object",
+  "required": ["specversion", "id", "type", "version", "source", "tenant", "time", "actor", "data"],
+  "properties": {
+    "specversion": { "const": "1.0" },
+    "id": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "type": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "source": { "type": "string", "pattern": "^/tenants/[^/]+(/teams/[^/]+)?$" },
+    "tenant": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "team": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "time": { "type": "string", "format": "date-time" },
+    "actor": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["role", "person", "runner", "system"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "instance": { "type": ["string", "null"], "maxLength": 60 },
+        "session": { "type": ["string", "null"], "maxLength": 120 },
+        "via": { "type": "string", "maxLength": 20, "description": "hook, script, tool, studio, api; readers accept unknown values" }
+      }
+    },
+    "subject": { "type": "string", "maxLength": 200 },
+    "run": { "type": "string", "maxLength": 80 },
+    "teamVersion": { "type": "string", "maxLength": 64 },
+    "data": { "type": "object" }
+  },
+  "additionalProperties": true
+}

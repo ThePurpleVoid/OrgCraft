@@ -1,0 +1,244 @@
+openapi: 3.1.0
+info:
+  title: Agent Team Studio API
+  version: "1"
+  summary: The public API. The Studio, the CLI, the kit's hooks and integrations use only this.
+  description: |
+    Versioned in the path. Within /v1/, changes are additive only, and a removal comes with at least 12 months'
+    notice (docs/contracts/README.md). Every response that lists things pages with `cursor` and `limit`.
+    Every write accepts an `Idempotency-Key` header.
+
+    Authentication:
+    - People sign in through OIDC (GitHub first) and send a session cookie or a bearer token.
+    - Agent sessions use a short-lived session token from the runner.
+    - Teams that report from outside the product (the kit's scripts and hooks) use a per-team **report token**
+      in `x-team-token`. It can append reports for that one team and read nothing.
+servers:
+  - url: https://{host}/v1
+    variables: { host: { default: localhost:4848 } }
+security:
+  - person: []
+tags:
+  - { name: teams }
+  - { name: events, description: "The event log (events.md) and the board projected from it" }
+  - { name: runs }
+  - { name: chat }
+  - { name: approvals }
+  - { name: connectors }
+  - { name: runners, description: Registration. The runner protocol itself is runner-protocol.md }
+paths:
+  /teams:
+    get: { tags: [teams], summary: Teams in the workspaces I can see, responses: { "200": { $ref: "#/components/responses/TeamList" } } }
+    post:
+      tags: [teams]
+      summary: Connect a team (a repository with .agent-team/, or a new Studio-managed team repository)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TeamCreate" } } } }
+      responses: { "201": { $ref: "#/components/responses/Team" } }
+  /teams/{team}:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      tags: [teams]
+      summary: The team, its live version (commit SHA), and its spec at that version as a TeamSpec
+      responses: { "200": { $ref: "#/components/responses/Team" } }
+  /teams/{team}/preview:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      tags: [teams]
+      summary: Every file a publish of this spec would change, and the validate issues
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SpecBody" } } } }
+      responses: { "200": { description: Changes and issues, content: { application/json: { schema: { $ref: "#/components/schemas/Preview" } } } } }
+  /teams/{team}/publish:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      tags: [teams]
+      summary: Compile, sync with the pinned kit, and propose (a pull request) or commit
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Publish" } } } }
+      responses:
+        "202": { description: Publish started; follow `team.published` events, content: { application/json: { schema: { $ref: "#/components/schemas/PublishResult" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /teams/{team}/reports:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      tags: [events]
+      summary: Accept one report in the kit's shape (team-status.sh, report.mjs, the hooks), byte for byte
+      description: Mapped to a `report.*` or `message.*` event (events.md). This is what TEAM_REPORT_URL points at.
+      security: [ { reportToken: [] } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KitReport" } } } }
+      responses:
+        "200": { description: Stored, content: { application/json: { schema: { type: object, properties: { ok: { const: true }, id: { type: string } } } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "429": { description: More than 30 reports a minute from one role }
+  /teams/{team}/events:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      tags: [events]
+      summary: The event log, newest last, filtered by type prefix, actor and time
+      parameters:
+        - { name: type, in: query, schema: { type: string }, description: "Prefix, such as report. or approval." }
+        - { name: actor, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { $ref: "#/components/parameters/cursor" }
+        - { $ref: "#/components/parameters/limit" }
+      responses: { "200": { description: Events, content: { application/json: { schema: { type: object, properties: { events: { type: array, items: { $ref: "schema/event.v1.json" } }, next: { type: string } } } } } } }
+    post:
+      tags: [events]
+      summary: Append envelopes (runners and integrations). Ids make retries safe
+      security: [ { session: [] }, { runner: [] } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { events: { type: array, items: { $ref: "schema/event.v1.json" }, maxItems: 500 } } } } } }
+      responses: { "200": { description: Stored (duplicates ignored) } }
+  /teams/{team}/events/stream:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      tags: [events]
+      summary: Live events as server-sent events; resumes from Last-Event-ID
+      responses: { "200": { description: text/event-stream of envelopes, content: { text/event-stream: {} } } }
+  /teams/{team}/board:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      tags: [events]
+      summary: Where every role stands now (the board projection)
+      responses: { "200": { description: Board, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } } }
+  /teams/{team}/report-tokens:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      tags: [events]
+      summary: Mint a report token for TEAM_REPORT_TOKEN (shown once; append-only for this team)
+      responses: { "201": { description: The token, content: { application/json: { schema: { type: object, properties: { id: { type: string }, token: { type: string }, url: { type: string } } } } } } }
+  /teams/{team}/runs:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { tags: [runs], summary: Runs, responses: { "200": { description: Runs } } }
+    post:
+      tags: [runs]
+      summary: Start a run (mode, caps). The chief of staff starts first
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/RunCreate" } } } }
+      responses: { "201": { description: The run } }
+  /runs/{run}/{action}:
+    post:
+      tags: [runs]
+      summary: Pause, resume or stop a run
+      parameters:
+        - { name: run, in: path, required: true, schema: { type: string } }
+        - { name: action, in: path, required: true, schema: { enum: [pause, resume, stop] } }
+      responses: { "200": { description: Done } }
+  /teams/{team}/chat:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { tags: [chat], summary: The chat with the chief of staff (chat.*, decision.* and approval.* events), responses: { "200": { description: Messages } } }
+    post:
+      tags: [chat]
+      summary: Say something to the chief of staff. Stored verbatim
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [text], properties: { text: { type: string, maxLength: 20000 }, replyTo: { type: string } } } } } }
+      responses: { "201": { description: The chat.message event } }
+  /approvals/{approval}:
+    post:
+      tags: [approvals]
+      summary: Approve or deny. Checks the person's role in the workspace
+      parameters: [ { name: approval, in: path, required: true, schema: { type: string } } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [decision], properties: { decision: { enum: [approved, denied] }, note: { type: string } } } } } }
+      responses: { "200": { description: The approval.decided event }, "403": { $ref: "#/components/responses/Problem" } }
+  /connectors:
+    get: { tags: [connectors], summary: Connector manifests this deployment offers (connectors.md), responses: { "200": { description: Manifests } } }
+  /teams/{team}/resources:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      tags: [connectors]
+      summary: Connect a resource (a connector instance). Secret values go to the vault and are never returned
+      responses: { "201": { description: The resource, with secret names only } }
+  /runners:
+    post:
+      tags: [runners]
+      summary: Register a runner with a one-time code; returns its runner key once
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name], properties: { code: { type: string }, name: { type: string }, capabilities: { type: object } } } } } }
+      responses: { "201": { description: Runner id and key } }
+components:
+  securitySchemes:
+    person: { type: http, scheme: bearer, description: OIDC sign-in; a cookie in the browser }
+    session: { type: http, scheme: bearer, description: Short-lived agent session token from the runner }
+    runner: { type: http, scheme: bearer, description: Runner key }
+    reportToken: { type: apiKey, in: header, name: x-team-token }
+  parameters:
+    team: { name: team, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }
+    cursor: { name: cursor, in: query, schema: { type: string } }
+    limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+  responses:
+    Problem: { description: An error (RFC 9457), content: { application/problem+json: { schema: { type: object, properties: { type: { type: string }, title: { type: string }, status: { type: integer }, detail: { type: string } } } } } }
+    Team: { description: A team, content: { application/json: { schema: { $ref: "#/components/schemas/Team" } } } }
+    TeamList: { description: Teams, content: { application/json: { schema: { type: object, properties: { teams: { type: array, items: { $ref: "#/components/schemas/Team" } }, next: { type: string } } } } } }
+  schemas:
+    Team:
+      type: object
+      properties:
+        id: { type: string }
+        workspace: { type: string }
+        name: { type: string }
+        store: { type: object, description: "The workspace store: a repository resource and branch" }
+        version: { type: string, description: The live published version (commit SHA) }
+        spec: { $ref: "../../packages/team-model/schema/team-spec.v1.json" }
+    TeamCreate:
+      type: object
+      required: [name]
+      properties: { name: { type: string }, workspace: { type: string }, repository: { type: string, description: A repository resource, or omitted for a Studio-managed one }, template: { type: string } }
+    SpecBody: { type: object, required: [spec], properties: { spec: { $ref: "../../packages/team-model/schema/team-spec.v1.json" } } }
+    Preview:
+      type: object
+      properties:
+        changes: { type: array, items: { type: object, properties: { path: { type: string }, status: { enum: [added, changed, removed] }, before: { type: [string, "null"] }, after: { type: [string, "null"] } } } }
+        issues: { type: array, items: { type: object, properties: { level: { enum: [error, warning] }, where: { type: string }, message: { type: string } } } }
+    Publish:
+      allOf:
+        - $ref: "#/components/schemas/SpecBody"
+        - type: object
+          properties: { mode: { enum: [pull-request, commit], default: pull-request }, branch: { type: string }, message: { type: string } }
+    PublishResult: { type: object, properties: { branch: { type: string }, commit: { type: string }, pr: { type: integer }, url: { type: string } } }
+    KitReport:
+      type: object
+      description: Exactly the report team-status.sh and report.mjs send (tools/board.mjs toRow).
+      required: [role]
+      properties:
+        id: { type: string }
+        at: { type: string }
+        role: { type: string }
+        instance: { type: string }
+        kind: { enum: [status, handoff, bug, signoff, blocked, note, heartbeat] }
+        status: { enum: [idle, working, waiting, blocked, review, done] }
+        task: { type: string }
+        issue: { type: integer }
+        pr: { type: integer }
+        branch: { type: string }
+        commit: { type: string }
+        platform: { type: string }
+        to: { type: string }
+        to_role: { type: string }
+        severity: { type: integer }
+        evidence: { oneOf: [ { type: array, items: { type: string } }, { type: string } ] }
+        detail: { type: string }
+        source: { type: string }
+        session: { type: string }
+      additionalProperties: true
+    Board:
+      type: object
+      properties:
+        at: { type: string, format: date-time }
+        roles:
+          type: array
+          items:
+            type: object
+            properties:
+              role: { type: string }
+              instance: { type: [string, "null"] }
+              status: { type: string }
+              task: { type: [string, "null"] }
+              issue: { type: [integer, "null"] }
+              pr: { type: [integer, "null"] }
+              branch: { type: [string, "null"] }
+              statusAt: { type: string, format: date-time }
+              lastAt: { type: string, format: date-time }
+              stale: { type: boolean }
+              waitingOn: { type: [string, "null"] }
+              live: { type: boolean, description: A hook or the runner reported in the last few minutes }
+    RunCreate:
+      type: object
+      properties:
+        mode: { enum: [runner, subagents, agent-teams], default: runner }
+        caps: { type: object, properties: { costPerRun: { type: integer }, costPerDay: { type: integer }, currency: { type: string }, sessions: { type: integer } } }

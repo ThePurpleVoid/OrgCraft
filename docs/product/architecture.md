@@ -335,7 +335,7 @@ The core rule ([ADR 0004](../adr/0004-team-versions-and-transitions.md)): **ever
 
 ## 13. Built to last: the decade checklist
 
-[ADR 0005](../adr/0005-online-first-built-to-last.md) holds the decision. This is the checklist every design and PR is held to.
+[ADR 0005](../adr/0005-online-first-built-to-last.md) holds the decision. This is the checklist every design and PR is held to. The contracts themselves are in [docs/contracts/](../contracts/README.md).
 
 | Concern | Rule | What it protects against |
 | --- | --- | --- |

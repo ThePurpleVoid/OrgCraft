@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Contracts for the online product** ([docs/contracts/](docs/contracts/README.md), milestone M1 of the MVP). They are written before the code that implements them:
+  - the event envelope, version 1, CloudEvents-compatible, with a catalogue of report, message, run, session, chat, approval, team and connector events
+  - `/v1/` of the public API as OpenAPI 3.1. `POST /v1/teams/{team}/reports` takes the kit's reports byte for byte, so teams already on the kit are seen without changing a script
+  - the runner protocol: runners connect outbound, work is checkpointed, secrets are released per session
+  - the connector manifest. The MCP tools come with `notify`, `sink`, `inbound`, `discover` and `work` capabilities. A `sink` in `kit-report` format keeps a board a team already runs working unchanged
+  - the work contract: area, check, propose, accept, evidence
+- `packages/events`: the envelope and an exact two-way mapping with the kit's board reports, tested on every report kind.
+
 ## 0.7.1
 
 - **Round trips keep extension files byte-identical.** A `roles/<x>.extend.md` with no blank line after its title was rewritten with one on import and compile, so opening a real team in the Studio and publishing it changed files nobody edited. The team model now keeps an unchanged extension's own text (`extensionText` in the TeamSpec). Found by opening a 50-role production team in the Studio.
