@@ -263,7 +263,12 @@ test('start checks: the budget left today, the worked-since-last rule, and the d
     const low = await p.call('POST', '/teams/shop/meetings', { meeting: 'standup' });
     assert.equal(low.status, 409);
     assert.match(low.body.error ?? JSON.stringify(low.body), /50 left/);
-    await p.call('PUT', '/teams/shop/budget', { perDay: 1000, sessions: 10 }, await p.su());
+    // capUsd is dollars: a budget in another currency is refused rather than converted wrongly.
+    await p.call('PUT', '/teams/shop/budget', { perDay: 100000, currency: 'JPY', sessions: 10 }, await p.su());
+    const yen = await p.call('POST', '/teams/shop/meetings', { meeting: 'standup' });
+    assert.equal(yen.status, 409);
+    assert.match(yen.body.error ?? JSON.stringify(yen.body), /US dollars/);
+    await p.call('PUT', '/teams/shop/budget', { perDay: 1000, currency: 'USD', sessions: 10 }, await p.su());
     // worked-since-last: nobody has reported yet, then qa does.
     assert.equal((await p.call('POST', '/teams/shop/meetings', { meeting: 'catch-up' })).status, 409);
     await p.m3.tx('acme', (ctx) => ctx.emit('shop', 'report.status', { status: 'working', task: 'Checkout' }, { run: run.id, actor: { kind: 'role', id: 'qa', via: 'tool' } }));

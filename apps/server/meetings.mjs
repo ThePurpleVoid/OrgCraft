@@ -111,6 +111,8 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
       const cap = minor(d.capUsd);
       const [b] = await q('select currency, per_day from budgets where team = $1', [team]);
       if (b?.per_day === null || b?.per_day === undefined) throw new Problem(409, 'set a daily cap first');
+      // capUsd is in US dollars; until meetings.json says a currency, a team budgeted in another one cannot convert it.
+      if ((b.currency ?? 'USD') !== 'USD') throw new Problem(409, `meeting caps are in US dollars and this team's budget is in ${b.currency}; meetings need a USD budget for now`);
       if (cap > Number(b.per_day)) throw new Problem(409, `the meeting's cap (${cap}) is above the team's daily cap (${b.per_day})`);
       const [day] = await q('select spent, raised from budget_days where team = $1 and day = $2::date', [team, ctx.now.toISOString().slice(0, 10)]);
       const left = Number(b.per_day) + Number(day?.raised ?? 0) - Number(day?.spent ?? 0);
