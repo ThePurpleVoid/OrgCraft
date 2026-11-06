@@ -932,7 +932,10 @@ function setPage(raw) {
     const role = params.get('role');
     if (p === 'team' && role && spec.roles?.[role]) { selected = role; selectedSystem = null; }
     render();
-    if (p === 'meetings' && params.get('id') && !meetings.show(params.get('id'))) flash('That meeting is not in this team any more.');
+    if (p === 'team' && role && !spec.roles?.[role]) flash('That role is not on this team any more.');
+    const shown = p === 'meetings' && params.get('id') ? meetings.show(params.get('id')) : 'shown';
+    if (shown === 'missing') flash('That meeting is not in this team any more.');
+    if (shown === 'dirty') flash('Save or cancel the meeting you are editing, then open the link again.');
   }
   if (location.hash !== `#${p}`) history.replaceState(null, '', p === 'team' ? location.pathname : `#${p}`);
 }

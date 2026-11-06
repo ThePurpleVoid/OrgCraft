@@ -110,7 +110,7 @@ test('every path the site rewrites to the control plane runs through the edge mi
 test('with the Studio, the site serves the Notifications page and sends every other team link to link.html', async () => {
   const { STUDIO_REWRITES } = await import('../deploy/vercel/build.mjs');
   const c = siteConfig('https://api.example.org', { studio: true });
-  assert.deepEqual(c.rewrites.slice(-2), STUDIO_REWRITES, 'after the API rewrites, so /v1 is never shadowed');
+  assert.deepEqual(c.rewrites.slice(3), STUDIO_REWRITES, 'after the API rewrites, so /v1 is never shadowed');
   for (const r of STUDIO_REWRITES) assert.ok(existsSync(`apps/studio/public${r.destination}`), r.destination);
   assert.equal(siteConfig('https://api.example.org').rewrites.length, 3, 'the status site has only the API rewrites');
 });

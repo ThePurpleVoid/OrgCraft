@@ -24,11 +24,12 @@ export const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'uns
 
 /**
  * The Studio's own pages for the links in emails and Slack messages (kit #101): the Notifications page, and every other
- * /teams/{team}/… path to link.html, which sends the browser to the right page of the Studio (apps/studio/public/links.js).
+ * /teams/{team}/… and /t/{team}/… path (cards, minutes) to link.html, which sends the browser to the right page of the Studio (apps/studio/public/links.js).
  */
 export const STUDIO_REWRITES = [
   { source: '/teams/:team/notifications', destination: '/notifications.html' },
   { source: '/teams/:path*', destination: '/link.html' },
+  { source: '/t/:path*', destination: '/link.html' },
 ];
 
 /** The vercel.json for a site that fronts the control plane at `api` (an https origin, no path); `studio` adds its pages. */

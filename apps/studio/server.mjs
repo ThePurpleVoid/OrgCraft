@@ -24,7 +24,7 @@ import { liveSource } from './live.mjs';
 import { chatSource } from './chat.mjs';
 import { runRequest, RunRefused } from './runs.mjs';
 import { openPullRequest, prSupport, pullRequestText } from './pr.mjs';
-import { linkHash } from './public/links.js';
+import { linkHash, resolveMeeting } from './public/links.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(HERE, 'public');
@@ -365,8 +365,13 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       }
       if (req.method === 'GET' || req.method === 'HEAD') {
         // A link from an email or Slack message (kit #101): to the right page of the Studio.
-        const to = linkHash(url.pathname, url.search);
-        if (to) { res.writeHead(302, { location: to, 'cache-control': 'no-store' }); return res.end(); }
+        // A held meeting's link opens the meeting it was held from, read from the control plane when one is connected.
+        const link = linkHash(url.pathname, url.search);
+        if (link) {
+          const to = await resolveMeeting(link, (id) => (chat.connected ? chat.meeting(id) : null));
+          res.writeHead(302, { location: to, 'cache-control': 'no-store' });
+          return res.end();
+        }
         // The kit's model and its price table (meeting estimates) are served next to the page.
         const file = url.pathname === '/team-model.mjs' ? MODEL : url.pathname === '/model-prices.json' ? PRICES : join(PUBLIC, url.pathname === '/' ? 'index.html' : url.pathname.slice(1));
         if (!file.startsWith(PUBLIC) && file !== MODEL && file !== PRICES) throw new HttpError(404, 'not found');

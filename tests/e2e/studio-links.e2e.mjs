@@ -5,7 +5,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +25,7 @@ before(async () => {
   const root = mkdtempSync(join(tmpdir(), 'studio-links-'));
   execFileSync('git', ['-C', root, 'init', '-q']);
   execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
+  writeFileSync(join(root, '.agent-team/meetings.json'), JSON.stringify({ meetings: [{ id: 'weekly-review', title: 'Weekly review', when: { days: ['mon'], at: '09:00' }, attendees: { roles: ['chief-of-staff'], lanes: [], rule: null }, facilitator: 'chief-of-staff', format: 'round', rounds: 1, agenda: 'What changed', ifBusy: 'next-pause', owner: { minutes: true, speaks: false }, capUsd: 1, skipIfQuiet: true }] }, null, 2));
   cp = await fakeControlPlane({ team: 'sample-app' });
   studio = createStudio({ root, env: cp.env });
   await new Promise((r) => studio.listen(0, '127.0.0.1', r));
@@ -69,6 +70,23 @@ test('a card, the budget, a role and a meeting, each from its link', { skip }, a
   await page.locator('#canvas .node.selected[data-slug="chief-of-staff"]').waitFor();
   assert.equal(new URL(page.url()).hash, '', 'the team page keeps a clean address');
 
+  await page.goto(`${base}/teams/sample-app/board?role=nobody-here`);
+  await page.getByText('That role is not on this team any more.').waitFor();
+
+  // A held meeting's minutes link (meetings.mjs writes /t/{team}/meetings/mtg_…): the meeting it was held from.
+  const r2 = await page.request.get(`${base}/t/sample-app/meetings/mtg_held1`, { maxRedirects: 0 });
+  assert.equal(r2.headers().location, '/#meetings?id=weekly-review');
+  await page.goto(`${base}/t/sample-app/meetings/mtg_held1`);
+  await page.locator('.meeting-row.selected', { hasText: 'Weekly review' }).waitFor();
+  // A held meeting the control plane does not know: the Meetings page.
+  assert.equal((await page.request.get(`${base}/t/sample-app/meetings/mtg_gone`, { maxRedirects: 0 })).headers().location, '/#meetings');
+  // A card's own link.
+  assert.equal((await page.request.get(`${base}/t/sample-app/approvals/apr_1`, { maxRedirects: 0 })).headers().location, '/#chat?card=apr_1');
+
+  // While the meeting has unsaved edits, a link to it keeps them (no reload of the form).
+  await page.locator('#m-title').fill('Weekly review, edited');
+  await page.evaluate(() => { location.hash = 'meetings?id=weekly-review'; });
+  assert.equal(await page.locator('#m-title').inputValue(), 'Weekly review, edited');
   // A meeting the team no longer has.
   await page.goto(`${base}/teams/sample-app/meetings/old-review`);
   await page.getByText('That meeting is not in this team any more.').waitFor();

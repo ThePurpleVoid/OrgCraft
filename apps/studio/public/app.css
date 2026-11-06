@@ -541,3 +541,5 @@ label.switch { display: inline-flex; gap: 8px; align-items: center; min-height: 
 label.switch input { width: auto; }
 /* A card or the cost line a notification linked to. */
 .card-msg.focused, .cost.focused { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; transition: outline-color 0.6s; }
+@media (max-width: 640px) { label.switch { min-height: 44px; } .n-address button, #email-another { min-height: 44px; } }
+.focus-miss { margin: 6px 12px; }

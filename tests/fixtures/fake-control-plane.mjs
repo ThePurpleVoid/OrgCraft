@@ -64,6 +64,9 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     if (req.method === 'POST' && key && replays.has(key)) return send(res, ...replays.get(key));
     const done = (status, body) => { if (req.method === 'POST' && key) replays.set(key, [status, body]); return send(res, status, body); };
 
+    // A held meeting (meetings.mjs view): the Studio reads its definition to open a link to its minutes.
+    const held = new RegExp(`^/v1/teams/${team}/meetings/([^/]+)$`).exec(p);
+    if (held && req.method === 'GET') return held[1] === 'mtg_held1' ? send(res, 200, { id: 'mtg_held1', definition: 'weekly-review', title: 'Weekly review', state: 'closed' }) : send(res, 404, { error: 'no such meeting' });
     if (p === `/v1/teams/${team}/chat` && req.method === 'GET') {
       const shown = events.filter((e) => /^(chat\.|decision\.|approval\.|card\.updated|run\.|budget\.)/.test(e.type));
       const before = url.searchParams.get('before');

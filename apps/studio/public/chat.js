@@ -221,7 +221,7 @@ export function createChat({ root, onOpen } = {}) {
       return `<button type="button" class="${style}" data-card="${esc(card.id)}" data-option="${esc(o.id)}">${esc(o.label ?? o.id)}</button>`;
     }).join('');
     const links = (card.links ?? []).map((l) => safeUrl(l.url) && `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.title ?? LINKS[l.rel] ?? human(l.rel ?? 'link'))}</a>`).filter(Boolean).join(' · ');
-    return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}" data-card-id="${esc(card.id)}">
+    return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}" data-card-id="${esc(card.id)}"${subjectId(card.subject) ? ` data-subject-id="${esc(subjectId(card.subject))}"` : ''}>
       <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtWhen(card.expires))}` : ''}</div>
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
       ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="Step-up secret" placeholder="Step-up secret" required><button type="submit" class="primary">Confirm</button></form>` : ''}
@@ -245,20 +245,23 @@ export function createChat({ root, onOpen } = {}) {
   /** Draws the chat, then brings a linked card or the budget into view once it is there (a notification's link). */
   function render() {
     draw();
-    if (st.focusMiss) flashNote(st.focusMiss);
     if (!st.focus || !st.loaded) return;
-    const el = st.focus.card ? log.querySelector(`[data-card-id="${CSS.escape(st.focus.card)}"]`) : st.focus.budget ? $('#cost', root) : null;
-    if (!el) { const budget = st.focus.budget; st.focus = null; if (budget) return; st.focusMiss = 'The card that link points to is not in the recent chat. It may be older, or already answered.'; return flashNote(st.focusMiss); }
+    const el = st.focus.card ? log.querySelector(`[data-card-id="${CSS.escape(st.focus.card)}"], [data-subject-id="${CSS.escape(st.focus.card)}"]`) : st.focus.budget ? $('#cost', root) : null;
+    if (!el) { const budget = st.focus.budget; st.focus = null; if (budget) return; return flashNote('The card that link points to is not in the recent chat. It may be older, or already answered.'); }
     st.focus = null;
     el.classList.add('focused');
     el.scrollIntoView({ block: 'center' });
     setTimeout(() => el.classList.remove('focused'), 4000);
   }
+  /** A note above the chat (not in it, so the next refresh does not wipe or repeat it), gone after a while. */
   function flashNote(text) {
+    log.parentElement.querySelector('.focus-miss')?.remove();
     const n = document.createElement('p');
     n.className = 'timeline muted focus-miss';
+    n.setAttribute('role', 'status');
     n.textContent = text;
-    log.append(n);
+    log.before(n);
+    setTimeout(() => n.remove(), 15_000);
   }
 
   function draw() {
@@ -630,7 +633,7 @@ export function createChat({ root, onOpen } = {}) {
 
   return {
     /** Shows one card (`card`: its id) or today's budget (`budget: true`) when the chat has loaded: a link from an email or Slack. */
-    focus(what) { st.focusMiss = null; st.focus = what && (what.card || what.budget) ? { ...what } : null; if (st.loaded) render(); },
+    focus(what) { st.focus = what && (what.card || what.budget) ? { ...what } : null; if (st.loaded) render(); },
     /** Starts loading and listening the first time the chat is shown. */
     open() {
       if (st.es) return;
