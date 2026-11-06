@@ -181,7 +181,7 @@ export function createMeetings({ root, ctx }) {
     const busy = ({ 'next-pause': 'An attendee in the middle of a task answers when its current step ends.', proxy: 'An attendee in the middle of a task answers from its board reports, at no cost.', skip: 'An attendee in the middle of a task is left out this time.' })[f.ifBusy ?? 'next-pause'];
     const steps = [
       [when, `${runner} opens the meeting and sends the agenda to ${att}.${f.skipIfQuiet && f.when.label === undefined ? ' If nothing changed since the last one, it is skipped.' : ''}`],
-      ['Then', `${f.format === 'discussion' ? `Attendees answer, then read each other and reply, for up to ${f.rounds ?? 3} rounds. It ends early when no one has more to add.` : 'Each attendee answers the agenda once.'} ${busy}`],
+      ['Then', `${f.format === 'discussion' ? `Attendees answer, then read each other's answers and reply, for up to ${f.rounds ?? 3} round${(f.rounds ?? 3) === 1 ? '' : 's'}. It ends early when no one has more to add.` : 'Each attendee answers the agenda once.'} ${busy}`],
       ['Minutes', `${runner} writes the minutes in the chat: answers, decisions and action items.${f.owner?.minutes !== false ? ' You get them.' : ''}${f.owner?.speaks ? ' You can speak during it.' : ''}`],
       ['After', 'Action items go to their owners as tasks or hand-offs. Anything that needs you becomes a decision card.'],
     ];
