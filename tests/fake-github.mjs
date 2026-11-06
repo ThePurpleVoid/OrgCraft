@@ -22,6 +22,8 @@ export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, installa
   const pulls = [];
   const minted = [];
   let delay = latency;
+  let inflight = 0;
+  let peak = 0;
   const prefix = `/repos/${repo}`;
   const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(body === undefined ? '' : JSON.stringify(body)); };
 
@@ -30,7 +32,10 @@ export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, installa
     for await (const c of req) raw += c;
     const url = new URL(req.url, 'http://x');
     calls.push({ method: req.method, path: url.pathname + url.search, auth: req.headers.authorization ?? '' });
+    // How many calls are waiting on the fake at once: the client's parallelism, independent of how busy the machine is.
+    inflight++; peak = Math.max(peak, inflight);
     if (delay) await new Promise((r) => setTimeout(r, delay));
+    inflight--;
     const body = raw ? JSON.parse(raw) : null;
     try {
       // App endpoints: a JWT mints an installation token.
@@ -119,6 +124,7 @@ export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, installa
     calls, pulls, minted, git,
     setInstallation: (v) => { installation = v; },
     setLatency: (ms) => { delay = ms; },
+    get peak() { return peak; },
     close: () => new Promise((r) => server.close(r)),
   };
 }
