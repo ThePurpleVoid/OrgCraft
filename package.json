@@ -15,6 +15,7 @@
     "apps/studio/",
     "bin/",
     "packages/events/",
+    "packages/github-app/",
     "packages/model-prices/",
     "packages/team-model/",
     "presets/",

@@ -23,13 +23,15 @@
 // repository's installation must be one of them, or the call is refused with a ProposalError of reason
 // `installation`, and no other installation is ever tried. Writes (open, accept, bound) look the installation up
 // fresh every time; reads (head, preview) may use a lookup up to five minutes old.
-import { createSign } from 'node:crypto';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { git } from './worktree.mjs';
 import { repoSlug } from './policy.mjs';
+import { appJwt, githubApp } from '../../packages/github-app/index.mjs';
+
+export { appJwt };
 
 export class ProposalError extends Error {
   constructor(reason, message) { super(message); this.reason = reason; }
@@ -54,14 +56,6 @@ export function previewUrl(u) {
   } catch { return null; }
 }
 
-/** A GitHub App's JWT (RS256, 9 minutes, backdated a minute for clock drift). */
-export function appJwt(appId, privateKey, now = Date.now()) {
-  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
-  const iat = Math.floor(now / 1000) - 60;
-  const head = `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64({ iat, exp: iat + 540, iss: String(appId) })}`;
-  return `${head}.${createSign('RSA-SHA256').update(head).sign(privateKey).toString('base64url')}`;
-}
-
 /**
  * GitHub, through the merger app. `fetch` is injectable for the tests; nothing here runs without an app id and key.
  * Tokens are per repository installation and kept until five minutes before they expire.
@@ -79,49 +73,19 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
     const host = new URL(url).hostname.toLowerCase();
     return hosts.some((h) => host === h || host.endsWith(`.${h}`));
   };
-  const tokens = new Map(); // slug#installation#permissions -> { token, until }
-  const lookups = new Map(); // slug -> { id, at }: the repository's installation, for reads only
-  const READ_FOR = 5 * 60_000;
-  async function call(path, { token, ...init } = {}) {
-    const res = await fetch(`${api}${path}`, { ...init, headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'agent-team-runner', authorization: `Bearer ${token}`, ...(init.body ? { 'content-type': 'application/json' } : {}) } });
-    const body = await res.json().catch(() => ({}));
-    return { status: res.status, body };
-  }
+  // The installation checks and the tokens (packages/github-app): writes look the installation up fresh, reads may
+  // use a lookup up to five minutes old, and only an installation bound to the tenant is ever used.
+  const app = githubApp({ appId, privateKey, api, fetch, userAgent: 'agent-team-runner' });
+  const call = app.call;
   // Each token carries only what its calls need: the merge path writes, the preview path only reads deployments.
   const WRITE = { contents: 'write', pull_requests: 'write' };
-  // The repository's installation, checked against the tenant's bound installations. `fresh` (every write) never
-  // uses an earlier lookup; a read may use one up to five minutes old.
-  async function installationFor(slug, installations, { fresh }) {
-    const bound = Array.isArray(installations) ? installations.filter((i) => Number.isSafeInteger(i) && i > 0) : [];
-    if (!bound.length) throw new ProposalError('installation', `no GitHub App installation is bound to this team's tenant, so nothing is written to or read from ${slug}; connect the GitHub App for this repository first`);
-    const seen = lookups.get(slug);
-    let id = !fresh && seen && Date.now() - seen.at < READ_FOR ? seen.id : null;
-    if (id === null) {
-      const inst = await call(`/repos/${slug}/installation`, { token: appJwt(appId, privateKey) });
-      if (inst.status === 404) { lookups.delete(slug); throw new ProposalError('installation', `the merger app is not installed on ${slug}`); }
-      if (inst.status !== 200 || !Number.isSafeInteger(inst.body?.id)) { lookups.delete(slug); throw new Error(`the installation of ${slug} could not be read (${inst.status})`); }
-      id = inst.body.id;
-      lookups.set(slug, { id, at: Date.now() });
-    }
-    if (!bound.includes(id)) throw new ProposalError('installation', `${slug} is under GitHub App installation ${id}, which is not bound to this team's tenant; refused, and no other installation is tried`);
-    return id;
-  }
-  async function tokenFor(slug, installations, { permissions = WRITE, fresh = true } = {}) {
-    const id = await installationFor(slug, installations, { fresh });
-    const key = `${slug}#${id}#${Object.entries(permissions).map(([k, v]) => `${k}:${v}`).join(',')}`;
-    const t = tokens.get(key);
-    if (t && t.until > Date.now()) return t.token;
-    const jwt = appJwt(appId, privateKey);
-    const tok = await call(`/app/installations/${id}/access_tokens`, { token: jwt, method: 'POST', body: JSON.stringify({ repositories: [slug.split('/')[1]], permissions }) });
-    if (tok.status !== 201 || !tok.body.token) throw new Error(`no installation token for ${slug} (${tok.status})`);
-    tokens.set(key, { token: tok.body.token, until: Date.parse(tok.body.expires_at) - 5 * 60_000 });
-    return tok.body.token;
-  }
+  const tokenFor = async (slug, installations, { permissions = WRITE, fresh = true } = {}) => (await app.tokenFor(slug, installations, { permissions, fresh })).token;
+  const installationFor = (slug, installations, opts) => app.installationFor(slug, installations, opts);
   const slugOf = (repo) => { const s = repoSlug(repo); if (!s) throw new Error(`${repo} is not a GitHub repository`); return s; };
   return {
     connector: 'github',
     /** Values the checkpoint scan and the memory redaction look for (the key's base64 body and the live tokens). */
-    secrets: () => [...pemLines(privateKey), ...[...tokens.values()].map((t) => t.token)],
+    secrets: () => [...pemLines(privateKey), ...app.liveTokens()],
     /** Before a checkpoint push: the repository's installation, looked up fresh, must be bound to the tenant. */
     async bound({ repo, installations }) {
       const slug = repoSlug(repo);
@@ -154,7 +118,7 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
       if (!FULL_SHA.test(String(sha ?? ''))) return null;
       const slug = slugOf(repo);
       let token;
-      try { token = await tokenFor(slug, installations, { permissions: { deployments: 'read' }, fresh: false }); } catch (e) { if (e instanceof ProposalError) throw e; return null; }
+      try { token = await tokenFor(slug, installations, { permissions: { deployments: 'read' }, fresh: false }); } catch (e) { if (e.reason === 'installation') throw e; return null; }
       const list = await call(`/repos/${slug}/deployments?sha=${sha}&per_page=10`, { token });
       if (list.status !== 200 || !Array.isArray(list.body)) return null;
       for (const d of list.body) {
