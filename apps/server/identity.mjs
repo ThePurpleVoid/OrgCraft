@@ -175,17 +175,22 @@ function firstPartyPolicy() {
 }
 
 /**
- * Who is calling, for rate limits. Behind the Vercel rewrite every request reaches us from Vercel's egress, so the
- * socket address (and fly-client-ip) is one IP for everyone: use the client IP the edge forwards. A caller who forges
- * these headers only escapes their own bucket; they can never fill anyone else's, and the global cap still holds.
+ * Who is calling, for rate limits, from what our own proxies say and nothing a client can write.
+ *
+ * x-forwarded-for is read from the right: each proxy we run appends the peer it saw, so with `hops` proxies in front
+ * of the server (Fly's is 1), the entry `hops` from the right is the real peer. A request that also carries the edge
+ * secret came through our Vercel rewrite, whose own entry sits one further left, so that is the caller. Anything a
+ * client puts in the header lands to the left of those and is never read. With no hops configured, the socket address.
  */
-export function forwardedIp(req, header = null) {
-  const h = req.headers;
-  const pick = (v) => String(v ?? '').split(',')[0].trim().slice(0, 64);
-  return (header && pick(h[header])) || pick(h['x-vercel-forwarded-for']) || pick(h['x-forwarded-for']) || req.socket?.remoteAddress || '';
+export function callerIp(req, { hops = 0, edgeSecret = null, edgeHeader = 'x-agent-team-edge' } = {}) {
+  const list = String(req.headers['x-forwarded-for'] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  const viaEdge = !!edgeSecret && hops > 0 && same(req.headers[edgeHeader] ?? '', edgeSecret);
+  const n = hops > 0 ? hops + (viaEdge ? 1 : 0) : 0;
+  const ip = n > 0 && list.length >= n ? list[list.length - n] : '';
+  return (ip || req.socket?.remoteAddress || '').slice(0, 64);
 }
 
-/** Requests per IP and minute on /oauth/* (S8): authorize 20, everything else 60; and 600 a minute in all. */
+/** Requests per IP and minute on /oauth/* (S8): authorize 20, everything else 60. */
 function limiter(now) {
   const hits = new Map();
   return (ip, bucket, max) => {
@@ -203,10 +208,11 @@ function limiter(now) {
  * The issuer. `publicUrl` is the issuer and the cookie origin (https). `tenant` is the workspace the first owner is
  * made in. `ownerGithub` is the first owner's numeric GitHub user id, read only while the deployment has no members.
  * `upstream` is githubUpstream(...) (or a stub with the same two methods). `clients` adds apps and the CLI:
- * [{ client_id, redirect_uris, application_type: 'native' }]. `clientIp(req)` names the caller for rate limits, and
- * `globalPerMinute` caps all /oauth requests together, the backstop if callers cannot be told apart.
+ * [{ client_id, redirect_uris, application_type: 'native' }]. `clientIp(req)` names the caller for rate limits
+ * (callerIp). There is no global cap: one would be a bucket anyone could empty for everyone (security review, #73);
+ * floods are for the host's concurrency limits and the edge.
  */
-export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), clientIp = (req) => forwardedIp(req), globalPerMinute = 600 }) {
+export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), clientIp = (req) => callerIp(req) }) {
   const issuer = new URL(publicUrl);
   if (issuer.protocol !== 'https:') throw new Error('sign-in needs an https AGENT_TEAM_PUBLIC_URL (the cookie is Secure and __Host-)');
   if (issuer.pathname !== '/' || issuer.search || issuer.hash) throw new Error('AGENT_TEAM_PUBLIC_URL must be an origin with no path for sign-in');
@@ -461,7 +467,6 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     if (!p.startsWith('/oauth/') && p !== '/.well-known/openid-configuration') return false;
     const authorize = p === '/oauth/authorize';
     if (limited(clientIp(req), authorize ? 'authorize' : 'oauth', authorize ? 20 : 60)) throw new Problem(429, 'too many sign-in requests from here; try again in a minute');
-    if (limited('*', 'all', globalPerMinute)) throw new Problem(429, 'too many sign-in requests right now; try again in a minute');
     if (authorize && req.method === 'GET' && url.searchParams.get('client_id') === WEB_CLIENT && !url.searchParams.has('response_type')) { await webStart(req, res, url); return true; }
     const inter = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
     if (inter && req.method === 'GET') { await upstreamStart(req, res, inter[1]); return true; }

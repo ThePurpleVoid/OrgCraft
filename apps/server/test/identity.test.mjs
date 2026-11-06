@@ -107,12 +107,12 @@ function browser(local, { ip = 'browser' } = {}) {
   return b;
 }
 
-async function issuer(fn, { ownerGithub = OWNER, now, clientIp = (req) => req.headers['x-test-ip'] ?? '', globalPerMinute } = {}) {
+async function issuer(fn, { ownerGithub = OWNER, now, clientIp = (req) => req.headers['x-test-ip'] ?? '' } = {}) {
   const db = await fresh();
   await store.ensureTenant(db, 'acme');
   const gh = await stubGitHub();
   const upstream = (await import('../identity.mjs')).githubUpstream({ clientId: 'Iv1.test', clientSecret: 'gh-secret', url: gh.url, apiUrl: gh.url });
-  const identity = await createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub, upstream, ...(clientIp ? { clientIp } : {}), ...(globalPerMinute ? { globalPerMinute } : {}), ...(now ? { now } : {}) });
+  const identity = await createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub, upstream, ...(clientIp ? { clientIp } : {}), ...(now ? { now } : {}) });
   const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, publicUrl: ORIGIN, identity, tickMs: 0, stepUpVerifier: verifier, ...(now ? { now } : {}) });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const local = `http://127.0.0.1:${server.address().port}`;
@@ -395,18 +395,29 @@ test('the 21st authorize call in a minute from one IP gets 429', () => issuer(as
   assert.equal((await browser({ ip: '203.0.113.10' }).fetch(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=/`)).status, 303);
 }));
 
-test('behind the edge, each caller has their own bucket by the forwarded IP, and all of /oauth has a global cap', () => issuer(async ({ local }) => {
-  const hit = (headers) => fetch(`${local}/oauth/authorize?client_id=agent-team-web&return=/`, { redirect: 'manual', headers });
-  // Every request comes from the same socket (the edge); the forwarded client IP tells callers apart.
-  for (let i = 0; i < 20; i++) await hit({ 'x-vercel-forwarded-for': '198.51.100.1' });
-  assert.equal((await hit({ 'x-vercel-forwarded-for': '198.51.100.1' })).status, 429);
-  assert.equal((await hit({ 'x-vercel-forwarded-for': '198.51.100.2' })).status, 303, 'one flooding caller does not lock out another');
-  assert.equal((await hit({ 'x-forwarded-for': '198.51.100.3, 10.0.0.1' })).status, 303);
-  // The backstop: 30 in all here (600 by default), whoever sends them.
-  let last;
-  for (let i = 0; i < 10; i++) last = await hit({ 'x-vercel-forwarded-for': `203.0.113.${i}` });
-  assert.equal(last.status, 429);
-}, { clientIp: null, globalPerMinute: 30 }));
+test('rate limits read the caller from our own proxies, from the right; a forged x-forwarded-for dodges nothing', async () => {
+  const EDGE = 'e'.repeat(40);
+  const { callerIp } = await import('../identity.mjs');
+  await issuer(async ({ local }) => {
+    const hit = (headers) => fetch(`${local}/oauth/authorize?client_id=agent-team-web&return=/`, { redirect: 'manual', headers });
+    // Straight to the host (Fly appends the real peer, 192.0.2.1): 700 forged left-hand entries are all that peer.
+    let refused = 0;
+    for (let i = 0; i < 700; i++) if ((await hit({ 'x-forwarded-for': `10.${i >> 8}.${i & 255}.1, 192.0.2.1` })).status === 429) refused++;
+    assert.equal(refused, 680);
+    // A fresh real caller still gets in: there is no shared bucket to fill.
+    assert.equal((await hit({ 'x-forwarded-for': '192.0.2.2' })).status, 303);
+    // Through the edge (secret present): Vercel's entry names the caller, Fly's names Vercel.
+    for (let i = 0; i < 20; i++) await hit({ 'x-forwarded-for': '198.51.100.1, 76.76.21.1', 'x-agent-team-edge': EDGE });
+    assert.equal((await hit({ 'x-forwarded-for': '198.51.100.1, 76.76.21.1', 'x-agent-team-edge': EDGE })).status, 429);
+    assert.equal((await hit({ 'x-forwarded-for': '198.51.100.2, 76.76.21.1', 'x-agent-team-edge': EDGE })).status, 303, 'another caller behind the same edge IP');
+  }, { clientIp: (req) => callerIp(req, { hops: 1, edgeSecret: EDGE }) });
+  // Without the secret, the edge's entry is not believed: the caller is the peer Fly saw.
+  const req = (xff, edge) => ({ headers: { 'x-forwarded-for': xff, ...(edge ? { 'x-agent-team-edge': edge } : {}) }, socket: { remoteAddress: '127.0.0.1' } });
+  assert.equal(callerIp(req('6.6.6.6, 198.51.100.1, 76.76.21.1'), { hops: 1, edgeSecret: EDGE }), '76.76.21.1');
+  assert.equal(callerIp(req('6.6.6.6, 198.51.100.1, 76.76.21.1', 'wrong'), { hops: 1, edgeSecret: EDGE }), '76.76.21.1');
+  assert.equal(callerIp(req('6.6.6.6, 198.51.100.1, 76.76.21.1', EDGE), { hops: 1, edgeSecret: EDGE }), '198.51.100.1');
+  assert.equal(callerIp(req('6.6.6.6'), {}), '127.0.0.1', 'no hops configured: the socket, whatever the header says');
+});
 
 test('the signing key rotates from the tick after 90 days, and the old one stays in the JWKS for a day', async () => {
   let t = Date.now();

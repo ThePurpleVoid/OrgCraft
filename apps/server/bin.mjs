@@ -19,8 +19,10 @@
 //   GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET   the deployment's GitHub App (its user authorization flow)
 //   AGENT_TEAM_PUBLIC_URL   must then be the https origin people open; it is the issuer and the cookie's origin
 //   AGENT_TEAM_OWNER_GITHUB the first owner's numeric GitHub user id, read only while there are no members
-//   AGENT_TEAM_CLIENT_IP_HEADER  a header that names the caller's IP, for sign-in rate limits, tried before
-//                           x-vercel-forwarded-for and the first x-forwarded-for entry (then the socket address)
+//   AGENT_TEAM_PROXY_HOPS   how many of our own proxies append to x-forwarded-for in front of the server (Fly.io: 1),
+//                           so sign-in rate limits read the caller's IP from the right and never trust a client's entry
+//   AGENT_TEAM_EDGE_SECRET  a secret the Vercel rewrite sends as x-agent-team-edge; with it, the edge's own entry names
+//                           the caller (without it, every request through the edge shares the edge's IP)
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -32,7 +34,7 @@ import { ensureTenant } from './store.mjs';
 import { startSinks } from './sinks.mjs';
 import { createControlPlane } from './server.mjs';
 import { hashStepUpSecret, stepUpVerifier } from './m3.mjs';
-import { createIdentity, forwardedIp, githubUpstream } from './identity.mjs';
+import { createIdentity, callerIp, githubUpstream } from './identity.mjs';
 
 const { values: o } = parseArgs({ options: {
   port: { type: 'string', default: process.env.PORT ?? '4849' },
@@ -82,11 +84,12 @@ if (!verifier) console.error('agent-team-server: no AGENT_TEAM_STEP_UP_SECRET_HA
 const db = await openDb(local ? { dataDir: join(data, 'db') } : { url: env.DATABASE_URL });
 await ensureTenant(db, tenant);
 const sinks = startSinks(db, key);
-const ipHeader = env.AGENT_TEAM_CLIENT_IP_HEADER?.toLowerCase();
+const proxy = { hops: Number(env.AGENT_TEAM_PROXY_HOPS ?? 0) || 0, edgeSecret: env.AGENT_TEAM_EDGE_SECRET || null };
+if (proxy.edgeSecret && proxy.edgeSecret.length < 32) { console.error('agent-team-server: AGENT_TEAM_EDGE_SECRET must be at least 32 characters'); process.exit(2); }
 const identity = env.GITHUB_APP_CLIENT_ID ? await createIdentity({
   db, key, tenant, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', ownerGithub: env.AGENT_TEAM_OWNER_GITHUB ?? null,
   upstream: githubUpstream({ clientId: env.GITHUB_APP_CLIENT_ID, clientSecret: env.GITHUB_APP_CLIENT_SECRET }),
-  clientIp: (req) => forwardedIp(req, ipHeader),
+  clientIp: (req) => callerIp(req, proxy),
 }) : null;
 const server = createControlPlane({ db, key, tenant, adminToken, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', sinks, stepUpVerifier: verifier, identity });
 server.listen(Number(o.port), o.host, () => {
