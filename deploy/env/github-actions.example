@@ -6,6 +6,7 @@ VERCEL_TOKEN=             # Vercel account token (Account Settings → Tokens)
 DATABASE_URL=             # see deploy/env/server.env.example
 AGENT_TEAM_MASTER_KEY=    # see deploy/env/server.env.example
 AGENT_TEAM_ADMIN_TOKEN=   # see deploy/env/server.env.example
+AGENT_TEAM_STEP_UP_SECRET_HASH=   # M3 exit; optional before. see deploy/env/server.env.example
 
 # Variables (Settings → Secrets and variables → Actions → Variables; not secret)
 AGENT_TEAM_DEPLOY=on              # the switch: the workflow does nothing until this is "on"

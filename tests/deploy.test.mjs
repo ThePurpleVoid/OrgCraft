@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { destructiveStatements } from '../deploy/server/guard.mjs';
 import { siteConfig, STATUS_PAGE } from '../deploy/vercel/build.mjs';
+import { scryptSync } from 'node:crypto';
+import { hashStepUp } from '../deploy/server/step-up-hash.mjs';
 
 test('the guard flags data-losing statements and nothing in the shipped migrations', () => {
   const flagged = destructiveStatements([
@@ -41,4 +43,15 @@ test('the site rewrites the API and discovery to one https origin, and nothing e
 test('until the Studio has a hosted mode, the site page only calls what the control plane serves', () => {
   const calls = [...STATUS_PAGE.matchAll(/fetch\(\s*['"`](\/v1\/[^'"`?$]*)/g)].map((m) => m[1]);
   assert.deepEqual(calls, ['/v1/health']);
+});
+
+test('the step-up hash is scrypt with its parameters and salt, and never contains the secret', () => {
+  const h = hashStepUp('correct horse battery staple');
+  const [kind, N, r, p, salt, key] = h.split('$');
+  assert.equal(kind, 'scrypt');
+  assert.ok(!h.includes('correct horse'));
+  const again = scryptSync('correct horse battery staple', Buffer.from(salt, 'base64url'), 32, { N: Number(N), r: Number(r), p: Number(p) });
+  assert.equal(again.toString('base64url'), key);
+  assert.notEqual(hashStepUp('correct horse battery staple'), h, 'a fresh salt each time');
+  assert.throws(() => hashStepUp('short'), /12 characters/);
 });

@@ -89,10 +89,15 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           AGENT_TEAM_MASTER_KEY: ${{ secrets.AGENT_TEAM_MASTER_KEY }}
           AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
+          AGENT_TEAM_STEP_UP_SECRET_HASH: ${{ secrets.AGENT_TEAM_STEP_UP_SECRET_HASH }}
         run: |
-          printf 'DATABASE_URL=%s\nAGENT_TEAM_MASTER_KEY=%s\nAGENT_TEAM_ADMIN_TOKEN=%s\n' \
-            "$DATABASE_URL" "$AGENT_TEAM_MASTER_KEY" "$AGENT_TEAM_ADMIN_TOKEN" \
-            | flyctl secrets import --stage --app "$FLY_APP" >/dev/null
+          {
+            printf 'DATABASE_URL=%s\nAGENT_TEAM_MASTER_KEY=%s\nAGENT_TEAM_ADMIN_TOKEN=%s\n' \
+              "$DATABASE_URL" "$AGENT_TEAM_MASTER_KEY" "$AGENT_TEAM_ADMIN_TOKEN"
+            # Optional until the M3 exit: without it, approvals that need step-up are refused, nothing else changes.
+            [ -n "$AGENT_TEAM_STEP_UP_SECRET_HASH" ] && printf 'AGENT_TEAM_STEP_UP_SECRET_HASH=%s\n' "$AGENT_TEAM_STEP_UP_SECRET_HASH"
+            true
+          } | flyctl secrets import --stage --app "$FLY_APP" >/dev/null
 
       - name: Run migrations the owner approved as destructive (only when allow_destructive is ticked)
         if: inputs.allow_destructive

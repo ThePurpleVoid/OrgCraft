@@ -54,15 +54,15 @@ Thirteen steps, about 30 minutes. Values go only where a step says. Never into c
 5. Sign up at vercel.com (Hobby is fine while this is non-commercial). Go to Account Settings → Tokens → Create, with full account scope. This is **`VERCEL_TOKEN`**. Do not import the repository into Vercel: the workflow deploys after CI and creates the project itself.
 
 **Two keys you make yourself**
-6. Run `openssl rand -base64 32` twice. The first is **`AGENT_TEAM_MASTER_KEY`**: it seals the vault, so losing it loses every stored secret. Keep it in your password manager. The second is **`AGENT_TEAM_ADMIN_TOKEN`**: it is how you sign in until GitHub sign-in lands. Keep it too.
+6. Run `openssl rand -base64 32` twice. The first is **`AGENT_TEAM_MASTER_KEY`**: it seals the vault, so losing it loses every stored secret. Keep it in your password manager. The second is **`AGENT_TEAM_ADMIN_TOKEN`**: it is how you sign in until GitHub sign-in lands. Keep it too. Third, marked **M3 exit** (step 10 deploys without it): choose a step-up secret, the phrase you will type each time you approve something, at least 12 characters. Keep it in your password manager, then run `node deploy/server/step-up-hash.mjs` in a clone of the repository (Node 20+). It asks for the phrase without showing it and prints **`AGENT_TEAM_STEP_UP_SECRET_HASH`**. Only the hash goes into GitHub.
 
 **GitHub** (repository Settings)
-7. Go to Environments → New environment → `production`. Set **Deployment branches and tags** to Selected → `main`, and tick **Required reviewers** → yourself, so that every deploy waits for your click. Both are required: they keep production secrets away from any other branch. Then, under Environment secrets, add the five values: `DATABASE_URL`, `FLY_API_TOKEN`, `VERCEL_TOKEN`, `AGENT_TEAM_MASTER_KEY`, `AGENT_TEAM_ADMIN_TOKEN`.
+7. Go to Environments → New environment → `production`. Set **Deployment branches and tags** to Selected → `main`, and tick **Required reviewers** → yourself, so that every deploy waits for your click. Both are required: they keep production secrets away from any other branch. Then, under Environment secrets, add the five values: `DATABASE_URL`, `FLY_API_TOKEN`, `VERCEL_TOKEN`, `AGENT_TEAM_MASTER_KEY`, `AGENT_TEAM_ADMIN_TOKEN`. At the M3 exit, add a sixth: `AGENT_TEAM_STEP_UP_SECRET_HASH`.
 8. Go to Secrets and variables → Actions → Variables and add `FLY_APP` = a globally unique name such as `purplegiragge-agent-team` (the API becomes `https://<FLY_APP>.fly.dev`) and `VERCEL_PROJECT` = `agent-team-kit`. If that Vercel name is taken, also set `AGENT_TEAM_PUBLIC_URL` to the address Vercel gives the project. Optional: `FLY_REGION` (default `iad`), `FLY_ORG` (default `personal`), `VERCEL_SCOPE` (a Vercel team slug), `AGENT_TEAM_TENANT` (default `main`).
 9. Add the variable `AGENT_TEAM_DEPLOY` = `on`. Until it exists, the Deploy workflow does nothing.
 
 **First deploy**
-10. Go to Actions → Deploy → Run workflow on `main`. It checks that every name is set, creates the Fly app, stages the three server secrets on Fly, migrates Supabase, starts the container, publishes the site, and smoke-tests both. If a later migration is flagged destructive, the deploy stops. Once you have agreed to it, re-run with `allow_destructive` ticked: that runs the migration once from Actions, and no running machine ever carries the flag. It takes about 5 minutes. After this, every green CI run on `main` asks for your approval in the Actions tab, then deploys.
+10. Go to Actions → Deploy → Run workflow on `main`. It checks that every name is set, creates the Fly app, stages the server secrets on Fly (the step-up hash too, once it is set), migrates Supabase, starts the container, publishes the site, and smoke-tests both. If a later migration is flagged destructive, the deploy stops. Once you have agreed to it, re-run with `allow_destructive` ticked: that runs the migration once from Actions, and no running machine ever carries the flag. It takes about 5 minutes. After this, every green CI run on `main` asks for your approval in the Actions tab, then deploys.
 11. Tell the chief of staff it is green. The team then connects the kit's own team to it: it creates the team, mints a report token, and puts `TEAM_REPORT_URL` and `TEAM_REPORT_TOKEN` in the shared board's `team.env`. You paste nothing for this.
 
 **Later, when the chief of staff asks (M3 and M4)**
@@ -97,6 +97,7 @@ Prices are as of November 2026; check each provider's page.
 |---|---|
 | [`deploy/server/Dockerfile`](../../deploy/server/Dockerfile) | The control plane image, the same for every host |
 | [`deploy/server/migrate.mjs`](../../deploy/server/migrate.mjs), [`guard.mjs`](../../deploy/server/guard.mjs) | Migrate with the destructive guard and the Data API check |
+| [`deploy/server/step-up-hash.mjs`](../../deploy/server/step-up-hash.mjs) | Hashes the owner's step-up secret (scrypt) without echoing it |
 | [`deploy/supabase/bootstrap.sql`](../../deploy/supabase/bootstrap.sql) | The one-time login and schema setup |
 | [`deploy/fly/server.toml`](../../deploy/fly/server.toml), [`runner.toml`](../../deploy/fly/runner.toml) | Fly configs (the runner's is a draft until apps/runner lands) |
 | [`deploy/runner/Dockerfile`](../../deploy/runner/Dockerfile) | The runner image (draft) |
