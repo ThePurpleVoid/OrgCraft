@@ -29,6 +29,9 @@ before(async () => {
   execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample firm', '--dir', root], { stdio: 'ignore' });
   // The team made its own "analytics-lead" when the kit it synced with had none; the pinned kit now ships one.
   writeFileSync(join(root, '.agent-team/roles/analytics-lead.md'), '# Numbers person\n\n**Model:** standard\n**Group:** insights\n**Reports to:** chief-of-staff\n**Status:** active\n\n## Identity\nYou keep the monthly figures honest.\n\n## Owns (writes)\n- `figures/`\n\n## Every thread, every task\n- `scripts/agent-team/team-status.sh analytics-lead status working --task "<task>"`\n');
+  // What the owner gave their agent: a system and an area. Neither may pass to the kit's role.
+  writeFileSync(join(root, '.agent-team/resources.json'), JSON.stringify({ resources: [{ id: 'sheets', type: 'mcp', name: 'Spreadsheets', config: {}, secrets: [] }], bindings: [{ role: 'analytics-lead', resource: 'sheets', permission: 'write' }] }, null, 2) + '\n');
+  writeFileSync(join(root, '.agent-team/ownership.json'), JSON.stringify({ rows: [{ path: 'figures/', writer: 'analytics-lead', notes: '' }] }, null, 2) + '\n');
   const lockFile = join(root, '.agent-team/kit.lock.json');
   const lock = JSON.parse(readFileSync(lockFile, 'utf8'));
   lock.kitRoles = lock.kitRoles.filter((s) => s !== 'analytics-lead');
@@ -79,6 +82,13 @@ test('a custom agent the kit now ships a role for: an error with Rename mine and
   await ed.waitFor({ state: 'hidden' });
   assert.equal(await page.locator('#library .lib-role', { hasText: 'Numbers person' }).count(), 0);
   assert.equal(await page.locator('#library .lib-role[data-slug="analytics-lead"] input').isChecked(), true);
+  // Publish shows what goes with it: the binding and the area row are gone, not handed to the kit's role.
+  await page.getByRole('button', { name: 'Publish…' }).click();
+  for (const f of ['resources.json', 'ownership.json']) {
+    await page.locator('summary', { hasText: f }).click();
+  }
+  const diff = await page.locator('#publish-dialog, dialog[open]').first().textContent();
+  assert.doesNotMatch(diff.replace(/^-.*$/gm, ''), /"role": "analytics-lead"|"writer": "analytics-lead"/);
   assert.equal(await page.locator('#issues li', { hasText: 'adds a role called' }).count(), 0);
 
   assert.deepEqual(errors, []);

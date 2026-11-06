@@ -182,7 +182,7 @@ export function createAgentEditor(root, app) {
             <div class="add-row"><input id="e-rename" value="${esc(renameTo(md))}" aria-label="A new slug for your agent" spellcheck="false" autocomplete="off"><button type="button" id="e-rename-go">Rename mine</button></div>
             <p class="result error" id="e-rename-msg" role="alert"></p>
             <div class="opts"><button type="button" id="e-use-kit">Use the kit's role</button></div>
-            <p class="hint">Use the kit's role removes your agent from the team, and its file at publish, and switches the kit's ${esc(slug)} on. Export yours first to keep a copy.</p>
+            <p class="hint">Use the kit's role removes your agent from the team (its file at publish, its systems and the areas it writes) and switches the kit's ${esc(slug)} on. Export yours first to keep a copy.</p>
           </div>` : ''}
           <section id="sec-identity"><h2>Identity</h2>
             <label>Name <input id="e-title" value="${esc(titleOf(md, slug))}" maxlength="60" autocomplete="off"></label>
@@ -404,7 +404,12 @@ export function createAgentEditor(root, app) {
       $('#e-rename').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); rename(); } };
       $('#e-use-kit').onclick = () => {
         const s = slug;
-        app.change((sp) => { sp.roles[s] = { source: 'kit', enabled: true }; });
+        // The agent goes with what it was given: its systems and the areas it wrote do not pass to the kit's role.
+        app.change((sp) => {
+          sp.roles[s] = { source: 'kit', enabled: true };
+          if (sp.resources?.bindings) sp.resources.bindings = sp.resources.bindings.filter((x) => x.role !== s);
+          if (sp.ownership?.rows) sp.ownership.rows = sp.ownership.rows.filter((r) => r.writer !== s);
+        });
         app.close();
       };
     }

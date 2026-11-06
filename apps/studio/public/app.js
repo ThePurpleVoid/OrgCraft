@@ -440,7 +440,7 @@ function renderLibrary() {
   // agents again (criterion 13). These rows open the agent; switching it on or off stays in Your agents.
   const kitGroups = new Set(view.all.filter((r) => !isCustom(spec.roles[r.slug])).map((r) => r.group));
   const fresh = [...new Set(mine.map((r) => r.group))].filter((g) => g && !kitGroups.has(g));
-  const ref = (r) => `<button type="button" class="lib-ref${r.slug === selected ? ' selected' : ''}" data-slug="${esc(r.slug)}" draggable="true"><span class="name">${esc(r.title)}</span><span class="tag">${r.enabled ? '' : 'off'}${r.dormant ? ' dormant' : ''}</span></button>`;
+  const ref = (r) => `<button type="button" class="lib-ref${r.slug === selected ? ' selected' : ''}" data-slug="${esc(r.slug)}" draggable="true"><span class="name">${esc(r.title)}</span><span class="tag">${imported.has(r.slug) ? 'imported' : 'custom'}${r.enabled ? '' : ' · off'}${r.dormant ? ' · dormant' : ''}</span></button>`;
   const section = (g) => (groups.has(g)
     ? `<div class="group-title"><span class="dot" style="background:${groupColor(g)}"></span>${esc(g)}</div>` + groups.get(g).sort(byTitle).map(row).join('')
     : `<div class="group-title" data-group="${esc(g)}"><span class="dot" style="background:${groupColor(g)}"></span>${esc(g)}</div>` + mine.filter((r) => r.group === g).sort(byTitle).map(ref).join(''));
