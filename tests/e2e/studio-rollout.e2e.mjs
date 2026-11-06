@@ -116,6 +116,8 @@ test('the copy: each state, the summary and the choice words (CPO D61 to D63)', 
   assert.match(rolloutHtml({ version: null, roles: [] }), /Nothing to roll out yet\. After you publish and the change merges, this shows which roles have picked it up\./);
   assert.match(rolloutHtml({ version: null, roles: [], pending: { version: 'abc1234' } }), /Waiting for the change to merge\. Roles keep running the version before it until it does\./);
   assert.match(rolloutHtml({ version: 'abc1234', name: 'abc1234, published 6 Nov', roles: [], summary: { moved: 0, of: 0 }, pending: { version: 'def5678' } }), /Roles keep running abc1234, published 6 Nov until it does\./);
+  assert.match(rolloutHtml({ version: 'abc1234', name: 'abc1234, published 6 Nov', roles: [], summary: { moved: 0, of: 9, finishing: 0 }, pending: { version: 'def5678' } }), /0 of 9 roles on abc1234, published 6 Nov</, 'pending: the count names the merged version');
+  assert.match(rolloutHtml({ version: 'abc1234', name: 'abc1234, published 6 Nov', roles: [], summary: { moved: 0, of: 9, finishing: 0 } }), /0 of 9 roles on the new version</);
   assert.ok(!rolloutHtml({ version: 'abc1234', name: '<b>x</b>', roles: [{ role: '<i>', state: 'off' }], summary: { moved: 0, of: 0 } }).includes('<b>x'), 'escaped');
 });
 
@@ -186,7 +188,7 @@ test('360px: the lines stack, nothing scrolls sideways; and the empty and waitin
 
   await page.goto(`http://127.0.0.1:${s3.address().port}/?t=${s3.launchToken}`);
   await page.goto(`http://127.0.0.1:${s3.address().port}/#rollout`);
-  await page.getByText(/^Waiting for the change to merge\. Roles keep running [0-9a-f]{7}, published \d+ \w+ until it does\. As of your last git fetch\.$/).waitFor();
+  await page.getByText(/^Waiting for the change to merge\. Roles keep running [0-9a-f]{7}, published \d+ \w+ until it does\. As of the last time the Studio checked the repository\.$/).waitFor();
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'rollout-waiting-phone.png') });
   assert.deepEqual(errors, []);
   await page.close();

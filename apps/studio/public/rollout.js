@@ -46,12 +46,13 @@ export function stateLine(r, { titleOf = human, now = Date.now() } = {}) {
 }
 
 /** The summary line: "{n} of {m} roles on the new version", ", {k} finishing work first", " · {u} not reporting a version". */
-export function summaryLine(s) {
+/** While a later change waits to merge (CPO), the count names the merged version instead of "the new version". */
+export function summaryLine(s, { on = 'the new version' } = {}) {
   if (!s) return '';
   const finishing = s.finishing + (s.offFinishing ?? 0);
   const unknown = s.unknown ? ` · ${s.unknown} not reporting a version` : '';
-  if (s.allMoved) return `All ${s.of} role${s.of === 1 ? '' : 's'} on the new version.${unknown}`;
-  return `${s.moved} of ${s.of} role${s.of === 1 ? '' : 's'} on the new version${finishing ? `, ${finishing} finishing work first` : ''}${unknown}`;
+  if (s.allMoved) return `All ${s.of} role${s.of === 1 ? '' : 's'} on ${on}.${unknown}`;
+  return `${s.moved} of ${s.of} role${s.of === 1 ? '' : 's'} on ${on}${finishing ? `, ${finishing} finishing work first` : ''}${unknown}`;
 }
 
 const fmtTime = (iso) => { const d = new Date(iso ?? ''); return Number.isNaN(+d) ? '' : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
@@ -68,7 +69,7 @@ export function rolloutHtml(data, { titleOf = human, now = Date.now() } = {}) {
   if (!data) return '<p class="muted">Reading the rollout…</p>';
   if (data.error) return `<p class="result error" role="alert">${esc(data.error)}</p>`;
   const pending = data.pending
-    ? `<p class="notice" role="status">Waiting for the change to merge. Roles keep running ${esc(data.name ?? 'the version before it')} until it does. As of your last git fetch.</p>` : '';
+    ? `<p class="notice" role="status">Waiting for the change to merge. Roles keep running ${esc(data.name ?? 'the version before it')} until it does. As of the last time the Studio checked the repository.</p>` : '';
   if (!data.version) return `<h2 class="flush ro-head">Rollout</h2>${pending || `<p class="muted">${esc(EMPTY)}</p>`}`;
   const rows = sortRoles(data.roles, titleOf).map((r) => {
     const line = stateLine(r, { titleOf, now });
@@ -81,7 +82,7 @@ export function rolloutHtml(data, { titleOf = human, now = Date.now() } = {}) {
   const newest = (data.roles ?? []).map((r) => r.lastAt).filter(Boolean).sort().at(-1);
   return `<h2 class="flush ro-head">Rollout of ${esc(data.name)}${data.changeUrl ? ' <span class="muted">· <a class="ro-change" target="_blank" rel="noopener noreferrer">see the change</a></span>' : ''}</h2>
     ${pending}
-    <p class="ro-summary">${esc(summaryLine(data.summary))}</p>
+    <p class="ro-summary">${esc(summaryLine(data.summary, data.pending && data.name ? { on: data.name } : undefined))}</p>
     <ul class="plain ro-list">${rows}</ul>
     <p class="hint ro-hint" hidden></p>
     <p class="hint">Based on board reports; may be out of date.${newest ? ` Newest report ${esc(fmtTime(newest))}.` : ''}</p>`;
