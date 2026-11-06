@@ -40,9 +40,14 @@ export function md(text) {
 }
 
 const fmtTime = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
+/** Minor units per major unit for a currency: 100 for USD, 1 for JPY, 1000 for KWD (ISO 4217, as Intl knows it). */
+export function minorDigits(currency) {
+  try { return new Intl.NumberFormat('en', { style: 'currency', currency: currency || 'USD' }).resolvedOptions().maximumFractionDigits; } catch { return 2; }
+}
 const fmtMoney = (minor, currency) => {
   if (typeof minor !== 'number') return '';
-  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD' }).format(minor / 100); } catch { return `${(minor / 100).toFixed(2)} ${currency ?? ''}`.trim(); }
+  const major = minor / 10 ** minorDigits(currency);
+  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD' }).format(major); } catch { return `${major.toFixed(minorDigits(currency))} ${currency ?? ''}`.trim(); }
 };
 
 /** Who said it: the owner (a person) or a role. */
@@ -62,6 +67,7 @@ const TIMELINE = {
   'run.stopped': (e) => `The run stopped${by(e)}${e.data?.reason ? `: ${e.data.reason}` : ''}`,
   'budget.warned': () => 'Most of today\'s budget is spent',
   'budget.exhausted': () => 'Today\'s budget is spent, so the team is paused',
+  'budget.updated': (e) => `The daily cap is now ${e.data?.perDay == null ? 'unset' : fmtMoney(e.data.perDay, e.data.currency)}${by(e)}`,
 };
 const subjectId = (subject) => String(subject ?? '').split('/').slice(1).join('/');
 
@@ -147,11 +153,23 @@ export function createChat({ root, onOpen } = {}) {
     return { ok: res.ok, status: res.status, data };
   }
 
+  /** What a closed card says instead of its buttons: its answer (#47 puts it on the card), or why it closed. */
+  function closedText(card) {
+    if (card.state === 'answered' && card.answer) {
+      const a = card.answer;
+      const label = (card.options ?? []).find((o) => o.id === a.option)?.label ?? human(a.option);
+      const by = typeof a.by === 'object' ? a.by?.name ?? a.by?.id : a.by;
+      return `${label}${by ? ` · ${by}` : ''}${a.at ? ` at ${fmtTime(a.at)}` : ''}${a.note ? `: ${a.note}` : ''}`;
+    }
+    return { answered: 'Answered', expired: 'Expired: nobody answered in time', superseded: 'No longer needed' }[card.state] ?? null;
+  }
+
   function cardHtml(card, answered) {
+    answered = answered || (card.state && card.state !== 'open' ? closedText(card) ?? human(card.state) : answered);
     const note = st.notes.get(card.id);
     const rec = card.recommendation?.option;
     const recLabel = rec && (card.options ?? []).find((o) => o.id === rec)?.label;
-    const known = ['approval', 'decision'].includes(card.kind);
+    const known = ['approval', 'decision', 'budget'].includes(card.kind);
     const buttons = answered ? '' : (card.options ?? []).map((o) => {
       const style = ['primary', 'danger'].includes(o.style) ? o.style : rec === o.id ? 'primary' : '';
       return `<button type="button" class="${style}" data-card="${esc(card.id)}" data-option="${esc(o.id)}">${esc(o.label ?? o.id)}</button>`;
@@ -193,6 +211,16 @@ export function createChat({ root, onOpen } = {}) {
       if (id) answered.set(id, e);
     }
     const seen = new Set();
+    // Cards that an event introduces (a request, or budget.exhausted) are drawn there; any other card where its first
+    // card.updated is (a budget card, or a decision from a source that sends no decision.requested).
+    const anchored = new Set(st.events.filter((e) => /\.requested$|^budget\.exhausted$/.test(e.type)).map((e) => (e.type === 'budget.exhausted' ? e.data?.cardId : cardFrom(e).id)).filter(Boolean));
+    const drawn = new Set();
+    const cardMsg = (card, e) => {
+      drawn.add(card.id);
+      const a = answered.get(card.id) ?? answered.get(e.subject ?? card.subject);
+      const who = e.actor?.id && e.actor.kind !== 'system' ? human(e.actor.id) : card.kind === 'budget' ? 'Budget' : 'Team';
+      return `<div class="msg them"><div class="who muted">${esc(who)} · ${esc(fmtTime(e.time))}</div>${cardHtml(card, a ? answerText(a, card) : st.answers.get(card.id))}</div>`;
+    };
     let html = st.next ? '<p class="older"><button type="button" id="chat-older">Show earlier messages</button></p>' : '';
     if (!st.loaded) html += '<p class="muted chat-empty">Loading the chat…</p>';
     else if (!st.events.length && !st.pending.length) html += '<div class="chat-empty"><p class="muted">Ask the chief of staff for something, as you would ask a colleague. Your words reach the team exactly as you type them.</p></div>';
@@ -204,8 +232,14 @@ export function createChat({ root, onOpen } = {}) {
           <div class="bubble">${who.me ? `<p class="verbatim">${esc(e.data?.text)}</p>` : `<div class="md">${md(e.data?.text)}</div>`}</div></div>`;
       } else if (e.type === 'decision.requested' || e.type === 'approval.requested') {
         const base = cardFrom(e);
-        const card = st.cards.get(base.id) ?? base;
-        html += `<div class="msg them"><div class="who muted">${esc(human(e.actor?.id))} · ${esc(fmtTime(e.time))}</div>${cardHtml(card, (() => { const a = answered.get(card.id) ?? answered.get(e.subject ?? card.subject); return a ? answerText(a, card) : st.answers.get(card.id); })())}</div>`;
+        if (!drawn.has(base.id)) html += cardMsg(st.cards.get(base.id) ?? base, e);
+      } else if (e.type === 'card.updated') {
+        const c = e.data?.card;
+        if (c?.id && !anchored.has(c.id) && !drawn.has(c.id)) html += cardMsg(st.cards.get(c.id) ?? c, e);
+      } else if (e.type === 'budget.exhausted') {
+        html += `<p class="timeline muted">${esc(TIMELINE[e.type]?.(e) ?? "Today's budget is spent")} · ${esc(fmtTime(e.time))}</p>`;
+        const c = e.data?.cardId && st.cards.get(e.data.cardId);
+        if (c && !drawn.has(c.id)) html += cardMsg(c, e);
       } else if (/^(decision\.answered|approval\.decided|card\.updated|usage\.recorded)$/.test(e.type)) {
         // shown on its card, or in the cost line
       } else if (TIMELINE[e.type]) {
@@ -331,6 +365,8 @@ export function createChat({ root, onOpen } = {}) {
       const label = (card.options ?? []).find((o) => o.id === option)?.label ?? option;
       st.answers.set(cardId, `${label} · you`);
       if (r.data?.type && r.data.id && !st.events.some((e) => e.id === r.data.id)) { st.local.add(r.data.id); st.events.push(r.data); }
+      // The control plane (#47) answers with { card, event }: the card, answered, is the newest version.
+      if (r.data?.card?.id) takeCards([r.data.card]);
     }
     render();
   }
@@ -375,14 +411,18 @@ export function createChat({ root, onOpen } = {}) {
   }
 
   // ---- start a run: the published team, a daily cap first, then Start
-  const toMinor = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : null; };
+  const currency = () => st.budget?.currency ?? 'USD';
+  const toMinor = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 && String(v).trim() ? Math.round(n * 10 ** minorDigits(currency())) : null; };
   function renderStart() {
     const plan = $('#start-plan', root);
     if (!st.plan) plan.textContent = 'Reading the published team…';
     else if (!st.plan.ok) plan.textContent = st.plan.error;
     else plan.textContent = `${st.plan.summary}${st.plan.repo?.url ? ` Repository: ${st.plan.repo.url} (${st.plan.repo.ref}).` : ''}`;
     plan.classList.toggle('refused', !!st.plan && !st.plan.ok);
-    $('#start-currency', root).textContent = st.budget?.currency ?? 'USD';
+    $('#start-currency', root).textContent = currency();
+    const d = minorDigits(currency());
+    $('#start-cap', root).step = d ? String(10 ** -d) : '1';
+    $('#start-cap', root).min = d ? String(10 ** -d) : '1';
     // Start stays off until there is a published team and a daily cap: the control plane refuses a run without one.
     $('#start-go', root).disabled = st.busy || !st.plan?.ok || toMinor($('#start-cap', root).value) === null;
   }
@@ -396,7 +436,7 @@ export function createChat({ root, onOpen } = {}) {
     const [plan, budget] = await Promise.all([api('/v1/team/run/plan'), api('/v1/team/budget')]);
     st.plan = plan.ok ? plan.data : { ok: false, error: plan.data.error ?? `HTTP ${plan.status}` };
     st.budget = budget.ok && budget.data.connected !== false ? budget.data : null;
-    if (st.budget?.perDay != null) $('#start-cap', root).value = (st.budget.perDay / 100).toFixed(2);
+    if (st.budget?.perDay != null) $('#start-cap', root).value = (st.budget.perDay / 10 ** minorDigits(currency())).toFixed(minorDigits(currency()));
     if (!budget.ok) { $('#start-result', root).textContent = budget.data.error ?? `HTTP ${budget.status}`; $('#start-result', root).classList.add('error'); }
     renderStart();
   }
@@ -411,7 +451,7 @@ export function createChat({ root, onOpen } = {}) {
       out.textContent = 'Saving the daily cap…';
       let b = await api('/v1/team/budget', { perDay, key: newId() });
       if (needsStepUp(b)) {
-        if (!(await stepUp(`Raising the daily cap to ${fmtMoney(perDay, st.budget?.currency ?? 'USD')} lets the team spend more.`))) return fail('The cap was not changed, so the run did not start.');
+        if (!(await stepUp(`Raising the daily cap to ${fmtMoney(perDay, currency())} lets the team spend more.`))) return fail('The cap was not changed, so the run did not start.');
         b = await api('/v1/team/budget', { perDay, key: newId() });
       }
       if (!b.ok) return fail(b.data.error ?? `HTTP ${b.status}`);

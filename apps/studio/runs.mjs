@@ -30,8 +30,9 @@ export function publicRepoUrl(raw) {
     u.username = ''; u.password = '';
     return u.toString();
   } catch {
-    // scp-like git@host:owner/repo.git carries no secret.
-    return /^[\w.-]+@[\w.-]+:[\w./-]+$/.test(raw) ? raw : null;
+    // scp-like git@host:owner/repo.git carries no secret; nor does a path to a repository on this machine.
+    if (/^[\w.-]+@[\w.-]+:[\w./-]+$/.test(raw)) return raw;
+    return raw.startsWith('/') ? `file://${raw}` : null;
   }
 }
 
@@ -66,12 +67,23 @@ export function runRequest(root, { dirty = [] } = {}) {
   const name = team.values?.PROJECT_NAME ?? 'This team';
   const active = roles.filter((r) => r.status !== 'dormant').length;
   const summary = `${name}: ${roles.length} roles (${active} active), ${doors[0].slug} reports to the owner. Published at ${version.slice(0, 12)}${team.kit ? ` with ${team.kit}` : ''}.`;
-  const url = publicRepoUrl(git(root, 'remote', 'get-url', 'origin'));
+  // Sessions check out the repository from its remote, so the run must be pinned to a commit the remote has: publish
+  // commits but does not push. HEAD must be what the upstream branch is, as far as this clone last fetched or pushed.
+  const upstream = git(root, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}');
+  if (!upstream) throw new RunRefused(`push first: branch ${git(root, 'branch', '--show-current') || '(detached)'} has no upstream, so the team's sessions could not check out ${version.slice(0, 12)}`);
+  const remote = upstream.split('/')[0];
+  if (git(root, 'rev-parse', '@{upstream}') !== version) {
+    const ahead = git(root, 'rev-list', '--count', '@{upstream}..HEAD');
+    throw new RunRefused(`push first: ${ahead && ahead !== '0' ? `${ahead} published commit${ahead === '1' ? ' is' : 's are'} not on ${upstream}` : `HEAD is not ${upstream}`}, so the team would run an older team or none`);
+  }
+  const url = publicRepoUrl(git(root, 'remote', 'get-url', remote));
+  if (!url) throw new RunRefused(`the remote ${remote} has no URL the team's sessions could use`);
+  const ref = upstream.slice(remote.length + 1);
   return {
     mode: 'runner',
     team: {
       version,
-      ...(url ? { repo: { url, ref: git(root, 'branch', '--show-current') || 'main' } } : {}),
+      repo: { url, ref },
       summary: cut(summary, SUMMARY_MAX, '…'),
       roles,
     },

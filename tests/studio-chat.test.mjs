@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KIT } from '../bin/agent-team.mjs';
@@ -121,11 +121,17 @@ test('run state, today\'s cost against the cap, pause, resume and stop', async (
 });
 
 // Start a run: the team as published (the last commit), a daily cap first, one run per team.
+const commit = (root, m = 'team') => { execFileSync('git', ['-C', root, 'add', '-A']); execFileSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', m]); };
+/** A team published and pushed: origin is a bare repository, then its URL is set to one with credentials in it. */
 function published() {
   const root = repo();
-  execFileSync('git', ['-C', root, 'remote', 'add', 'origin', 'https://someone:ghp_secret@example.com/acme/shop.git']);
-  execFileSync('git', ['-C', root, 'add', '-A']);
-  execFileSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'team']);
+  const bare = mkdtempSync(join(tmpdir(), 'studio-origin-'));
+  execFileSync('git', ['init', '-q', '--bare', bare]);
+  commit(root);
+  execFileSync('git', ['-C', root, 'remote', 'add', 'origin', bare]);
+  execFileSync('git', ['-C', root, 'push', '-q', '-u', 'origin', 'HEAD:refs/heads/main']);
+  execFileSync('git', ['-C', root, 'branch', '-q', '--set-upstream-to=origin/main']);
+  execFileSync('git', ['-C', root, 'remote', 'set-url', 'origin', 'https://someone:ghp_secret@example.com/acme/shop.git']);
   return root;
 }
 
@@ -149,7 +155,7 @@ test('start a run: the published roster, a daily cap first, step-up to raise it,
       const plan = (await call('/v1/team/run/plan')).body;
       assert.equal(plan.ok, true);
       assert.equal(plan.frontDoor, 'chief-of-staff');
-      assert.deepEqual(plan.repo, { url: 'https://example.com/acme/shop.git', ref: plan.repo.ref }, 'no credentials in the repo URL');
+      assert.deepEqual(plan.repo, { url: 'https://example.com/acme/shop.git', ref: 'main' }, 'no credentials in the repo URL; the upstream branch');
       assert.equal((await call('/v1/team/budget')).body.perDay, null);
       // No daily cap: the control plane refuses, and the Studio passes its words on.
       const refused = await call('/v1/team/run/start', { key: 's0' });
@@ -173,7 +179,7 @@ test('start a run: the published roster, a daily cap first, step-up to raise it,
       const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
       assert.equal(sent.mode, 'runner');
       assert.equal(sent.team.version, head, 'the run is frozen on the published commit');
-      assert.equal(sent.team.repo.url, 'https://example.com/acme/shop.git');
+      assert.deepEqual(sent.team.repo, { url: 'https://example.com/acme/shop.git', ref: 'main' });
       assert.equal(typeof sent.team.summary, 'string');
       assert.ok(sent.team.summary.length <= 2000);
       assert.equal(sent.team.roles.filter((r) => r.reportsTo === 'owner').length, 1);
@@ -226,4 +232,29 @@ test('resuming a run today\'s cap paused needs step-up, and is refused while the
       assert.equal((await call('/v1/team/run')).body.run.state, 'running');
     });
   } finally { cp.close(); }
+});
+
+test('start a run refuses a published commit that is not pushed, or a branch with no upstream', async () => {
+  const cp = await fakeControlPlane({ running: false });
+  const root = published();
+  writeFileSync(join(root, 'docs/team/roles/README.md'), 'changed\n');
+  commit(root, 'publish again, not pushed');
+  try {
+    await serveAt(root, cp.env, async (call) => {
+      const plan = (await call('/v1/team/run/plan')).body;
+      assert.equal(plan.ok, false);
+      assert.match(plan.error, /^push first: 1 published commit is not on origin\/main/);
+      const r = await call('/v1/team/run/start', { key: 'np' });
+      assert.equal(r.status, 409);
+      assert.match(r.body.error, /push first/);
+      execFileSync('git', ['-C', root, 'checkout', '-q', '-b', 'studio/new-roles']);
+      assert.match((await call('/v1/team/run/plan')).body.error, /^push first: branch studio\/new-roles has no upstream/);
+      assert.equal(cp.started.length, 0, 'nothing reached the control plane');
+    });
+  } finally { cp.close(); }
+});
+
+test('money uses each currency\'s own minor unit (cents, yen, fils)', async () => {
+  const { minorDigits } = await import('../apps/studio/public/chat.js');
+  assert.deepEqual(['USD', 'EUR', 'JPY', 'KWD'].map(minorDigits), [2, 2, 0, 3]);
 });

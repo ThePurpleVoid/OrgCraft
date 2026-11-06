@@ -125,7 +125,9 @@ jobs:
         run: |
           npm install --no-save --no-package-lock playwright@1.56.1
           npx playwright install --with-deps chromium
-      - name: Studio in a browser (chat round trip, stale card, 360px)
+      - name: The control plane's dependencies (the browser test also runs against the real apps/server)
+        run: npm ci --prefix apps/server
+      - name: Studio in a browser (chat round trip, stale card, 360px, start a run, the real control plane)
         env: { SCREENSHOTS: screenshots }
         run: node --test tests/e2e/*.e2e.mjs
       - uses: actions/upload-artifact@v4

@@ -137,6 +137,12 @@ test('start a run: the published team, a daily cap first, step-up to set it, and
   execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
   execFileSync('git', ['-C', root, 'add', '-A']);
   execFileSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'team']);
+  // Published and pushed: a run is pinned to a commit its remote has.
+  const bare = mkdtempSync(join(tmpdir(), 'studio-e2e-origin-'));
+  execFileSync('git', ['init', '-q', '--bare', bare]);
+  execFileSync('git', ['-C', root, 'remote', 'add', 'origin', bare]);
+  execFileSync('git', ['-C', root, 'push', '-q', '-u', 'origin', 'HEAD:refs/heads/main']);
+  execFileSync('git', ['-C', root, 'branch', '-q', '--set-upstream-to=origin/main']);
   const plane = await fakeControlPlane({ team: 'sample-app', running: false, perDay: null });
   const s2 = createStudio({ root, env: plane.env });
   await new Promise((r) => s2.listen(0, '127.0.0.1', r));

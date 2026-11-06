@@ -193,6 +193,7 @@ a { color: var(--accent); }
 .timeline { font-size: 12px; margin: 0; text-align: center; }
 .card-msg { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; padding: 10px 14px; }
 .card-msg.k-approval { border-left-color: var(--warn); }
+.card-msg.k-budget { border-left-color: var(--error); }
 .card-msg.answered { opacity: .8; border-left-color: var(--line); }
 .card-msg h3 { font-size: 15px; margin: 2px 0 4px; }
 .card-meta { font-size: 12px; }
