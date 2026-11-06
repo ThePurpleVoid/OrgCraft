@@ -22,6 +22,7 @@ servers:
 security:
   - person: []
   - cookie: []
+  - app: []
 tags:
   - { name: teams }
   - { name: events, description: "The event log (events.md) and the board projected from it" }
@@ -29,6 +30,7 @@ tags:
   - { name: chat }
   - { name: approvals }
   - { name: connectors }
+  - { name: notifications, description: "Email or Slack a person when something needs them (PRD 6.8): their own verified addresses or linked Slack account, the kinds they chose, channels an admin picked, signed links. Nothing is ever approved or answered from an email or Slack" }
   - { name: runners, description: Registration. The runner protocol itself is runner-protocol.md }
   - { name: me, description: "The signed-in person across teams: inbox, summary, devices (clients.md)" }
 paths:
@@ -71,11 +73,11 @@ paths:
     post:
       tags: [events]
       summary: Accept one report in the kit's shape (team-status.sh, report.mjs, the hooks), byte for byte
-      description: Mapped to a `report.*` or `message.*` event (events.md). This is what TEAM_REPORT_URL points at.
+      description: Mapped to a `report.*` or `message.*` event (events.md). This is what TEAM_REPORT_URL points at. A body with `kind` `published` (report.mjs published, from the team's CI on main) is a `team.published` event with id `published-<version>`, stored once per commit; `duplicate` is true when it was already there.
       security: [ { reportToken: [] } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KitReport" } } } }
+      requestBody: { required: true, content: { application/json: { schema: { oneOf: [ { $ref: "#/components/schemas/KitReport" }, { $ref: "#/components/schemas/KitPublished" } ] } } } }
       responses:
-        "200": { description: Stored, content: { application/json: { schema: { type: object, properties: { ok: { const: true }, id: { type: string } } } } } }
+        "200": { description: Stored, content: { application/json: { schema: { type: object, properties: { ok: { const: true }, id: { type: string }, duplicate: { type: boolean } } } } } }
         "400": { $ref: "#/components/responses/Problem" }
         "429": { description: More than 30 reports a minute from one role }
   /teams/{team}/events:
@@ -112,6 +114,16 @@ paths:
       tags: [events]
       summary: Where every role stands now (the board projection)
       responses: { "200": { description: Board, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } } }
+  /teams/{team}/rollout:
+    parameters:
+      - { $ref: "#/components/parameters/team" }
+      - { name: version, in: query, schema: { type: string, pattern: "^[0-9a-f]{7,40}$" }, description: "A published commit; default: the latest team.published event's" }
+      - { name: publishedAt, in: query, schema: { type: string, format: date-time }, description: "When it merged (with version)" }
+    get:
+      x-min-role: viewer
+      tags: [events]
+      summary: "The rollout after a publish merges (demo step 17): per role moved, next-task, finishing (with the change step's plan), off-finishing, off, no-report or unknown, and the summary. A role counts as moved only when a report after the merge names the new version. Read-only"
+      responses: { "200": { description: "{ version, name, publishedAt, pr, roles: [{ role, state, teamVersion, status, task, lastAt, stale, plan? }], summary: { moved, of, finishing, offFinishing, unknown, noReport, allMoved } }; version null when nothing is published yet" } }
   /teams/{team}/report-tokens:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post:
@@ -128,7 +140,7 @@ paths:
     post:
       x-min-role: admin
       tags: [connectors]
-      summary: Forward events to a URL, in order, at least once (kit-report keeps a board the team already runs working)
+      summary: Forward events to a URL, in order, at least once (kit-report keeps a board the team already runs working), or send them as email to opted-in people
       requestBody:
         required: true
         content:
@@ -137,15 +149,94 @@ paths:
               type: object
               required: [url]
               properties:
-                url: { type: string, format: uri, description: "https, or http to this machine" }
-                format: { enum: [kit-report, event], default: kit-report }
+                url: { type: string, format: uri, description: "https, or http to this machine (not for email)" }
+                format: { enum: [kit-report, event, email, slack], default: kit-report, description: "email sends notification events to the people who opted in (PRD 6.8); slack connects the team's Slack workspace, one per team" }
+                provider: { type: string, description: "email only: the provider id, such as resend" }
+                sender: { type: string, description: "email only: the From address" }
                 header: { type: string, description: "Header to send the secret in, such as x-team-token" }
-                secret: { type: string, description: "Name of a stored secret (PUT /secrets/{name})" }
+                secret: { type: string, description: "Name of a stored secret (PUT /secrets/{name}); EMAIL_… for email, SLACK_… (the bot token) for slack" }
+                clientId: { type: string, description: "slack only: the Slack app's client id, for Connect Slack" }
+                clientSecret: { type: string, description: "slack only: name of the stored secret with the app's client secret (SLACK_…)" }
                 from: { enum: [now, start], default: now }
       responses: { "201": { description: The sink } }
   /teams/{team}/sinks/{sink}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: sink, in: path, required: true, schema: { type: string } } ]
     delete: { x-min-role: admin, tags: [connectors], summary: Stop forwarding, responses: { "200": { description: Removed } } }
+  /teams/{team}/emails:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { x-min-role: viewer, tags: [notifications], summary: "The caller's own email addresses for this team, and the kinds they can switch on", responses: { "200": { description: "{ teamName, ready, kinds, emails }: ready is false until the team has an email sink with its provider key stored, so the page can say emails are not set up instead of offering a code" } } }
+    post:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: Add an address for yourself; a 6-digit code is emailed to it (expires in 15 minutes). Nothing else is sent until it is verified and kinds are on
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } } }
+      responses: { "201": { description: "{ id, email, verified, sent, reason? }" }, "429": { description: A code was sent less than a minute ago } }
+  /teams/{team}/emails/{email}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: email, in: path, required: true, schema: { type: string } } ]
+    patch:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: Choose the kinds to email (approval, budget80, budget100, blocked, minutes, ready); the address must be verified
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
+      responses: { "200": { description: The address }, "409": { description: Not verified yet } }
+    delete: { x-min-role: viewer, tags: [notifications], summary: Remove the address, responses: { "200": { description: Removed } } }
+  /teams/{team}/emails/{email}/verify:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: email, in: path, required: true, schema: { type: string } } ]
+    post:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: Verify the address with the emailed code (5 tries)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code], properties: { code: { type: string, pattern: "^[0-9]{6}$" } } } } } }
+      responses: { "200": { description: Verified }, "400": { description: Wrong code }, "410": { description: Expired or out of tries } }
+  /email/{action}:
+    parameters: [ { name: action, in: path, required: true, schema: { enum: [link, unsubscribe, resubscribe] } }, { name: t, in: query, required: true, schema: { type: string } } ]
+    get: { tags: [notifications], security: [], summary: "No sign-in, the signed token is the proof. link: redirects into the Studio until it expires (approvals 24 hours, others 7 days). unsubscribe: shows a page asking to turn off one kind for one team (the button POSTs)", responses: { "200": { description: A page }, "302": { description: Into the Studio }, "410": { description: The link expired } } }
+    post: { tags: [notifications], security: [], summary: "unsubscribe: turns off one kind for one team (also RFC 8058 one-click); resubscribe: Turn it back on", responses: { "200": { description: A page } } }
+  /teams/{team}/slack:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { x-min-role: viewer, tags: [notifications], summary: "Is Slack connected and working (health), the kinds, and the caller's own link", responses: { "200": { description: "{ connected, ready, canLink, health, kinds, me }" } } }
+  /teams/{team}/slack/connect:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post: { x-min-role: viewer, tags: [notifications], summary: "Start Connect Slack: the Sign in with Slack URL (identity only), with a state bound to the caller and team for 10 minutes", responses: { "200": { description: "{ url }" }, "409": { description: Slack is not connected for this team } } }
+  /teams/{team}/slack/link:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: "Finish Connect Slack from the Studio's /slack/callback page: links the caller's Slack account (same workspace as the team's) and sends the first DM once a kind is on"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, state], properties: { code: { type: string }, state: { type: string }, kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
+      responses: { "201": { description: "{ linked, name, kinds, welcomed }" }, "400": { description: The state is not this caller's }, "409": { description: Another workspace, or Slack not connected }, "410": { description: Started more than 10 minutes ago } }
+  /teams/{team}/slack/me:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    patch:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: Choose the kinds to get as a Slack DM
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
+      responses: { "200": { description: The link }, "404": { description: Not linked } }
+    delete: { x-min-role: viewer, tags: [notifications], summary: "Disconnect Slack: stops every DM from this team (channel posts keep going)", responses: { "200": { description: Removed } } }
+  /teams/{team}/slack/channels:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { x-min-role: admin, tags: [notifications], summary: The channels picked for this team, responses: { "200": { description: "{ channels }" } } }
+    post:
+      x-min-role: admin
+      tags: [notifications]
+      summary: "Pick a channel; kinds default to budget80, budget100 and minutes (approval and BLOCKED start off). The channel gets a first post saying who chose it"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [channel, name], properties: { channel: { type: string, pattern: "^[CG][A-Z0-9]{2,20}$" }, name: { type: string }, kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
+      responses: { "201": { description: "The channel, and posted (or reason)" }, "409": { description: Already picked, or Slack not connected } }
+  /teams/{team}/slack/channels/{channel}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: channel, in: path, required: true, schema: { type: string } } ]
+    patch:
+      x-min-role: admin
+      tags: [notifications]
+      summary: Choose the kinds posted to this channel
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
+      responses: { "200": { description: The channel } }
+    delete: { x-min-role: admin, tags: [notifications], summary: Stop posting to this channel, responses: { "200": { description: Removed } } }
+  /slack/{action}:
+    parameters: [ { name: action, in: path, required: true, schema: { enum: [unsubscribe, resubscribe] } }, { name: t, in: query, required: true, schema: { type: string } } ]
+    get: { tags: [notifications], security: [], summary: "No sign-in, the signed token is the proof. unsubscribe: shows a page asking to turn off one kind of Slack DM for one team (the button POSTs). Studio links in Slack messages use /email/link", responses: { "200": { description: A page } } }
+    post: { tags: [notifications], security: [], summary: "unsubscribe: turns off one kind of Slack DM for one team; resubscribe: Turn it back on", responses: { "200": { description: A page } } }
   /secrets:
     get: { x-min-role: admin, tags: [connectors], summary: Secret names and when they changed (never values), responses: { "200": { description: Names } } }
   /secrets/{name}:
@@ -193,6 +284,18 @@ paths:
       summary: Say something to the chief of staff. Stored verbatim
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [text], properties: { text: { type: string, maxLength: 20000 }, replyTo: { type: string }, clientId: { type: string, maxLength: 80, description: "Made by the client (a ULID). A repeat returns the first message with 200" } } } } } }
       responses: { "200": { description: The chat.message event already stored for this clientId }, "201": { description: The chat.message event } }
+  /teams/{team}/meetings:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { x-min-role: viewer, tags: [meetings], summary: "The team's latest meetings (at most 50), newest first", responses: { "200": { description: "{ meetings: [Meeting] }" } } }
+    post:
+      x-min-role: editor
+      tags: [meetings]
+      summary: "Start a meeting now: an instance (mtg_…) of a definition the running run was started with. 404 for an unknown definition; 409 when no run is running, the definition is already open, or today's budget has less left than the meeting's cap"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, description: "Either meeting or adhoc", properties: { meeting: { type: string, description: The definition id }, adhoc: { type: object, description: "Additive (G-15): an unscheduled meeting run by the front door, with next-pause. Without cap, the budget's meetingCap applies; a cap above the meetingCap is refused (409), and open meetings hold what is left of their caps against today's budget", required: [title, attendees], properties: { title: { type: string, maxLength: 200 }, agenda: { type: string, maxLength: 4000 }, attendees: { type: array, maxItems: 20, items: { type: string } }, cap: { type: object, required: [amount, currency], properties: { amount: { type: integer, minimum: 1, description: Minor units }, currency: { type: string, description: "The budget's currency" } } } } } } } } } }
+      responses: { "201": { description: "The meeting: { id, definition, title, facilitator, attendees, state, outcome, capped, turn, replies, skipped, minutes, cap, spent, currency, run }" } }
+  /teams/{team}/meetings/{meeting}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: meeting, in: path, required: true, schema: { type: string } } ]
+    get: { x-min-role: viewer, tags: [meetings], summary: "One meeting, for its page (/t/{team}/meetings/{meeting})", responses: { "200": { description: The meeting }, "404": { description: No such meeting } } }
   /approvals/{approval}:
     post:
       x-min-role: approver
@@ -342,7 +445,7 @@ paths:
     post:
       x-min-role: approver
       tags: [approvals]
-      summary: Answer a decision or ongoing-work card. Send the version you saw; a stale version gets 409 with the current card
+      summary: "Answer a decision or ongoing-work card. Send the version you saw; a stale version gets 409 with the current card. x-min-role is the least for any card; each kind needs its own: approval and decision cards an approver, a budget card (and any kind not named here) an admin, else 403 forbidden"
       parameters: [ { name: card, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [option, version], properties: { option: { type: string }, version: { type: integer }, note: { type: string } } } } } }
       responses: { "200": { description: The answer event }, "409": { description: The card changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
@@ -392,6 +495,7 @@ components:
     runner: { type: http, scheme: bearer, description: Runner key }
     reportToken: { type: apiKey, in: header, name: x-team-token }
     cron: { type: http, scheme: bearer, description: "The deployment's CRON_SECRET, for /internal/* only (its tick and its smoke check); never a person's" }
+    app: { type: http, scheme: DPoP, description: "An app's access token (iPhone, Android, CLI): `Authorization: DPoP <token>` plus a `DPoP` proof header for this request (RFC 9449), signed by the device key the token is bound to: htm and htu of this request (the deployment's origin and path), iat within 60 seconds, ath of the token, a jti used once. The Bearer scheme is refused for these tokens. Roles apply as for the web; passkeys are added and removed on the web only, and an app may step up with one" }
     cookie: { type: apiKey, in: cookie, name: __Host-agent-team, description: "The web's session, set by the issuer's callback (HttpOnly, Secure, SameSite=Lax; 12 hours idle, 7 days in all). An unsafe method sent with it needs this deployment's Origin and content-type application/json, or gets 403 (problem type csrf)" }
   parameters:
     team: { name: team, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }
@@ -423,6 +527,7 @@ components:
         workspaces: { type: array, items: { type: object, properties: { tenant: { type: string }, role: { type: string, enum: [owner, admin, editor, viewer, approver] } } } }
         passkeys: { type: integer }
         authTime: { type: [string, "null"], format: date-time }
+        notices: { type: array, description: "The person's own security changes of the last 30 days, newest first (at most 20): passkey.added, passkey.removed, passkey.sign-count-flagged, step-up.locked, sessions.ended, member.role-changed, member.removed. Shown until the notifications channel delivers them (S5)", items: { type: object, properties: { action: { type: string }, at: { type: string, format: date-time }, passkey: { type: string }, name: { type: string }, tenant: { type: string }, role: { type: string } } } }
     Team:
       type: object
       properties:
@@ -448,6 +553,21 @@ components:
         - type: object
           properties: { mode: { enum: [pull-request, commit], default: pull-request }, branch: { type: string }, message: { type: string } }
     PublishResult: { type: object, properties: { branch: { type: string }, commit: { type: string }, pr: { type: integer }, url: { type: string } } }
+    KitPublished:
+      type: object
+      description: A team version that reached the main branch (tools/report.mjs publishedBody). Becomes team.published.
+      required: [kind, version]
+      properties:
+        kind: { const: published }
+        version: { type: string, pattern: "^[0-9a-f]{40}$" }
+        publishedAt: { type: string, format: date-time }
+        pr: { type: [integer, "null"], minimum: 1 }
+        roles: { type: array, maxItems: 500, items: { type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,59}$" } }
+        off: { type: array, maxItems: 500, items: { type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,59}$" } }
+        plan: { type: object, additionalProperties: { type: object, required: [choice], properties: { choice: { enum: [finish, handoff, pause, move-after-merge, move-and-handover] }, to: { type: string } } } }
+        changes: { type: array, maxItems: 200, items: { type: string, maxLength: 300 } }
+        by: { type: string, maxLength: 120 }
+        source: { type: string }
     KitReport:
       type: object
       description: Exactly the report team-status.sh and report.mjs send (tools/board.mjs toRow).
@@ -525,13 +645,31 @@ components:
                   pool: { type: integer, description: "Most instances, so to: role#instance can be checked" }
                   model: { type: string }
                   brief: { type: string, description: "The role's brief as text, at most 20 KB; sent to the runner as session.start prompt.brief" }
+            meetings:
+              type: array
+              maxItems: 50
+              description: "Additive (meetings). The team's meetings.json entries, frozen with the run like the roles, with attendees already resolved to role slugs by the Studio (meetingAttendees, the facilitator left out). A missing facilitator means the front door"
+              items:
+                type: object
+                required: [id, title, attendees, capUsd]
+                properties:
+                  id: { type: string, description: The definition id in meetings.json }
+                  title: { type: string, maxLength: 200 }
+                  agenda: { type: string, maxLength: 4000 }
+                  facilitator: { type: string }
+                  attendees: { type: array, items: { type: string }, description: In the order turns go }
+                  rule: { enum: [worked-since-last], description: The server also invites roles that reported since the meeting last closed }
+                  format: { enum: [round, discussion], description: A discussion runs as a written round for now }
+                  ifBusy: { enum: [next-pause, proxy, skip], default: next-pause }
+                  owner: { type: object, properties: { minutes: { type: boolean, default: true }, speaks: { type: boolean, default: false } } }
+                  capUsd: { type: number, exclusiveMinimum: 0, description: "Stored as cap in the budget's minor units, rounded up" }
     Card:
       type: object
       description: Anything a person answers, the same on every client and channel (clients.md section 6)
       required: [id, kind, title, options, version, url]
       properties:
         id: { type: string }
-        kind: { type: string, description: "approval, decision, budget, ongoing-work, meeting-invite, channel-failed; clients render unknown kinds generically" }
+        kind: { type: string, description: "approval, decision, budget, ready, ongoing-work, meeting-invite, channel-failed; clients render unknown kinds generically" }
         team: { type: string }
         subject: { type: string }
         title: { type: string }
@@ -574,6 +712,7 @@ components:
         perDay: { type: [integer, "null"], description: Minor units }
         perRun: { type: [integer, "null"] }
         sessions: { type: integer, default: 3, description: Live sessions at once }
+        meetingCap: { type: [integer, "null"], description: "Additive (G-15). The cap of a meeting started without one, in minor units; null means a tenth of perDay. At most perDay (lowering perDay below it brings it down too); raising it needs step-up" }
         currency: { type: string }
         today: { type: object, readOnly: true, properties: { day: { type: string, format: date }, spent: { type: integer }, raised: { type: integer }, state: { type: string } } }
     ToolResult:

@@ -9,6 +9,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Problem, id, sha } from './store.mjs';
 import { checkTool, detailOf } from './tools.mjs';
 import { personActor } from './m3.mjs';
+import { createMeetings } from './meetings.mjs';
 
 export const SESSION_TOKEN_MINUTES = 15;
 const ACK_SECONDS = 30;
@@ -16,15 +17,16 @@ const CHECKPOINT_MS = 10 * 60_000;
 const BACKOFF = [5, 30, 120, 600];
 const MAX_ATTEMPTS = 10;
 const LIVE = ['starting', 'running', 'idle', 'waiting'];
-const RUNNER_MAY_SEND = (type) => /^session\./.test(type) || ['usage.recorded', 'report.heartbeat', 'chat.message'].includes(type) || /^proposal\.(opened|updated|accepted|failed)$/.test(type);
+const RUNNER_MAY_SEND = (type) => /^session\./.test(type) || ['usage.recorded', 'report.heartbeat', 'chat.message'].includes(type) || /^proposal\.(opened|updated|accepted|failed|previewed)$/.test(type);
 const TOOL_EVENT = { report: 'report.status', handoff: 'message.handoff', bug: 'message.bug', signoff: 'message.signoff', blocked: 'message.blocked' };
 const SESSION_STATE = { 'session.started': 'running', 'session.idle': 'idle', 'session.ended': 'ended' };
 
 const utcDay = (d) => d.toISOString().slice(0, 10);
 const backoff = (attempts) => BACKOFF[Math.min(Math.max(attempts - 1, 0), BACKOFF.length - 1)];
 
-export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console }) {
+export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes }) {
   const reg = () => (typeof runners === 'function' ? runners() : runners);
+  const meetings = createMeetings({ db, m3, publicUrl, ...(meetingTurnMinutes ? { turnMinutes: meetingTurnMinutes } : {}) });
   const toolsUrl = () => String(publicUrl || '').replace(/\/+$/, '');
 
   // ---- What wakes whom ----------------------------------------------------------------------------------------------
@@ -51,6 +53,9 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (to === 'owner') to = roster.frontDoor;
       const [role, instance] = String(to ?? '').split('#');
       add(role, instance || null);
+    } else if (event.type === 'meeting.turn') {
+      // A turn goes to the role; a pool role's lowest-numbered live instance takes it (meetings, A8).
+      add(event.data?.to, await meetings.instanceFor(q, run.id, event.data?.to));
     } else if ((event.type === 'decision.answered' || event.type === 'approval.decided') && event.data?.session) {
       const [s] = await q('select role, instance from sessions where id = $1', [event.data.session]);
       if (s) add(s.role, s.instance);
@@ -62,11 +67,12 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   async function project(ctx, { event }) {
     if (!event.team) return;
     const { q } = ctx;
+    await meetings.project(ctx, event);
     if (SESSION_STATE[event.type] && event.actor?.session) {
       await q('update sessions set state = $2, last_seen = now() where id = $1 and state <> $2', [event.actor.session, SESSION_STATE[event.type]]);
       if (event.type === 'session.ended') ctx.after.push(() => startQueued(ctx.tenant, event.team));
     }
-    if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided'].includes(event.type)) return;
+    if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided', 'meeting.turn'].includes(event.type)) return;
     const run = await activeRun(q, event.team);
     if (!run) return;
     for (const t of await targets(q, run, event)) {
@@ -121,6 +127,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         await q('update deliveries set next_at = now() + make_interval(secs => 10) where id = $1', [d.id]);
         return null;
       }
+      if (wake.type === 'meeting.turn') await meetings.sent(q, wake.id);
       if (s && LIVE.includes(s.state) && conn) {
         await q("update deliveries set state = 'sent', session = $2, attempts = attempts + 1, next_at = now() + make_interval(secs => $3) where id = $1", [d.id, s.id, ACK_SECONDS]);
         return { d, conn, op: 'session.message', body: { session: s.id, message: wake, delivery: d.id } };
@@ -321,6 +328,24 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         if (tool === 'blocked') await ctx.emit(sess.team, 'report.status', { status: 'blocked', task: i.task, issue: i.issue, detail: i.need }, opts);
         out = { event: ev.id };
         await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: ev.id });
+      } else if (tool === 'meeting_reply' || tool === 'meeting_close' || tool === 'meeting_start') {
+        const r = tool === 'meeting_start' ? await meetings.startAdhoc(ctx, sess, i, roster) : await meetings.tool(ctx, sess, tool, i, roster);
+        if (r.problems) {
+          const ev = await ctx.emit(sess.team, 'session.tool', { tool: `team.${tool}`, decision: 'refused', rule: 'meetings', detail: r.problems.join(' ') }, opts);
+          await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'refused', rule: 'meetings', event: ev.id, detail: { problems: r.problems } });
+          return { refused: r.problems };
+        }
+        if (tool === 'meeting_reply') await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: r.event });
+        out = r;
+      } else if (tool === 'ready_to_try') {
+        const r = await m3.readyToTry(ctx, sess, i, { roster, opts });
+        if (r.problems) {
+          const ev = await ctx.emit(sess.team, 'session.tool', { tool: `team.${tool}`, decision: 'refused', rule: 'ready', detail: r.problems.join(' ') }, opts);
+          await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'refused', rule: 'ready', event: ev.id, detail: { problems: r.problems } });
+          return { refused: r.problems };
+        }
+        await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: r.event });
+        out = r;
       } else if (tool === 'ask_owner') {
         const expiresAt = i.expires ? new Date(i.expires) : new Date(ctx.now.getTime() + 7 * 86_400_000);
         const card = await m3.createCard(ctx, sess.team, {
@@ -373,7 +398,10 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
           const env = { ...e, tenant: conn.tenant, team: sess.team, source: `/tenants/${conn.tenant}/teams/${sess.team}`, run: sess.run, teamVersion: sess.team_version ?? e.teamVersion,
             actor: { kind: 'role', id: sess.role, instance: sess.instance ?? null, session: sess.id, via: e.actor?.via === 'tool' ? 'tool' : 'hook' } };
           if (e.type === 'chat.message') env.data = { ...(e.data ?? {}), from: sess.role };
+          // One stored event per deployment, whatever id the frame had, so a repeat after a reconnect is a no-op.
+          if (e.type === 'proposal.previewed') { env.data = m3.checkPreviewed(e.data); env.id = `previewed-${env.data.ref}-${env.data.deployment}`; await m3.previewForMerge(ctx, sess.team, env.data); }
           const out = await m3.appendIn(ctx, sess.team, [env]);
+          if (e.type === 'proposal.previewed' && out.length) await m3.previewArrived(ctx, sess.team, env.data);
           if (e.type === 'chat.message' && out.length) {
             await ctx.q('insert into chat_messages(tenant, team, event, from_kind, from_id, text, reply_to, at) values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict do nothing',
               [conn.tenant, sess.team, env.id, 'role', sess.role, String(env.data.text ?? ''), env.data.replyTo ?? null, env.time]);
@@ -436,7 +464,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     if (a.state === 'pending' || a.state === 'approved') {
       await ctx.q("update approvals set state = 'expired', decided_at = now() where id = $1", [a.id]);
       const [c] = await ctx.q("select state from cards where id = $1", [a.card]);
-      if (c?.state === 'open') await m3.changeCard(ctx, sess.team, a.card, { state: 'superseded' });
+      // Open or already answered: either way the card must stop reading as the person's approval (D1).
+      if (c?.state === 'open' || c?.state === 'answered') await m3.changeCard(ctx, sess.team, a.card, { state: 'superseded' });
       await ctx.emit(sess.team, 'approval.decided', { approval: a.id, decision: 'superseded', by: null, note: 'the pull request changed after it was approved', session: sess.id, cardId: a.card }, { subject: `approval/${a.id}`, run: sess.run });
     }
   }
@@ -477,6 +506,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       for (const d of due) await deliver(tenant, d.id);
       await expire(tenant);
       await rollover(tenant);
+      await meetings.tick(tenant);
       // A runner gone for ten minutes is not coming back for its sessions: they can start elsewhere.
       await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where state = 'unknown' and last_seen < now() - interval '10 minutes'"));
     }
@@ -515,7 +545,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     });
   }
 
-  return { project, deliver, tick, toolCall, authSession, ops, onLost, welcome, runChanged, approvalDecided, saveCheckpoint };
+  return { project, deliver, tick, toolCall, authSession, ops, onLost, welcome, runChanged, approvalDecided, saveCheckpoint, meetings };
 }
 
 /**

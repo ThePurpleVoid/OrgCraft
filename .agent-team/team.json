@@ -1,5 +1,5 @@
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.15.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.17.0",
   "preset": "minimal",
   "include": [
     "cpo",
@@ -16,8 +16,8 @@
   "values": {
     "PROJECT_NAME": "Agent Team Kit",
     "OWNER": "the owner",
-    "TIMEZONE": "UTC",
-    "DIGEST_TIME": "08:00"
+    "TIMEZONE": "America/Los_Angeles",
+    "DIGEST_TIME": "07:00"
   },
   "subagents": false,
   "hooks": true

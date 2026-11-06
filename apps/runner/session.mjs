@@ -2,16 +2,20 @@
 // It owns the session's working copy, its queue of messages, its budget and its liveness. The runner key's events
 // (session.*, usage.recorded, report.heartbeat, and the front door's chat.message) go out through `emit`; role
 // messages go through the team tool server, so the control plane mints them (docs/product/m3-design.md).
+import { tierModel } from '../../packages/model-prices/index.mjs';
+import { loadPrices } from '../../packages/model-prices/node.mjs';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
-import { safeRead, safeWrite, sharedDir } from './sandbox.mjs';
-import { checkpoint as saveWork, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
+import { reapAside, safeRead, safeWrite, sandboxPool, sharedDir } from './sandbox.mjs';
+import { checkHead, checkpoint as saveWork, copyPath, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
-export const DEFAULT_TIERS = { deep: 'claude-opus-5-5', standard: 'claude-opus-5-5', routine: 'claude-sonnet-5-5', light: 'claude-haiku-5-5' };
+// Which model each tier runs on comes from the kit's one price table (packages/model-prices), not a copy here.
+export const PRICES = loadPrices();
+export const DEFAULT_TIERS = { ...PRICES.tiers };
 /**
  * The only parts of the runner's environment a session inherits (security review R1). Not HOME: each session
  * gets its own empty one. Not the model key: the session gets the loopback proxy's address and a token of its
@@ -54,12 +58,32 @@ export function wakePrompt(m, role, { resume = false } = {}) {
   if (m.type === 'decision.answered') {
     return `${lead}. The owner answered your question${d.question ? ` "${d.question}"` : ''}: ${JSON.stringify(d.answer ?? null)}${d.note ? `, with this note, verbatim:\n\n> ${d.note}` : '.'}`;
   }
+  if (m.type === 'meeting.turn') return meetingPrompt(lead, d);
   const kind = (/^message\.(\w+)$/.exec(m.type ?? '') ?? [])[1];
   const head = kind ? `${kind.toUpperCase()} from ${from}` : `${m.type ?? 'Message'} from ${from}`;
   const fields = Object.entries(d).filter(([k, v]) => k !== 'source' && v !== null && v !== '' && !(Array.isArray(v) && !v.length))
     .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v) : v}`).join('\n');
   return `${lead}, then handle this.\n\n${head}${m.id ? ` (event ${m.id})` : ''}:\n\n${fields}`;
 }
+
+/** A meeting turn (written round): the agenda and the replies so far, or, for the facilitator, the closing turn. */
+function meetingPrompt(lead, d) {
+  const replies = (d.replies ?? []).map((r) => `- ${r.role}, verbatim:\n${String(r.text ?? '').split('\n').map((l) => `  > ${l}`).join('\n')}`).join('\n');
+  const skipped = (d.skipped ?? []).map((s) => `${s.role} (${s.reason})`).join(', ');
+  const head = `MEETING "${d.title ?? d.definition}" (meeting ${d.meeting})`;
+  const agenda = `Agenda: ${d.agenda || 'none given'}`;
+  if (d.closing) {
+    return `${lead}, then close this meeting: you run it.\n\n${head}: ${d.capped ? 'it reached its cost cap, so not every attendee had a turn. Write partial minutes and say so.' : 'every attendee has had a turn.'}\n${agenda}\n\n`
+      + `Replies${d.note ? ` (${d.note})` : ''}:\n${replies || '(none)'}${skipped ? `\n\nSkipped: ${skipped}` : ''}\n\n`
+      + `Call meeting_close with { meeting: "${d.meeting}", minutes } and, if the meeting agreed any, actionItems [{ to, task, doneWhen }] and decisions for the owner [{ question, options, recommended }]. The minutes go to the chat and the board; they are not committed.`;
+  }
+  return `${lead}, then take your turn in this meeting.\n\n${head}, turn ${d.turn} of ${d.of}.\n${agenda}\n\n`
+    + `${replies ? `Replies so far${d.note ? ` (${d.note})` : ''}:\n${replies}\n\n` : ''}`
+    + `Answer with meeting_reply { meeting: "${d.meeting}", text } in a few sentences; it goes verbatim into the minutes. Then go back to what you were doing.`;
+}
+
+// How long to wait between looks for a merge's preview deployment: about ten minutes in all (G-12).
+const PREVIEW_DELAYS = [10e3, 20e3, 30e3, 60e3, 60e3, 60e3, 120e3, 120e3, 120e3];
 
 export class Session {
   /**
@@ -91,9 +115,8 @@ export class Session {
   }
 
   get model() {
-    const tiers = { ...DEFAULT_TIERS, ...this.deps.tiers };
     const tier = (/\*\*Model:\*\*\s*([a-z]+)/i.exec(this.body.prompt?.brief ?? '') ?? [])[1]?.toLowerCase();
-    return this.body.model ?? tiers[this.body.tier ?? tier] ?? tiers.standard;
+    return this.body.model ?? tierModel(this.body.tier ?? tier, PRICES, this.deps.tiers);
   }
 
   /** What this session may still spend, in minor units: the smaller of today's and the run's remaining budget. */
@@ -106,7 +129,13 @@ export class Session {
   async start() {
     const b = this.body;
     try {
-      const sb = this.deps.sandbox ?? null;
+      // The session's own agent user (#28): a slot of the runner's pool, the one its working copy last had if free.
+      this.pool = sandboxPool(this.deps.sandbox ?? null);
+      if (this.pool) {
+        this.slot = this.pool.take(copyPath({ work: this.work, repo: b.repo, worktree: b.worktree, session: this.id }));
+        if (!this.slot) throw Object.assign(new Error('every agent user of this runner is in use'), { capacity: true });
+      }
+      const sb = this.slot ?? null;
       this.copy = await prepare({ root: this.deps.root, work: this.work, repo: b.repo, worktree: b.worktree, session: this.id, sandbox: sb });
       sharedDir(join(this.work, 'memory'), sb);
       sharedDir(dirname(this.memoryPath), sb, { leaf: true });
@@ -130,7 +159,9 @@ export class Session {
       }
       if (b.instance) this.env.AGENT_TEAM_INSTANCE = String(b.instance);
     } catch (e) {
-      await this.emit('session.ended', { role: this.role, reason: 'failed', detail: `could not start: ${e.message}` });
+      if (this.copy) release(this.copy.cwd, this.id);
+      await this.endSlot();
+      await this.emit('session.ended', { role: this.role, reason: e.capacity ? 'capacity' : 'failed', detail: `could not start: ${e.message}` });
       this.state = 'ended';
       this._ended();
       return;
@@ -194,7 +225,7 @@ export class Session {
     let out;
     try {
       out = await this.deps.adapter.turn({
-        session: this.id, role: this.role, model: this.model, cwd: this.copy.cwd, env: this.env, resume: this.resume, sandbox: this.deps.sandbox ?? null,
+        session: this.id, role: this.role, model: this.model, cwd: this.copy.cwd, env: this.env, resume: this.resume, sandbox: this.slot ?? null,
         systemPrompt: systemPrompt(this.body.prompt, this.role, this.memoryPath), prompt: this.takeNote(wakePrompt(message, this.role, { resume })),
         signal: this.abort.signal, maxBudgetUsd: remaining === null ? undefined : remaining / 100, mcp: this.body.tools?.mcp ?? {},
         tools: Object.entries(TOOLS).map(([name, t]) => ({ name, description: t.description, shape: t.shape })),
@@ -209,7 +240,7 @@ export class Session {
       if (limit) clearTimeout(limit);
     }
     if (out.resume) this.resume = out.resume;
-    await this.record(out.usage ?? {});
+    await this.record(out.usage ?? {}, { meeting: message?.type === 'meeting.turn' ? message.data?.meeting : undefined });
     const timedOut = this.abort.signal.reason === 'time';
     if (this.remaining !== null && this.remaining <= 0 && this.state !== 'stopping') { this.stopReason = 'budget'; this.state = 'stopping'; }
     if (this.state === 'stopping') return;
@@ -219,14 +250,15 @@ export class Session {
   }
 
   /** usage.recorded in whole minor units, the fraction carried to the next report (rounded up on the last one). */
-  async record(u, { last = false } = {}) {
+  async record(u, { last = false, meeting } = {}) {
     const cost = (u.costUsd ?? 0) * 100;
     this.spent += cost;
     const whole = last ? Math.ceil(this.spent - 1e-9) : Math.floor(this.spent + 1e-9);
     const due = whole - this.reported;
     if (!(u.inputTokens || u.outputTokens || due > 0)) return;
     this.reported += Math.max(due, 0);
-    await this.emit('usage.recorded', { inputTokens: u.inputTokens ?? 0, outputTokens: u.outputTokens ?? 0, cost: Math.max(due, 0), currency: 'USD', model: this.model });
+    // A meeting turn's spend is tagged with the meeting; the server checks the tag before it counts toward the cap.
+    await this.emit('usage.recorded', { inputTokens: u.inputTokens ?? 0, outputTokens: u.outputTokens ?? 0, cost: Math.max(due, 0), currency: 'USD', model: this.model, ...(typeof meeting === 'string' ? { meeting } : {}) });
   }
 
   /** The front door's completed text blocks are its replies in the chat; other roles' text stays in their session. */
@@ -385,6 +417,7 @@ export class Session {
       try {
         const m = await this.deps.proposals.accept({ repo: this.body.repo.url, ref: this.proposal.ref, branch: this.copy.branch, base: this.copy.base, headSha: approved, approval });
         await this.emit('proposal.accepted', { ...base, result: m.result });
+        this.watchPreview({ connector: base.connector, ref: base.ref, sha: m.result });
         // The base has it now (squashed): later work starts from there, on a fresh pull request.
         // Only when the remote branch is gone: otherwise the next push onto it would be refused (not a fast-forward).
         this.proposal = null;
@@ -397,6 +430,16 @@ export class Session {
         if (reason === 'head-moved' && round < MAX_REASKS) {
           const now = await this.deps.proposals.head({ repo: this.body.repo.url, ref: this.proposal.ref }).catch(() => null);
           if (now && now !== approved) {
+            // Commits the runner did not push have not been through its checks: they must pass the same ones
+            // (ownership against the bases the runner fetched, symlinks, large files, the secret scan over every
+            // commit in the range) before any card can name them. If they fail, no card.
+            const c = await checkHead(this.copy.cwd, { branch: this.copy.branch, sha: now, areas: this.body.areas ?? [], secrets: this.secretValues() })
+              .catch((err) => ({ ok: false, problem: { rule: 'history', items: [], text: `not asked: ${err.message}` } }));
+            if (!c.ok) {
+              const moved = c.problem.rule === 'head-moved';
+              await this.emit('proposal.failed', { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: now, approval, reason: moved ? 'head-moved' : 'checks', detail: c.problem.text.slice(0, 500) });
+              return { text: JSON.stringify({ approval, decision: 'approved', merged: false, reason: moved ? 'head-moved' : 'checks', rule: c.problem.rule }) + ` Approved, but not merged: the pull request's head moved to ${now}, which this session did not push, and it was not asked again (${c.problem.text}). Tell your manager; do not merge another way.`, isError: true };
+            }
             headSha = now;
             this.proposal.headSha = now;
             await this.emit('proposal.updated', { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: now });
@@ -429,6 +472,7 @@ export class Session {
     if (this.copy) release(this.copy.cwd, this.id);
     this.deps.modelProxy?.unregister(this.id);
     await this.record({}, { last: true });
+    await this.endSlot();
     await this.emit('report.heartbeat', { status: 'idle', detail: reason === 'budget' ? 'stopped: the session reached its budget' : `stopped (${reason})`, source: 'hook' }, { via: 'hook' });
     await this.emit('session.ended', { role: this.role, reason, branch: this.copy?.branch, commit: saved.commit, pushed: saved.pushed ?? false, ...(saved.error ? { detail: saved.error } : {}) });
     this.state = 'ended';
@@ -438,5 +482,46 @@ export class Session {
 
   emit(type, data, opts = {}) {
     return this.deps.emit(this, type, data, opts);
+  }
+
+  /**
+   * Hand the session's agent user back (#28). A slot of its own is emptied first (reap: every process, its temporary
+   * files, its home and memory folder) and its working copy parked (closed, and all of it the runner's). A slot
+   * that does not come back empty is kept out of the pool for good, and the runner says so. The clean-up runs in a
+   * child process (reapAside), so it never stalls the other sessions; the slot goes back when it is done.
+   */
+  async endSlot() {
+    const slot = this.slot;
+    if (!slot || this.slotDone) return;
+    this.slotDone = true;
+    if (!slot.own) return this.pool.give(slot);
+    const r = await reapAside(slot, [this.home, dirname(this.memoryPath)].filter((p) => p && existsSync(p)), { park: this.copy?.cwd ?? null });
+    if (r.ok) this.pool.give(slot);
+    else this.deps.log?.(`agent user ${slot.uid} is kept out of use: ${r.problems.join('; ')}`);
+  }
+
+  /**
+   * After a merge: wait for the host's deployment of the merge commit and send proposal.previewed with its link
+   * (G-12). The link is read from the connector, never from the model. Gives up quietly after the last delay
+   * (about ten minutes by default), or when the session ends; a repository with no deployments sends nothing.
+   */
+  watchPreview({ connector, ref, sha }) {
+    const look = this.deps.proposals?.preview;
+    if (!look || !sha) return;
+    const delays = this.deps.previewDelays ?? PREVIEW_DELAYS;
+    this.previewing = (async () => {
+      for (const ms of delays) {
+        const stop = await Promise.race([new Promise((r) => setTimeout(() => r(false), ms).unref?.()), this.ended.then(() => true)]);
+        if (stop || this.state === 'ended') return null;
+        const p = await look.call(this.deps.proposals, { repo: this.body.repo.url, sha }).catch((e) => { this.deps.log?.(`preview of ${sha}: ${e.message}`); return null; });
+        if (p) {
+          await this.emit('proposal.previewed', { connector, ref, sha, url: p.url, environment: p.environment, state: 'success', deployment: p.deployment })
+            .catch((e) => this.deps.log?.(`proposal.previewed for ${ref}: ${e.message}`));
+          return p;
+        }
+      }
+      this.deps.log?.(`no preview of ${sha} (pull request ${ref}) came up; nothing sent`);
+      return null;
+    })();
   }
 }

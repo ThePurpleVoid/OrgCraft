@@ -16,8 +16,21 @@ ANTHROPIC_API_KEY=… node bin.mjs start
 `register` trades the code for a runner key, kept in `~/.agent-team/runner/runner.json` (readable only by you).
 `start` connects with it. A deployment sets `AGENT_TEAM_SERVER` and `AGENT_TEAM_RUNNER_KEY` instead.
 
-**Run it in the container** (`Dockerfile`). That is the supported deployment: the runner runs as `runner` and every
-session as `agent`. Outside it (no `AGENT_TEAM_SANDBOX_UID`), sessions share the runner's OS user and could read its
+**Run it in the container** (`Dockerfile`). That is the supported deployment. The runner runs as `runner`, and
+every live session runs as an agent user of its own, from a pool of eight (`agent0` to `agent7`,
+`AGENT_TEAM_SANDBOX_UIDS=10100-10107`), so one session cannot read another's working copy, home or memory, even for
+another customer.
+- A session's folders are in its user's group.
+- The folders on the way are traverse only.
+- A working copy no session holds is closed to every agent user and wholly the runner's.
+- At a session's end, every process of its user is stopped and its temporary files and IPC are removed. The user
+  is checked empty before the next session gets it.
+- The pool needs `fs.protected_hardlinks=1`, which is the Linux default.
+- Where the platform allows it, also mount `/proc` with `hidepid=invisible`. No secret is ever on a command line,
+  but without it one agent user can see another's processes.
+
+The older single user (`AGENT_TEAM_SANDBOX_UID`) still works but serves one team only. Outside the container (no
+sandbox settings), sessions share the runner's OS user and could read its
 environment, so that is for development only: with `ANTHROPIC_API_KEY` set and no sandbox the runner refuses to
 start (`AGENT_TEAM_RUNNER_UNSANDBOXED=1` overrides that for development). On a Mac, run it through Docker:
 
@@ -45,7 +58,8 @@ Once, before the first start (the owner checklist, part A, made these):
 mkdir -p ~/.agent-team/runner-secrets && chmod 700 ~/.agent-team/runner-secrets
 ssh-keygen -t ed25519 -f ~/.agent-team/runner-secrets/runner-deploy-key -N ""   # paste only the .pub as a deploy key
 # the merger GitHub App: install it only on the team's own repositories, with Contents and Pull requests
-# read and write (and Metadata read) and nothing else. Its private key, downloaded from GitHub, saved as:
+# read and write, Metadata read and (for the Ready to try preview link) Deployments read, and nothing else.
+# Its private key, downloaded from GitHub, saved as:
 mv ~/Downloads/<app>.private-key.pem ~/.agent-team/runner-secrets/merger-app.pem
 ```
 
@@ -62,12 +76,12 @@ AGENT_TEAM_SERVER=http://127.0.0.1:4849 AGENT_TEAM_SERVER_TOKEN="$T" AGENT_TEAM_
 # 2. The runner image.
 docker build -f apps/runner/Dockerfile -t agent-team-runner .
 
-# 3. Redeem a one-time code (15 minutes, once), with a step-up. The key lands in the volume, never on screen.
-SU=$(curl -s -H "authorization: Bearer $T" -H 'content-type: application/json' \
-  -d "{\"secret\":\"$(cat ~/.agent-team/server/step-up.secret)\"}" localhost:4849/v1/auth/step-up | jq -r .token)
-CODE=$(curl -s -X POST -H "authorization: Bearer $T" -H "x-step-up: $SU" localhost:4849/v1/runners/codes | jq -r .code)
+# 3. Get a one-time code in the Studio: open Chat, click "Add a runner…" in the header, name the machine (optional)
+#    and click "Get a code", then confirm with the step-up secret. The dialog shows the code once (15 minutes, one
+#    use) and the command to copy; run it with the server as Docker sees it. The key lands in the volume, never on
+#    screen. (Screenshot: docs/product/screenshots/runner-code/runner-code.png.)
 docker run --rm -v ~/.agent-team/runner-secrets:/run/agent-team:ro -v agent-team-runner:/data agent-team-runner \
-  node apps/runner/bin.mjs register --server http://host.docker.internal:4849 --code "$CODE" --name my-mac
+  node apps/runner/bin.mjs register --server http://host.docker.internal:4849 --code XXXX-XXXX-XXXX --name my-mac
 
 # 4. Start it. ANTHROPIC_API_KEY comes from your shell (part B of the owner checklist; not before).
 docker run -d --name agent-team-runner --restart unless-stopped \
@@ -180,7 +194,9 @@ the machine happens to have.
 
 The whole M3 exit test on one machine with no model and no key (Pass A): the control plane, the Studio, and this
 runner with the scripted fake model in `adapters/dryrun.mjs` (a chief of staff, a builder and QA), against a fresh team
-whose remote is a bare repository on disk.
+whose remote is a bare repository on disk. The chief of staff asks you one decision card (step 7) and says back what you chose; the
+builder's change goes through QA's SIGNOFF to an approval card and a merge pinned to its head. Use `--runner docker`
+to exercise the sandbox (D2, D9) as well.
 
 ```bash
 npm ci --prefix apps/server && npm ci --prefix apps/runner

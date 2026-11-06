@@ -23,8 +23,18 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 /** Agreed by the security reviewer and web-dev: no inline or third-party scripts, inline styles allowed. */
 export const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
 
-/** The vercel.json for a site that fronts the control plane at `api` (an https origin, no path). */
-export function siteConfig(api) {
+/**
+ * The Studio's own pages for the links in emails and Slack messages (kit #101): the Notifications page, and every other
+ * /teams/{team}/… and /t/{team}/… path (cards, minutes) to link.html, which sends the browser to the right page of the Studio (apps/studio/public/links.js).
+ */
+export const STUDIO_REWRITES = [
+  { source: '/teams/:team/notifications', destination: '/notifications.html' },
+  { source: '/teams/:path*', destination: '/link.html' },
+  { source: '/t/:path*', destination: '/link.html' },
+];
+
+/** The vercel.json for a site that fronts the control plane at `api` (an https origin, no path); `studio` adds its pages. */
+export function siteConfig(api, { studio = false } = {}) {
   const u = new URL(api);
   if (u.protocol !== 'https:' || (u.pathname !== '/' && u.pathname !== '') || u.search || u.hash || u.username) {
     throw new Error(`--api must be an https origin with no path, query or credentials (got ${api})`);
@@ -44,6 +54,7 @@ export function siteConfig(api) {
       // Sign-in: the deployment is its own OIDC issuer (ADR 0007), at the site's origin.
       { source: '/oauth/:path*', destination: `${origin}/oauth/:path*` },
       { source: '/.well-known/openid-configuration', destination: `${origin}/.well-known/openid-configuration` },
+      ...(studio ? STUDIO_REWRITES : []),
     ],
     headers: [
       {
@@ -136,7 +147,7 @@ export function buildSite({ api, out, studio = false }) {
   }
   writeFileSync(join(dir, 'middleware.js'), MIDDLEWARE);
   writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ private: true, type: 'module' }, null, 2)}\n`);
-  writeFileSync(join(dir, 'vercel.json'), `${JSON.stringify(siteConfig(api), null, 2)}\n`);
+  writeFileSync(join(dir, 'vercel.json'), `${JSON.stringify(siteConfig(api, { studio }), null, 2)}\n`);
   return dir;
 }
 

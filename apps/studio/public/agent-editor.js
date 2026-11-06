@@ -10,6 +10,7 @@ import {
 } from './team-model.mjs';
 import { roleSystemsHtml, wireBindings } from './panels.js';
 import { packNeeds } from './agents.js';
+import { stateEl } from './env.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const field = (md, name) => (new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm').exec(md ?? '')?.[1] ?? '').trim();
@@ -94,14 +95,14 @@ export function createAgentEditor(root, app) {
     slug = s;
     pending = narrow = confirmMove = board = null;
     if (origin) origins.set(s, origin);
-    document.body.classList.add('editing');
+    stateEl().classList.add('editing');
     root.hidden = false;
     draw();
     root.querySelector('#e-title')?.focus();
   }
   function close() {
     slug = null;
-    document.body.classList.remove('editing');
+    stateEl().classList.remove('editing');
     root.hidden = true;
     root.innerHTML = '';
   }
@@ -267,7 +268,7 @@ export function createAgentEditor(root, app) {
             <textarea id="e-raw" rows="16" spellcheck="false">${esc(md)}</textarea></details>
         </div>
         <aside class="ed-prev" aria-label="Brief preview">
-          <div class="row" style="justify-content:space-between"><h2>Brief preview</h2><span class="badge">${kitClash ? 'name clash' : role.source === 'project-replaces-kit' ? 'replaces a kit role' : 'custom role'}</span></div>
+          <div class="row between"><h2>Brief preview</h2><span class="badge">${kitClash ? 'name clash' : role.source === 'project-replaces-kit' ? 'replaces a kit role' : 'custom role'}</span></div>
           <p class="hint"><code>.agent-team/roles/${esc(slug)}.md</code>. Exactly the file publish writes.</p>
           <pre id="e-preview" class="brief"></pre>
           <h2>Checks</h2>

@@ -8,14 +8,19 @@
 //   node tools/dry-run/m3.mjs hold     --dir <folder>      an approved merge waits (before step 9b)
 //   node tools/dry-run/m3.mjs move-head --dir <folder>     push a commit to the open pull request (step 9b)
 //   node tools/dry-run/m3.mjs release  --dir <folder>      the held merge goes ahead (and fails head-moved if moved)
+//   node tools/dry-run/m3.mjs deploy [pr] --dir <folder>   the stand-in host deploys the latest merge (or that PR's):
+//       the runner finds the preview link and the Ready to try card gains it (G-12)
 //   node tools/dry-run/m3.mjs spend <usd> --dir <folder>   the next turn reports that cost (step 11)
+//   node tools/dry-run/m3.mjs meeting [id] --dir <folder>  start a meeting now (standup by default): each attendee
+//       answers its turn and the chief of staff posts the minutes in the chat
+//   node tools/dry-run/m3.mjs meeting-spend <usd> --dir <folder>   the next attendee's turn costs that (the cap path)
 //   node tools/dry-run/m3.mjs status   --dir <folder>      the pull requests (head, state, merge result) and the log
 //
 // Needs `npm ci --prefix apps/server` and `npm ci --prefix apps/runner` first. `up` writes <folder>/state.json; the
 // other commands read it, so they work from another terminal while `up` runs.
 import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -42,6 +47,11 @@ export function teamRepo(dir) {
   // Who may write what: the builder its app, QA its evidence, the front door its notes.
   writeFileSync(join(root, '.agent-team/ownership.json'), JSON.stringify({ rows: [
     { writer: BUILDER.role, path: 'app/**' }, { writer: 'qa-web', path: 'qa/**' }, { writer: 'chief-of-staff', path: 'notes/**' },
+  ] }, null, 2));
+  // One meeting: a written round of the builder and QA, run by the front door, with a small cap.
+  writeFileSync(join(root, '.agent-team/meetings.json'), JSON.stringify({ meetings: [
+    { id: 'standup', title: 'Daily standup', when: { days: ['mon', 'tue', 'wed', 'thu', 'fri'], at: '09:00' }, attendees: { roles: [BUILDER.role, 'qa-web'] }, facilitator: 'chief-of-staff',
+      format: 'round', agenda: 'What you did, what is next, what blocks you.', ifBusy: 'next-pause', owner: { minutes: true, speaks: false }, capUsd: 0.5 },
   ] }, null, 2));
   for (const d of ['app', 'qa', 'notes']) { mkdirSync(join(root, d), { recursive: true }); writeFileSync(join(root, d, 'README.md'), `# ${d}\n`); }
   git(root, 'add', '-A');
@@ -157,6 +167,30 @@ export function hooks(dir) {
     log: () => { try { return readFileSync(join(s.control, 'log.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } },
     signoff: ({ evidence = ['qa/dry-run.log'], result = 'pass', walked, testedOn } = {}) => writeFileSync(join(s.control, 'qa-signoff.json'), JSON.stringify({ evidence, result, walked, testedOn })),
     spend: (usd) => writeFileSync(join(s.control, 'spend.json'), JSON.stringify({ usd: Number(usd) })),
+    meetingSpend: (usd) => writeFileSync(join(s.control, 'meeting-spend.json'), JSON.stringify({ usd: Number(usd) })),
+    /** Start a meeting now, as the Studio's button will: POST /v1/teams/{team}/meetings with the admin token. */
+    meeting: async (meeting = 'standup') => {
+      const res = await fetch(`${s.cp}/v1/teams/${s.team}/meetings`, { method: 'POST', headers: { authorization: `Bearer ${s.adminToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ meeting }) });
+      const b = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(`${res.status}: ${b.error ?? JSON.stringify(b)}`);
+      return b;
+    },
+    /** One meeting as the control plane has it. */
+    meetingNow: async (mid) => (await fetch(`${s.cp}/v1/teams/${s.team}/meetings/${mid}`, { headers: { authorization: `Bearer ${s.adminToken}` } })).json(),
+    /**
+     * The stand-in host deploys a merge commit (G-12): a successful deployment with a preview link, as Vercel or
+     * Netlify would write to GitHub's deployment statuses. The runner reads it; the model never sees the file.
+     */
+    deploy: ({ ref, url = `https://preview-${ref ?? 'latest'}.dry-run.example/`, environment = 'Preview' } = {}) => {
+      const merged = Object.values(proposals()).filter((p) => p.state === 'merged' && (ref === undefined || p.ref === Number(ref)));
+      const p = merged.at(-1);
+      if (!p) throw new Error('no merged pull request to deploy');
+      const f = join(s.bare, 'agent-team-deployments.json');
+      const list = existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : [];
+      const d = { id: list.length + 1, sha: p.result, environment, state: 'success', url };
+      writeFileSync(`${f}.tmp`, JSON.stringify([...list, d], null, 2)); chmodSync(`${f}.tmp`, 0o644); renameSync(`${f}.tmp`, f);
+      return { ...d, ref: p.ref };
+    },
     hold: () => writeFileSync(join(s.control, 'hold-merge'), ''),
     release: () => rmSync(join(s.control, 'hold-merge'), { force: true }),
     /** Push one more commit to the open pull request's branch on the stand-in remote: its head moves. */
@@ -183,7 +217,7 @@ async function main() {
   } });
   if (cmd === 'up') {
     const h = await up({ dir: o.dir, port: Number(o.port), studioPort: Number(o['studio-port']), runner: o.runner, image: o.image });
-    console.log(`\nM3 dry run is up (folder ${h.dir}).\n  Studio:          ${h.link}\n  Step-up secret:  ${h.secret}\n  Control plane:   ${h.cp} (admin token in ${join(h.dir, 'state.json')})\n  Stand-in remote: ${h.bare}\n\nSteer it from another terminal with: node tools/dry-run/m3.mjs <signoff|hold|move-head|release|spend <usd>|status> --dir ${h.dir}\nCtrl-C stops it.`);
+    console.log(`\nM3 dry run is up (folder ${h.dir}).\n  Studio:          ${h.link}\n  Step-up secret:  ${h.secret}\n  Control plane:   ${h.cp} (admin token in ${join(h.dir, 'state.json')})\n  Stand-in remote: ${h.bare}\n\nSteer it from another terminal with: node tools/dry-run/m3.mjs <signoff|hold|move-head|release|deploy [pr]|spend <usd>|meeting|meeting-spend <usd>|status> --dir ${h.dir}\nCtrl-C stops it.`);
     const stop = async () => { await h.down(); process.exit(0); };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
     return;
@@ -192,9 +226,12 @@ async function main() {
   const h = hooks(o.dir);
   if (cmd === 'signoff') h.signoff({ evidence: o.evidence ? o.evidence.split(',') : undefined, result: o.result });
   else if (cmd === 'hold') h.hold();
+  else if (cmd === 'deploy') console.log(JSON.stringify(h.deploy({ ref: arg })));
   else if (cmd === 'release') h.release();
   else if (cmd === 'move-head') console.log(JSON.stringify(h.moveHead()));
   else if (cmd === 'spend') h.spend(arg);
+  else if (cmd === 'meeting-spend') h.meetingSpend(arg);
+  else if (cmd === 'meeting') console.log(JSON.stringify(await h.meeting(arg ?? 'standup')));
   else if (cmd === 'status') console.log(JSON.stringify({ proposals: h.proposals(), log: h.log() }, null, 2));
   else throw new Error(`unknown command ${cmd}`);
 }

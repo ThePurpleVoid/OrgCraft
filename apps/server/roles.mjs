@@ -7,7 +7,7 @@
 //   owner     + makes and removes owners
 //
 // Not listed, on purpose: routes that are not a person's (the x-team-token report intake, a runner redeeming its code,
-// a session's tools, the cron's /internal), /health, and a person's own sign-in and passkeys (/me, /me/passkeys,
+// a session's tools, the cron's /internal, the signed links in team emails under /email and in Slack DMs under /slack), /health, and a person's own sign-in and passkeys (/me, /me/passkeys,
 // /auth/step-up/challenge), which any signed-in person may use, member or not.
 //
 // Every other /v1 route a person can call is listed here, and api-v1.yaml states the same minimum as x-min-role (a test
@@ -41,12 +41,33 @@ export const ROUTES = [
   ['POST', '/teams/{team}/runs', 'editor'],
   ['GET', '/teams/{team}/chat', 'viewer'],
   ['POST', '/teams/{team}/chat', 'editor'],
+  ['GET', '/teams/{team}/meetings', 'viewer'],
+  ['POST', '/teams/{team}/meetings', 'editor'],
+  ['GET', '/teams/{team}/meetings/{meeting}', 'viewer'],
   ['GET', '/teams/{team}/board', 'viewer'],
+  ['GET', '/teams/{team}/rollout', 'viewer'],
   ['POST', '/teams/{team}/report-tokens', 'admin'],
   ['DELETE', '/teams/{team}/report-tokens/{token}', 'admin'],
   ['GET', '/teams/{team}/sinks', 'admin'],
   ['POST', '/teams/{team}/sinks', 'admin'],
   ['DELETE', '/teams/{team}/sinks/{sink}', 'admin'],
+  // A person's own email addresses for a team: anyone who can see the team may get its emails (PRD 6.8 O7).
+  ['GET', '/teams/{team}/emails', 'viewer'],
+  ['POST', '/teams/{team}/emails', 'viewer'],
+  ['PATCH', '/teams/{team}/emails/{email}', 'viewer'],
+  ['DELETE', '/teams/{team}/emails/{email}', 'viewer'],
+  ['POST', '/teams/{team}/emails/{email}/verify', 'viewer'],
+  // Slack (CPO story "Slack notifications", D55): anyone who can see the team may link their own Slack for DMs; only
+  // owners and admins pick the team's channels.
+  ['GET', '/teams/{team}/slack', 'viewer'],
+  ['POST', '/teams/{team}/slack/connect', 'viewer'],
+  ['POST', '/teams/{team}/slack/link', 'viewer'],
+  ['PATCH', '/teams/{team}/slack/me', 'viewer'],
+  ['DELETE', '/teams/{team}/slack/me', 'viewer'],
+  ['GET', '/teams/{team}/slack/channels', 'admin'],
+  ['POST', '/teams/{team}/slack/channels', 'admin'],
+  ['PATCH', '/teams/{team}/slack/channels/{channel}', 'admin'],
+  ['DELETE', '/teams/{team}/slack/channels/{channel}', 'admin'],
   ['GET', '/secrets', 'admin'],
   ['PUT', '/secrets/{name}', 'admin'],
   ['GET', '/teams/{team}/roles/{role}', 'viewer'],

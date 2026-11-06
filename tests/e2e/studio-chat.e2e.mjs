@@ -100,7 +100,7 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
 
   await page.getByRole('button', { name: 'Pause' }).click();
   await page.locator('#run-state', { hasText: 'Paused' }).waitFor();
-  await page.getByText('The run was paused by owner').waitFor();
+  await page.getByText('The run was paused · owner').waitFor();
   await page.getByRole('button', { name: 'Resume' }).waitFor();
   assert.equal(cp.runs[0].state, 'paused');
   assert.deepEqual(errors, []);
@@ -202,11 +202,18 @@ test('start a run: the published team, a daily cap first, step-up to set it, and
       assert.equal(plane.budget.perDay, 2000);
       assert.equal(plane.started.length, 1);
       assert.equal(plane.started[0].team.version, execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim());
-      await page.getByText('The team started a run').waitFor();
+      await page.getByText('A run started').waitFor();
       await page.getByRole('button', { name: 'Pause' }).waitFor();
       // Stop it, so the phone pass finds no run going until the one "started elsewhere".
-      page.once('dialog', (d) => d.accept());
-      await page.getByRole('button', { name: 'Stop' }).click();
+      // The Studio's own dialog, not the browser's confirm() (embed spec 4): Keep it running first, then stop.
+      await page.getByRole('button', { name: 'Stop', exact: true }).click();
+      const ask = page.locator('dialog.ask-dialog');
+      await ask.getByText('Stop the run? Every role session stops after its current step.').waitFor();
+      await ask.getByRole('button', { name: 'Keep it running' }).click();
+      await ask.waitFor({ state: 'detached' });
+      await page.getByRole('button', { name: 'Pause' }).waitFor();
+      await page.getByRole('button', { name: 'Stop', exact: true }).click();
+      await ask.getByRole('button', { name: 'Stop the run' }).click();
       await page.getByRole('button', { name: 'Start a run' }).waitFor();
       assert.deepEqual(errors, []);
       await ctx.close();

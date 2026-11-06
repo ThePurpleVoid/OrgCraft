@@ -30,6 +30,8 @@ const IDLE_MS = 12 * 3600_000;
 const ABSOLUTE_MS = 7 * 86400_000;
 const KEY_ROTATE_MS = 90 * 86400_000;
 const KEY_OVERLAP_MS = 86400_000;
+/** ES256 for the deployment's own clients; RS256 because OpenID Connect requires every OP to offer it (conformance). */
+const SIGNING_ALGS = ['ES256', 'RS256'];
 const FLOW_SECONDS = 600;
 const UID = /^[A-Za-z0-9_-]{1,128}$/;
 const ROLES = new Set(['owner', 'admin', 'editor', 'viewer', 'approver']);
@@ -109,17 +111,29 @@ export async function issuerKeys(db, key, now = () => new Date()) {
   return db.systemTx(async ({ q }) => {
     await q('select pg_advisory_xact_lock(4852)');
     const t = now().getTime();
-    let rows = await q('select kid, sealed, created_at, retired_at from issuer_keys where retired_at is null or retired_at > $1 order by created_at desc', [new Date(t - KEY_OVERLAP_MS)]);
-    const current = rows.find((r) => !r.retired_at);
-    if (!current || t - new Date(current.created_at).getTime() > KEY_ROTATE_MS) {
-      const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const live = async () => (await q('select kid, sealed, created_at, retired_at from issuer_keys where retired_at is null or retired_at > $1 order by created_at desc, kid', [new Date(t - KEY_OVERLAP_MS)]))
+      .map((r) => ({ ...r, jwk: JSON.parse(unseal(key, '_issuer', r.kid, r.sealed)) }));
+    const add = async (alg) => {
+      const { privateKey } = alg === 'ES256' ? generateKeyPairSync('ec', { namedCurve: 'P-256' }) : generateKeyPairSync('rsa', { modulusLength: 2048 });
       const kid = rid('k_', 12);
-      const jwk = { ...privateKey.export({ format: 'jwk' }), kid, alg: 'ES256', use: 'sig' };
-      await q('update issuer_keys set retired_at = $1 where retired_at is null', [new Date(t)]);
+      const jwk = { ...privateKey.export({ format: 'jwk' }), kid, alg, use: 'sig' };
       await q('insert into issuer_keys(kid, sealed, created_at) values ($1, $2, $3)', [kid, seal(key, '_issuer', kid, JSON.stringify(jwk)), new Date(t)]);
-      rows = await q('select kid, sealed, created_at, retired_at from issuer_keys where retired_at is null or retired_at > $1 order by created_at desc', [new Date(t - KEY_OVERLAP_MS)]);
+    };
+    let rows = await live();
+    const current = (alg) => rows.find((r) => !r.retired_at && (r.jwk.alg ?? 'ES256') === alg);
+    const es = current('ES256');
+    if (!es || t - new Date(es.created_at).getTime() > KEY_ROTATE_MS) {
+      // Both keys rotate together; the old ones stay in the JWKS for the overlap.
+      await q('update issuer_keys set retired_at = $1 where retired_at is null', [new Date(t)]);
+      for (const alg of SIGNING_ALGS) await add(alg);
+      rows = await live();
+    } else if (!current('RS256')) {
+      // A deployment from before RS256 gets its RSA key next to the current EC key, on the same rotation from then on.
+      await add('RS256');
+      rows = await live();
     }
-    return rows.map((r) => JSON.parse(unseal(key, '_issuer', r.kid, r.sealed)));
+    // ES256 first: the library signs with the first key of an algorithm, and our own clients ask for ES256.
+    return rows.map((r) => r.jwk).sort((a, b) => (a.alg === b.alg ? 0 : a.alg === 'ES256' ? -1 : b.alg === 'ES256' ? 1 : 0));
   });
 }
 
@@ -222,9 +236,10 @@ function limiter(now) {
  * `upstream` is githubUpstream(...) (or a stub with the same two methods). `clients` adds apps and the CLI:
  * [{ client_id, redirect_uris, application_type: 'native' }]. `proxy` is { hops, edgeSecret } (callerIp), and
  * `clientIp(req)` names the caller for rate limits. There is no global cap: one would be a bucket anyone could empty for everyone (security review, #73);
- * floods are for the host's concurrency limits and the edge.
+ * floods are for the host's concurrency limits and the edge. `configure(config)` returns the library configuration
+ * to use instead: only the OpenID conformance harness (conformance/op.mjs) passes it; the server never does.
  */
-export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), proxy = {}, clientIp = (req) => callerIp(req, proxy) }) {
+export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), proxy = {}, clientIp = (req) => callerIp(req, proxy), configure = null }) {
   const issuer = new URL(publicUrl);
   if (issuer.protocol !== 'https:') throw new Error('sign-in needs an https AGENT_TEAM_PUBLIC_URL (the cookie is Secure and __Host-)');
   if (issuer.pathname !== '/' || issuer.search || issuer.hash) throw new Error('AGENT_TEAM_PUBLIC_URL must be an origin with no path for sign-in');
@@ -265,8 +280,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     return grant;
   }
 
-  const web = { client_id: WEB_CLIENT, token_endpoint_auth_method: 'none', redirect_uris: [webRedirect], grant_types: ['authorization_code'], response_types: ['code'] };
-  const natives = (clients ?? nativeClients(origin)).map((c) => ({ token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], application_type: 'native', dpop_bound_access_tokens: true, require_auth_time: true, ...c }));
+  const web = { client_id: WEB_CLIENT, token_endpoint_auth_method: 'none', redirect_uris: [webRedirect], grant_types: ['authorization_code'], response_types: ['code'], id_token_signed_response_alg: 'ES256' };
+  const natives = (clients ?? nativeClients(origin)).map((c) => ({ token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], application_type: 'native', dpop_bound_access_tokens: true, require_auth_time: true, ...c, id_token_signed_response_alg: 'ES256' }));
   let provider, callback, kids = '';
   /** (Re)builds the library around the current signing keys: at start, and when the tick rotates them. */
   const build = (keys) => {
@@ -275,12 +290,12 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     callback = provider.callback();
   };
   const makeProvider = (keys) => {
-    const p = new Provider(origin, {
+    const config = {
       adapter: adapterFor(db),
       clients: [web, ...natives],
-      // ES256 only: the issuer's key is P-256 (section 2, step 4).
+      // ES256 for our own clients (the issuer's P-256 key, section 2, step 4); RS256 is offered, never the default.
       clientDefaults: { id_token_signed_response_alg: 'ES256', grant_types: ['authorization_code'], response_types: ['code'] },
-      enabledJWA: { idTokenSigningAlgValues: ['ES256'], dPoPSigningAlgValues: ['ES256', 'EdDSA'] },
+      enabledJWA: { idTokenSigningAlgValues: SIGNING_ALGS, dPoPSigningAlgValues: ['ES256', 'EdDSA'] },
       jwks: { keys },
       cookies: {
         keys: [createHmac('sha256', key).update('agent-team/oidc-cookies/v1').digest('base64url')],
@@ -308,7 +323,9 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
       issueRefreshToken: async (_ctx, client) => client.grantTypeAllowed('refresh_token'),
       rotateRefreshToken: true,
       ttl: { AccessToken: 900, AuthorizationCode: 60, IdToken: 900, Interaction: FLOW_SECONDS, Session: 12 * 3600, Grant: 30 * 86400, RefreshToken: 30 * 86400 },
-      interactions: { policy: firstPartyPolicy(), url: (_ctx, interaction) => `/sign-in?interaction=${interaction.uid}` },
+      // A signed-in person whose client asks again for consent (prompt=consent) is never shown a page: every client is
+      // the deployment's own, so the grant is what was asked for (consentGranted). Anyone else signs in first.
+      interactions: { policy: firstPartyPolicy(), url: (_ctx, interaction) => (interaction.prompt.name === 'consent' ? `/oauth/interaction/${interaction.uid}/consent` : `/sign-in?interaction=${interaction.uid}`) },
       loadExistingGrant,
       clientBasedCORS: () => false,
       routes: { authorization: '/oauth/authorize', token: '/oauth/token', jwks: '/oauth/jwks', userinfo: '/oauth/userinfo', revocation: '/oauth/revoke', end_session: '/oauth/session/end', introspection: '/oauth/introspect', registration: '/oauth/reg', pushed_authorization_request: '/oauth/par', code_verification: '/oauth/device', device_authorization: '/oauth/device/auth', backchannel_authentication: '/oauth/backchannel', challenge: '/oauth/challenge', credential: '/oauth/credential' },
@@ -316,7 +333,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
         ctx.type = 'text/plain; charset=utf-8';
         ctx.body = `Sign-in failed: ${String(out.error ?? 'error').replace(/[^\w .,:;'()-]/g, '')}${out.error_description ? ` (${String(out.error_description).replace(/[^\w .,:;'()-]/g, '').slice(0, 300)})` : ''}`;
       },
-    });
+    };
+    const p = new Provider(origin, configure ? configure(config) : config);
     // TLS ends at the deployment's proxy, and the issuer is fixed by config: tell the library the scheme ourselves,
     // and never let a request's forwarded host name the issuer.
     p.proxy = true;
@@ -404,6 +422,25 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     return redirect(res, upstream.authorizeUrl({ state, challenge: s256(verifier), redirectUri: githubRedirect }), [setCookie(UPSTREAM_COOKIE, state, FLOW_SECONDS)]);
   }
 
+  /**
+   * Finishes a consent prompt for the person already signed in to this interaction (see `interactions` above). The
+   * interaction is the one this browser's interaction cookie names (interactionDetails), and it must be the one in
+   * the path: another browser presenting the uid is refused (security review of #113).
+   */
+  async function consentGranted(req, res, uid) {
+    if (!UID.test(uid)) return toSignIn(res, 'expired');
+    req.headers['x-forwarded-proto'] = 'https';
+    req.headers.host = issuer.host;
+    const interaction = await provider.interactionDetails(req, res).catch(() => null);
+    if (!interaction || interaction.uid !== uid || interaction.prompt.name !== 'consent' || !interaction.session?.accountId) return toSignIn(res, 'expired');
+    const { details } = interaction.prompt;
+    const grant = (interaction.grantId && await provider.Grant.find(interaction.grantId))
+      || new provider.Grant({ accountId: interaction.session.accountId, clientId: interaction.params.client_id });
+    if (details.missingOIDCScope) grant.addOIDCScope(details.missingOIDCScope.join(' '));
+    if (details.missingOIDCClaims) grant.addOIDCClaims(details.missingOIDCClaims);
+    return provider.interactionFinished(req, res, { consent: { grantId: await grant.save() } }, { mergeWithLastSubmission: true });
+  }
+
   async function upstreamDone(req, res, url) {
     const clear = [setCookie(UPSTREAM_COOKIE, '', 0)];
     const state = url.searchParams.get('state') ?? '', mine = cookies(req).get(UPSTREAM_COOKIE) ?? '';
@@ -468,6 +505,11 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     else {
       await db.system('update person_sessions set revoked_at = now() where person = $1 and revoked_at is null', [person]);
       await db.system('update oauth_tokens set revoked_at = now() where person = $1 and revoked_at is null', [person]);
+      // Signed out everywhere (removed from their last workspace, or by request): their team email addresses and Slack links go in
+      // every workspace too, so nothing about a team reaches someone with no way in (security review of #101). They
+      // add and verify an address again when they come back.
+      await db.system('delete from email_subscriptions where principal = $1', [person]);
+      await db.system('delete from slack_links where principal = $1', [person]);
     }
     await db.system("delete from oidc_store where model in ('Session', 'Grant') and payload->>'accountId' = $1 and (model = 'Session' or payload->>'clientId' = $2 or $3::boolean)", [person, WEB_CLIENT, !only]);
     await audit(person, only ? 'sign-out' : 'sessions.ended', {});
@@ -482,6 +524,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     if (authorize && req.method === 'GET' && url.searchParams.get('client_id') === WEB_CLIENT && !url.searchParams.has('response_type')) { await webStart(req, res, url); return true; }
     const inter = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
     if (inter && req.method === 'GET') { await upstreamStart(req, res, inter[1]); return true; }
+    const consent = /^\/oauth\/interaction\/([^/]+)\/consent$/.exec(p);
+    if (consent && req.method === 'GET') { await consentGranted(req, res, consent[1]); return true; }
     if (p === '/oauth/callback/github' && req.method === 'GET') { await upstreamDone(req, res, url); return true; }
     if (p === '/oauth/web/done' && req.method === 'GET') { await webDone(req, res, url); return true; }
     if (p === '/oauth/revoke' && req.method === 'POST' && /^application\/json\b/i.test(req.headers['content-type'] ?? '')) { await signOut(req, res); return true; }

@@ -3,6 +3,8 @@
 // The owner's side goes through the Studio's own API, as the page would: the daily cap with step-up, Start, a chat
 // request, then the approval card answered with step-up. The run must end in a merge pinned to the approved head.
 // A second request walks step 9b: a push after the approval makes the merge fail head-moved, and a new card asks again.
+// After the merge, step 12: Ready to try, with the preview link the runner reads from the (stand-in) host.
+// Then a meeting (a written round, minutes in the chat) and its cap, and step 11, the daily cap.
 //
 //   npm ci --prefix apps/server && npm ci --prefix apps/runner && node --test tests/e2e/m3-dry-run.e2e.mjs
 //   M3_DRY_RUN_RUNNER=docker uses the runner image (docker build -f apps/runner/Dockerfile -t agent-team-runner .;
@@ -74,7 +76,13 @@ test('a chat request ends in a pull request, an approval card with step-up, and 
   await waitFor(() => hk.log().some((l) => l.step === 'qa:waiting-for-signoff'), 60_000);
   hk.signoff({ evidence: ['qa/dry-run.log'], walked: 'the M3 exit test, step 6' });
 
-  // Steps 7 and 8: the approval card names the PR and its head; approved with step-up.
+  // Step 7: the chief of staff's decision card, answered with the other option; it says back what was chosen.
+  const decision = await waitFor(async () => (await cards()).find((x) => x.kind === 'decision' && x.state === 'open'), 60_000);
+  assert.deepEqual(decision.options.map((o) => o.id), ['home', 'new-page']);
+  await studio('POST', `/v1/team/cards/${encodeURIComponent(decision.id)}`, { kind: decision.kind, subject: decision.subject, option: 'new-page', version: decision.version, key: `e2e-${decision.id}` });
+  await waitFor(() => hk.log().some((l) => l.step === 'chief-of-staff:answered' && l.answer === 'new-page'), 60_000);
+
+  // Step 8: the approval card names the PR and its head; approved with step-up.
   const c = await openApproval();
   const head = execFileSync('git', ['-C', h.bare, 'rev-parse', `refs/heads/${opened.branch}`], { encoding: 'utf8' }).trim();
   assert.equal(c.data.pr, opened.ref, 'the approval card names the pull request');
@@ -86,8 +94,17 @@ test('a chat request ends in a pull request, an approval card with step-up, and 
   assert.equal(merged.mergedHead, head);
   const main = execFileSync('git', ['-C', h.bare, 'show', 'main:app/request.md'], { encoding: 'utf8' });
   assert.match(main, /hello to new visitors/);
-  await waitFor(() => hk.log().some((l) => l.step === 'chief-of-staff:reported'), 60_000);
-  console.log(JSON.stringify({ pr: merged.ref, headSha: merged.mergedHead, result: merged.result }));
+  // Step 12 (G-12): the front door says it is Ready to try. The card goes out before the deployment is up, then
+  // the stand-in host deploys the merge commit, the runner reads the link and the open card gains it.
+  const told = await waitFor(() => hk.log().find((l) => l.step === 'chief-of-staff:ready' && l.pr === merged.ref), 60_000);
+  assert.ok(told.ok, told.detail);
+  const ready = await waitFor(async () => (await cards()).find((x) => x.kind === 'ready' && x.id === told.card), 60_000);
+  assert.deepEqual([ready.state, ready.data.pr, ready.data.commit, ready.data.preview], ['open', merged.ref, merged.result, null]);
+  const dep = hk.deploy({ ref: merged.ref });
+  const live = await waitFor(async () => (await cards()).find((x) => x.id === ready.id && x.data?.preview), 60_000);
+  assert.equal(live.data.preview, dep.url, 'the link is the deployment\'s, read by the runner');
+  assert.ok(live.links.some((l) => l.rel === 'preview' && l.url === dep.url));
+  console.log(JSON.stringify({ pr: merged.ref, headSha: merged.mergedHead, result: merged.result, preview: live.data.preview }));
 });
 
 test('step 9b: a push after the approval stops the merge (head-moved); a new card names the new head, and only that merges', { skip, timeout: 180_000 }, async () => {
@@ -116,6 +133,45 @@ test('step 9b: a push after the approval stops the merge (head-moved); a new car
   const merged = await proposal((p) => p.ref === opened.ref && p.state === 'merged');
   assert.equal(merged.mergedHead, moved.head);
   console.log(JSON.stringify({ pr: merged.ref, headSha: merged.mergedHead, result: merged.result }));
+});
+
+test('meetings: a written round ends with the minutes in the chat; a turn that blows the cap closes it capped', { skip, timeout: 120_000 }, async () => {
+  const m = await hk.meeting('standup');
+  assert.deepEqual(m.attendees, ['qa-web', 'web-dev'], 'resolved by the Studio, the facilitator left out');
+  await waitFor(async () => (await hk.meetingNow(m.id)).state === 'closed', 60_000);
+  const done = await hk.meetingNow(m.id);
+  assert.equal(done.outcome, 'completed');
+  assert.deepEqual(done.replies.map((r) => r.role), ['qa-web', 'web-dev']);
+  const page = await studio('GET', '/v1/team/chat');
+  const minutes = (page.items ?? []).find((e) => e.type === 'chat.message' && e.data?.meeting === m.id);
+  assert.ok(minutes, 'the minutes are in the chat');
+  assert.match(minutes.data.text, /qa-web: qa-web: on track/);
+  assert.equal(execFileSync('git', ['-C', h.bare, 'log', '--oneline', '--all', '--grep', 'inutes'], { encoding: 'utf8' }).trim(), '', 'minutes are never committed');
+
+  // The cap: the first attendee's turn costs $1, the cap is $0.50; the rest is skipped and the minutes are partial.
+  hk.meetingSpend(1);
+  const c = await hk.meeting('standup');
+  await waitFor(async () => (await hk.meetingNow(c.id)).state === 'closed', 60_000);
+  const capped = await hk.meetingNow(c.id);
+  assert.deepEqual([capped.outcome, capped.capped, capped.spent >= capped.cap], ['capped', true, true]);
+  assert.deepEqual(capped.skipped.map((x) => [x.role, x.reason]), [['qa-web', 'capped'], ['web-dev', 'capped']]);
+  assert.ok(hk.log().some((l) => l.step === 'meeting:closed' && l.meeting === c.id && l.capped), 'the facilitator wrote partial minutes');
+  const run = await studio('GET', '/v1/team/run');
+  assert.equal(run.run?.state, 'running', 'the meeting\'s cap stops the meeting, not the run');
+});
+
+test('G-15: "web dev and QA web on X, now" in the chat starts an ad hoc meeting; the minutes land in the chat', { skip, timeout: 120_000 }, async () => {
+  await studio('POST', '/v1/team/chat', { text: 'Web dev and QA web on the checkout errors, now', clientId: 'e2e-adhoc' });
+  const started = await waitFor(() => hk.log().find((l) => l.step === 'chief-of-staff:meeting-started'), 60_000);
+  assert.ok(started.ok, started.detail);
+  assert.deepEqual(started.attendees, ['web-dev', 'qa-web']);
+  const mid = started.meeting;
+  await waitFor(async () => (await hk.meetingNow(mid)).state === 'closed', 60_000);
+  const m = await hk.meetingNow(mid);
+  assert.deepEqual([m.adhoc, m.outcome, m.title], [true, 'completed', 'The checkout errors']);
+  assert.equal(m.cap, 50, 'no cap given: a tenth of the 500 daily cap');
+  const page = await studio('GET', '/v1/team/chat');
+  assert.ok((page.items ?? []).some((e) => e.type === 'chat.message' && e.data?.meeting === mid), 'the minutes are in the chat');
 });
 
 test('step 11: a turn that takes the day past the cap pauses the run and puts a budget card in the chat', { skip, timeout: 120_000 }, async () => {

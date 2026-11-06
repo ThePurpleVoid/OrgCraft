@@ -33,7 +33,7 @@ The envelope is compatible with [CloudEvents 1.0](https://cloudevents.io), so an
 | `time` | yes | When it happened, in ISO 8601 UTC. Reports may carry their own time. Otherwise it is the time we received them. |
 | `actor` | yes | Who did it. `kind` is one of `role`, `person`, `runner` or `system`. `id` is a role slug, member id, runner id or service name. `instance` tells pool roles apart. `session` is the agent session. `via` says how the event arrived: `hook`, `script` (team-status.sh, report.mjs), `tool` (the team tool server), `studio` or `api`. |
 | `subject` | no | What it is about: `role/<slug>`, `run/<id>`, `approval/<id>`, `pr/<n>`, `meeting/<id>`. |
-| `run`, `teamVersion` | no | The run, and the published team version (commit SHA) the actor was running. Change safety uses them (ADR 0004). |
+| `run`, `teamVersion` | no | The run, and the published team version (commit SHA) the actor was running. Change safety and the rollout view use them (ADR 0004). A kit report (0.16 and later) fills it from the checkout: the last commit that changed `.agent-team`. |
 | `data` | yes | The event's own fields. Its shape depends on `type` and `version`. |
 
 Limits: an event is at most 64 KiB, and evidence is links, not payloads. Secrets never appear in any field. The ingest redacts anything that matches the secret patterns `validate` uses, and records that a redaction happened.
@@ -64,28 +64,44 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | `session.started`, `session.idle`, `session.ended` | `role`, `instance`, `worktree`, `branch`, `model` (provider and name, as values), `reason` |
 | `session.tool` | `tool`, `target` (path, command or MCP server and tool), `decision` (allowed, refused, needs-approval), `rule` |
 | `proposal.opened`, `proposal.updated`, `proposal.accepted`, `proposal.failed` | `connector` (for example `github`), `ref` (for a repository, the pull request number), `url`, `branch`, `headSha`, `approval` (on accepted and failed), `result` (the merge commit, on accepted), `reason` (on failed: head-moved, checks, conflict). Emitted by the runner, which proposes and accepts for its sessions (work contract `propose` and `accept`) |
-| `usage.recorded` | `inputTokens`, `outputTokens`, `cost` (in the currency's minor unit), `currency` |
-| `budget.warned`, `budget.exhausted` | `scope` (day, run), `day` (UTC date), `spent`, `cap` (minor units), `currency`, `cardId` (string: the budget card's id, on exhausted) |
-| `budget.updated` | `currency`, `perDay`, `perRun` (minor units, or null), `sessions`, `by` (member): the team's caps after a change |
+| `proposal.previewed` | `connector`, `ref` (the pull request number), `sha` (the commit deployed: refused unless it is the full merge commit, `result`, of that PR's `proposal.accepted` on this team), `url` (https, no user or password), `environment`, `state` (always `success`: only a deployment that is up is sent), `deployment` (the provider's deployment id). Emitted by the runner after `proposal.accepted`, from the repository's deployment statuses. The control plane stores one per deployment (id `previewed-<ref>-<deployment>`, whatever the frame said) and adds the URL to that PR's open `ready` card |
+| `usage.recorded` | `inputTokens`, `outputTokens`, `cost` (in the currency's minor unit), `currency`, `meeting` (optional: the meeting whose turn this was; the server counts it toward that meeting's cap only when the session was given one of its turns, and otherwise ignores the tag) |
+| `budget.warned` (at 80% of the day's cap), `budget.exhausted` | `scope` (day, run), `day` (UTC date), `spent`, `cap` (minor units), `currency`, `cardId` (string: the budget card's id, on exhausted) |
+| `budget.updated` | `currency`, `perDay`, `perRun` (minor units, or null), `sessions`, `meetingCap` (minor units, or null for a tenth of `perDay`; at most `perDay`, and lowering `perDay` below it lowers it too), `by` (member): the team's caps after a change |
 
 ### Owner, chat and approvals
 
 | `type` | `data` |
 | --- | --- |
-| `chat.message` | `from` (member or role), `text` (verbatim for the owner; the dilution rule), `replyTo`, `attachments` (links), `clientId` (the id the client made, so a resend is stored once) |
+| `chat.message` | `from` (member or role), `text` (verbatim for the owner; the dilution rule), `replyTo`, `attachments` (links), `clientId` (the id the client made, so a resend is stored once), `meeting` (optional: set on a meeting's minutes) |
 | `decision.requested`, `decision.answered` | `question`, `options`, `recommended`, `answer`, `by`, `cardId` (string), `session` (the session that asked, which the answer wakes) |
-| `approval.requested` | `action` (a classification from the policy), `command` or `call`, `why`, `risk`, `expires`, `cardId` (string), `session`, `pr` and `headSha` (for `accept`: the approval is for that exact head) |
+| `approval.requested` | `action` (a classification from the policy), `command` or `call`, `why`, `summary` and `recommendation` (optional, shown in the approval email), `risk`, `expires`, `cardId` (string), `session`, `pr` and `headSha` (for `accept`: the approval is for that exact head) |
 | `approval.decided` | `approval`, `decision` (approved, denied, expired, superseded: the head moved), `by` (member), `note`, `session`, `headSha` |
+| `ready.posted` | `pr`, `title`, `summary`, `commit` (the merge commit), `preview` and `environment` (when the deployment was already up), `issue`, `task`, `cardId`, `session`. The front door's `ready_to_try` ([team-tools.md](team-tools.md)); the email and Slack kind "Ready to try" (`ready`) follows it |
+| `ready.previewed` | `pr`, `cardId`, `url`, `environment`: a preview arrived after the card went out, and the open card now links it |
 | `card.updated` | `card` (object): the whole card at its new `version` ([clients.md](clients.md) section 6). Emitted on every change (created, answered, expired, superseded); a client keeps the latest per card id |
+
+### Meetings
+
+A meeting runs as a written round ([team-tools.md](team-tools.md), `meeting_reply` and `meeting_close`; [M3 design](../product/m3-design.md) section 2). Every one of these has `subject: meeting/<id>` and `data.meeting` (the instance, `mtg_…`) and `data.definition` (the id in `meetings.json`). Events a meeting causes elsewhere (`chat.message`, `report.note`, `message.handoff`, `message.blocked`, `decision.requested`, `usage.recorded`) carry the optional `data.meeting` too. A completed or capped close also emits `meeting.minutes` (below) for the email sink, in its existing shape, where `meeting` is the title and `meetingId` the instance. A facilitator that misses its closing turn gets `meeting.skipped` with `missed` and `closing: true`, then `meeting.closed` with outcome `abandoned`.
+
+| `type` | `data` |
+| --- | --- |
+| `meeting.opened` | `title`, `agenda`, `facilitator`, `attendees` (role slugs, in turn order), `format`, `ifBusy`, `cap` (minor units), `currency`, `by` (member), `adhoc` (true for an unscheduled meeting, whose `definition` is `adhoc-<id>`) |
+| `meeting.turn` | `to` (a role), `turn`, `of`, `title`, `agenda`, `closing` (the facilitator's closing turn), `capped`, `replies` so far (`{ role, text }`, oldest dropped first past 40 KB, with `dropped` and `note`), `skipped` (on the closing turn). Wakes `to` |
+| `meeting.replied` | `role`, `turn`, `text` (verbatim) |
+| `meeting.skipped` | `role`, `turn`, `reason` (`busy` with `ifBusy` skip or proxy, `missed` past the turn deadline, `capped`: every turn still to come once the cap is reached, the current one first; readers accept reasons they do not know), `proxy` (true when `ifBusy` is proxy), `closing` (the facilitator missed its closing turn) |
+| `meeting.closed` | `title`, `outcome` (completed, capped, abandoned), `minutes` (not on abandoned), `why` (on abandoned), `replies` (a count), `skipped`, `spent`, `cap`, `currency`, `actionItems` and `decisions` (counts), `url` (the meeting page) |
 
 ### Team and connectors
 
 | `type` | `data` |
 | --- | --- |
-| `team.published` | `version` (commit SHA), `pr`, `changes` (paths), `by` |
+| `team.published` | `version` (commit SHA), `pr`, `changes` (paths), `by`; optional `publishedAt` (when it merged, else the event's time), `roles` (the slugs the team runs), `off` (slugs switched off, removed or made dormant), `plan` (the change step's choices, `{ [role]: { choice, to? } }`). The rollout view (`GET /teams/{team}/rollout`) reads the latest one. One per commit: the id is `published-<version>` (40 lowercase hex), whoever posts it, so the repository's CI (`report.mjs published` through the report route, `actor` `system`/`repository`, `data.via` `repository`) and the Studio collapse into one event |
 | `team.transition` | `from`, `to`, `items` (per in-flight item: role, choice, state). See ADR 0004 |
 | `connector.connected`, `connector.health`, `connector.revoked` | `connector`, `resource`, `status`, `detail` |
 | `notification.sent`, `notification.failed` | `channel`, `to` (member), `event` (the id it was about), `attempt` |
+| `meeting.minutes` | `meeting` (its name), `meetingId`, `date`, `decisions` (each `{ text }`), `actions`, `needsYou` (how many items need the owner). Emitted by the meeting's clerk when it publishes the minutes; the email sink sends it to people who switched on "Meeting minutes" |
 
 New types are added to this catalogue in the same PR that first emits them.
 

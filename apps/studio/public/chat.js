@@ -3,6 +3,8 @@
 // the team's replies in a small Markdown subset, cards built from their fields, today's cost against the cap, and
 // pause and stop for the run. The Studio server holds the token; this page only talks to it.
 
+import { apiUrl, ask, requestJson } from './env.js';
+
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const human = (slug) => { const s = String(slug ?? '').replace(/[-_]+/g, ' ').trim(); return s ? s[0].toUpperCase() + s.slice(1) : 'Someone'; };
@@ -40,6 +42,18 @@ export function md(text) {
 }
 
 const fmtTime = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
+/** A time with its day when it is not today ("tomorrow 05:42", "Mon 9 Nov 05:42"), so a deadline never looks past. */
+export const fmtWhen = (iso, now = new Date()) => {
+  const d = new Date(iso);
+  if (Number.isNaN(+d)) return '';
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(d) - day(now)) / 86400000);
+  const t = fmtTime(iso);
+  if (diff === 0) return t;
+  if (diff === 1) return `tomorrow ${t}`;
+  if (diff === -1) return `yesterday ${t}`;
+  return `${d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} ${t}`;
+};
 /** Minor units per major unit for a currency: 100 for USD, 1 for JPY, 1000 for KWD (ISO 4217, as Intl knows it). */
 export function minorDigits(currency) {
   try { return new Intl.NumberFormat('en', { style: 'currency', currency: currency || 'USD' }).resolvedOptions().maximumFractionDigits; } catch { return 2; }
@@ -59,12 +73,14 @@ function speaker(e) {
 }
 
 const by = (e) => { const b = e.data?.by; const n = typeof b === 'object' ? b?.name ?? b?.id : b; return n ? ` by ${n}` : ''; };
+/** Who did it, after a middle dot ("A run started · Dana"), so the line never reads as the team acting "by" someone. */
+const who = (e) => { const b = e.data?.by; const n = typeof b === 'object' ? b?.name ?? b?.id : b; return n ? ` · ${n}` : ''; };
 /** Run and budget events, as one line each in the chat. */
 const TIMELINE = {
-  'run.started': (e) => `The team started a run${by(e)}`,
-  'run.paused': (e) => `The run was paused${by(e)}${e.data?.reason ? `: ${e.data.reason}` : ''}`,
-  'run.resumed': (e) => `The run resumed${by(e)}`,
-  'run.stopped': (e) => `The run stopped${by(e)}${e.data?.reason ? `: ${e.data.reason}` : ''}`,
+  'run.started': (e) => `A run started${who(e)}`,
+  'run.paused': (e) => `The run was paused${who(e)}${e.data?.reason ? ` (${e.data.reason})` : ''}`,
+  'run.resumed': (e) => `The run resumed${who(e)}`,
+  'run.stopped': (e) => `The run stopped${who(e)}${e.data?.reason ? ` (${e.data.reason})` : ''}`,
   'budget.warned': () => 'Most of today\'s budget is spent',
   'budget.exhausted': () => 'Today\'s budget is spent, so the team is paused',
   'budget.updated': (e) => `The daily cap is now ${e.data?.perDay == null ? 'unset' : fmtMoney(e.data.perDay, e.data.currency)}${by(e)}`,
@@ -88,13 +104,14 @@ function cardFrom(e) {
   return { id: d.cardId || subjectId(e.subject) || e.id, kind: 'decision', subject: e.subject, version: d.version ?? 1, title: d.question ?? d.title ?? 'A decision', body: d.body ?? '', options: opts, recommendation: rec };
 }
 
-export function createChat({ root, onOpen } = {}) {
+export function createChat({ root, onOpen, runs = true } = {}) {
   const st = {
     connected: null, error: null, events: [], next: null, cards: new Map(), answers: new Map(), pending: [],
     notes: new Map(), // card id -> note shown above it (changed, step-up)
     run: null, cost: null, summary: null, busy: false, loaded: false, es: null, team: null,
     runError: null, budget: null, plan: null, shaOpen: new Set(), // approval cards whose full sha is shown // GET /v1/team/budget and /v1/team/run/plan, read when the start dialog opens
     older: [], local: new Set(), // pages fetched with 'Show earlier'; events this page posted
+    forbidden: new Set(), // cards the control plane said this person's role may not answer (403)
 
   };
 
@@ -107,6 +124,7 @@ export function createChat({ root, onOpen } = {}) {
         <button id="run-start" type="button" class="primary" hidden>Start a run…</button>
         <button id="run-pause" type="button"></button>
         <button id="run-stop" type="button" class="danger">Stop</button>
+        <button id="runner-add" type="button" hidden>Add a runner…</button>
       </div>
     </div>
     <dialog id="start-dialog" class="start-dialog">
@@ -121,6 +139,21 @@ export function createChat({ root, onOpen } = {}) {
         <div class="dialog-actions">
           <button value="cancel" type="submit" formnovalidate>Cancel</button>
           <button id="start-go" type="button" class="primary" disabled>Start</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="runner-dialog" class="start-dialog" aria-labelledby="runner-title">
+      <form method="dialog" class="dialog" id="runner-form">
+        <h2 id="runner-title">Add a runner</h2>
+        <p class="muted">A runner is the machine that runs this team's agents. Get a one-time code here, then register that machine with it. Getting a code asks you to confirm it is you.</p>
+        <div id="runner-list" class="runner-list"></div>
+        <label for="runner-name">Name for the machine</label>
+        <input id="runner-name" maxlength="100" autocomplete="off" placeholder="e.g. Office Mac mini">
+        <div id="runner-code" class="runner-code" hidden></div>
+        <p id="runner-result" class="result error" role="status"></p>
+        <div class="dialog-actions">
+          <button value="close" type="submit" formnovalidate>Close</button>
+          <button id="runner-go" type="button" class="primary">Get a code</button>
         </div>
       </form>
     </dialog>
@@ -143,11 +176,13 @@ export function createChat({ root, onOpen } = {}) {
       <button type="submit" class="primary" id="chat-send">Send</button>
     </form>`;
 
+  // Runs off (a host that offers chat without runs): no run controls at all.
+  $('.chat-run', root).hidden = !runs;
   const log = $('#chat-log', root);
   const text = $('#chat-text', root);
 
   async function api(path, body) {
-    const res = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+    const res = await requestJson(path, body);
     let data = {};
     try { data = await res.json(); } catch { /* empty */ }
     return { ok: res.ok, status: res.status, data };
@@ -184,13 +219,14 @@ export function createChat({ root, onOpen } = {}) {
     const rec = card.recommendation?.option;
     const recLabel = rec && (card.options ?? []).find((o) => o.id === rec)?.label;
     const known = ['approval', 'decision', 'budget'].includes(card.kind);
-    const buttons = answered ? '' : (card.options ?? []).map((o) => {
+    // A card this person's role may not answer (a budget card below admin, #95) shows why instead of its buttons.
+    const buttons = answered || st.forbidden.has(card.id) ? '' : (card.options ?? []).map((o) => {
       const style = ['primary', 'danger'].includes(o.style) ? o.style : rec === o.id ? 'primary' : '';
       return `<button type="button" class="${style}" data-card="${esc(card.id)}" data-option="${esc(o.id)}">${esc(o.label ?? o.id)}</button>`;
     }).join('');
     const links = (card.links ?? []).map((l) => safeUrl(l.url) && `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.title ?? LINKS[l.rel] ?? human(l.rel ?? 'link'))}</a>`).filter(Boolean).join(' · ');
-    return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}" data-card-id="${esc(card.id)}">
-      <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtTime(card.expires))}` : ''}</div>
+    return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}" data-card-id="${esc(card.id)}"${subjectId(card.subject) ? ` data-subject-id="${esc(subjectId(card.subject))}"` : ''}>
+      <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtWhen(card.expires))}` : ''}</div>
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
       ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="Step-up secret" placeholder="Step-up secret" required><button type="submit" class="primary">Confirm</button></form>` : ''}
       <h3>${esc(card.title)}</h3>
@@ -210,7 +246,29 @@ export function createChat({ root, onOpen } = {}) {
     return `${label ?? human(what)}${by ? ` · ${by}` : ''}${e.time ? ` at ${fmtTime(e.time)}` : ''}${d.note ? `: ${d.note}` : ''}`;
   }
 
+  /** Draws the chat, then brings a linked card or the budget into view once it is there (a notification's link). */
   function render() {
+    draw();
+    if (!st.focus || !st.loaded) return;
+    const el = st.focus.card ? log.querySelector(`[data-card-id="${CSS.escape(st.focus.card)}"], [data-subject-id="${CSS.escape(st.focus.card)}"]`) : st.focus.budget ? $('#cost', root) : null;
+    if (!el) { const budget = st.focus.budget; st.focus = null; if (budget) return; return flashNote('The card that link points to is not in the recent chat. It may be older, or already answered.'); }
+    st.focus = null;
+    el.classList.add('focused');
+    el.scrollIntoView({ block: 'center' });
+    setTimeout(() => el.classList.remove('focused'), 4000);
+  }
+  /** A note above the chat (not in it, so the next refresh does not wipe or repeat it), gone after a while. */
+  function flashNote(text) {
+    log.parentElement.querySelector('.focus-miss')?.remove();
+    const n = document.createElement('p');
+    n.className = 'timeline muted focus-miss';
+    n.setAttribute('role', 'status');
+    n.textContent = text;
+    log.before(n);
+    setTimeout(() => n.remove(), 15_000);
+  }
+
+  function draw() {
     if (st.connected === false) {
       log.innerHTML = `<div class="chat-empty"><p><strong>No control plane connected.</strong></p><p class="muted">The chat talks to your team's chief of staff through the control plane. Start the Studio with <code>AGENT_TEAM_SERVER</code>, <code>AGENT_TEAM_SERVER_TOKEN</code> and <code>AGENT_TEAM_SERVER_TEAM</code> set, as for the live board.</p></div>`;
       text.disabled = true; $('#chat-send', root).disabled = true;
@@ -293,7 +351,10 @@ export function createChat({ root, onOpen } = {}) {
     const cost = $('#cost', root);
     if (c && typeof c.today === 'number') {
       const pct = c.capPerDay ? Math.min(100, Math.round((c.today / c.capPerDay) * 100)) : null;
-      cost.innerHTML = `Today ${esc(fmtMoney(c.today, c.currency))}${c.capPerDay ? ` of ${esc(fmtMoney(c.capPerDay, c.currency))}` : ', no daily cap'}${pct !== null ? `<span class="meter${pct >= 80 ? ' high' : ''}" aria-hidden="true"><span style="width:${pct}%"></span></span>` : ''}`;
+      cost.innerHTML = `Today ${esc(fmtMoney(c.today, c.currency))}${c.capPerDay ? ` of ${esc(fmtMoney(c.capPerDay, c.currency))}` : ', no daily cap'}${pct !== null ? `<span class="meter${pct >= 80 ? ' high' : ''}" aria-hidden="true"><span></span></span>` : ''}`;
+      // The bar's width through the DOM: a strict CSP refuses style="" in markup (embed spec 4).
+      const bar = cost.querySelector('.meter > span');
+      if (bar) bar.style.width = `${pct}%`;
       cost.title = c.capPerDay ? `${pct}% of today's cap${c.state === 'exhausted' ? ': the cap is reached' : ''}` : '';
       cost.classList.toggle('over', c.state === 'exhausted');
     } else cost.textContent = '';
@@ -307,6 +368,7 @@ export function createChat({ root, onOpen } = {}) {
     // With no run going, the one control is Start (the control plane allows one run per team).
     $('#run-start', root).hidden = going || st.connected !== true;
     $('#run-start', root).disabled = st.busy;
+    $('#runner-add', root).hidden = st.connected !== true;
   }
 
   async function load() {
@@ -383,6 +445,9 @@ export function createChat({ root, onOpen } = {}) {
       // Until sign-in lands (M4), the proof is the deployment's step-up secret typed in; the Studio server keeps only the
       // short-lived step-up token the control plane gives back.
       st.notes.set(cardId, { kind: 'stepup', option, text: 'Confirm it is you: type the step-up secret to answer. The control plane checks it; neither this page nor the Studio keeps it.' });
+    } else if (r.status === 403) {
+      st.forbidden.add(cardId);
+      st.notes.set(cardId, { kind: 'error', text: card.kind === 'budget' ? 'Only an admin of this workspace can answer a budget card, since it changes what the team may spend. Ask an admin.' : `Your role cannot answer this card. ${r.data.error ?? ''}`.trim() });
     } else if (!r.ok) {
       st.notes.set(cardId, { kind: 'error', text: r.data.error ?? `HTTP ${r.status}` });
     } else {
@@ -423,7 +488,7 @@ export function createChat({ root, onOpen } = {}) {
   const needsStepUp = (r) => r.status === 401 && /step-up-required$/.test(r.data.type ?? '');
 
   async function control(action) {
-    if (action === 'stop' && !confirm('Stop the run? Every role session stops after its current step. You can start a new run later.')) return;
+    if (action === 'stop' && !(await ask('Stop the run? Every role session stops after its current step. You can start a new run later.', { ok: 'Stop the run', cancel: 'Keep it running', danger: true }))) return;
     st.busy = true; renderRun();
     let r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
     // Resuming a run the budget paused needs a recent sign-in.
@@ -490,6 +555,50 @@ export function createChat({ root, onOpen } = {}) {
     await load();
     await loadRun();
   }
+  // Runners (runner-protocol.md, register): a one-time code, minted after step-up and shown once. The page keeps it
+  // only while the dialog is open; closing it clears the code, and the Studio server never stored it.
+  const shq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
+  async function openRunners() {
+    const dlg = $('#runner-dialog', root);
+    $('#runner-code', root).hidden = true;
+    $('#runner-code', root).innerHTML = '';
+    $('#runner-result', root).textContent = '';
+    $('#runner-go', root).textContent = 'Get a code';
+    $('#runner-list', root).innerHTML = '';
+    dlg.showModal();
+    const r = await api('/v1/team/runners');
+    const list = (r.ok ? r.data.runners ?? [] : []).filter((x) => !x.revoked_at);
+    $('#runner-list', root).innerHTML = list.length
+      ? `<p class="muted">Registered: ${list.map((x) => `<strong>${esc(x.name || x.id)}</strong>${x.last_seen ? ` <span class="muted">(last seen ${esc(fmtWhen(x.last_seen))})</span>` : ' <span class="muted">(not connected yet)</span>'}`).join(', ')}</p>`
+      : '<p class="muted">No runner is registered yet.</p>';
+  }
+  async function mintRunnerCode() {
+    const name = $('#runner-name', root).value.trim();
+    const go = $('#runner-go', root);
+    go.disabled = true;
+    $('#runner-result', root).textContent = '';
+    let r = await api('/v1/team/runners/code', { name });
+    if (needsStepUp(r) && await stepUp('A runner code lets a machine join this team and run its agents.')) r = await api('/v1/team/runners/code', { name });
+    go.disabled = false;
+    if (!r.ok) { $('#runner-result', root).textContent = needsStepUp(r) ? 'No code: confirming it is you was cancelled.' : r.data.error ?? `HTTP ${r.status}`; return; }
+    const { code, expires, server } = r.data;
+    const cmd = `agent-team-runner register --server ${shq(server)} --code ${code}${name ? ` --name ${shq(name)}` : ''}`;
+    const box = $('#runner-code', root);
+    box.innerHTML = `<p>Your code, shown once:</p>
+      <output class="code" aria-label="Runner code">${esc(code)}</output>
+      <p class="hint">It works once, until ${esc(fmtWhen(expires))} (15 minutes). When you close this, it is gone; get a new one if you need it.</p>
+      <p>On the machine, run:</p>
+      <pre><code id="runner-cmd">${esc(cmd)}</code></pre>
+      <button type="button" id="runner-copy">Copy the command</button>`;
+    box.hidden = false;
+    go.textContent = 'Get a new code';
+    $('#runner-copy', root).onclick = async () => {
+      try { await navigator.clipboard.writeText(cmd); $('#runner-copy', root).textContent = 'Copied'; } catch { $('#runner-copy', root).textContent = 'Select the command and copy it'; }
+    };
+  }
+  $('#runner-add', root).onclick = openRunners;
+  $('#runner-go', root).onclick = mintRunnerCode;
+  $('#runner-dialog', root).addEventListener('close', () => { $('#runner-code', root).innerHTML = ''; $('#runner-code', root).hidden = true; });
   $('#run-start', root).onclick = openStart;
   $('#start-go', root).onclick = start;
   $('#start-cap', root).addEventListener('input', renderStart);
@@ -530,15 +639,19 @@ export function createChat({ root, onOpen } = {}) {
   $('#run-stop', root).onclick = () => control('stop');
 
   return {
+    /** Shows one card (`card`: its id) or today's budget (`budget: true`) when the chat has loaded: a link from an email or Slack. */
+    focus(what) { st.focus = what && (what.card || what.budget) ? { ...what } : null; if (st.loaded) render(); },
     /** Starts loading and listening the first time the chat is shown. */
     open() {
       if (st.es) return;
       load();
-      st.es = new EventSource('/v1/team/board/stream');
+      st.es = new EventSource(apiUrl('/v1/team/board/stream'));
       let t = null;
       st.es.addEventListener('changed', () => { clearTimeout(t); t = setTimeout(load, 100); });
       onOpen?.();
       setTimeout(() => text.focus({ preventScroll: true }), 0);
     },
+    /** Stops listening (the Studio is unmounted). */
+    close() { st.es?.close(); st.es = null; },
   };
 }

@@ -3,6 +3,7 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { summarize, toRow } from '../../tools/board.mjs';
 import { checkEvent, fromKitRow, toKitRow } from '../../packages/events/index.mjs';
+import { rollout as rolloutOf } from '../../packages/team-model/index.mjs';
 import { seal, unseal } from './vault.mjs';
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -104,6 +105,47 @@ export async function appendReport(db, tenant, team, body, now = new Date()) {
   return { id: row.id, row, stored };
 }
 
+const ROLE_SLUG = /^[a-z0-9][a-z0-9_-]{0,59}$/;
+const PLAN = new Set(['finish', 'handoff', 'pause', 'move-after-merge', 'move-and-handover']);
+/** The event id of a publish: one per commit, so the repository's CI and the Studio's fast path store it once. */
+export const publishedId = (version) => `published-${String(version).toLowerCase()}`;
+
+/**
+ * A team.published event from the kit's `report.mjs published` (the repository's CI on main), through the report
+ * route and its token: { version (40 hex), publishedAt, pr, roles, off, plan, changes, by }. Idempotent per commit.
+ */
+export async function appendPublished(db, tenant, team, body, now = new Date()) {
+  const b = body && typeof body === 'object' ? body : {};
+  const version = String(b.version ?? '').toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(version)) throw new Problem(400, 'version is the full commit SHA (40 hex characters)');
+  if (b.publishedAt != null && (typeof b.publishedAt !== 'string' || Number.isNaN(Date.parse(b.publishedAt)))) throw new Problem(400, 'publishedAt is an ISO date and time');
+  if (b.pr != null && !(Number.isInteger(b.pr) && b.pr > 0)) throw new Problem(400, 'pr is a pull request number');
+  const slugs = (x, name) => {
+    if (x == null) return [];
+    if (!Array.isArray(x) || x.length > 500 || !x.every((r) => typeof r === 'string' && ROLE_SLUG.test(r))) throw new Problem(400, `${name} is a list of at most 500 role slugs`);
+    return [...new Set(x)];
+  };
+  const roles = slugs(b.roles, 'roles');
+  const off = slugs(b.off, 'off');
+  const plan = {};
+  if (b.plan != null) {
+    if (typeof b.plan !== 'object' || Array.isArray(b.plan) || Object.keys(b.plan).length > 500) throw new Problem(400, 'plan is { [role]: { choice, to? } }');
+    for (const [role, p] of Object.entries(b.plan)) {
+      if (!ROLE_SLUG.test(role) || !p || !PLAN.has(p.choice) || (p.to != null && !ROLE_SLUG.test(String(p.to)))) throw new Problem(400, `plan for ${role.slice(0, 60)}: choice is one of ${[...PLAN].join(', ')}, to a role slug`);
+      plan[role] = { choice: p.choice, ...(p.to != null ? { to: String(p.to) } : {}) };
+    }
+  }
+  if (b.changes != null && (!Array.isArray(b.changes) || b.changes.length > 200 || !b.changes.every((c) => typeof c === 'string' && c.length <= 300))) throw new Problem(400, 'changes is a list of at most 200 paths');
+  const publishedAt = b.publishedAt ? new Date(b.publishedAt).toISOString() : now.toISOString();
+  const data = { version, publishedAt, pr: b.pr ?? null, roles, off, plan, changes: b.changes ?? [], by: String(b.by ?? '').slice(0, 120) || null, via: 'repository' };
+  const event = {
+    specversion: '1.0', id: publishedId(version), type: 'team.published', version: 1, source: `/tenants/${tenant}/teams/${team}`,
+    tenant, team, time: publishedAt, actor: { kind: 'system', id: 'repository' }, subject: 'team', data,
+  };
+  const stored = await append(db, tenant, team, [event]);
+  return { id: event.id, stored, duplicate: !stored.length };
+}
+
 /** The seq of a stored event, for `after=<event id>` and Last-Event-ID. Throws 400 when the id is not in the log. */
 export async function seqOf(db, tenant, team, eventId) {
   if (!eventId) return 0;
@@ -144,6 +186,26 @@ export async function board(db, tenant, team, { days = 7, role = '', now = new D
   return { ...summarize(rows.map((r) => toKitRow(r.envelope)).filter(Boolean), { now, days: Number(days) || 7, role }), asOf: last.id, seq: last.seq };
 }
 
+/**
+ * The rollout of a published team version (demo step 17): which roles have picked it up, from the board. The version
+ * is the latest team.published event's unless the caller names one (`version`, with `publishedAt`); the event can also
+ * name the team's roles, the ones switched off and the change step's plan. Read-only.
+ */
+export async function rollout(db, tenant, team, { version = '', publishedAt = '', now = new Date() } = {}) {
+  await getTeam(db, tenant, team);
+  const [ev] = version ? [] : await db.tenant(tenant, ({ q }) => q("select envelope from events where team = $1 and type = 'team.published' order by seq desc limit 1", [team]));
+  const d = ev?.envelope?.data ?? {};
+  const v = String(version || d.version || '').toLowerCase();
+  if (v && !/^[0-9a-f]{7,40}$/.test(v)) throw new Problem(400, 'version is a commit SHA (7 to 40 hex characters)');
+  const at = publishedAt || d.publishedAt || ev?.envelope?.time || null;
+  if (at && Number.isNaN(Date.parse(at))) throw new Problem(400, 'publishedAt is an ISO date and time');
+  const b = await board(db, tenant, team, { now, days: 30 });
+  const list = (x) => (Array.isArray(x) ? x.map(String).filter((r) => /^[a-z0-9][a-z0-9_-]{0,59}$/.test(r)) : null);
+  const roles = (!version && list(d.roles)) || b.current.filter((c) => !c.instance).map((c) => c.role);
+  const plan = !version && d.plan && typeof d.plan === 'object' ? d.plan : {};
+  return { ...rolloutOf({ version: v, publishedAt: at, roles, off: (!version && list(d.off)) || [], plan, board: b }), pr: version ? null : d.pr ?? null, asOf: b.asOf };
+}
+
 export async function putSecret(db, key, tenant, name, value) {
   if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(name ?? '')) throw new Problem(400, 'a secret name is UPPER_SNAKE_CASE');
   if (typeof value !== 'string' || !value) throw new Problem(400, 'a secret needs a value');
@@ -160,28 +222,67 @@ export async function readSecret(db, key, tenant, name) {
 }
 
 const SINK_COLS = 'id, url, format, header, secret, cursor, failures, next_at, last_error, created_at';
+const EMAIL_SINK_COLS = "id, null as url, 'email' as format, null as header, secret, provider, sender, cursor, failures, next_at, last_error, created_at";
+const SLACK_SINK_COLS = "id, null as url, 'slack' as format, null as header, secret, client_id, client_secret, cursor, failures, next_at, last_error, failing_since, created_at";
+const SENDER = /^(?:[^\s@<>]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}|[^<>\r\n"]{1,80} <[^\s@<>]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}>)$/;
 
-export async function addSink(db, tenant, team, { url, format = 'kit-report', header = '', secret = '', from = 'now' }) {
+/**
+ * Adds a sink. kit-report and event sinks POST to a URL. An email sink ({ format: 'email', provider, sender,
+ * secret }) sends the team's notification events to the people who opted in; `secret` names the vault entry that
+ * holds the provider's key, and with no key stored nothing is sent. `providers` is the list of provider ids.
+ * A Slack sink ({ format: 'slack', secret, clientId, clientSecret }) is the team's Slack workspace connection, one per
+ * team: `secret` names the vault entry with the bot token, and `clientId` with `clientSecret` (a vault entry name)
+ * let people link their own Slack account. Nothing is posted until the token is stored.
+ */
+export async function addSink(db, tenant, team, { url, format = 'kit-report', header = '', secret = '', from = 'now', provider = '', sender = '', clientId = '', clientSecret = '' }, { providers = [] } = {}) {
   await getTeam(db, tenant, team);
-  let u;
-  try { u = new URL(url); } catch { throw new Problem(400, 'a sink needs a URL'); }
-  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname))) throw new Problem(400, 'a sink URL must be https (http only to this machine)');
-  if (!['kit-report', 'event'].includes(format)) throw new Problem(400, 'format is kit-report or event');
-  if (header && !/^[A-Za-z0-9-]{1,64}$/.test(header)) throw new Problem(400, 'header is a header name, like x-team-token');
+  if (!['kit-report', 'event', 'email', 'slack'].includes(format)) throw new Problem(400, 'format is kit-report, event, email or slack');
   if (secret && !/^[A-Z][A-Z0-9_]{0,63}$/.test(secret)) throw new Problem(400, 'secret is the name of a stored secret');
+  let u = null;
+  if (format === 'slack') {
+    if (!/^SLACK_[A-Z0-9_]{1,58}$/.test(secret)) throw new Problem(400, 'secret names the vault entry with the bot token, and starts with SLACK_, like SLACK_BOT_TOKEN');
+    if (clientId && !/^[0-9]{1,20}\.[0-9]{1,20}$/.test(clientId)) throw new Problem(400, "clientId is the Slack app's client id, like 1234567890.1234567890");
+    if (clientSecret && !/^SLACK_[A-Z0-9_]{1,58}$/.test(clientSecret)) throw new Problem(400, 'clientSecret names the vault entry with the client secret, and starts with SLACK_');
+    if (!clientId !== !clientSecret) throw new Problem(400, 'send clientId and clientSecret together, or neither');
+  } else if (format === 'email') {
+    if (!providers.includes(provider)) throw new Problem(400, `provider is one of ${providers.join(', ') || '(none configured)'}`);
+    if (!SENDER.test(String(sender))) throw new Problem(400, 'sender is the From address, like "Acme team <team@acme.example>"');
+    if (!/^EMAIL_[A-Z0-9_]{1,58}$/.test(secret)) throw new Problem(400, 'secret names the vault entry with the provider key, and starts with EMAIL_, like EMAIL_PROVIDER_KEY');
+  } else {
+    try { u = new URL(url); } catch { throw new Problem(400, 'a sink needs a URL'); }
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname))) throw new Problem(400, 'a sink URL must be https (http only to this machine)');
+    if (header && !/^[A-Za-z0-9-]{1,64}$/.test(header)) throw new Problem(400, 'header is a header name, like x-team-token');
+  }
   return db.tenant(tenant, async ({ q }) => {
     // A new sink starts at the end of the log unless asked to replay it from the start.
     const [{ max }] = await q('select coalesce(max(seq), 0) as max from events where team = $1', [team]);
     const cursor = from === 'start' ? 0 : Number(max);
+    if (format === 'slack') {
+      if ((await q('select 1 from slack_sinks where team = $1', [team])).length) throw new Problem(409, 'this team is already connected to Slack; remove that sink first');
+      return (await q(`insert into slack_sinks(id, tenant, team, secret, client_id, client_secret, cursor) values ($1, $2, $3, $4, $5, $6, $7) returning ${SLACK_SINK_COLS}`,
+        [id('sink'), tenant, team, secret, clientId || null, clientSecret || null, cursor]))[0];
+    }
+    if (format === 'email') {
+      return (await q(`insert into email_sinks(id, tenant, team, provider, sender, secret, cursor) values ($1, $2, $3, $4, $5, $6, $7) returning ${EMAIL_SINK_COLS}`,
+        [id('sink'), tenant, team, provider, sender, secret, cursor]))[0];
+    }
     return (await q(`insert into sinks(id, tenant, team, url, format, header, secret, cursor) values ($1, $2, $3, $4, $5, $6, $7, $8) returning ${SINK_COLS}`,
       [id('sink'), tenant, team, u.toString(), format, header || null, secret || null, cursor]))[0];
   });
 }
 
-export const listSinks = (db, tenant, team) => db.tenant(tenant, ({ q }) => q(`select ${SINK_COLS} from sinks where team = $1 order by created_at`, [team]));
+export const listSinks = (db, tenant, team) => db.tenant(tenant, async ({ q }) => [
+  ...(await q(`select ${SINK_COLS} from sinks where team = $1 order by created_at`, [team])),
+  ...(await q(`select ${EMAIL_SINK_COLS} from email_sinks where team = $1 order by created_at`, [team])),
+  ...(await q(`select ${SLACK_SINK_COLS} from slack_sinks where team = $1 order by created_at`, [team])),
+]);
 
 export async function removeSink(db, tenant, team, sid) {
-  const rows = await db.tenant(tenant, ({ q }) => q('delete from sinks where id = $1 and team = $2 returning id', [sid, team]));
+  const rows = await db.tenant(tenant, async ({ q }) => [
+    ...(await q('delete from sinks where id = $1 and team = $2 returning id', [sid, team])),
+    ...(await q('delete from email_sinks where id = $1 and team = $2 returning id', [sid, team])),
+    ...(await q('delete from slack_sinks where id = $1 and team = $2 returning id', [sid, team])),
+  ]);
   if (!rows.length) throw new Problem(404, 'no such sink');
 }
 

@@ -102,7 +102,7 @@ test('step-up: a slow hash, the bearer token refused, single use, a lockout afte
 test('budget: raising or setting a cap needs step-up, lowering does not, and a run needs a daily cap', async () => {
   await withStepUp(async ({ call }) => {
     await call('POST', '/teams', { id: 'shop' });
-    assert.deepEqual((await call('GET', '/teams/shop/budget')).body, { currency: 'USD', perDay: null, perRun: null, sessions: 3, today: { day: new Date().toISOString().slice(0, 10), spent: 0, raised: 0, state: 'ok' } });
+    assert.deepEqual((await call('GET', '/teams/shop/budget')).body, { currency: 'USD', perDay: null, perRun: null, sessions: 3, meetingCap: null, today: { day: new Date().toISOString().slice(0, 10), spent: 0, raised: 0, state: 'ok' } });
     assert.equal((await call('POST', '/teams/shop/runs', { team: roster() })).status, 409, 'no run without a daily cap');
     const need = await call('PUT', '/teams/shop/budget', { perDay: 1000 });
     assert.equal(need.status, 401);
@@ -263,6 +263,7 @@ test('budget: warns once at 80%, and at 100% pauses the run and sends one card; 
     const cards = (await call('GET', '/me/inbox')).body.cards;
     assert.equal(cards.length, 1, 'one card, however many usage events crossed the line');
     assert.equal(cards[0].kind, 'budget');
+    assert.match(cards[0].body, /spent \$\d+\.\d\d of \$\d+\.\d\d /, 'money, not minor units (QA, M3 exit pass A)');
     assert.equal(cards[0].id, got[1].data.cardId);
     const summary = (await call('GET', '/me/summary')).body.teams[0];
     assert.deepEqual([summary.run, summary.cost.today, summary.cost.capPerDay, summary.inbox], ['paused', 1070, 1000, 1]);

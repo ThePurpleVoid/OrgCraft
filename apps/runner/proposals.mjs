@@ -13,6 +13,8 @@
 //   accept({ repo, ref, branch, base, headSha, approval }) -> { result, deleted } (the merge commit; whether the
 //                    branch is gone, so the session may start again from the base)
 //   head({ repo, ref }) -> the proposal's head on the remote now
+//   preview({ repo, sha }) -> { deployment, environment, url } for a successful deployment of that commit, or null
+//                    (G-12, "Ready to try": the link comes from the host's deployment status, never from the model)
 // and an accept that cannot land throws a ProposalError with `reason` head-moved, checks or conflict.
 import { createSign } from 'node:crypto';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -32,6 +34,19 @@ const need = (sha) => { if (!FULL_SHA.test(String(sha ?? ''))) throw new Proposa
 // The long lines of a PEM key: any one of them in a commit is a leak (a whole key rarely survives copy and paste).
 const pemLines = (pem) => String(pem).split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length >= 40 && !l.startsWith('-----'));
 
+/** The hosts' GitHub Apps whose deployment statuses a preview link may come from (configurable per runner). */
+export const PREVIEW_CREATORS = ['vercel[bot]', 'netlify[bot]'];
+const NEVER_PREVIEW_CREATORS = ['github-actions[bot]'];
+
+/** A deployment's link, if it is one a person may be sent to: https, no user or password, at most 2000 characters. */
+export function previewUrl(u) {
+  if (typeof u !== 'string' || u.length > 2000) return null;
+  try {
+    const x = new URL(u);
+    return x.protocol === 'https:' && !x.username && !x.password ? x.href : null;
+  } catch { return null; }
+}
+
 /** A GitHub App's JWT (RS256, 9 minutes, backdated a minute for clock drift). */
 export function appJwt(appId, privateKey, now = Date.now()) {
   const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -44,23 +59,37 @@ export function appJwt(appId, privateKey, now = Date.now()) {
  * GitHub, through the merger app. `fetch` is injectable for the tests; nothing here runs without an app id and key.
  * Tokens are per repository installation and kept until five minutes before they expire.
  */
-export function githubProposals({ appId, privateKey, api = 'https://api.github.com', fetch = globalThis.fetch, method = 'squash' }) {
+export function githubProposals({ appId, privateKey, api = 'https://api.github.com', fetch = globalThis.fetch, method = 'squash', previewCreators = PREVIEW_CREATORS, previewHosts = null }) {
   if (!appId || !privateKey) throw new Error('the merger app needs an app id and a private key');
+  // Who may write the status a preview link is read from: the host's own app, never Actions (agent code can run
+  // there with deployments write, and could put any link on a trusted card).
+  const creators = new Set(previewCreators.map((c) => String(c).trim().toLowerCase()).filter((c) => c && !NEVER_PREVIEW_CREATORS.includes(c)));
+  const hosts = previewHosts?.length ? previewHosts.map((h) => String(h).trim().toLowerCase().replace(/^\.+/, '')).filter(Boolean) : null;
+  const trusted = (status, url) => {
+    const c = status?.creator;
+    if (!c || c.type !== 'Bot' || !creators.has(String(c.login ?? '').toLowerCase())) return false;
+    if (!hosts) return true;
+    const host = new URL(url).hostname.toLowerCase();
+    return hosts.some((h) => host === h || host.endsWith(`.${h}`));
+  };
   const tokens = new Map(); // slug -> { token, until }
   async function call(path, { token, ...init } = {}) {
     const res = await fetch(`${api}${path}`, { ...init, headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'agent-team-runner', authorization: `Bearer ${token}`, ...(init.body ? { 'content-type': 'application/json' } : {}) } });
     const body = await res.json().catch(() => ({}));
     return { status: res.status, body };
   }
-  async function tokenFor(slug) {
-    const t = tokens.get(slug);
+  // Each token carries only what its calls need: the merge path writes, the preview path only reads deployments.
+  const WRITE = { contents: 'write', pull_requests: 'write' };
+  async function tokenFor(slug, permissions = WRITE) {
+    const key = `${slug}#${Object.entries(permissions).map(([k, v]) => `${k}:${v}`).join(',')}`;
+    const t = tokens.get(key);
     if (t && t.until > Date.now()) return t.token;
     const jwt = appJwt(appId, privateKey);
     const inst = await call(`/repos/${slug}/installation`, { token: jwt });
     if (inst.status !== 200) throw new Error(`the merger app is not installed on ${slug} (${inst.status})`);
-    const tok = await call(`/app/installations/${inst.body.id}/access_tokens`, { token: jwt, method: 'POST', body: JSON.stringify({ repositories: [slug.split('/')[1]], permissions: { contents: 'write', pull_requests: 'write' } }) });
+    const tok = await call(`/app/installations/${inst.body.id}/access_tokens`, { token: jwt, method: 'POST', body: JSON.stringify({ repositories: [slug.split('/')[1]], permissions }) });
     if (tok.status !== 201 || !tok.body.token) throw new Error(`no installation token for ${slug} (${tok.status})`);
-    tokens.set(slug, { token: tok.body.token, until: Date.parse(tok.body.expires_at) - 5 * 60_000 });
+    tokens.set(key, { token: tok.body.token, until: Date.parse(tok.body.expires_at) - 5 * 60_000 });
     return tok.body.token;
   }
   const slugOf = (repo) => { const s = repoSlug(repo); if (!s) throw new Error(`${repo} is not a GitHub repository`); return s; };
@@ -85,6 +114,26 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
       const r = await call(`/repos/${slug}/pulls/${Number(ref)}`, { token: await tokenFor(slug) });
       if (r.status !== 200 || !FULL_SHA.test(r.body.head?.sha ?? '')) throw new Error(`could not read the head of pull request ${ref} (${r.status})`);
       return r.body.head.sha;
+    },
+    /**
+     * The newest successful deployment of `sha` with an https link (GitHub deployment statuses, which hosts such as
+     * Vercel and Netlify write), written by a host app on `previewCreators` (and, if set, on a `previewHosts` domain).
+     * Needs the app's Deployments read permission; without it, null (no link, no error).
+     */
+    async preview({ repo, sha }) {
+      if (!FULL_SHA.test(String(sha ?? ''))) return null;
+      const slug = slugOf(repo);
+      let token;
+      try { token = await tokenFor(slug, { deployments: 'read' }); } catch { return null; }
+      const list = await call(`/repos/${slug}/deployments?sha=${sha}&per_page=10`, { token });
+      if (list.status !== 200 || !Array.isArray(list.body)) return null;
+      for (const d of list.body) {
+        const st = await call(`/repos/${slug}/deployments/${Number(d.id)}/statuses?per_page=1`, { token });
+        const last = st.status === 200 && Array.isArray(st.body) ? st.body[0] : null;
+        const url = previewUrl(last?.environment_url);
+        if (last?.state === 'success' && url && trusted(last, url)) return { deployment: Number(d.id), environment: String(d.environment ?? 'Preview').slice(0, 100), url };
+      }
+      return null;
     },
     async accept({ repo, ref, branch, headSha }) {
       need(headSha);
@@ -134,6 +183,14 @@ export function localProposals({ checks = async () => true, before = async () =>
       s.proposals[ref] = { ref, branch, base, title, headSha, state: 'open' };
       store(repo, s);
       return { connector: 'local', ref, url: `file://${dir(repo)}#${ref}`, headSha, existed: false };
+    },
+    /** The harness's stand-in host: `<bare>/agent-team-deployments.json`, [{ id, sha, environment, state, url }]. */
+    async preview({ repo, sha }) {
+      const f = join(dir(repo), 'agent-team-deployments.json');
+      if (!existsSync(f)) return null;
+      const list = JSON.parse(readFileSync(f, 'utf8'));
+      const d = [...list].reverse().find((x) => x.sha === sha && x.state === 'success' && previewUrl(x.url));
+      return d ? { deployment: Number(d.id), environment: String(d.environment ?? 'Preview'), url: previewUrl(d.url) } : null;
     },
     async head({ repo, ref }) {
       const p = load(repo).proposals[ref];

@@ -1,0 +1,35 @@
+# Tells the control plane which team version is live on main (Agent Team Kit `report.mjs published`), so the rollout
+# view can say which roles have picked it up. One event per commit; re-runs collapse. It never fails the build: with
+# no control plane secrets yet, it says so and skips.
+#
+# Secrets (repository settings, Actions): CONTROL_PLANE_REPORT_URL (https://<server>/v1/teams/<team>/reports) and
+# CONTROL_PLANE_REPORT_TOKEN (a report token minted for that team).
+name: team published
+on:
+  push:
+    branches: [main]
+    paths: ['.agent-team/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  published:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }   # the version is the last commit on main that changed .agent-team/
+      - name: Report the published team version
+        env:
+          TEAM_REPORT_URL: ${{ secrets.CONTROL_PLANE_REPORT_URL }}
+          TEAM_REPORT_TOKEN: ${{ secrets.CONTROL_PLANE_REPORT_TOKEN }}
+        run: |
+          if [ -z "$TEAM_REPORT_URL" ] || [ -z "$TEAM_REPORT_TOKEN" ]; then
+            echo "Skipped: CONTROL_PLANE_REPORT_URL and CONTROL_PLANE_REPORT_TOKEN are not set yet (M4 owner checklist)."
+            exit 0
+          fi
+          if ! grep -q "report.mjs published" scripts/agent-team/report.mjs; then
+            echo "Skipped: scripts/agent-team is on a kit before 0.17.0, which has no 'report.mjs published'."
+            exit 0
+          fi
+          node scripts/agent-team/report.mjs published || true

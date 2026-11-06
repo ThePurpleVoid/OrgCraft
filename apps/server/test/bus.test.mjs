@@ -125,6 +125,10 @@ test('D1: an accept approval needs pr and headSha, and approval.result carries t
     const card = (await p.call('GET', `/cards/${r.body.card}`)).body;
     assert.equal(card.title, 'chief-of-staff asks to merge #7 at abc1234', 'the person sees the PR and the head they approve');
     assert.ok(card.links.some((l) => l.url === 'https://github.com/example/shop/pull/7'));
+    // QA (M3 exit pass A): the body is the role's words; the held call is data, for the client to show as code.
+    assert.equal(card.body, 'tests pass\n\nIt will merge pull request #7 at commit abc1234.');
+    assert.equal(typeof card.data.call, 'string');
+    assert.ok(!card.data.call.includes('ghp_'), 'the card shows the redacted call');
     const [a] = await p.db.system('select call from approvals where id = $1', [r.body.approval]);
     assert.deepEqual([a.call.pr, a.call.headSha], [7, 'abc1234'.padEnd(40, '0')]);
     assert.ok(!a.call.command.includes('ghp_'), 'a token in the command is redacted before it is stored');
@@ -154,8 +158,11 @@ test('D1: proposal.failed head-moved supersedes the approval and asks nothing it
     assert.equal((await runner.request('events', { events: [failed] })).op, 'ack');
     const rows = await p.db.system("select id, state from approvals where session = $1", [s.session]);
     assert.deepEqual(rows.map((a) => [a.id, a.state]), [[r.body.approval, 'expired']], 'exactly one approval, expired; no second one pinned to the stale head');
-    const [card] = await p.db.system('select state from cards where id = $1', [r.body.card]);
-    assert.equal(card.state, 'answered', 'a card already answered keeps its answer; an open one would be marked superseded');
+    const [card] = await p.db.system('select state, answer, card from cards where id = $1', [r.body.card]);
+    // QA (M3 exit pass A): an approved card must stop reading as approved once the head moved. Its answer is kept.
+    assert.equal(card.state, 'superseded');
+    assert.equal(card.card.state, 'superseded');
+    assert.ok(card.answer, 'the answer is kept, for the record');
     const decided = (await p.call('GET', '/teams/shop/events?type=approval.decided')).body.events.filter((e) => e.data.approval === r.body.approval).map((e) => e.data.decision);
     assert.ok(decided.includes('superseded'), JSON.stringify(decided));
     const [{ n }] = await p.db.system("select count(*)::int as n from cards where kind = 'approval'");
@@ -353,3 +360,73 @@ async function waitFor(fn, ms = 5000) {
     await new Promise((r) => setTimeout(r, 25));
   }
 }
+
+test('G-12 ready_to_try: front door only, only after a merge, preview from the runner, attached later, "Got it" wakes nobody', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    await tool(p.call, s, 'handoff', { to: 'web-dev', task: 'Dark mode', changed: 'x', verify: 'y', doneWhen: 'z' });
+    const web = (await start(runner, 'web-dev')).body;
+    const env = (type, data, sess = s, id = `ev_${Math.random().toString(36).slice(2)}`) => ({ specversion: '1.0', id, type, version: 1, source: '/tenants/acme/teams/shop', tenant: 'acme', team: 'shop', time: new Date().toISOString(), actor: { kind: 'role', id: 'x', session: sess.session }, data });
+    const ask = { pr: 7, title: 'Dark mode', summary: 'Dark mode follows the system setting.' };
+
+    assert.equal((await tool(p.call, web, 'ready_to_try', ask)).status, 403, 'only the front door tells the owner');
+    const forged = env('proposal.accepted', { connector: 'github', ref: 7, url: 'https://evil.example/pull/7', result: 'e'.repeat(40) });
+    assert.equal((await p.call('POST', '/teams/shop/events', { events: [forged] })).status, 403, 'an admin cannot post a merge: only the runner says a PR merged');
+    const early = await tool(p.call, s, 'ready_to_try', ask);
+    assert.equal(early.status, 422, 'not before the PR merged with an approval');
+    assert.match(early.body.problems.join(' '), /has not merged/);
+    assert.equal((await tool(p.call, s, 'ready_to_try', { pr: 7 })).status, 422, 'a title is required');
+
+    const merge = 'abcdef1'.padEnd(40, '0');
+    assert.equal((await runner.request('events', { events: [env('proposal.accepted', { connector: 'github', ref: 7, url: 'https://github.com/example/shop/pull/7', headSha: 'f'.repeat(40), result: merge, approval: 'apr_x' })] })).op, 'ack');
+    const r = await tool(p.call, s, 'ready_to_try', ask);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.preview, null);
+    let card = (await p.call('GET', `/cards/${r.body.card}`)).body;
+    assert.deepEqual([card.kind, card.title, card.subject, card.data.pr, card.data.commit, card.data.preview], ['ready', 'Dark mode', 'ready/7', 7, merge, null]);
+    assert.match(card.body, /preview link is not up yet/);
+    assert.deepEqual(card.links, [{ rel: 'pull-request', url: 'https://github.com/example/shop/pull/7' }]);
+    assert.deepEqual(card.options.map((o) => [o.id, o.stepUp]), [['seen', false]]);
+    const posted = (await p.call('GET', '/teams/shop/events?type=ready.posted')).body.events;
+    assert.deepEqual([posted.length, posted[0].data.cardId, posted[0].data.commit, posted[0].actor.id], [1, card.id, merge, 'chief-of-staff']);
+    const chat = (await p.call('GET', '/teams/shop/events?type=chat.message')).body.events.at(-1);
+    assert.match(chat.data.text, /^Dark mode: ready to try\. The preview link follows/);
+    assert.deepEqual(chat.data.attachments, [card.url]);
+
+    // The runner's preview: checked, stored once per deployment, and added to the open card.
+    const prev = { connector: 'github', ref: 7, sha: merge, url: 'https://shop-git-dark.example.app', environment: 'Preview', state: 'success', deployment: 991 };
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, url: 'http://insecure.example' })] })).op, 'nack', 'only https');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, state: 'failure' })] })).op, 'nack', 'only a successful deployment');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, url: 'https://user:pw@evil.example' })] })).op, 'nack', 'no user or password in the link');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, sha: 'b'.repeat(40) })] })).op, 'nack', 'only the merge commit of the approved merge');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, sha: undefined })] })).op, 'nack', 'the sha is required');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, ref: 8 })] })).op, 'nack', 'not for a PR that has not merged');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', prev)] })).op, 'ack');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', prev)] })).op, 'ack', 'a repeat is fine');
+    assert.equal((await p.call('GET', '/teams/shop/events?type=proposal.previewed')).body.events.length, 1, 'stored once per deployment');
+    card = (await p.call('GET', `/cards/${r.body.card}`)).body;
+    assert.deepEqual([card.version, card.state, card.data.preview, card.data.environment], [2, 'open', prev.url, 'Preview']);
+    assert.equal(card.body, ask.summary, 'the pending line is gone');
+    assert.ok(card.links.some((l) => l.rel === 'preview' && l.url === prev.url));
+    const pv = (await p.call('GET', '/teams/shop/events?type=ready.previewed')).body.events;
+    assert.deepEqual([pv.length, pv[0].data.url, pv[0].data.cardId], [1, prev.url, card.id]);
+
+    // Telling the owner again supersedes the old card, and the new one has the preview at once.
+    const again = await tool(p.call, s, 'ready_to_try', { ...ask, title: 'Dark mode, now with contrast fixes' });
+    assert.equal(again.body.preview, prev.url);
+    assert.equal((await p.call('GET', `/cards/${r.body.card}`)).body.state, 'superseded');
+    const inbox = (await p.call('GET', '/me/inbox')).body.cards.filter((c) => c.kind === 'ready');
+    assert.deepEqual(inbox.map((c) => c.id), [again.body.card]);
+
+    // "Got it" closes it and wakes nobody (no decision.answered).
+    const before = runner.frames.length;
+    const got = await p.call('POST', `/cards/${again.body.card}`, { option: 'seen', version: 1 });
+    assert.equal(got.status, 200, JSON.stringify(got.body));
+    assert.equal(got.body.event, null);
+    assert.equal((await p.call('GET', '/teams/shop/events?type=decision.answered')).body.events.length, 0);
+    await new Promise((res) => setTimeout(res, 200));
+    assert.ok(!runner.frames.slice(before).some((f) => f.op === 'session.message' || f.op === 'session.start'), 'nobody is woken');
+  }, { tickMs: 0 });
+});

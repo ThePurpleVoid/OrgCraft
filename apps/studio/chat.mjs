@@ -47,6 +47,8 @@ export function chatSource(env = process.env) {
     team,
     where: `${server}/v1/teams/${t}`,
     Upstream,
+    /** One held meeting (a link to its minutes names it): { definition, title, … }. */
+    meeting: (id) => call('GET', `/teams/${t}/meetings/${encodeURIComponent(id)}`),
     /** A page of the chat, newest last. `before` is the opaque cursor the control plane gave. */
     chat: ({ before } = {}) => call('GET', `/teams/${t}/chat${before ? `?before=${encodeURIComponent(before)}` : ''}`),
     /** The owner's words, verbatim. The client id makes a retry land once. */
@@ -89,6 +91,17 @@ export function chatSource(env = process.env) {
       const pick = Object.fromEntries(['perDay', 'perRun', 'sessions', 'currency'].filter((k) => body?.[k] !== undefined).map((k) => [k, body[k]]));
       return call('PUT', `/teams/${t}/budget`, pick, { ...(key ? { 'idempotency-key': key } : {}), ...spendStepUp() });
     },
+    /**
+     * A one-time code for registering a runner (XXXX-XXXX-XXXX, 15 minutes, one use). It needs step-up, so it spends
+     * one. The code passes through to the page once and is kept nowhere here. `server` is what the register command
+     * needs: the control plane's base URL.
+     */
+    async runnerCode(name) {
+      const r = await call('POST', '/runners/codes', { name: typeof name === 'string' ? name.slice(0, 100) : '' }, spendStepUp());
+      return { code: r.code, expires: r.expires, server };
+    },
+    /** The workspace's runners: name, last seen, revoked. Never their keys (the control plane keeps only hashes). */
+    runners: () => call('GET', '/runners'),
     /** Starts a run on the published team (runs.mjs builds the body). One run per team: a second one is a 409. */
     start: (body, key) => call('POST', `/teams/${t}/runs`, body, key ? { 'idempotency-key': key } : {}),
   };

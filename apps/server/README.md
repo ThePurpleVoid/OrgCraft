@@ -42,6 +42,65 @@ curl -H "authorization: Bearer $T" -H 'content-type: application/json' \
 
 Sinks deliver in order, at least once, and back off from 5 seconds to an hour while the other end is down.
 
+**Email the people who opt in** (PRD 6.8). An `email` sink sends the team's notification events (approval needed,
+budget at 80% and at 100%, a role is blocked, meeting minutes) through an email provider. The provider's key lives in
+the vault, named by the sink. With no key stored, nothing is sent: deliveries are logged as skipped.
+
+```bash
+curl -X PUT -H "authorization: Bearer $T" -H "x-step-up: $SU" -H 'content-type: application/json' -d '{"value":"<provider API key>"}' localhost:4849/v1/secrets/EMAIL_PROVIDER_KEY
+curl -H "authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"format":"email","provider":"resend","sender":"My team <team@example.com>","secret":"EMAIL_PROVIDER_KEY"}' \
+  localhost:4849/v1/teams/my-team/sinks
+```
+
+Then each person adds their own address for the team (`POST /v1/teams/my-team/emails`). It gets a 6-digit code that
+expires in 15 minutes (`POST …/emails/{id}/verify`), and they switch on the kinds they want
+(`PATCH …/emails/{id}` with `{ "kinds": ["approval", "budget100"] }`). Nothing is emailed before that.
+
+- Every email has one link into the Studio. The link goes through `/v1/email/link`, expires (approvals after 24 hours,
+  everything else after 7 days) and lands where sign-in and step-up apply. No email takes an action by reply.
+- The footer's link turns off that one kind for that one team, with no sign-in: the page asks ("Stop … emails?"), and its button turns
+  it off (a mail scanner opening the link changes nothing). Mail clients get `List-Unsubscribe` and one-click
+  unsubscribe.
+- Only people who are still members get emails; removing a member, or signing them out everywhere, deletes their
+  addresses. Codes are capped at 10 a day per person, and wrong codes at 20 a day. The sink's secret name must
+  start with `EMAIL_`.
+- Set `AGENT_TEAM_PUBLIC_URL` (where the links point) and `AGENT_TEAM_STUDIO_URL` (where they land).
+- The copy is in `email.mjs`, and every delivery is logged in `email_deliveries`. Providers sit behind one interface,
+  `send(message) -> { id }`, and `resend` is the first.
+
+**Message people in Slack** (PRD 6.8, phase 4). A `slack` sink connects the team to one Slack workspace. Its bot token
+and its sign-in client secret live in the vault, and the sink holds only their names. Until the token is stored,
+nothing is posted. This works the same way in local mode.
+
+```sh
+curl -X PUT -H "authorization: Bearer $T" -H "x-step-up: $SU" -H 'content-type: application/json' -d '{"value":"xoxb-…"}' localhost:4849/v1/secrets/SLACK_BOT_TOKEN
+curl -X PUT -H "authorization: Bearer $T" -H "x-step-up: $SU" -H 'content-type: application/json' -d '{"value":"<client secret>"}' localhost:4849/v1/secrets/SLACK_CLIENT_SECRET
+curl -X POST -H "authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"format":"slack","secret":"SLACK_BOT_TOKEN","clientId":"1234567890.1234567890","clientSecret":"SLACK_CLIENT_SECRET"}' \
+  localhost:4849/v1/teams/my-team/sinks
+```
+
+The Slack app needs one bot scope, `chat:write`. It also needs Sign in with Slack (`openid` and `profile`) with the
+redirect URL `$AGENT_TEAM_STUDIO_URL/slack/callback`. It has no interactivity and no request URL.
+
+- **DMs.** DMs are per person and opt-in. A person presses Connect Slack (`POST …/slack/connect` returns the sign-in
+  URL). Slack sends them back to the Studio's `/slack/callback`, which posts `{ code, state }` to `POST …/slack/link`
+  with their session. The state only works for that same person and team, and only for 10 minutes. The Slack
+  account must be in the team's workspace. They then choose kinds with `PATCH …/slack/me`, and the first DM says
+  what they will get. `DELETE …/slack/me` stops all their DMs.
+- **Channels.** An owner or admin picks channels with `POST …/slack/channels` and `{ channel, name, kinds? }`. The
+  bot must be in the channel. Kinds default to the two budget kinds and minutes; approval and BLOCKED start off.
+  Channel posts leave out recommendations and meeting decisions.
+- **Messages.** Every message has the notification text, at most four lines, exactly one link button into the Studio
+  (through `/v1/email/link`, with the same expiry as email), and a context line. Nothing can be approved or answered
+  from Slack. In a DM, "Turn off these messages" opens the same ask-first page as email, under `/v1/slack/unsubscribe`.
+- **Failures.** When a DM fails, it goes by email instead to that person's verified addresses for the team.
+  `GET …/slack` returns the health line (`working`, or `failing` since a time). A post that can never work, for
+  example because the bot was removed from the channel, is logged and skipped so it doesn't hold up the rest.
+- **Who gets messages.** Only people who are still members get DMs. Removing a member, or signing them out
+  everywhere, deletes their Slack link. Every try is logged in `slack_deliveries`, and the copy is in `slack.mjs`.
+
 ## Read it
 
 | Call | What it gives |
@@ -177,17 +236,34 @@ OpenID-Certified library: `identity.mjs` holds its storage adapter and our polic
   it: a viewer reads, an editor chats and runs, an approver answers approvals and cards, an admin manages teams,
   budgets, runners, tokens, secrets and members, an owner makes owners. Every route a person can call is listed with
   its minimum, `api-v1.yaml` states the same as `x-min-role` (a test checks they agree), and an unlisted route is
-  refused. Step-up never lifts a role: a viewer with a fresh `su_` still cannot approve.
+  refused. Step-up never lifts a role: a viewer with a fresh `su_` still cannot approve. Cards add a role per kind:
+  approval and decision cards need an approver, a budget card (or any new kind) an admin.
 - **Members and invitations** (`members.mjs`). `GET /v1/members`, `PATCH`/`DELETE /v1/members/{id}`, and
   `GET`/`POST`/`DELETE /v1/invitations` (`{ github: login or id, role }`; the login is resolved to its numeric id
   once). Changes need step-up and are audited. Only an owner makes or removes an owner, and nobody removes or demotes
   the last one. Membership is read on every request, so a removed member is refused on their next one; a person left
   in no workspace is signed out everywhere, app tokens included.
+- **Security notices.** `GET /v1/me` lists the person's own security changes of the last 30 days (`notices`: a
+  passkey added or removed, a flagged sign count, a lockout, sessions ended, a role changed or removed), until the
+  notifications channel delivers them.
 - **The admin token is retired** once anyone owns the deployment (401, `admin-token-retired`). The host's way back in
   when no owner can sign in is `agent-team-server admin reset-owner <github-user-id>` (on Fly:
   `fly ssh console -C "agent-team-server admin reset-owner 1234"`), an owner invitation valid for one day.
 
-Still to come (order 2): bearer tokens from the apps on `/v1`, and the `oidc-conformance` CI job.
+- **Apps on `/v1`** (`dpop.mjs`). An app sends `Authorization: DPoP <access token>` and a `DPoP` proof for each
+  request (RFC 9449), signed by the device key its token is bound to: this method and URL, a fresh `iat`, `ath` of
+  this token, a `jti` used once. The token is oidc-provider's (`AccessToken.find`); the proof is checked with `jose`,
+  the library oidc-provider uses for its own. Roles apply as for the web. Passkeys are added and removed on the web;
+  an app may step up with one. Removing a person's last membership revokes their app tokens at once.
+
+- **OpenID conformance** (`conformance/`, CI job `oidc-conformance`). The OpenID Foundation's suite runs its Basic
+  OP plan (code flow, ID token, userinfo, prompt, max_age, code reuse, redirect checks, PKCE S256, refresh token
+  rotation) and Config OP plan against this issuer on every PR. `conformance/op.mjs` starts the real issuer on https
+  with a stand-in GitHub; it alone switches on client registration, so the suite can register its own confidential
+  clients, and asks PKCE of public clients only (every deployment client is public). Run it on a laptop with docker:
+  `npm ci && conformance/run.sh`. Accepted deviations, each with its reason, live in `conformance/expected-failures.json`.
+  The issuer has two signing keys, rotated together: P-256 (ES256, which every client of ours is pinned to) and
+  RSA-2048 (RS256, offered for ID tokens only, because OpenID Connect requires every OP to support it).
 
 ## Host it in another server
 

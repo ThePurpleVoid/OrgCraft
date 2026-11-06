@@ -195,3 +195,45 @@ export async function withStepUp(why, method, path, body) {
 }
 
 export { esc };
+
+// ---- security notices (S5): the person's own security changes, shown on the next visit until email delivers them
+
+/** One notice in words: "A passkey "Work laptop" was added on 6 Nov, 05:42." */
+export function noticeText(n) {
+  const when = (() => { const d = new Date(n.at); return Number.isNaN(+d) ? '' : ` on ${d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`; })();
+  const key = n.name ? `A passkey "${n.name}"` : 'A passkey';
+  const where = n.tenant ? ` in ${n.tenant}` : '';
+  return ({
+    'passkey.added': `${key} was added${when}.`,
+    'passkey.removed': `${key} was removed${when}.`,
+    'passkey.sign-count-flagged': `${key} was used in a way that suggests it may have been copied${when}. Remove it if you are not sure.`,
+    'step-up.locked': `Confirming it is you was locked after too many failed tries${when}.`,
+    'sessions.ended': `Your signed-in sessions were ended${when}.`,
+    'member.role-changed': `Your role${where} changed${n.role ? ` to ${n.role}` : ''}${when}.`,
+    'member.removed': `You were removed${where ? ` from${where.slice(3)}` : ' from a workspace'}${when}.`,
+  })[n.action] ?? `Your account changed (${n.action})${when}.`;
+}
+
+const SEEN = 'agent-team-notices-seen';
+/** The notices newer than the last one this browser dismissed, newest first. */
+export function unseenNotices(me, storage = globalThis.localStorage) {
+  let seen = '';
+  try { seen = storage?.getItem(SEEN) ?? ''; } catch { /* private mode: show them all */ }
+  return (me?.notices ?? []).filter((n) => !seen || n.at > seen);
+}
+/** Marks every current notice as seen in this browser. */
+export function dismissNotices(me, storage = globalThis.localStorage) {
+  const newest = (me?.notices ?? []).reduce((m, n) => (n.at > m ? n.at : m), '');
+  try { if (newest) storage?.setItem(SEEN, newest); } catch { /* private mode */ }
+}
+/** The banner, or '' when there is nothing new. Its button has id notices-ok. */
+export function noticesBanner(me, storage) {
+  const list = unseenNotices(me, storage);
+  if (!list.length) return '';
+  return `<section class="notices notice" role="status" aria-label="Changes to your account">
+    <p><strong>Changes to your account</strong></p>
+    <ul>${list.map((n) => `<li>${esc(noticeText(n))}</li>`).join('')}</ul>
+    <p class="hint">If you did not do this, remove any passkey you do not recognise below, then sign out.</p>
+    <button type="button" id="notices-ok">Got it</button>
+  </section>`;
+}

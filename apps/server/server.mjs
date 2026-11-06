@@ -22,6 +22,9 @@ import { createBus } from './bus.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
+import { appCaller } from './dpop.mjs';
+import { PROVIDERS, createEmail, page } from './email.mjs';
+import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 
 /** The bus hears every stored event (deliveries) and run and approval changes (stops, results). */
 function wireBus(m3, bus) {
@@ -34,6 +37,7 @@ const { Problem } = store;
 const REPORTS_PER_MINUTE = 30;
 
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const NOTICE_ACTIONS = ['passkey.added', 'passkey.removed', 'passkey.sign-count-flagged', 'step-up.locked', 'sessions.ended', 'member.role-changed', 'member.removed'];
 
 /** The JSON body for a Problem: { error }, plus RFC 9457 type, title and status when it has a type, plus any body
  *  it carries (a 409 for a changed card carries the current card itself, as api-v1.yaml says). */
@@ -68,6 +72,8 @@ function readRaw(req, limit = MAX_BODY) {
   });
 }
 
+const readText = async (req, limit) => (await readRaw(req, limit)).toString('utf8');
+
 async function readJson(req, limit) {
   if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new Problem(415, 'send JSON (content-type: application/json)');
   const raw = await readRaw(req, limit);
@@ -98,7 +104,7 @@ export function createControlPlane(opts) {
   const m3 = opts.m3 ?? createM3({ db: opts.db, now: opts.now, publicUrl: opts.publicUrl });
   let runners = null;
   // The bus: what wakes whom, and sending it to runners (m3-design sections 2 to 4, 7).
-  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl });
+  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl, meetingTurnMinutes: opts.meetingTurnMinutes });
   wireBus(m3, bus);
   // Runners connect here over a WebSocket (runner-protocol.md).
   runners = attachRunners(server, { db: opts.db, ops: bus.ops, welcome: bus.welcome, onLost: bus.onLost, ...(opts.runnerOptions ?? {}) });
@@ -120,12 +126,17 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {} }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
   const passkeys = identity ? createPasskeys({ db, m3, origin: identity.origin, now }) : null;
   const members = identity ? createMembers({ db, lookup: identity.lookup, endSessions: (p) => identity.endSessions(p), requireStepUp: passkeys.requireStepUp, now }) : null;
+  const emailProviders = emailOpts.providers ?? PROVIDERS;
+  const email = createEmail({ db, key, publicUrl, providers: emailProviders, readSecret: store.readSecret, now, fetch: emailOpts.fetch ?? fetch });
+  const studioUrl = String(emailOpts.studioUrl ?? publicUrl ?? '').replace(/\/+$/, '');
+  // "Connect Slack" sends a person back to this Studio page, which posts { code, state } with their session.
+  const slack = createSlack({ db, key, publicUrl, redirectUri: studioUrl ? `${studioUrl}/slack/callback` : '', providers: slackOpts.providers ?? SLACK_PROVIDERS, readSecret: store.readSecret, now, fetch: slackOpts.fetch ?? fetch });
   let tickMisses = [];
   const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl });
   if (!givenBus) wireBus(m3, bus);
@@ -146,7 +157,17 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
 
   /** Who is calling: the admin token, or (hosted) a signed-in person's cookie. `tenant` is null for a person who is
    *  not a member of this server's workspace: they can read /v1/me and nothing else. */
-  const person = async (req) => {
+  const person = async (req, path) => {
+    // An app (iPhone, Android, the CLI): its device-bound access token and a DPoP proof for this request (S3).
+    if (identity && /^DPoP /.test(req.headers.authorization ?? '')) {
+      const app = await appCaller({ db, provider: identity.provider, origin: identity.origin, now }, req, path);
+      const [p] = await db.system('select login, name from people where id = $1', [app.person]);
+      if (!p) throw new Problem(401, 'app token refused: no such person', { type: 'unauthenticated' });
+      const workspaces = await identity.workspaces(app.person);
+      const here = workspaces.find((w) => w.tenant === tenant);
+      // No cookie session: authTime is null, so nothing that trusts a recent sign-in (a first passkey) is open to apps.
+      return { tenant: here ? tenant : null, principal: app.person, via: 'app', role: here?.role ?? null, client: app.client, session: { person: app.person, login: p.login, name: p.name, authTime: null, session: null }, workspaces };
+    }
     const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? '');
     // D6: a session's token acts for a role, never for a person (approvals, cards, runs, budgets, step-up).
     if (m && /^st_/.test(m[1])) throw new Problem(403, 'a session token cannot act for a person');
@@ -288,11 +309,23 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
 
     if (a === 'health' && m === 'GET') return send(res, 200, { ok: true, db: db.kind });
 
+    // Email links (no sign-in): the signed token is the proof. Unsubscribe turns off one kind for one team (D54).
+    if (a === 'email' && !b) return emailPage(req, res, url, team);
+    // The same for Slack DMs: "Turn off these messages" (D60), with the same ask-first page.
+    if (a === 'slack' && !b && (team === 'unsubscribe' || team === 'resubscribe')) return noticePage(req, res, url, team, SLACK_WORDS);
+
     // The kit's reports: the same body and answer as the hosted board, so only TEAM_REPORT_URL changes.
     if (a === 'teams' && b === 'reports' && !c && m === 'POST') {
       const t = await store.authReport(db, team, req.headers['x-team-token']);
       if (!t) throw new Problem(401, 'a valid x-team-token for this team is required');
       const body = await readJson(req, 64 * 1024);
+      // A publish from the repository's CI (report.mjs published): team.published, once per commit.
+      if (body?.kind === 'published') {
+        if (limited(team, ':published')) throw new Problem(429, `more than ${REPORTS_PER_MINUTE} publishes a minute`);
+        const { id, stored, duplicate } = await store.appendPublished(db, t, team, body, now());
+        appended(team, stored);
+        return send(res, 200, { ok: true, id, duplicate });
+      }
       const role = String(body?.role ?? '').toLowerCase();
       if (limited(team, role)) throw new Problem(429, `more than ${REPORTS_PER_MINUTE} reports a minute from ${role}`);
       const { id, stored } = await store.appendReport(db, t, team, body, now());
@@ -334,7 +367,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return send(res, 200, identity.caller(req));
     }
 
-    const who = await person(req);
+    const who = await person(req, url.pathname);
     if (a === 'me' && !team && m === 'GET') return send(res, 200, await meView(who));
     if (passkeys && ((a === 'me' && team === 'passkeys') || (a === 'auth' && team === 'step-up'))) {
       // A retry after a lost answer replays it (the challenge is single use, so running it again would fail).
@@ -344,7 +377,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     // A member elsewhere only: nothing here shows which teams exist (spec section 4).
     if (!who.tenant) throw new Problem(404, 'not found');
     // Roles on every route (roles.mjs): a route without a listed role is refused, so none ships unguarded.
-    if (who.via === 'cookie') {
+    if (who.via !== 'admin') {
       const min = minRole(m, url.pathname.slice(3));
       if (!min) throw new Problem(404, 'not found');
       if (!atLeast(who.role, min)) throw new Problem(403, `this needs the ${min} role or above; you are ${who.role}`, { type: 'forbidden' });
@@ -365,14 +398,17 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return send(res, 201, await passkeys.stepUp(mustBePerson(who), body.webauthn), {}, { secrets: ['token'] });
     }
     if (a === 'me' && !b && m === 'GET') return send(res, 200, await passkeys.list(mustBePerson(who)));
-    if (a === 'me' && b === 'options' && !c && m === 'GET') return send(res, 200, await passkeys.registrationOptions(mustBePerson(who)));
-    if (a === 'me' && !b && m === 'POST') return send(res, 201, await passkeys.register(mustBePerson(who), await readJson(req, 64 * 1024), step));
-    if (a === 'me' && b && !c && m === 'DELETE') return send(res, 200, await passkeys.remove(mustBePerson(who), b, step));
+    if (a === 'me' && b === 'options' && !c && m === 'GET') return send(res, 200, await passkeys.registrationOptions(mustBePerson(who, { web: true })));
+    if (a === 'me' && !b && m === 'POST') return send(res, 201, await passkeys.register(mustBePerson(who, { web: true }), await readJson(req, 64 * 1024), step));
+    if (a === 'me' && b && !c && m === 'DELETE') return send(res, 200, await passkeys.remove(mustBePerson(who, { web: true }), b, step));
     throw new Problem(404, 'not found');
   }
 
-  const mustBePerson = (who) => {
-    if (who.via !== 'cookie') throw new Problem(400, 'passkeys belong to a signed-in person, not the admin token');
+  /** Passkeys are a person's: never the admin token's. Adding or removing one is the web's (it needs a recent sign-in
+   *  or step-up in the browser); an app may list them and step up with one. */
+  const mustBePerson = (who, { web = false } = {}) => {
+    if (who.via === 'admin') throw new Problem(400, 'passkeys belong to a signed-in person, not the admin token');
+    if (web && who.via !== 'cookie') throw new Problem(403, 'add or remove passkeys in the Studio, signed in on the web', { type: 'forbidden' });
     return who;
   };
 
@@ -380,7 +416,54 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   async function meView(who) {
     if (who.via === 'admin') return { id: 'admin', login: null, name: 'Admin token', workspaces: [{ tenant, role: 'owner' }], passkeys: 0, authTime: null };
     const [{ n }] = await db.system('select count(*)::int as n from passkeys where person = $1', [who.principal]);
-    return { id: who.principal, login: who.session.login, name: who.session.name ?? who.session.login, workspaces: who.workspaces.map((w) => ({ tenant: w.tenant, role: w.role })), passkeys: Number(n), authTime: who.session.authTime };
+    // S5, until the notifications channel delivers them: the person's own security changes of the last 30 days, so the
+    // Studio can show "a passkey was added to your account" on their next visit.
+    const notices = await db.system(`select action, at, detail from identity_audit where person = $1 and at > now() - interval '30 days'
+      and action = any($2) order by at desc, id desc limit 20`, [who.principal, NOTICE_ACTIONS]);
+    return { id: who.principal, login: who.session.login, name: who.session.name ?? who.session.login, workspaces: who.workspaces.map((w) => ({ tenant: w.tenant, role: w.role })), passkeys: Number(n), authTime: who.session.authTime,
+      notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}) })) };
+  }
+
+  const html = (res, status, body, headers = {}) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'", ...headers }); res.end(body); };
+  async function emailPage(req, res, url, what) {
+    const t = url.searchParams.get('t') ?? '';
+    const m = req.method;
+    if (what === 'link' && m === 'GET') {
+      const target = email.linkTarget(t);
+      if (!target) return html(res, 400, page('This link is not valid', ['Open the Studio and find the item there.']));
+      if (target.expired) return html(res, 410, page('This link has expired', ['Links in team emails expire. Open the Studio and find the item there.'], studioUrl ? [{ label: 'Open the Studio', href: studioUrl + '/' }] : []));
+      res.writeHead(302, { location: studioUrl + target.path, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+      return res.end();
+    }
+    if (what === 'unsubscribe' || what === 'resubscribe') return noticePage(req, res, url, what, EMAIL_WORDS);
+    throw new Problem(404, 'not found');
+  }
+
+  // The words of the turn-off pages, per channel (CPO copy, D54 and D60).
+  const EMAIL_WORDS = { api: email, path: 'email', noun: 'emails', these: 'these emails', still: 'Other emails you turned on still arrive. Your address stays verified.', again: 'Other emails you turned on still arrive.', manage: 'Manage all emails' };
+  const SLACK_WORDS = { api: slack, path: 'slack', noun: 'Slack messages', these: 'these messages', still: 'Other messages you turned on still arrive. Slack stays connected.', again: 'Other messages you turned on still arrive.', manage: 'Manage all messages' };
+  async function noticePage(req, res, url, what, w) {
+    const t = url.searchParams.get('t') ?? '';
+    const m = req.method;
+    if (m !== 'GET' && m !== 'POST') throw new Problem(404, 'not found');
+    const on = what === 'resubscribe';
+    const self = (op) => `/v1/${w.path}/${op}?t=${encodeURIComponent(t)}`;
+    if (on && m !== 'POST') return html(res, 405, page('Use the button', [`Turn the ${w.noun} back on with the button on the confirmation page.`]), { allow: 'POST' });
+    // A GET only asks: mail scanners and link previews open links, and must not turn anything off (security review). The button POSTs.
+    if (m === 'GET') {
+      const p = await w.api.peekToken(t);
+      if (!p) return html(res, 400, page('This link is not valid', [`Manage your ${w.noun} in the Studio.`]));
+      if (url.searchParams.get('keep') === '1') return html(res, 200, page('Nothing changed', [`You still get ${w.these}.`]));
+      return html(res, 200, page(`Stop "${p.label}" ${w.noun} for ${p.teamName}?`, [w.still],
+        [{ label: `Turn off ${w.these}`, href: self('unsubscribe'), post: true }, { label: 'Keep getting them', href: `${self('unsubscribe')}&keep=1`, secondary: true }]));
+    }
+    const r = await w.api.fromToken(t, on);
+    if (!r) return html(res, 400, page('This link is not valid', [`Manage your ${w.noun} in the Studio.`]));
+    // A mail client's one-click unsubscribe (RFC 8058) only needs a 200.
+    if (!on && w === EMAIL_WORDS && /List-Unsubscribe=One-Click/.test(await readText(req, 1024))) return html(res, 200, page('Unsubscribed', []));
+    const settings = studioUrl ? [{ label: w.manage, href: `${studioUrl}/teams/${encodeURIComponent(r.team)}/notifications`, secondary: true }] : [];
+    if (on) return html(res, 200, page(`You will get "${r.label}" ${w.noun} for ${r.teamName} again`, [w.again], [{ label: 'Turn them off', href: self('unsubscribe'), post: true, secondary: true }, ...settings]));
+    return html(res, 200, page(`You won't get "${r.label}" ${w.noun} for ${r.teamName}`, [w.still], [{ label: 'Turn it back on', href: self('resubscribe'), post: true }, ...settings]));
   }
 
   async function personRoute(req, res, who, url, parts) {
@@ -416,7 +499,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (a === 'runs' && team && b && !c && m === 'POST') return send(res, 200, await did(m3.controlRun(t, team, b, me, { stepUp })));
     if (a === 'approvals' && team && !b && m === 'POST') return send(res, 200, await did(m3.decideApproval(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
     if (a === 'cards' && team && !b && m === 'GET') return send(res, 200, await m3.getCard(t, team));
-    if (a === 'cards' && team && !b && m === 'POST') return send(res, 200, await did(m3.answerCard(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
+    if (a === 'cards' && team && !b && m === 'POST') return send(res, 200, await did(m3.answerCard(t, team, await readJson(req, 16 * 1024), me, { stepUp, role: who.role })));
     if (a === 'runners' && team === 'codes' && !b && m === 'POST') {
       const body = req.headers['content-type'] ? (await readJson(req, 16 * 1024)) ?? {} : {};
       await m3.requireStepUp(t, me, stepUp, 'Adding a runner');
@@ -440,6 +523,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         const body = await readJson(req, 2 * 1024 * 1024);
         const events = Array.isArray(body?.events) ? body.events : null;
         if (!events || events.length > 500) throw new Problem(400, 'send { events: [...] }, at most 500');
+        // A merge and its preview are the runner's word only (G-12 security): a Ready to try card links nothing else.
+        if (events.some((e) => /^proposal\./.test(String(e?.type ?? '')))) throw new Problem(403, 'proposal events come only from a runner, over its WebSocket', { type: 'forbidden' });
         const stored = await did(m3.appendEvents(t, team, events));
         const sent = new Set(events.map((e) => e?.id));
         const mine = stored.filter(({ id }) => sent.has(id));
@@ -450,6 +535,9 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
       if (b === 'runs' && !c && m === 'POST') return send(res, 201, await did(m3.startRun(t, team, (await readJson(req, MAX_BODY)) ?? {}, me)));
+      if (b === 'meetings' && !c && m === 'GET') return send(res, 200, { meetings: await bus.meetings.list(t, team) });
+      if (b === 'meetings' && !c && m === 'POST') return send(res, 201, await did(bus.meetings.start(t, team, (await readJson(req, 16 * 1024)) ?? {}, me)));
+      if (b === 'meetings' && c && !parts[5] && m === 'GET') return send(res, 200, await bus.meetings.get(t, team, c));
       if (b === 'chat' && !c && m === 'GET') return send(res, 200, await m3.getChat(t, team, Object.fromEntries(url.searchParams)));
       if (b === 'chat' && !c && m === 'POST') {
         const { created, event } = await did(m3.postChat(t, team, await readJson(req, 64 * 1024), me));
@@ -464,6 +552,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         const { seq, ...body } = await store.board(db, t, team, { days, role, now: now() });
         return send(res, 200, body, { etag: tag });
       }
+      // The rollout view after a publish merges (demo step 17): which roles have picked up the new team version.
+      if (b === 'rollout' && !c && m === 'GET') return send(res, 200, await store.rollout(db, t, team, { version: url.searchParams.get('version') ?? '', publishedAt: url.searchParams.get('publishedAt') ?? '', now: now() }));
       if (b === 'report-tokens' && !c && m === 'POST') {
         const tok = await store.mintReportToken(db, t, team);
         const base = publicUrl || `http://${req.headers.host}`;
@@ -471,7 +561,32 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       }
       if (b === 'report-tokens' && c && m === 'DELETE') { await store.revokeReportToken(db, t, team, c); return send(res, 200, { ok: true }); }
       if (b === 'sinks' && !c && m === 'GET') return send(res, 200, { sinks: await store.listSinks(db, t, team) });
-      if (b === 'sinks' && !c && m === 'POST') { const s = await store.addSink(db, t, team, (await readJson(req, 16 * 1024)) ?? {}); sinks?.wake(); return send(res, 201, s); }
+      if (b === 'sinks' && !c && m === 'POST') { const s = await store.addSink(db, t, team, (await readJson(req, 16 * 1024)) ?? {}, { providers: Object.keys(emailProviders) }); sinks?.wake(); return send(res, 201, s); }
+      // A person's own email addresses for this team (PRD 6.8 O7): add, verify with a code, choose kinds, remove.
+      if (b === 'emails') {
+        const d = parts[5];
+        if (!c && m === 'GET') return send(res, 200, await email.list(t, team, me));
+        if (!c && m === 'POST') return send(res, 201, await email.add(t, team, me, await readJson(req, 4 * 1024)));
+        if (c && d === 'verify' && m === 'POST') return send(res, 200, await email.verify(t, team, me, c, await readJson(req, 4 * 1024)));
+        if (c && !d && m === 'PATCH') return send(res, 200, await email.setKinds(t, team, me, c, await readJson(req, 4 * 1024)));
+        if (c && !d && m === 'DELETE') return send(res, 200, await email.remove(t, team, me, c));
+      }
+      // Slack (CPO story "Slack notifications"): a person's own DMs, and the channels an admin picks.
+      if (b === 'slack') {
+        const d = parts[5];
+        if (!c && m === 'GET') return send(res, 200, await slack.status(t, team, me));
+        if (c === 'connect' && !d && m === 'POST') return send(res, 200, await slack.connect(t, team, me));
+        if (c === 'link' && !d && m === 'POST') return send(res, 201, await slack.link(t, team, me, await readJson(req, 4 * 1024)));
+        if (c === 'me' && !d && m === 'PATCH') return send(res, 200, await slack.setKinds(t, team, me, await readJson(req, 4 * 1024)));
+        if (c === 'me' && !d && m === 'DELETE') return send(res, 200, await slack.unlink(t, team, me));
+        if (c === 'channels' && !d && m === 'GET') return send(res, 200, await slack.channels(t, team));
+        if (c === 'channels' && !d && m === 'POST') {
+          const name = who.session?.name ?? who.session?.login ?? (who.via === 'admin' ? 'The admin' : '');
+          return send(res, 201, await slack.addChannel(t, team, { principal: me, name }, await readJson(req, 4 * 1024)));
+        }
+        if (c === 'channels' && d && m === 'PATCH') return send(res, 200, await slack.setChannelKinds(t, team, d, await readJson(req, 4 * 1024)));
+        if (c === 'channels' && d && m === 'DELETE') return send(res, 200, await slack.removeChannel(t, team, d));
+      }
       if (b === 'sinks' && c && m === 'DELETE') { await store.removeSink(db, t, team, c); return send(res, 200, { ok: true }); }
     }
     if (members && a === 'members' && !b) {

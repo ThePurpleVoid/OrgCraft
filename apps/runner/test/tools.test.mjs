@@ -8,8 +8,8 @@ const ctx = { role: 'web-dev', frontDoor: false, frontDoorRole: 'chief-of-staff'
 const ok = (name, input, c = ctx) => { const r = checkTool(name, input, c); assert.equal(r.problems, undefined, `${name}: ${r.problems}`); return r.input; };
 const no = (name, input, re, c = ctx) => { const r = checkTool(name, input, c); assert.ok(r.problems, `${name} should be refused`); assert.match(r.problems.join(' | '), re); };
 
-test('the seven tools of tools/1, and nothing else', () => {
-  assert.deepEqual(Object.keys(TOOLS).sort(), ['ask_owner', 'blocked', 'bug', 'handoff', 'report', 'request_approval', 'signoff']);
+test('the seven tools of tools/1 and the three meeting tools, and nothing else', () => {
+  assert.deepEqual(Object.keys(TOOLS).sort(), ['ask_owner', 'blocked', 'bug', 'handoff', 'meeting_close', 'meeting_reply', 'meeting_start', 'ready_to_try', 'report', 'request_approval', 'signoff']);
   no('merge', {}, /no team tool called merge/);
 });
 
@@ -70,4 +70,32 @@ test('request_approval', () => {
   ok('request_approval', { action: 'deploy-production', call: 'deploy.sh --production', why: 'QA signed off', risk: 'medium', links: ['https://github.com/o/r/pull/57'] });
   ok('request_approval', { action: 'something-new', call: 'x', why: 'y' }, ctx);
   no('request_approval', { action: 'accept', why: 'merge it' }, /call/);
+});
+
+test('meeting_reply and meeting_close', () => {
+  ok('meeting_reply', { meeting: 'mtg_01abc', text: 'Built the cart.' });
+  no('meeting_reply', { meeting: 'standup', text: 'x' }, /meeting id/);
+  no('meeting_reply', { meeting: 'mtg_1', text: ' ' }, /required/);
+  ok('meeting_close', { meeting: 'mtg_1', minutes: 'm', actionItems: [{ to: 'qa-web', task: 'Test it', doneWhen: 'signed off' }], decisions: [{ question: 'Ship?', options: [{ id: 'yes', label: 'Yes', consequence: 'It ships.' }, { id: 'no', label: 'No', consequence: 'It waits.' }], recommended: 'yes' }] });
+  no('meeting_close', { meeting: 'mtg_1', minutes: 'm', actionItems: [{ to: 'web-dev', task: 't', doneWhen: 'd' }] }, /never to yourself/);
+  no('meeting_close', { meeting: 'mtg_1', minutes: 'm', actionItems: [{ to: 'qa-web', task: 't' }] }, /doneWhen/);
+  no('meeting_close', { meeting: 'mtg_1', minutes: 'm', decisions: [{ question: 'q', options: [{ id: 'a', label: 'A', consequence: 'c' }, { id: 'b', label: 'B', consequence: 'c' }], recommended: 'z' }] }, /recommended/);
+});
+
+test('ready_to_try: the front door only, and no link from the model', () => {
+  const door = { frontDoor: true, role: 'chief-of-staff', roster: ['chief-of-staff', 'web-dev'] };
+  ok('ready_to_try', { pr: 12, title: 'Checkout retries', summary: 'Payments retry once on a timeout.' }, door);
+  no('ready_to_try', { pr: 12, title: 'x', summary: 'y' }, /Only the front door/);
+  no('ready_to_try', { pr: 0, title: 'x', summary: 'y' }, /pr/, door);
+  no('ready_to_try', { pr: 12, title: 'x'.repeat(121), summary: 'y' }, /title/, door);
+  assert.equal(ok('ready_to_try', { pr: 12, title: 'x', summary: 'y', url: 'https://evil.example' }, door).url, undefined, 'a link from the model is dropped');
+});
+
+test('meeting_start: the front door only', () => {
+  const door = { ...ctx, role: 'chief-of-staff', frontDoor: true };
+  ok('meeting_start', { title: 'Checkout errors', attendees: ['web-dev', 'qa-web'] }, door);
+  ok('meeting_start', { title: 'Checkout errors', attendees: ['web-dev'], cap: { amount: 50, currency: 'USD' } }, door);
+  no('meeting_start', { title: 'x', attendees: ['web-dev'] }, /Only the front door/);
+  no('meeting_start', { title: 'x', attendees: ['nobody'] }, /not a role/, door);
+  no('meeting_start', { title: 'x', attendees: [] }, /at least one/, door);
 });

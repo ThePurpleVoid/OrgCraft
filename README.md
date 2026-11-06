@@ -15,6 +15,23 @@ Owner
    └─ cfo, general-counsel, coo        finance, legal, compliance, strategy, team ops (dormant until needed)
 ```
 
+## Lightest setup: just the agent files
+
+You don't need the Studio, the control plane or the runner. The kit works as plain files in your repository, with Claude Code (or another coding agent) doing the work on your own machine:
+
+```sh
+cd ~/code/my-app
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.18.0 init --preset engineering --project "My App" --owner "Sam" --subagents
+```
+
+That writes the role briefs and protocols to `docs/team/`, the report and gate scripts to `scripts/agent-team/`, one subagent per active role to `.claude/agents/`, and your project layer to `.agent-team/`. Nothing runs in the background and nothing is sent anywhere. Paste `docs/team/project-instructions.md` (below its line) into `CLAUDE.md`, then open Claude Code in the repository and say:
+
+> You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me.
+
+To use another coding agent that reads `AGENTS.md`, add `"targets": ["claude-code", "agents-md"]` to `.agent-team/team.json` and run `scripts/agent-team/sync.sh` (see [other coding agents](docs/other-coding-agents.md)).
+
+The dashboard, the Studio (the visual team editor), the control plane and the runner are optional add-ons, described below. Add them when you want them.
+
 ## Why
 
 Give one agent a big task and it does everything at once, badly. Give ten agents the same task and they trip over each other. The kit adds the parts a real team relies on:
@@ -31,11 +48,11 @@ Give one agent a big task and it does everything at once, badly. Give ten agents
 
 The kit is a dependency, not a template. Your repository keeps only what is specific to it, in `.agent-team/`; the briefs, protocols and scripts are generated from a pinned kit version. Improve the kit once and every team picks it up on the next sync.
 
-Requirements: git and Node 18+, plus bash and `jq` for the merge gate and locks (Git Bash or WSL on Windows; see [docs/windows.md](docs/windows.md)). Claude Code with project threads (claude.ai) or the CLI.
+Requirements: git and Node 18+. The merge gate, locks and reporter also run without bash; only `team-board.sh`, `janitor.sh` and bash-function gates need it (see [docs/windows.md](docs/windows.md)). Claude Code with project threads (claude.ai) or the CLI.
 
 ```sh
 cd ~/code/my-app
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.15.0 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.18.0 init --preset engineering --project "My App" --owner "Sam" --timezone "America/Los_Angeles"
 ```
 
 Or start from a team template: `agent-team templates` lists them (Startup product team, Customer support team, Content studio), and `init --template customer-support-team --project "My Shop"` makes that team, with its custom agents, areas, meeting and suggested systems. See [team templates](docs/customizing.md#start-from-a-team-template).
@@ -45,7 +62,7 @@ Then:
 1. Edit `docs/team/ownership.md` so the paths match your layout.
 2. Edit the gates and hardware pools in `.agent-team/config.sh`.
 3. Paste `docs/team/project-instructions.md` into your Claude project's instructions (or into `CLAUDE.md`).
-4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI. `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.15.0 doctor` smoke-tests the whole setup.
+4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI ([the CI snippet](docs/customizing.md#ci) also tells a hosted control plane when a team change reaches main). `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.18.0 doctor` smoke-tests the whole setup.
 5. Open the chief of staff: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."*
 6. Ask for something. Watch it live with `node scripts/agent-team/dashboard.mjs` (a web dashboard at http://localhost:4747) or `scripts/agent-team/team-board.sh` in the terminal.
 
@@ -143,7 +160,7 @@ tests/                          tests for the CLI, scripts and tools, smoke scen
 ## Build the team visually: Agent Team Studio
 
 ```sh
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.15.0 studio --open   # opens http://localhost:4848/?t=<launch token>
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.18.0 studio --open   # opens http://localhost:4848/?t=<launch token>
 ```
 
 Switch roles on and off from the library, drag a card onto another to change who it reports to, and set each role's model tier, status and duties in the inspector. **Flow** shows who hands work to whom. In **Systems**, add your database, hosting or any MCP server and drag it onto the roles that may use it. **Owned areas** and **Checks** are suggested from your repository's folders and build files. The kit's rules run on every change. **Publish** shows every file that would change, then commits the team and its generated files on a new branch. It can also push that branch and open a pull request for review: with the GitHub CLI (`gh`) signed in on your machine, the Studio opens the pull request itself; without it, you get the branch and a link to open one. The pull request's body is the publish's change-safety plan. The Studio uses only your machine's own git and gh sign-in, and never force-pushes.

@@ -47,6 +47,8 @@ export function toRow(b, now = new Date()) {
     pr: int(b.pr),
     branch: text(b.branch, 200),
     commit: text(b.commit, 40),
+    // The team version the role's checkout runs: the last commit that changed .agent-team (report.mjs fills it).
+    team_version: /^[0-9a-f]{7,40}$/.test(String(b.team_version ?? '')) ? String(b.team_version) : null,
     platform: text(b.platform, 20),
     to_role: to,
     severity: severity && severity <= 4 ? severity : null,
@@ -78,10 +80,11 @@ export function summarize(rows, { now = new Date(), days = 7, role = '', staleMi
   const limits = { ...STALE_MINUTES, ...staleMinutes };
   const t = now.getTime();
   const key = (r) => `${r.role}#${r.instance ?? ''}`;
-  const lastAny = new Map(), lastStatus = new Map(), lastMsg = new Map(), hooked = new Set();
+  const lastAny = new Map(), lastStatus = new Map(), lastMsg = new Map(), hooked = new Set(), lastVersion = new Map();
   for (const r of rows) {
     const k = key(r);
     lastAny.set(k, r.at);
+    if (r.team_version) lastVersion.set(k, { version: r.team_version, at: r.at });
     if (r.source === 'hook') hooked.add(k);
     if (r.status) lastStatus.set(k, r);
     if ((r.kind === 'handoff' || r.kind === 'blocked') && r.to_role) lastMsg.set(k, r);
@@ -98,6 +101,9 @@ export function summarize(rows, { now = new Date(), days = 7, role = '', staleMi
       stale: s.status in limits && t - Date.parse(last) > limits[s.status] * 60_000,
       // No hook event from this thread: it reports only for itself (another coding agent, or hooks off), so it can go quiet.
       self_reported: !hooked.has(k),
+      // The team version it last reported running (null from a kit before 0.16, or a report without git).
+      team_version: lastVersion.get(k)?.version ?? null,
+      team_version_at: lastVersion.get(k)?.at ?? null,
       waiting_on: (s.status === 'waiting' || s.status === 'blocked') && m && Date.parse(m.at) >= Date.parse(s.at) - 5000 ? m.to_role : null,
     });
   }

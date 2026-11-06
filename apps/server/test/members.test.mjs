@@ -118,12 +118,20 @@ test('members: removing one ends their access at once, and nobody removes or dem
   assert.equal((await admin.b.call('PATCH', `/members/${ids.eli}`, { role: 'owner' }, { 'x-step-up': await admin.su() })).status, 403);
   assert.equal((await admin.b.call('PATCH', `/members/${ids.eli}`, { role: 'viewer' })).status, 401, 'step-up first');
 
+  // Eli gets team emails (a verified address with a kind on) and Slack DMs: removing Eli removes those too (security review).
+  assert.equal((await boss.b.call('POST', '/teams', { id: 'web' })).status, 201);
+  await db.system(`insert into email_subscriptions(id, tenant, team, principal, email, kinds, verified_at)
+    select 'eml_eli', tenant, 'web', person, 'eli@example.com', '{approval}', now() from members where person = (select id from people where subject = '3003')`);
+  await db.system(`insert into slack_links(id, tenant, team, principal, slack_user, slack_workspace, kinds)
+    select 'slk_eli', tenant, 'web', person, 'U0ELI', 'T0WEB', '{approval}' from members where person = (select id from people where subject = '3003')`);
   // Removing Eli: the very next request is refused, and Eli is signed out everywhere (no other workspace).
   assert.equal((await editor.b.call('GET', '/teams')).status, 200);
   assert.equal((await admin.b.call('DELETE', `/members/${ids.eli}`, {}, { 'x-step-up': await admin.su() })).status, 200);
   assert.equal((await editor.b.call('GET', '/teams')).status, 401);
   assert.equal((await editor.b.call('GET', '/me')).status, 401);
   assert.equal((await db.system("select count(*)::int as n from person_sessions where person = (select id from people where subject = '3003') and revoked_at is null"))[0].n, 0);
+  assert.equal((await db.system("select count(*)::int as n from email_subscriptions where id = 'eml_eli'"))[0].n, 0);
+  assert.equal((await db.system("select count(*)::int as n from slack_links where id = 'slk_eli'"))[0].n, 0, 'and their Slack link');
   assert.deepEqual((await boss.b.call('GET', '/members')).body.members.map((m) => m.login).sort(), ['dana', 'octo']);
 
   // With a second owner, the first can step down.
@@ -149,4 +157,27 @@ test('the admin token is retired once someone owns the deployment; reset-owner o
   const b = browser({ ip: 'eli' });
   assert.equal(await b.signIn(), `${ORIGIN}/`);
   assert.equal((await b.call('GET', '/me')).body.workspaces[0].role, 'owner');
+}));
+
+test('each card kind has a least role: an approver answers a decision but not a budget card', () => issuer(async ({ gh, browser, server }) => {
+  gh.directory.push(dana);
+  const boss = await person(gh, browser, owner);
+  assert.equal((await boss.b.call('POST', '/teams', { id: 'web' })).status, 201);
+  const approver = await join(gh, browser, boss, dana, 'approver');
+  const card = (kind) => server.m3.tx('acme', (ctx) => server.m3.createCard(ctx, 'web', { kind, subject: `${kind}/1`, title: 'Choose', options: [{ id: 'a', label: 'A', style: 'primary', stepUp: false }, { id: 'b', label: 'B', style: 'secondary', stepUp: false }] }));
+  const { result: budget } = await card('budget');
+  const { result: decision } = await card('decision');
+  const refused = await approver.b.call('POST', `/cards/${budget.id}`, { option: 'a', version: 1 });
+  assert.equal(refused.status, 403);
+  assert.match(refused.body.error, /budget card needs the admin role/);
+  assert.equal((await approver.b.call('POST', `/cards/${decision.id}`, { option: 'a', version: 1 })).status, 200);
+  assert.equal((await boss.b.call('POST', `/cards/${budget.id}`, { option: 'a', version: 1 })).status, 200);
+}));
+
+test('GET /v1/me lists the person\'s own security changes (S5, until notifications deliver them)', () => issuer(async ({ gh, browser }) => {
+  const boss = await person(gh, browser, owner);
+  const notices = (await boss.b.call('GET', '/me')).body.notices;
+  assert.equal(notices[0].action, 'passkey.added');
+  assert.equal(notices[0].name, 'octo\'s laptop');
+  assert.match(notices[0].passkey, /^pk_/);
 }));

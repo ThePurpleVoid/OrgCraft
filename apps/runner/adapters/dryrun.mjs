@@ -6,7 +6,12 @@
 //   qa-signoff.json   { "evidence": [...], "walked": "...", "testedOn": "...", "result": "pass" } QA's SIGNOFF; the
 //                     QA role waits for it after its HANDOFF (step 6), then the file is used up
 //   spend.json        { "usd": 6 } the next turn reports that cost, then the file is used up (step 11)
+//   meeting-spend.json { "usd": 1 } the next attendee's meeting turn costs that and does not answer (the cap path)
 //
+// When the builder's merge lands it hands the PR to the front door, which tells the owner it is Ready to try (G-12).
+//
+// The front door also asks the owner one decision (step 7) and says what they chose when the answer comes. In a
+// meeting every role answers its turn and the facilitator closes it with minutes made of the replies.
 // Every step is written to the control folder's log.jsonl with the run and session ids.
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -33,17 +38,53 @@ export function dryrunAdapter({ control, qaRole = 'qa-web', frontDoor = 'chief-o
     // The front door: answers the owner and hands the request to the builder; tells the owner when it lands.
     [frontDoor]: async (t) => {
       const asked = request(t.prompt);
+      // G-15: "Web dev and QA web on the checkout errors, now" starts an ad hoc meeting with those roles.
+      const now = asked && /^(.+?)\s+on\s+(.+?),?\s+now\.?$/i.exec(asked.trim());
+      if (now) {
+        const who = now[1].toLowerCase();
+        const attendees = [builder().role, qaRole].filter((r) => who.includes(r) || who.includes(r.replace(/-/g, ' ')));
+        const topic = now[2].trim();
+        const r = await t.call('meeting_start', { title: topic.charAt(0).toUpperCase() + topic.slice(1), agenda: `What you know about ${topic}, and what you would do next.`, attendees });
+        t.say(r.isError ? `I could not start that meeting: ${r.text}` : `Starting a meeting now with ${attendees.join(' and ')} on ${topic}. The minutes will be here.`);
+        let meeting;
+        try { meeting = JSON.parse(r.text).meeting; } catch { /* refused: the text says why */ }
+        log(t, 'chief-of-staff:meeting-started', { attendees, meeting, ok: !r.isError, detail: r.isError ? r.text.slice(0, 300) : undefined });
+        return { usage: usage() };
+      }
       if (asked !== null) {
         const b = builder();
         const task = asked.split('\n')[0].slice(0, 200) || 'the owner\'s request';
         t.say(`On it. I'm handing this to ${b.role}: ${task}`);
+        // Step 7: one decision for the owner (a card they answer, from the phone too); the work goes on meanwhile.
+        const d = await t.call('ask_owner', { question: `Where should "${task.slice(0, 120)}" go?`, options: [
+          { id: 'home', label: 'On the home page', consequence: 'The change goes on the page everyone sees first.' },
+          { id: 'new-page', label: 'On a page of its own', consequence: 'The change gets its own page, linked from the menu.' },
+        ], recommended: 'home', why: 'Most visitors only see the home page.' });
+        log(t, 'chief-of-staff:asked', { ok: !d.isError, detail: d.isError ? d.text : undefined });
         const r = await t.call('handoff', { to: b.role, task, changed: 'nothing yet: a request from the owner, quoted below', verify: `the change in ${b.file} says what was asked`, doneWhen: 'merged after the owner approves it' });
         log(t, 'chief-of-staff:handoff', { to: b.role, ok: !r.isError, detail: r.isError ? r.text : undefined });
         return { usage: usage() };
       }
+      const answered = /The owner answered your question.*?: "([^"]*)"/.exec(t.prompt);
+      if (answered) {
+        t.say(`Noted: ${answered[1] === 'new-page' ? 'on a page of its own' : 'on the home page'}. I've passed it on.`);
+        log(t, 'chief-of-staff:answered', { answer: answered[1] });
+        return { usage: usage() };
+      }
       const [k, from] = kind(t.prompt);
       if (k === 'HANDOFF' && from) {
-        t.say(`${from} says it is done: ${/changed: (.*)/.exec(t.prompt)?.[1] ?? 'see the board'}.`);
+        const changed = /changed: (.*)/.exec(t.prompt)?.[1] ?? 'see the board';
+        const pr = Number(/\bpr: #?(\d+)/.exec(t.prompt)?.[1]);
+        // G-12: a merged change is "Ready to try"; the server adds the merge commit and the preview link itself.
+        if (/^merged: /.test(changed) && pr) {
+          const title = changed.slice('merged: '.length).slice(0, 120);
+          const r = await t.call('ready_to_try', { pr, title, summary: `${from} finished it and the owner approved the merge.` });
+          let out = {};
+          try { out = JSON.parse(r.text); } catch { /* refused: the text says why */ }
+          log(t, 'chief-of-staff:ready', { pr, card: out.card, preview: out.preview ?? null, ok: !r.isError, detail: r.isError ? r.text.slice(0, 300) : undefined });
+          return { usage: usage() };
+        }
+        t.say(`${from} says it is done: ${changed}.`);
         log(t, 'chief-of-staff:reported', { from });
       }
       return { usage: usage() };
@@ -81,11 +122,33 @@ export function dryrunAdapter({ control, qaRole = 'qa-web', frontDoor = 'chief-o
       } else if (k === 'SIGNOFF') {
         const r = await t.call('request_approval', { action: 'accept', call: `merge the pull request for: ${task}`, why: `${from} signed off` });
         log(t, 'builder:accept', { ok: !r.isError, detail: r.text.slice(0, 500) });
-        if (!r.isError) await t.call('handoff', { to: frontDoor, task, changed: `merged: ${task}`, verify: 'the base branch has the change', doneWhen: 'you tell the owner' });
+        let pr;
+        try { pr = JSON.parse(r.text.slice(0, r.text.indexOf('}') + 1)).pr; } catch { /* not merged: no PR to name */ }
+        if (!r.isError) await t.call('handoff', { to: frontDoor, task, changed: `merged: ${task}`, verify: 'the base branch has the change', doneWhen: 'you tell the owner', ...(pr ? { pr } : {}) });
       }
       return { usage: usage() };
     },
   };
+  // Meetings (written round): an attendee answers its turn; the facilitator writes the minutes from the replies.
+  const meeting = async (t) => {
+    const id = /\(meeting (mtg_[\w-]+)\)/.exec(t.prompt)?.[1];
+    if (!id) return null;
+    // meeting-spend.json { "usd": 1 }: this attendee's turn costs that much and ends before it answers (the cap path).
+    const blew = !/close this meeting/.test(t.prompt) && take('meeting-spend.json');
+    if (blew) { log(t, 'meeting:spent', { meeting: id, usd: blew.usd }); return { usage: { inputTokens: 1000, outputTokens: 200, costUsd: Number(blew.usd) } }; }
+    if (/close this meeting/.test(t.prompt)) {
+      const said = [...t.prompt.matchAll(/^- ([a-z0-9][\w#-]*), verbatim:\n {2}> (.*)$/gm)].map((x) => `${x[1]}: ${x[2]}`);
+      const capped = /cost cap/.test(t.prompt);
+      const minutes = `${said.length ? said.join('\n') : 'Nobody spoke.'}${capped ? '\n\nThe meeting reached its cost cap; these minutes are partial.' : ''}`;
+      const r = await t.call('meeting_close', { meeting: id, minutes });
+      log(t, 'meeting:closed', { meeting: id, capped, replies: said.length, ok: !r.isError, detail: r.isError ? r.text : undefined });
+    } else {
+      const r = await t.call('meeting_reply', { meeting: id, text: `${t.role}: on track, nothing blocks me.` });
+      log(t, 'meeting:replied', { meeting: id, ok: !r.isError, detail: r.isError ? r.text : undefined });
+    }
+    return { usage: usage() };
+  };
+  for (const [k, f] of Object.entries(script)) script[k] = async (t) => (await meeting(t)) ?? f(t);
   if (!existsSync(control)) throw new Error(`the control folder ${control} does not exist`);
   return { ...stubAdapter(script), runtime: 'dryrun' };
 }

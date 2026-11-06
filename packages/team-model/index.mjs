@@ -368,6 +368,38 @@ const field = (md, name) => (new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm').e
  * Checks a TeamSpec the way sync and the roster check would, plus the data files, without touching disk.
  * Returns [{ level: 'error' | 'warning', where, message }], errors first.
  */
+// Common names people type for a time zone, and the IANA zone each means. Meetings and the scheduler need an IANA zone
+// (Intl rejects "Pacific"), so init maps these and validate names them.
+export const ZONE_ALIASES = {
+  pacific: 'America/Los_Angeles', pt: 'America/Los_Angeles', pst: 'America/Los_Angeles', pdt: 'America/Los_Angeles', 'pacific time': 'America/Los_Angeles',
+  mountain: 'America/Denver', mt: 'America/Denver', mst: 'America/Denver', mdt: 'America/Denver', 'mountain time': 'America/Denver', arizona: 'America/Phoenix',
+  central: 'America/Chicago', ct: 'America/Chicago', cst: 'America/Chicago', cdt: 'America/Chicago', 'central time': 'America/Chicago',
+  eastern: 'America/New_York', et: 'America/New_York', est: 'America/New_York', edt: 'America/New_York', 'eastern time': 'America/New_York',
+  alaska: 'America/Anchorage', hawaii: 'Pacific/Honolulu', atlantic: 'America/Halifax', newfoundland: 'America/St_Johns',
+  uk: 'Europe/London', gb: 'Europe/London', london: 'Europe/London', gmt: 'Europe/London', bst: 'Europe/London', ireland: 'Europe/Dublin',
+  cet: 'Europe/Paris', cest: 'Europe/Paris', 'central european': 'Europe/Paris', eet: 'Europe/Athens', 'eastern european': 'Europe/Athens', wet: 'Europe/Lisbon',
+  india: 'Asia/Kolkata', ist: 'Asia/Kolkata', japan: 'Asia/Tokyo', jst: 'Asia/Tokyo', china: 'Asia/Shanghai', singapore: 'Asia/Singapore', korea: 'Asia/Seoul',
+  sydney: 'Australia/Sydney', aest: 'Australia/Sydney', aedt: 'Australia/Sydney', melbourne: 'Australia/Melbourne', perth: 'Australia/Perth',
+  nz: 'Pacific/Auckland', 'new zealand': 'Pacific/Auckland', utc: 'UTC', 'z': 'UTC', zulu: 'UTC',
+};
+/** True when Intl knows `zone` as a time zone (an IANA name such as Europe/Lisbon, or UTC). */
+export function isZone(zone) {
+  if (typeof zone !== 'string' || !zone.trim()) return false;
+  try { new Intl.DateTimeFormat('en', { timeZone: zone }); return true; } catch { return false; }
+}
+/**
+ * A team's TIMEZONE as an IANA zone: { zone, from } where `from` is 'iana' (already one), 'alias' (a common name such as
+ * "Pacific" mapped to America/Los_Angeles), or null when neither (zone is then null). Abbreviations Intl happens to
+ * accept (EST, PST8PDT) still map to the city zone, which follows daylight saving.
+ */
+export function toZone(value) {
+  const v = String(value ?? '').trim();
+  const alias = ZONE_ALIASES[v.toLowerCase().replace(/\s+/g, ' ')];
+  if (alias) return { zone: alias, from: alias === v ? 'iana' : 'alias' };
+  if (/^[A-Za-z]+\/[A-Za-z0-9_+\-/]+$/.test(v) && isZone(v)) return { zone: v, from: 'iana' };
+  return { zone: null, from: null };
+}
+
 export function validate(spec, kit, { dailyCapUsd = spec.options?.budgets?.dailyUsd } = {}) {
   const issues = [];
   const add = (level, where, message) => issues.push({ level, where, message });
@@ -376,6 +408,13 @@ export function validate(spec, kit, { dailyCapUsd = spec.options?.budgets?.daily
   for (const t of teamTargets(spec.options)) if (!TARGETS.includes(t)) add('error', 'team.json', `targets lists "${t}"; the kit writes ${TARGETS.join(', ')}`);
   if (spec.options?.packs !== undefined && !Array.isArray(spec.options.packs)) add('error', 'team.json', 'packs must be a list of pack names');
   else if (kit?.packs) for (const p of teamPacks(spec.options)) if (!(p in kit.packs)) add('error', 'team.json', `packs lists "${p}", which the kit does not have (packs: ${Object.keys(kit.packs).join(', ')})`);
+  // Meetings and the scheduler read TIMEZONE with Intl; a name it rejects ("Pacific") silently becomes UTC. A warning,
+  // so a team that has one still syncs.
+  const tz = spec.values?.TIMEZONE;
+  if (tz !== undefined && toZone(tz).from !== 'iana') {
+    const z = toZone(tz).zone;
+    add('warning', 'team.json', `TIMEZONE "${tz}" is not an IANA time zone, so meetings and the scheduler would use UTC; ${z ? `set it to "${z}"` : 'use a name such as America/Los_Angeles or Europe/Lisbon'}`);
+  }
   const installed = new Map(roles.map((r) => [r.slug, r]));
   const manager = new Map(roles.map((r) => [r.slug, (field(r.md, 'Reports to').split(/\s/)[0] ?? '').toLowerCase()]));
   const top = roles.filter((r) => manager.get(r.slug) === 'owner');
@@ -868,6 +907,52 @@ export function versionName(sha, publishedAt) {
 }
 
 /**
+ * The rollout of a published team version (demo step 17, CPO copy "Rollout view after a publish", D61 to D63): which
+ * roles have picked it up, from the board (summarize() output, whose rows carry the team_version each role last
+ * reported). Read-only: it describes, nothing here acts.
+ *
+ *   version      the commit the publish merged (any length from 7); newer: later versions that also count as moved
+ *   publishedAt  when it merged. A role counts as moved only when a report after this names the new version (D61).
+ *   roles        the slugs the published team runs; off: slugs the publish switched off, removed or made dormant
+ *   plan         the change step's choices, { [role]: { choice: 'finish' | 'handoff' | 'pause' | ..., to? } }
+ *
+ * Each role gets one state: moved, next-task (idle on the old version, picks it up at its next task), finishing
+ * (mid-task on the old version, with its plan), off-finishing, off, no-report (nothing since the publish; lastAt when
+ * older reports exist) or unknown (reports without a version: an older kit or another coding agent). Unknown roles
+ * stay outside "n of m" (D62).
+ */
+export function rollout({ version, publishedAt = null, newer = [], roles = [], off = [], plan = {}, board = { current: [] } } = {}) {
+  const v = String(version ?? '');
+  if (!/^[0-9a-f]{7,40}$/.test(v)) return { version: null, name: null, roles: [], summary: null };
+  const same = (a, b) => !!a && !!b && (a.startsWith(b) || b.startsWith(a));
+  const isNew = (tv) => same(tv, v) || newer.some((n) => same(tv, String(n)));
+  const since = publishedAt ? Date.parse(publishedAt) : NaN;
+  const after = (at) => Number.isNaN(since) || (!!at && Date.parse(at) >= since);
+  const rows = new Map((board?.current ?? []).filter((c) => !c.instance).map((c) => [c.role, c]));
+  const offSet = new Set(off);
+  const slugs = [...new Set([...roles, ...off])].sort();
+  const out = slugs.map((role) => {
+    const c = rows.get(role);
+    const base = { role, teamVersion: c?.team_version ?? null, status: c?.status ?? null, task: c?.task ?? '', lastAt: c?.last_at ?? null, stale: !!c?.stale };
+    const working = !!c && BUSY.has(c.status);
+    if (offSet.has(role)) return { ...base, state: working && after(c.last_at) ? 'off-finishing' : 'off' };
+    if (!c || !after(c.last_at)) return { ...base, state: 'no-report' };
+    if (c.team_version && isNew(c.team_version) && after(c.team_version_at)) return { ...base, state: 'moved' };
+    if (!c.team_version) return { ...base, state: 'unknown' };
+    if (working) return { ...base, state: 'finishing', plan: plan[role] ?? { choice: 'finish' } };
+    return { ...base, state: 'next-task' };
+  });
+  const count = (st) => out.filter((r) => r.state === st).length;
+  const counted = out.filter((r) => !['off', 'off-finishing', 'unknown'].includes(r.state)).length;
+  const moved = count('moved');
+  return {
+    version: v, name: versionName(v, publishedAt), publishedAt,
+    roles: out,
+    summary: { moved, of: counted, finishing: count('finishing'), offFinishing: count('off-finishing'), unknown: count('unknown'), noReport: count('no-report'), allMoved: counted > 0 && moved === counted },
+  };
+}
+
+/**
  * Each change joined with the work in flight: [{ id, kind, role, detail, severity: 'safe' | 'choice' | 'blocking',
  * inFlight, choices, recommended, stale }]. Choices are ids the runner knows (architecture section 12.4).
  *
@@ -1051,13 +1136,19 @@ export function checkMeetings(meetings, roles, { dailyCapUsd } = {}) {
     const who = meetingAttendees(m, roles);
     const others = who.roles.filter((s) => s !== m.facilitator);
     if (others.length < 2 && !who.dynamic) add('warning', id, `has ${others.length === 1 ? 'one attendee' : 'no attendees'} besides the role that runs it`);
-    if (!w.label && Array.isArray(w.days)) for (const d of w.days) {
-      const k = `${d} ${w.at}`;
-      for (const o of slots.get(k) ?? []) {
-        const both = who.roles.filter((s) => o.roles.includes(s));
-        if (both.length) add('warning', id, `meets at the same time as ${o.id} (${d} ${w.at}), and both include ${both.join(', ')}`);
+    if (!w.label && Array.isArray(w.days)) {
+      const clashes = new Map(); // one warning per other meeting, naming every shared day
+      for (const d of w.days) {
+        const k = `${d} ${w.at}`;
+        for (const o of slots.get(k) ?? []) {
+          const both = who.roles.filter((s) => o.roles.includes(s));
+          if (!both.length) continue;
+          const c = clashes.get(o.id) ?? { days: new Set(), both: new Set() };
+          c.days.add(d); both.forEach((s) => c.both.add(s)); clashes.set(o.id, c);
+        }
+        slots.set(k, [...(slots.get(k) ?? []), { id, roles: who.roles }]);
       }
-      slots.set(k, [...(slots.get(k) ?? []), { id, roles: who.roles }]);
+      for (const [other, c] of clashes) add('warning', id, `meets at the same time as ${other} (${[...c.days].join(', ')} ${w.at}), and both include ${[...c.both].join(', ')}`);
     }
   }
   return out;
