@@ -266,7 +266,10 @@ test('apps: exact redirect URIs, PKCE, refresh tokens bound to the device key, a
   assert.equal(reuse.status, 400);
   assert.equal(reuse.body.error, 'invalid_grant');
   assert.equal((await token({ grant_type: 'refresh_token', refresh_token: r1.body.refresh_token })).status, 400);
-  assert.equal((await db.system("select count(*)::int as n from identity_audit where action = 'refresh-token.reused'"))[0].n, 1);
+  // The library's grant.revoked event is not awaited, so the audit row can land just after the answer (seen on Postgres in CI).
+  const reused = async () => (await db.system("select count(*)::int as n from identity_audit where action = 'refresh-token.reused'"))[0].n;
+  for (let i = 0; i < 50 && (await reused()) === 0; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(await reused(), 1);
   assert.equal((await db.system("select count(*)::int as n from oauth_tokens where revoked_at is null and kind = 'refresh'"))[0].n, 0);
   // The code worked once.
   assert.equal((await token({ grant_type: 'authorization_code', code, redirect_uri: redirect, code_verifier: verifier })).status, 400);

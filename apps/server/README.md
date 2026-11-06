@@ -264,6 +264,19 @@ OpenID-Certified library: `identity.mjs` holds its storage adapter and our polic
   `npm ci && conformance/run.sh`. Accepted deviations, each with its reason, live in `conformance/expected-failures.json`.
   The issuer has two signing keys, rotated together: P-256 (ES256, which every client of ours is pinned to) and
   RSA-2048 (RS256, offered for ID tokens only, because OpenID Connect requires every OP to support it).
+- **Hosts: the Studio inside your own app** (`hosts.mjs`, docs/specs/studio-embed.md section 6, issue #123). An
+  admin registers a customer's own site with `POST /v1/hosts { name, origins, redirectUris }` (step-up). It becomes a
+  confidential OIDC client of this issuer: `client_secret_basic` (the secret is in that answer only, then kept sealed),
+  PKCE S256, and DPoP-bound access tokens like the apps', so the host's server keeps one DPoP key and its users'
+  refresh tokens server-side. Each person says yes once on the deployment's consent page for that host (no silent
+  grant; `prompt=none` before that answers `consent_required`), and can unlink it with `DELETE /v1/me/hosts/{id}`.
+  A host's token works only on the routes in `roles.mjs` `HOST_ROUTES` (reads, chat, runs, meetings, decision and
+  Ready to try cards, stream tickets), never with step-up: approvals, members, budgets and keys open this deployment
+  in a top-level window. `DELETE /v1/hosts/{id}` revokes
+  every token it holds at once. Live updates: `POST /v1/teams/{team}/stream-tickets` gives a single-use, 60-second,
+  read-only ticket for one team; the host's page opens `…/events/stream?ticket=…` here directly. That stream answers
+  CORS only for the minting host's own origins, never with credentials, and ends when the person leaves the
+  workspace or the host is revoked. Keep `ticket` out of the edge's access logs.
 
 ## Host it in another server
 

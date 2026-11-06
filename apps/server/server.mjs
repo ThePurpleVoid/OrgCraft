@@ -23,6 +23,8 @@ import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
 import { appCaller } from './dpop.mjs';
+import { HOST_ID } from './hosts.mjs';
+import { HOST_CARD_KINDS, hostMay } from './roles.mjs';
 import { PROVIDERS, createEmail, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 import { createHostedStudio } from './studio.mjs';
@@ -127,7 +129,7 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000 }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
@@ -173,7 +175,9 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       const workspaces = await identity.workspaces(app.person);
       const here = workspaces.find((w) => w.tenant === tenant);
       // No cookie session: authTime is null, so nothing that trusts a recent sign-in (a first passkey) is open to apps.
-      return { tenant: here ? tenant : null, principal: app.person, via: 'app', role: here?.role ?? null, client: app.client, session: { person: app.person, login: p.login, name: p.name, authTime: null, session: null }, workspaces };
+      // A host's server (studio-embed.md section 6) calls for its signed-in user the same way, through its proxy.
+      const via = HOST_ID.test(app.client) ? 'host' : 'app';
+      return { tenant: here ? tenant : null, principal: app.person, via, role: here?.role ?? null, client: app.client, session: { person: app.person, login: p.login, name: p.name, authTime: null, session: null }, workspaces };
     }
     const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? '');
     // D6: a session's token acts for a role, never for a person (approvals, cards, runs, budgets, step-up).
@@ -212,12 +216,12 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
    * Server-sent events: catch up from the log after an event id (Last-Event-ID on reconnect, or ?after=), then live.
    * Ids, not positions, so clients never parse. `team` null streams every team of the tenant (/me/stream).
    */
-  async function stream(req, res, t, team, url) {
+  async function stream(req, res, t, team, url, { headers = {}, still = null } = {}) {
     if (team) await store.getTeam(db, t, team);
     const from = req.headers['last-event-id'] ?? url.searchParams.get('after') ?? '';
     let last = team ? await store.seqOf(db, t, team, from) : await store.tenantSeqOf(db, t, from);
     const type = url.searchParams.get('type') ?? '';
-    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no', ...headers });
     res.write('retry: 3000\n\n');
     const write = ({ seq, event }) => {
       last = seq;
@@ -246,7 +250,11 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       } catch { /* the next wake or poll retries */ } finally { reading = false; }
     };
     const off = live.on(team ?? '*', (stored) => { if (stored.some((x) => x.event.tenant === t)) pump(); });
-    const beat = setInterval(() => res.write(': keep-alive\n\n'), 20_000);
+    // A ticket's stream (S8) ends when the person leaves the workspace or the host is revoked: checked with each beat.
+    const beat = setInterval(async () => {
+      if (still && !(await still().catch(() => false))) { res.end(); return; }
+      res.write(': keep-alive\n\n');
+    }, still ? streamCheckMs : 20_000);
     const poll = pollMs > 0 ? setInterval(pump, pollMs) : null;
     poll?.unref?.();
     res.on('close', () => { closed = true; off(); clearInterval(beat); if (poll) clearInterval(poll); });
@@ -374,8 +382,27 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return send(res, 200, identity.caller(req));
     }
 
+    // The live stream opened by a host's page with a stream ticket (S8): the ticket is the only credential.
+    if (a === 'teams' && b === 'events' && c === 'stream' && !parts[5] && m === 'GET' && url.searchParams.has('ticket')) {
+      if (!identity) throw new Problem(404, 'not found');
+      const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
+      const tk = await identity.hosts.redeem(url.searchParams.get('ticket'), team, origin);
+      const cors = tk.allowOrigin ? { 'access-control-allow-origin': tk.allowOrigin, vary: 'Origin' } : {};
+      return stream(req, res, tk.tenant, team, url, { headers: cors, still: () => identity.hosts.stillMember(tk.tenant, tk.person, tk.client) });
+    }
+
     const who = await person(req, url.pathname);
     if (a === 'me' && !team && m === 'GET') return send(res, 200, await meView(who));
+    // A host acts for its user in the Studio's own routes only: never step-up or passkeys (those open on this
+    // deployment in a top-level window, spec section 6), and never the host registry itself (S4).
+    // An allowlist (roles.mjs HOST_ROUTES): anything else, and anything carrying step-up, opens on this deployment.
+    if (who.via === 'host' && (!hostMay(m, url.pathname.slice(3)) || req.headers['x-step-up'])) {
+      throw new Problem(403, 'not through a host: open this deployment in a top-level window for that', { type: 'forbidden' });
+    }
+    if (who.via === 'host' && a === 'cards' && team && m === 'POST') {
+      const card = await m3.getCard(who.tenant ?? tenant, team);
+      if (!HOST_CARD_KINDS.has(card.kind)) throw new Problem(403, `a ${card.kind} card is answered on this deployment, not through a host`, { type: 'forbidden' });
+    }
     if (passkeys && ((a === 'me' && team === 'passkeys') || (a === 'auth' && team === 'step-up'))) {
       // A retry after a lost answer replays it (the challenge is single use, so running it again would fail).
       // Idempotency is kept per workspace, so a person in none of them has none.
@@ -527,6 +554,26 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       const body = req.headers['content-type'] ? (await readJson(req, 16 * 1024)) ?? {} : {};
       await m3.requireStepUp(t, me, stepUp, 'Adding a runner');
       return send(res, 201, await store.mintRunnerCode(db, t, me, body), {}, { secrets: ['code'] });
+    }
+    // Hosts: a customer's own site that mounts the Studio (studio-embed.md section 6). Sign-in must be on.
+    if (a === 'hosts') {
+      if (!identity) throw new Problem(404, 'hosts need sign-in on this deployment (GITHUB_APP_CLIENT_ID and an https AGENT_TEAM_PUBLIC_URL)');
+      if (!team && m === 'GET') return send(res, 200, await identity.hosts.list(t));
+      if (!team && m === 'POST') {
+        const body = await readJson(req, 16 * 1024);
+        await m3.requireStepUp(t, me, stepUp, 'Registering a host');
+        return send(res, 201, await identity.hosts.create(t, me, body), {}, { secrets: ['clientSecret'] });
+      }
+      if (team && !b && m === 'DELETE') return send(res, 200, await identity.hosts.revoke(t, team, me));
+    }
+    if (a === 'me' && team === 'hosts' && identity && who.via !== 'admin') {
+      if (!b && m === 'GET') return send(res, 200, await identity.hosts.myLinks(me));
+      if (b && !c && m === 'DELETE') return send(res, 200, await identity.hosts.unlink(me, b));
+    }
+    if (a === 'teams' && team && b === 'stream-tickets' && !c && m === 'POST') {
+      if (!identity) throw new Problem(404, 'stream tickets need sign-in on this deployment');
+      await store.getTeam(db, t, team);
+      return send(res, 201, await identity.hosts.mintTicket(t, team, who), {}, { secrets: ['ticket', 'url'] });
     }
     if (a === 'runners' && !team && m === 'GET') return send(res, 200, { runners: await store.listRunners(db, t) });
     if (a === 'runners' && team && team !== 'codes' && !b && m === 'DELETE') { await store.revokeRunner(db, t, team); runners?.close(team); return send(res, 200, { ok: true }); }

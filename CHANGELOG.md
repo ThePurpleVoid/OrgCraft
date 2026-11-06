@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Control plane: hosts and stream tickets, for the Studio inside your own app** (issue #123 step 2, docs/specs/studio-embed.md section 6, S4 and S8). An admin registers a host with `POST /v1/hosts` (step-up). It is a confidential OIDC client of the deployment's issuer: client secret shown once and kept sealed, PKCE, DPoP-bound tokens. A host's token can use the Studio's own routes, never step-up, passkeys or the host registry, and revoking the host ends its tokens at once. `POST /v1/teams/{team}/stream-tickets` gives a single-use, 60-second ticket that the host's page uses to open the team's live stream directly, with CORS for that host's origins only and no credentials; the stream ends when the person is removed or the host revoked. Migration `009_hosts.sql`. Sign-in must be on; local mode is unchanged.
 - **Studio: Notifications page, Slack** (CPO Slack story, D55 to D60). Under Emails, a Slack section with the CPO's copy:
   - **Connecting your account:** "Connect Slack" signs the person in with Slack (identity only). The new `/slack/callback` page (`slack-callback.html`, rewritten by `build.mjs --studio`) links the account and returns to Notifications. A cancelled, forged or expired sign-in says what to do.
   - **DMs:** the same switches as email, with the suggested two ticked but not saved until Save (D49). After that each switch saves at once.

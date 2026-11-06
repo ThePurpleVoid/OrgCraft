@@ -106,8 +106,16 @@ paths:
     get:
       x-min-role: viewer
       tags: [events]
-      summary: Live events as server-sent events; resumes from Last-Event-ID
+      summary: "Live events as server-sent events; resumes from Last-Event-ID. With ?ticket= (a stream ticket) it needs no other credential, answers CORS for the minting host's origins only (never with credentials), and ends when the person leaves the workspace or the host is revoked"
+      parameters: [ { name: ticket, in: query, required: false, schema: { type: string }, description: "a stream ticket (single use, 60 seconds); keep it out of access logs" } ]
       responses: { "200": { description: text/event-stream of envelopes, content: { text/event-stream: {} } } }
+  /teams/{team}/stream-tickets:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: viewer
+      tags: [events]
+      summary: "A stream ticket (S8): single use, 60 seconds, read-only, for this team and the caller. A host's page opens the stream with it directly, because server-sent events cannot pass through a short-lived function. Needs sign-in on"
+      responses: { "201": { description: "{ ticket, url, expiresIn }" } }
   /teams/{team}/board:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
@@ -392,6 +400,39 @@ paths:
       tags: [runners]
       summary: Revoke a runner's key. Its connection and sessions end
       parameters: [ { name: runner, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: Revoked } }
+  /hosts:
+    get:
+      x-min-role: admin
+      tags: [hosts]
+      summary: "Hosts: customers' own sites that mount the Studio and sign their users in here (studio-embed.md section 6). Needs sign-in on"
+      responses: { "200": { description: "{ hosts: [ { id, clientId, name, origins, redirectUris, createdBy, createdAt, revokedAt? } ] }" } }
+    post:
+      x-min-role: admin
+      tags: [hosts]
+      summary: "Register a host as a confidential OIDC client (client_secret_basic, PKCE S256, DPoP-bound tokens). The client secret is in this answer only. Needs step-up"
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name, origins, redirectUris], properties: { name: { type: string, maxLength: 100 }, origins: { type: array, minItems: 1, maxItems: 5, items: { type: string, description: "an https origin, no path" } }, redirectUris: { type: array, minItems: 1, maxItems: 5, items: { type: string, description: "https, on one of the origins, no fragment" } } } } } } }
+      responses: { "201": { description: "The host, with clientId, clientSecret (once), issuer, tokenAuth and dpop" }, "401": { description: "Step-up required (problem type step-up-required)" } }
+  /me/hosts:
+    get:
+      x-min-role: viewer
+      tags: [hosts]
+      summary: The sites I allowed on a host's consent page (studio-embed.md section 6)
+      responses: { "200": { description: "{ hosts: [ { id, name, origins, linkedAt } ] }" } }
+  /me/hosts/{host}:
+    delete:
+      x-min-role: viewer
+      tags: [hosts]
+      summary: Unlink a site. Its tokens for me end at once, and it must ask on the consent page again
+      parameters: [ { name: host, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: Unlinked } }
+  /hosts/{host}:
+    delete:
+      x-min-role: admin
+      tags: [hosts]
+      summary: Revoke a host. Every token it holds and every unused stream ticket it minted stop working at once
+      parameters: [ { name: host, in: path, required: true, schema: { type: string } } ]
       responses: { "200": { description: Revoked } }
   /sessions/{session}/tools/{tool}:
     post:

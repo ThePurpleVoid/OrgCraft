@@ -29,12 +29,20 @@ export const ROUTES = [
   ['POST', '/runners/codes', 'admin'],
   ['GET', '/runners', 'admin'],
   ['DELETE', '/runners/{runner}', 'admin'],
+  // Hosts (studio-embed.md section 6): registering one makes a sign-in client, so it is an admin's, with step-up.
+  ['GET', '/hosts', 'admin'],
+  ['POST', '/hosts', 'admin'],
+  ['DELETE', '/hosts/{host}', 'admin'],
+  // The sites a person allowed on the host consent page: their own, so any member may list and unlink them.
+  ['GET', '/me/hosts', 'viewer'],
+  ['DELETE', '/me/hosts/{host}', 'viewer'],
   ['GET', '/teams', 'viewer'],
   ['POST', '/teams', 'admin'],
   ['GET', '/teams/{team}', 'viewer'],
   ['GET', '/teams/{team}/events', 'viewer'],
   ['POST', '/teams/{team}/events', 'admin'],
   ['GET', '/teams/{team}/events/stream', 'viewer'],
+  ['POST', '/teams/{team}/stream-tickets', 'viewer'],
   ['GET', '/teams/{team}/budget', 'viewer'],
   ['PUT', '/teams/{team}/budget', 'admin'],
   ['GET', '/teams/{team}/runs', 'viewer'],
@@ -100,10 +108,37 @@ const compiled = ROUTES.map(([method, path, role]) => ({ method, role, path, re:
 
 /** The minimum role for a request under /v1 (path without the /v1 prefix), or null when the route is not listed. */
 export function minRole(method, path) {
+  return routeOf(method, path)?.role ?? null;
+}
+
+/** The ROUTES entry a request matches ({ method, path, role }), or null. */
+export function routeOf(method, path) {
   const p = path.replace(/\/+$/, '') || '/';
   // A literal segment wins over a parameter (/runners/codes before /runners/{runner}).
   const hits = compiled.filter((r) => r.method === method && r.re.test(p));
   if (!hits.length) return null;
   hits.sort((x, y) => (y.path.match(/\{/g)?.length ?? 0) < (x.path.match(/\{/g)?.length ?? 0) ? 1 : -1);
-  return hits[0].role;
+  return hits[0];
 }
+
+/**
+ * What a host (a customer's own site that mounts the Studio, studio-embed.md S4) may do for its signed-in user: read,
+ * chat, start and steer runs and meetings, answer non-approval cards (checked again on the card's kind), and get
+ * stream tickets. Nothing that changes who is in the workspace, its money, credentials, sinks or the hosts
+ * themselves, and nothing behind step-up: those open on this deployment in a top-level window. A route missing here is
+ * refused for a host, so a new route is closed to hosts until someone decides otherwise.
+ */
+export const HOST_ROUTES = new Set([
+  'GET /me/summary', 'GET /me/stream', 'GET /me/inbox',
+  'POST /runs/{run}/{action}',
+  'GET /cards/{card}', 'POST /cards/{card}',
+  'GET /teams', 'GET /teams/{team}', 'GET /teams/{team}/events', 'GET /teams/{team}/events/stream', 'POST /teams/{team}/stream-tickets',
+  'GET /teams/{team}/budget',
+  'GET /teams/{team}/runs', 'POST /teams/{team}/runs',
+  'GET /teams/{team}/chat', 'POST /teams/{team}/chat',
+  'GET /teams/{team}/meetings', 'POST /teams/{team}/meetings', 'GET /teams/{team}/meetings/{meeting}',
+  'GET /teams/{team}/board', 'GET /teams/{team}/rollout',
+]);
+/** The card kinds a host may answer (S4: never an approval; a budget card raises spending, an admin's call). */
+export const HOST_CARD_KINDS = new Set(['decision', 'ready']);
+export const hostMay = (method, path) => { const r = routeOf(method, path); return !!r && HOST_ROUTES.has(`${r.method} ${r.path}`); };
