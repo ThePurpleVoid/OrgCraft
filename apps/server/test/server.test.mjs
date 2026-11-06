@@ -36,7 +36,8 @@ async function planeAt(now, fn) {
   const db = await fresh();
   await store.ensureTenant(db, 'acme');
   let woke = 0;
-  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, sinks: { wake: () => woke++ }, ...(now ? { now } : {}) });
+  const { verifier } = await import('./helpers.mjs');
+  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, sinks: { wake: () => woke++ }, stepUpVerifier: verifier, ...(now ? { now } : {}) });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}/v1`;
   const call = async (method, path, body, headers = { authorization: `Bearer ${ADMIN}` }) => {
@@ -235,7 +236,10 @@ test('a kit-report sink hands reports to a team\'s own board, with its token fro
   try {
     await plane(async ({ db, call }) => {
       await call('POST', '/teams', { id: 'mirror' });
-      assert.equal((await call('PUT', '/secrets/OWN_BOARD_TOKEN', { value: 'their-token' })).status, 200);
+      assert.equal((await call('PUT', '/secrets/OWN_BOARD_TOKEN', { value: 'their-token' })).status, 401, 'writing a secret needs step-up (issue #28 D4)');
+      const { STEP_UP_SECRET } = await import('./helpers.mjs');
+      const su = (await call('POST', '/auth/step-up', { secret: STEP_UP_SECRET })).body.token;
+      assert.equal((await call('PUT', '/secrets/OWN_BOARD_TOKEN', { value: 'their-token' }, { authorization: `Bearer ${ADMIN}`, 'x-step-up': su })).status, 200);
       assert.deepEqual((await call('GET', '/secrets')).body.secrets.map((s) => s.name), ['OWN_BOARD_TOKEN'], 'names only, never values');
       assert.equal((await call('POST', '/teams/mirror/sinks', { url: 'http://example.com/x' })).status, 400, 'plain http only to this machine');
       const sink = (await call('POST', '/teams/mirror/sinks', { url: target, header: 'x-team-token', secret: 'OWN_BOARD_TOKEN' })).body;
@@ -279,8 +283,12 @@ test('the Studio shows a team\'s live board from the control plane, without the 
     await new Promise((r) => studio.listen(0, '127.0.0.1', r));
     const sbase = `http://127.0.0.1:${studio.address().port}`;
     try {
+      // Sign in the way the page does: the launch link sets the Studio's session cookie.
+      const launch = await fetch(`${sbase}/?t=${studio.launchToken}`, { redirect: 'manual' });
+      const headers = { cookie: launch.headers.get('set-cookie').split(';')[0] };
+      assert.equal((await fetch(`${sbase}/v1/team/board`)).status, 401, 'no session cookie, no board');
       const ctl = new AbortController();
-      const res = await fetch(`${sbase}/v1/team/board/stream`, { signal: ctl.signal });
+      const res = await fetch(`${sbase}/v1/team/board/stream`, { signal: ctl.signal, headers });
       const reader = res.body.getReader();
       const changed = (async () => {
         const dec = new TextDecoder();
@@ -292,7 +300,7 @@ test('the Studio shows a team\'s live board from the control plane, without the 
       await call('POST', '/teams/studio-team/reports', { role: 'chief-of-staff', kind: 'status', status: 'working', task: 'Plan the week' }, { 'x-team-token': token });
       assert.ok(await changed);
       ctl.abort();
-      const text = await (await fetch(`${sbase}/v1/team/board`)).text();
+      const text = await (await fetch(`${sbase}/v1/team/board`, { headers })).text();
       assert.ok(!text.includes(ADMIN), 'the token stays on the server');
       const body = JSON.parse(text);
       assert.equal(body.source, 'server');

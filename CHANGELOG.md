@@ -1,7 +1,24 @@
 # Changelog
 
-## Unreleased
+## 0.9.2
 
+### Security
+
+- **DNS rebinding on the local dashboard and the Studio (severity 2). Every team should sync to 0.9.2.** A web page on a hostile domain whose DNS name resolves to 127.0.0.1 could call `scripts/agent-team/dashboard.mjs` or `agent-team studio` as if it were the same origin. It could read the board, post reports, and use the token these servers hold for a hosted board (`TEAM_READ_TOKEN`) or the control plane. Both servers now check the `Host` header on every request, static files included, before anything else runs:
+  - Bound to a loopback address, they answer only `localhost`, `127.0.0.1` and `[::1]` (any port).
+  - Bound to another address, they also answer that address. On `0.0.0.0` or `::` that means every address of the machine.
+  - Each server also answers the names in its own allowlist, `DASHBOARD_ALLOWED_HOSTS` or `STUDIO_ALLOWED_HOSTS`.
+  - Anything else gets 403. The Studio's Origin and JSON checks on POSTs stay as they were.
+- **What existing teams see on sync:**
+  - A new file, `scripts/agent-team/hosts.mjs`.
+  - Threads on other machines that report to a dashboard started with `--host 0.0.0.0` keep working when they use its IP address. If they use a name (`TEAM_REPORT_URL=http://mac-mini.local:4747/...`, a VPN or tunnel name, a reverse proxy), set that name in `DASHBOARD_ALLOWED_HOSTS` on the dashboard machine; until then those reports get 403.
+  - The hosted board, the exported dashboard and CoachSpotter-style sites are not affected. Neither are reports written to the local log.
+
+### Design and contracts (nothing changes on sync)
+
+- **Chat with the chief of staff in the Studio** (milestone M3, issue #28). A Chat page next to the team: your messages are sent and shown exactly as you type them, with a client id so a retry lands once; the team's replies appear as they arrive, in a small Markdown subset; decision and approval cards are built from their fields (never HTML) and every answer sends the card version it saw, so a card that changed first comes back refreshed instead of being answered blind. The header shows the run's state, today's cost against the daily cap, and Pause, Resume and Stop. Like the live board, the Studio's server calls the control plane, so the token never reaches the page. It works at 360px wide; on a small screen the team itself is read-only.
+- **The Studio has its own sign-in.** It prints and opens a launch link (`/?t=<token>`); opening it sets an HttpOnly, SameSite=Strict cookie, and every other request needs that cookie. Another process or a machine on the network that reaches the port gets 401. Approvals ask for the step-up secret each time: the Studio keeps the step-up token only for the one answer it covers.
+- A browser test (Playwright) drives the chat against a stand-in control plane with a stubbed runner, and CI runs it.
 - **M4 sign-in design** ([docs/specs/m4-sign-in.md](docs/specs/m4-sign-in.md), [ADR 0007](docs/adr/0007-deployment-is-its-own-identity-provider.md), accepted with conditions): each deployment is its own OIDC issuer with GitHub upstream, a first-party cookie for the web on one origin, PKCE bearer tokens for apps and the CLI, invite-only membership, passkeys for step-up on the web, and the admin token and step-up secret retired outside local mode.
 - **M3 security requirements** (m3-design.md section 12, D1 to D9): sessions sandboxed with a throwaway HOME, an allowlisted environment and no credentials, with the runner pushing after an ownership and secret check on the checkpoint diff; approvals bound to the exact call and head sha, merges done by the runner with its own credential behind a branch ruleset, a scrypt-hashed step-up secret with lockout, step-up on raising spend, budget resume, runner codes and secrets, and no card answers from session tokens. Contracts: additive `pr` and `headSha` on approvals and a `superseded` decision; **a recorded exception to rule 1**: step-up is now required on four existing writes (`PUT /secrets/{name}`, raising `PUT /teams/{team}/budget`, `POST /runs/{run}/resume` after a budget pause, `POST /runners/codes`), tightened before any client calls them.
 - **M3 seams** ([docs/product/m3-design.md](docs/product/m3-design.md)): the tables for runs, sessions, the message bus, cards, approvals, chat, budgets and audit; how a message wakes a role; the runner and server ops M3 builds and who may send what; chat cards built from `card.updated` events; the daily budget at 80% and 100%; and the hosting split for a Vercel and Supabase deployment. Contracts, all additive: a new [team tools](docs/contracts/team-tools.md) contract (`tools/1`), new event types (`card.updated`, `budget.warned`, `budget.exhausted`, `session.queued`), `session.renew`, `session.token` and `nack` in `runner/1`, and the tool, step-up, budget and runner-code endpoints in `/v1/`.

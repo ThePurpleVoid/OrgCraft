@@ -1,6 +1,7 @@
 // Agent Team Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
 import { resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
+import { createChat } from './chat.js';
 import { bind, renderAreas, renderChecks, renderSystemInspector, renderSystemsStrip, roleSystemsHtml, wireBindings } from './panels.js';
 
 const $ = (s) => document.querySelector(s);
@@ -25,6 +26,9 @@ let flow = { key: '', edges: [], unresolved: [] }; // hand-offs, from the server
 let sugg = null; // owned area and check suggestions from the repository
 let scale = 1;
 let live = null; // { on, source, where, board, error, es } when the live board is shown
+let chat = null; // the chief-of-staff chat, made the first time it is opened
+/** Phones get the control room (chat, live board) and a read-only team: building the team needs a large screen. */
+const small = matchMedia('(max-width: 640px)');
 
 // ------------------------------------------------------------------------------------------------ model
 
@@ -50,6 +54,7 @@ function derive() {
 
 /** Every change goes through here, so undo, redo and the redraw are in one place. */
 function change(fn) {
+  if (small.matches) { flash('Editing the team needs a larger screen'); render(); return; }
   undo.push(JSON.stringify(spec));
   if (undo.length > 200) undo.shift();
   redo.length = 0;
@@ -487,6 +492,7 @@ function render() {
   renderIssues();
   $('#undo').disabled = !undo.length;
   $('#redo').disabled = !redo.length;
+  if (small.matches) for (const el of document.querySelectorAll('#inspector :is(input, select, textarea, button), #library input')) el.disabled = true;
 }
 
 // ------------------------------------------------------------------------------------------------ publish
@@ -568,6 +574,15 @@ async function confirmPublish() {
 
 // ------------------------------------------------------------------------------------------------ start
 
+function setPage(page) {
+  const p = page === 'chat' ? 'chat' : 'team';
+  document.body.dataset.page = p;
+  for (const b of document.querySelectorAll('#pages [data-page]')) b.setAttribute('aria-pressed', String(b.dataset.page === p));
+  if (p === 'chat') { chat ??= createChat({ root: $('#chat-page') }); chat.open(); }
+  else render();
+  if (location.hash !== `#${p}`) history.replaceState(null, '', p === 'team' ? location.pathname : '#chat');
+}
+
 async function start() {
   try {
     S = await api('/v1/team');
@@ -598,12 +613,17 @@ async function start() {
     if (r) ctx.selectSystem(r[1]);
   });
   $('#views').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setMode(b.dataset.view); });
+  $('#pages').addEventListener('click', (e) => { const b = e.target.closest('[data-page]'); if (b) setPage(b.dataset.page); });
+  addEventListener('hashchange', () => setPage(location.hash.slice(1)));
+  small.addEventListener('change', () => { document.body.classList.toggle('small', small.matches); render(); });
+  document.body.classList.toggle('small', small.matches);
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
     e.preventDefault();
     if (e.shiftKey) step(redo, undo); else step(undo, redo);
   });
   render();
+  setPage(location.hash.slice(1));
 }
 
 start();

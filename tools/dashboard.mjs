@@ -23,6 +23,7 @@ import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readLog, summarize, toRow } from './board.mjs';
 import { buildGraph } from './roster-graph.mjs';
+import { hostGuard } from './hosts.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(HERE, 'dashboard');
@@ -104,7 +105,7 @@ function startDemo(graph, log) {
   }, 2500);
 }
 
-export function createDashboard({ root, teamDir, home, token = process.env.DASHBOARD_TOKEN ?? '', hosted = process.env.TEAM_BOARD_URL ?? '', readToken = process.env.TEAM_READ_TOKEN ?? '' } = {}) {
+export function createDashboard({ root, teamDir, home, token = process.env.DASHBOARD_TOKEN ?? '', hosted = process.env.TEAM_BOARD_URL ?? '', readToken = process.env.TEAM_READ_TOKEN ?? '', hosts = process.env.DASHBOARD_ALLOWED_HOSTS ?? '' } = {}) {
   const log = join(home, 'events.jsonl');
   const clients = new Set();
   let graph = null, graphStamp = '';
@@ -153,6 +154,8 @@ export function createDashboard({ root, teamDir, home, token = process.env.DASHB
   };
 
   const server = createServer(async (req, res) => {
+    // DNS rebinding: answer only the names this server is really reached by (tools/hosts.mjs), on every route.
+    if (!allowed(req)) return send(res, 403, { error: 'host not allowed (add it to DASHBOARD_ALLOWED_HOSTS)' });
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
       if (req.method === 'GET' && url.pathname === '/api/roster') return send(res, 200, { ...meta, ...roster() });
@@ -189,6 +192,7 @@ export function createDashboard({ root, teamDir, home, token = process.env.DASHB
       return send(res, 500, { error: e.message });
     }
   });
+  const allowed = hostGuard(server, hosts);
   server.on('close', () => { clearInterval(tick); for (const res of clients) res.end(); });
   return { server, log, roster };
 }

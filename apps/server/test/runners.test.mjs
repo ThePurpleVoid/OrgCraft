@@ -7,7 +7,9 @@ import { plane } from './helpers.mjs';
 
 /** Registers a runner through the API and returns its key. */
 async function register(call, name = 'r1') {
-  const { code } = (await call('POST', '/runners/codes')).body;
+  const { STEP_UP_SECRET, ADMIN } = await import('./helpers.mjs');
+  const token = (await call('POST', '/auth/step-up', { secret: STEP_UP_SECRET })).body.token;
+  const { code } = (await call('POST', '/runners/codes', undefined, { authorization: `Bearer ${ADMIN}`, 'x-step-up': token })).body;
   return (await call('POST', '/runners', { code, name })).body;
 }
 

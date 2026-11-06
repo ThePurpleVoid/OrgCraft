@@ -33,7 +33,8 @@ revoked with `DELETE /v1/teams/my-team/report-tokens/{id}`.
 runs (such as `board/supabase`), with its token kept in the vault:
 
 ```bash
-curl -X PUT -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"value":"<their token>"}' localhost:4849/v1/secrets/OWN_BOARD_TOKEN
+SU=$(curl -s -H "authorization: Bearer $T" -H 'content-type: application/json' -d "{\"secret\":\"$(cat ~/.agent-team/server/step-up.secret)\"}" localhost:4849/v1/auth/step-up | jq -r .token)
+curl -X PUT -H "authorization: Bearer $T" -H "x-step-up: $SU" -H 'content-type: application/json' -d '{"value":"<their token>"}' localhost:4849/v1/secrets/OWN_BOARD_TOKEN
 curl -H "authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"url":"https://<ref>.supabase.co/functions/v1/team-report","header":"x-team-token","secret":"OWN_BOARD_TOKEN"}' \
   localhost:4849/v1/teams/my-team/sinks
@@ -62,10 +63,10 @@ The run state, live version, daily cap and inbox count in the summary fill in as
 ## Register a runner
 
 A runner (the process that runs agent sessions, `docs/contracts/runner-protocol.md`) is registered once with a
-one-time code. A person mints it; the runner redeems it for its key, which is shown once and kept only as a hash:
+one-time code. A person mints it, with a step-up (below), since a runner is another pair of hands; the runner redeems it for its key, which is shown once and kept only as a hash:
 
 ```bash
-curl -X POST -H "authorization: Bearer $T" localhost:4849/v1/runners/codes      # → { "code": "K7QM-…", "expires": … }
+curl -X POST -H "authorization: Bearer $T" -H "x-step-up: $SU" localhost:4849/v1/runners/codes   # → { "code": "K7QM-…", … }
 curl -H 'content-type: application/json' -d '{"code":"K7QM-…","name":"my laptop","capabilities":{"runtimes":["agent-sdk"]}}' localhost:4849/v1/runners
 # → { "id": "rnr_…", "key": "rnr_….…", … }
 ```
@@ -78,6 +79,38 @@ revokes one.
 Every write takes an `Idempotency-Key` header. The first answer is kept for a day, and a retry with the same key gets
 it back with `Idempotent-Replayed: true`, so a request sent twice from a bad connection acts once. The same key on a
 different request is a `422`. Report intake needs none: the kit's report ids already make its retries safe.
+
+## Runs, chat, cards and approvals (M3)
+
+| Call | What it does |
+|---|---|
+| `GET`/`PUT /v1/teams/{team}/budget` | The daily cap (`perDay`, minor units), `perRun`, live `sessions` and today's spend. A run needs a daily cap |
+| `POST /v1/teams/{team}/runs` | Start a run, frozen on `team: { version, roles: [{ slug, reportsTo, areas }] }` with exactly one role reporting to `owner` (the front door) |
+| `POST /v1/runs/{run}/pause`, `/resume`, `/stop` | Pause and stop are always one tap |
+| `GET`/`POST /v1/teams/{team}/chat` | The chat page (items, current cards, run, cost line); a message is stored byte for byte, and a repeated `clientId` once |
+| `POST /v1/approvals/{id}`, `GET`/`POST /v1/cards/{id}` | Answer with the `version` you saw; a stale one gets `409` with the current card |
+| `GET /v1/me/inbox` | Every open card across teams, approvals first, with `asOf` and an `ETag` |
+
+At 80% of the daily cap the team gets `budget.warned`; at 100% its runs pause and one `budget` card asks the owner
+to resume tomorrow or add half the cap again. While the day is spent no run resumes, whoever paused it. A run's own
+`caps.costPerRun` and `caps.costPerDay` pause just that run, and raising one gives that run more without changing the
+team's caps. Every budget change is a `budget.updated` event. One run per team at a time is held by a unique index.
+
+**Step-up.** Approving, raising or clearing a cap, resuming a run the budget paused, and adding to the budget need a
+fresh step-up: `POST /v1/auth/step-up` with `{ "secret": "…" }` returns a token for `x-step-up`, valid 5 minutes and
+once. Without it the answer is `401` with `"type": "step-up-required"`. The secret is not the sign-in token (that is
+refused); the server keeps only its scrypt hash, from `AGENT_TEAM_STEP_UP_SECRET_HASH`:
+
+```bash
+printf '%s' 'a secret of 12 characters or more' | node bin.mjs --hash-step-up   # → scrypt$32768$8$1$…
+```
+
+Five wrong secrets in 15 minutes lock step-up for the tenant (`429`), and every try is audited. Each try is
+counted, under a per-tenant lock, before the slow check runs, and one check per tenant runs at a time (`429` while one
+does), so parallel guesses gain nothing. The hash may use scrypt N from 2^15 to 2^17 and r up to 8: at most 128 MiB a check. With no hash set,
+step-up is refused (`401 step-up-required`), never passed. A notification to the owner on lockout comes with the
+notification channels (M4). Local mode makes a
+secret in `--data/step-up.secret`. M4's sign-in replaces the secret; the header stays.
 
 ## Host it in another server
 
@@ -113,5 +146,9 @@ TEST_DATABASE_URL=postgres://… npm test   # a real Postgres; wipes its public 
 
 Not yet: events from other instances reach a stream within `pollMs` rather than at once (Postgres LISTEN/NOTIFY can
 come with always-on instances), and people sign in with one admin token (GitHub sign-in is milestone M4).
+
+Appends take a per-tenant advisory lock so that `seq` is commit order and a stream never skips an event. That
+puts one tenant's appends in a line: each is one short transaction (a few milliseconds), so the ceiling is a few
+hundred events a second per tenant, far above an agent team's rate. Tenants do not wait for each other.
 
 Tests on a real Postgres run one file at a time, since each test wipes the schema.
