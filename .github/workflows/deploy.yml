@@ -134,3 +134,62 @@ jobs:
         env:
           AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
         run: node deploy/smoke.mjs --site "$PUBLIC_URL" --api "https://$FLY_APP.fly.dev"
+
+  runner:
+    # The runner, a second Fly app next to the control plane, with one volume at /data. Off until the owner sets the
+    # variable AGENT_TEAM_RUNNER to "on", after the M3 exit: it needs ANTHROPIC_API_KEY (with a daily cap set) and
+    # AGENT_TEAM_RUNNER_KEY, which the owner makes once with deploy/fly/register-runner.mjs (registration needs their
+    # step-up). It connects out to the container directly, never through Vercel.
+    needs: deploy
+    if: vars.AGENT_TEAM_RUNNER == 'on'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      FLY_APP: ${{ vars.FLY_APP }}
+      RUNNER_APP: ${{ vars.FLY_APP }}-runner
+      FLY_ORG: ${{ vars.FLY_ORG || 'personal' }}
+      FLY_REGION: ${{ vars.FLY_REGION || 'iad' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+        with:
+          version: 0.5.5
+
+      - name: Check that the runner's secrets are set (names only)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_TEAM_RUNNER_KEY: ${{ secrets.AGENT_TEAM_RUNNER_KEY }}
+        run: |
+          missing=""
+          for n in ANTHROPIC_API_KEY AGENT_TEAM_RUNNER_KEY; do [ -n "${!n}" ] || missing="$missing $n"; done
+          if [ -n "$missing" ]; then echo "::error::Not set in the production environment:$missing (docs/deploy/vercel-supabase.md, step 12)"; exit 1; fi
+
+      - name: Create the runner app and its volume if they do not exist yet
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl status --app "$RUNNER_APP" >/dev/null 2>&1 || flyctl apps create "$RUNNER_APP" --org "$FLY_ORG"
+          if ! flyctl volumes list --app "$RUNNER_APP" --json | grep -q '"name": *"runner_data"'; then
+            flyctl volumes create runner_data --app "$RUNNER_APP" --region "$FLY_REGION" --size 20 --yes
+          fi
+
+      - name: Stage the runner's secrets on Fly
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_TEAM_RUNNER_KEY: ${{ secrets.AGENT_TEAM_RUNNER_KEY }}
+        run: |
+          printf 'ANTHROPIC_API_KEY=%s\nAGENT_TEAM_RUNNER_KEY=%s\n' "$ANTHROPIC_API_KEY" "$AGENT_TEAM_RUNNER_KEY" \
+            | flyctl secrets import --stage --app "$RUNNER_APP" >/dev/null
+
+      - name: Deploy the runner (apps/runner/Dockerfile; never with no-new-privileges, the sandbox needs its file caps)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy . --app "$RUNNER_APP" --config deploy/fly/runner.toml --dockerfile apps/runner/Dockerfile \
+            --remote-only --ha=false --primary-region "$FLY_REGION" --wait-timeout 5m \
+            --env AGENT_TEAM_SERVER="https://$FLY_APP.fly.dev"
