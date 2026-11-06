@@ -29,6 +29,9 @@ may be under someone else's control.
   (`sandbox.mjs`), with no capabilities and no way to gain any. It cannot read the runner's process environment
   (the runner key, the model key) or the data folder (`/data`, 0700: the key file, the push credential, the
   caches). It works in `/work`, shared with the runner through a group, so the runner can check what it made.
+  The runner never follows a link there: the folders on the way to a session's own are the runner's and closed to
+  its writes, and the memory file, `.gitconfig` and `.git` are opened without following links. Stopping a session
+  signals its whole process group, as the agent, and kills it after a grace period.
 - **No credentials.** Each session gets its own empty `HOME` and an allowlisted environment (`PATH`, locale, `TERM`;
   more only by the runner's `sessionEnv`). The model key stays in the runner: sessions reach the model through a
   loopback proxy, with a token of their own that dies with the session and works only for the messages API

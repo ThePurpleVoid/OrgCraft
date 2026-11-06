@@ -13,7 +13,7 @@
 //   - no secret is in the changes (file names and content), the same scan the memory file gets (R4).
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { owns } from './policy.mjs';
@@ -65,12 +65,16 @@ export function harden(cwd) {
   if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('.git is not the runner\'s own directory');
   // With sessions as another user, a .git the agent replaced is the agent's, not the runner's (F3).
   if (m.sandbox && process.getuid && st.uid !== process.getuid()) throw new Error('.git was replaced by the session; not running git in it');
+  // Nothing in .git may be a link (it could point the runner's git, or its writes, at the runner's own files).
+  const link = readdirSync(dot, { withFileTypes: true }).find((e) => e.isSymbolicLink());
+  if (link) throw new Error(`.git/${link.name} is a link; not running git in this copy`);
   const esc = (v) => String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  rmSync(join(dot, 'config'), { force: true });
   writeFileSync(join(dot, 'config'), [
     '[core]', '\trepositoryformatversion = 0', '\tfilemode = true', '\tbare = false', '\tlogallrefupdates = true',
     '[remote "origin"]', `\turl = "${esc(m.url)}"`, '\tfetch = +refs/heads/*:refs/remotes/origin/*',
     ...(m.branch ? [`[branch "${esc(m.branch)}"]`, '\tremote = origin', `\tmerge = refs/heads/${m.branch}`] : []), '',
-  ].join('\n'));
+  ].join('\n'), { flag: 'wx', mode: 0o640 });
   rmSync(join(dot, 'hooks'), { recursive: true, force: true });
   mkdirSync(join(dot, 'hooks'));
   rmSync(join(dot, 'info', 'attributes'), { force: true });
@@ -117,6 +121,7 @@ export async function prepare({ root, work = root, repo, worktree, session, sand
       return { cwd, branch, base, baseSha, head: await git(cwd, 'rev-parse', 'HEAD'), resumed: true };
     }
     for (const d of [work, join(work, 'worktrees'), dirname(cwd)]) sharedDir(d, sandbox);
+    // The clone itself (made by git below, with the runner's umask) is the leaf the agent works in.
     // A full copy, with no hard links or alternates into the cache: the session can change only its own files.
     await git(root, 'clone', '--quiet', '--no-hardlinks', '--no-checkout', cache, cwd);
     harden(cwd);
@@ -176,16 +181,8 @@ async function refreshBase(cwd) {
   }
 }
 
-async function history(cwd) {
-  const { bases } = meta.get(cwd) ?? {};
-  if (!bases?.length) throw new Error('no recorded base for this working copy');
-  await refreshBase(cwd).catch((e) => { e.refresh = true; throw e; });
-  const range = ['HEAD', '--not', ...bases];
-  const names = new Set([
-    ...(await git(cwd, 'log', '--format=', '--name-only', '--no-renames', '--cc', ...range)).split('\n'),
-    ...(await git(cwd, 'diff', '--name-only', '--no-renames', `${bases.at(-1)}...HEAD`)).split('\n'),
-  ].filter(Boolean));
-  const patch = await git(cwd, 'log', '--format=', '-p', '--cc', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', ...range);
+/** The lines a patch adds, per file. */
+function addedLines(patch) {
   const added = new Map();
   // File headers come only between a `diff --` line and its first hunk; inside a hunk, a line starting with
   // `+++ ` or `--- ` is content (an added `++ x` line), so it is scanned like any other.
@@ -199,13 +196,27 @@ async function history(cwd) {
     const pre = line.slice(0, cols);
     if (pre.includes('+') && !pre.includes('-')) added.set(file, (added.get(file) ?? '') + line.slice(cols) + '\n');
   }
+  return [...added].map(([path, text]) => ({ path, text }));
+}
+
+async function history(cwd) {
+  const { bases } = meta.get(cwd) ?? {};
+  if (!bases?.length) throw new Error('no recorded base for this working copy');
+  await refreshBase(cwd).catch((e) => { e.refresh = true; throw e; });
+  const range = ['HEAD', '--not', ...bases];
+  const names = new Set([
+    ...(await git(cwd, 'log', '--format=', '--name-only', '--no-renames', '--cc', ...range)).split('\n'),
+    ...(await git(cwd, 'diff', '--name-only', '--no-renames', `${bases.at(-1)}...HEAD`)).split('\n'),
+  ].filter(Boolean));
+  const patch = await git(cwd, 'log', '--format=', '-p', '--cc', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', ...range);
+  const added = addedLines(patch);
   const messages = await git(cwd, 'log', '--format=%B%x00', ...range);
   const links = [];
   for (const l of (await git(cwd, 'diff', '--raw', '--no-renames', '--no-abbrev', `${bases.at(-1)}...HEAD`)).split('\n')) {
     const m = /^:\d+ 120000 \S+ (\S+) \S+\t(.+)$/.exec(l);
     if (m) links.push({ path: m[2], target: await git(cwd, 'cat-file', 'blob', m[1]) });
   }
-  return { names: [...names], added: [...added].map(([path, text]) => ({ path, text })), messages, links, ...(await binaries(cwd, range)) };
+  return { names: [...names], added, messages, links, ...(await binaries(cwd, range)) };
 }
 
 const MAX_BLOB = 20 * 1024 * 1024;
@@ -219,14 +230,25 @@ async function binaries(cwd, range) {
   if (!objects.length) return { binaries: [], large: [] };
   const p = run('git', [...SAFE, 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], { cwd, env: gitEnv(), maxBuffer: 64 * 1024 * 1024 });
   p.child.stdin.end(objects.join('\n') + '\n');
-  const out = [], large = [];
+  const out = [], large = [], wanted = [];
   for (const line of (await p).stdout.trim().split('\n')) {
     const [sha, type, size] = line.split(' ');
     if (type !== 'blob') continue;
-    const path = named.get(sha) || sha;
-    if (Number(size) > MAX_BLOB) { large.push(path); continue; }
-    const { stdout } = await run('git', [...SAFE, 'cat-file', 'blob', sha], { cwd, env: gitEnv(), encoding: 'buffer', maxBuffer: MAX_BLOB + 1024 });
-    if (stdout.subarray(0, 8000).includes(0)) out.push({ path, text: stdout.toString('latin1') });
+    if (Number(size) > MAX_BLOB) large.push(named.get(sha) || sha); else wanted.push(sha);
+  }
+  if (wanted.length) {
+    // One `cat-file --batch` for every blob: "<sha> blob <size>\n<content>\n" each.
+    const q = run('git', [...SAFE, 'cat-file', '--batch'], { cwd, env: gitEnv(), encoding: 'buffer', maxBuffer: 512 * 1024 * 1024 });
+    q.child.stdin.end(wanted.join('\n') + '\n');
+    const buf = (await q).stdout;
+    let at = 0;
+    while (at < buf.length) {
+      const nl = buf.indexOf(10, at);
+      const [sha, , size] = buf.subarray(at, nl).toString().split(' ');
+      const body = buf.subarray(nl + 1, nl + 1 + Number(size));
+      at = nl + 1 + Number(size) + 1;
+      if (body.subarray(0, 8000).includes(0)) out.push({ path: named.get(sha) || sha, text: body.toString('latin1') });
+    }
   }
   return { binaries: out, large };
 }
@@ -261,7 +283,9 @@ export async function checkpoint({ cwd, branch, role, reason, areas = [], secret
   const stop = (rule, items, error) => ({ commit: null, pushed: false, held, refused: { rule, items: items.slice(0, 20) }, error });
   if (mine.length) {
     await git(cwd, 'add', '-A', '--', ...mine);
-    const hits = findSecrets({ files: mine.map((p) => ({ path: p, text: existsSync(join(cwd, p)) && lstatSync(join(cwd, p)).isFile() ? readFileSync(join(cwd, p), 'utf8') : '' })), values: secrets });
+    // Scanned from what git staged, never by reading the working copy (which could hold links).
+    const staged = addedLines(await git(cwd, 'diff', '--cached', '-p', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv'));
+    const hits = findSecrets({ files: [...mine.map((p) => ({ path: p, text: '' })), ...staged], values: secrets });
     if (hits.length) { await git(cwd, 'reset', '--quiet'); return stop('secret-scan', hits, `not committed: the changes look like they hold a secret (${hits.slice(0, 5).join(', ')})`); }
     if (await git(cwd, 'diff', '--cached', '--name-only')) await git(cwd, '-c', `user.name=${role}`, '-c', 'user.email=runner@agent-team.invalid', 'commit', '--quiet', '--no-verify', '-m', `checkpoint (${role}): ${reason}`);
   }

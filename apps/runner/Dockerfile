@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
   && useradd --no-create-home --uid 10002 --gid 10010 --shell /usr/sbin/nologin --home-dir /nonexistent agent \
   && mkdir -p /data /work /usr/local/libexec/agent-team \
   && chown runner:runner /data && chmod 0700 /data \
-  && chown runner:agentwork /work && chmod 2770 /work \
+  && chown runner:agentwork /work && chmod 2750 /work \
   && cp /usr/bin/setpriv /usr/local/libexec/agent-team/setpriv \
   && chown root:runner /usr/local/libexec/agent-team/setpriv && chmod 0750 /usr/local/libexec/agent-team/setpriv \
   && setcap cap_setuid,cap_setgid+ep /usr/local/libexec/agent-team/setpriv \

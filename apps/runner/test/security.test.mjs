@@ -320,3 +320,68 @@ test('F3: a session runs as another user and cannot read the runner\'s environme
     delete process.env.RUNNER_F3_MARKER;
   }
 });
+
+test('F3: stopping a sandboxed session signals its whole process group through setpriv, then SIGKILL', async () => {
+  const { sandboxSpawn } = await import('../sandbox.mjs');
+  const { mkdtempSync, readFileSync: read, chmodSync: chmod } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  // A stand-in setpriv that records how it was called and runs the command after `--` as the same user.
+  const dir = mkdtempSync(join(tmpdir(), 'runner-kill-'));
+  const log = join(dir, 'calls'), fake = join(dir, 'setpriv');
+  writeFileSync(fake, `#!/bin/sh\necho "$*" >> ${log}\nwhile [ "$1" != "--" ]; do shift; done; shift\nexec "$@"\n`);
+  chmod(fake, 0o755);
+  const sandbox = { uid: 10002, gid: 10010, exec: fake };
+  const child = sandboxSpawn(sandbox, { grace: 300 })({ command: '/bin/sh', args: ['-c', 'trap "" TERM; sleep 30 & echo $!; wait'], cwd: dir, env: { PATH: process.env.PATH } });
+  const grandchild = await new Promise((r) => child.stdout.once('data', (d) => r(Number(String(d).trim()))));
+  const exited = new Promise((r) => child.on('exit', r));
+  assert.equal(child.kill('SIGTERM'), true);
+  await exited;
+  const calls = read(log, 'utf8').trim().split('\n');
+  assert.ok(calls.some((c) => c.endsWith(`-- kill -TERM -- -${child.pid}`)), calls.join('\n'));
+  assert.ok(calls.some((c) => c.endsWith(`-- kill -KILL -- -${child.pid}`)), 'SIGKILL after the grace period');
+  assert.ok(calls.every((c) => c.startsWith('--reuid=10002 --regid=10010')), 'as the agent');
+  await new Promise((r) => setTimeout(r, 100));
+  // Gone, or a zombie waiting for init to reap it: either way it no longer runs.
+  let state = 'gone';
+  try { state = read(`/proc/${grandchild}/stat`, 'utf8').split(') ')[1][0]; } catch {}
+  assert.ok(['gone', 'Z'].includes(state), `the group is gone, children included (state ${state})`);
+});
+
+test('G1: the runner never follows a link the agent planted in its home, memory folder or .git', async () => {
+  const { Session } = await import('../session.mjs');
+  const { sharedDir } = await import('../sandbox.mjs');
+  const { readFileSync: read, rmSync: rm, symlinkSync: link, mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { bare, root } = origin();
+  const outside = mkdtempSync(join(tmpdir(), 'runner-outside-'));
+  const secretFile = join(outside, 'environ'), target = join(outside, 'gitconfig');
+  writeFileSync(secretFile, 'AGENT_TEAM_RUNNER_KEY=rnr_abcdefghijkl.abcdefghijklmnopqrstuvwxyz0123456789ABCD\n');
+  writeFileSync(target, '[credential]\n\thelper = store\n');
+  const start = () => { const s = new Session({ session: 'ses_g1', role: 'web-dev', team: 't', repo: { url: bare }, worktree: 'web/g1', areas: ['web/'] }, { root, emit: async () => {}, adapter: { turn: async () => ({}) }, runnerKey: 'rnr_abcdefghijkl.abcdefghijklmnopqrstuvwxyz0123456789ABCD' }); s.pump = () => {}; return s; };
+  let s = start();
+  await s.start();
+  // Reading: the memory file becomes a link to something the runner can read and the agent cannot.
+  rm(s.memoryPath); link(secretFile, s.memoryPath);
+  let r = await s.checkpoint('t');
+  assert.equal(r.memory, '', 'nothing read through the link');
+  assert.match(r.problem, /memory file was not sent: it is a link/);
+  // Writing: on the next start, .gitconfig and the memory file are links to the runner's own files.
+  await s.stop('now', 't');
+  rm(join(s.home, '.gitconfig')); link(target, join(s.home, '.gitconfig'));
+  s = start();
+  await s.start();
+  assert.equal(read(target, 'utf8'), '[credential]\n\thelper = store\n', 'the runner did not write through the link');
+  assert.equal(s.state, 'ended', 'the session does not start on a planted link');
+  // .git: a link in it, or .git/config as a link, is refused or replaced without touching the target.
+  const { prepare: prep, checkpoint: save, release: rel } = await import('../worktree.mjs');
+  const w = await prep({ root, repo: { url: bare }, worktree: 'web/g1b', session: 'g1b' });
+  rm(join(w.cwd, '.git', 'config')); link(target, join(w.cwd, '.git', 'config'));
+  await assert.rejects(() => save({ cwd: w.cwd, branch: 'web/g1b', role: 'r', reason: 't', areas: ['web/'] }), /is a link/);
+  assert.equal(read(target, 'utf8'), '[credential]\n\thelper = store\n');
+  rel(w.cwd, 'g1b');
+  // sharedDir refuses a folder that is a link.
+  link(outside, join(root, 'planted'));
+  assert.throws(() => sharedDir(join(root, 'planted'), null), /ELOOP|ENOTDIR|not a folder/);
+  // The runner key is a secret like the others.
+  assert.deepEqual(findSecrets({ text: 'rnr_abcdefghijkl.abcdefghijklmnopqrstuvwxyz0123456789ABCD' }), ['memory: runner key']);
+});

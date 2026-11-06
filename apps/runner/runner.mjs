@@ -106,7 +106,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, ad
     }
     let s;
     const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
-    s = new Session(body, { adapter, root, work, sandbox, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval });
+    s = new Session(body, { adapter, root, work, sandbox, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval });
     s.tools = tools;
     setToken(s, body.token, body.tokenExpires);
     sessions.set(body.session, s);

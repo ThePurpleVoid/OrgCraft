@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
-import { sharedDir } from './sandbox.mjs';
+import { safeRead, safeWrite, sharedDir } from './sandbox.mjs';
 import { checkpoint as saveWork, outOfArea, prepare, release } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
@@ -102,15 +102,18 @@ export class Session {
     try {
       const sb = this.deps.sandbox ?? null;
       this.copy = await prepare({ root: this.deps.root, work: this.work, repo: b.repo, worktree: b.worktree, session: this.id, sandbox: sb });
-      for (const d of [join(this.work, 'memory'), dirname(this.memoryPath)]) sharedDir(d, sb);
+      sharedDir(join(this.work, 'memory'), sb);
+      sharedDir(dirname(this.memoryPath), sb, { leaf: true });
       // A home of its own, with no credentials in it: nothing of the runner user's (ssh, gh, git, the runner key).
       this.home = join(this.work, 'homes', safe(this.id));
-      for (const d of [join(this.work, 'homes'), this.home, join(this.home, 'tmp')]) sharedDir(d, sb);
+      sharedDir(join(this.work, 'homes'), sb);
+      sharedDir(this.home, sb, { leaf: true });
+      sharedDir(join(this.home, 'tmp'), sb, { leaf: true });
       // The agent runs git in a clone the runner owns; this lets it, and names its commits.
-      writeFileSync(join(this.home, '.gitconfig'), `[safe]\n\tdirectory = ${this.copy.cwd}\n[user]\n\tname = ${this.role}\n\temail = ${this.role}@agent-team.invalid\n`);
+      safeWrite(join(this.home, '.gitconfig'), `[safe]\n\tdirectory = ${this.copy.cwd}\n[user]\n\tname = ${this.role}\n\temail = ${this.role}@agent-team.invalid\n`, { base: this.work });
       const memory = b.checkpoint?.memory ?? b.prompt?.memory;
-      if (memory !== undefined && memory !== null) writeFileSync(this.memoryPath, String(memory));
-      else if (!existsSync(this.memoryPath)) writeFileSync(this.memoryPath, '');
+      if (memory !== undefined && memory !== null) safeWrite(this.memoryPath, String(memory), { base: this.work });
+      else if (!existsSync(this.memoryPath)) safeWrite(this.memoryPath, '', { base: this.work });
       const pass = [...PASS_ENV, ...(this.deps.sessionEnv ?? [])];
       this.env = { ...Object.fromEntries(pass.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]])), HOME: this.home, TMPDIR: join(this.home, 'tmp'), AGENT_TEAM_ROLE: this.role, AGENT_TEAM_RUN: b.run ?? '', AGENT_TEAM_SESSION: this.id };
       if (this.deps.modelProxy && process.env.ANTHROPIC_API_KEY) {
@@ -277,18 +280,20 @@ export class Session {
     const go = async () => {
       const r = await this.save(reason);
       // The memory file goes to the control plane, so it gets the same secret scan; hits are redacted.
-      const raw = existsSync(this.memoryPath) ? readFileSync(this.memoryPath, 'utf8').slice(0, 64 * 1024) : '';
+      let raw = '', unreadable = null;
+      try { raw = safeRead(this.memoryPath, { base: this.work }); } catch (e) { if (e.code !== 'ENOENT') unreadable = `the memory file was not sent: ${e.code === 'ELOOP' ? 'it is a link' : e.message}`; }
       const memory = redactSecrets(raw, this.secretValues());
       await this.emit('session.idle', { role: this.role, reason: 'checkpoint', branch: this.copy.branch, commit: r.commit, pushed: r.pushed, ...(r.error ? { detail: r.error } : {}), ...(memory !== raw ? { redacted: true } : {}) });
-      return { commit: r.commit, pushed: r.pushed, memory, ...(r.error ? { problem: r.error } : {}) };
+      const problem = [r.error, unreadable].filter(Boolean).join('; ');
+      return { commit: r.commit, pushed: r.pushed, memory, ...(problem ? { problem } : {}) };
     };
     if (!this.copy) return Promise.resolve({ pushed: false, problem: 'the session has no working copy' });
     if (!this.running) return go();
     return new Promise((resolve) => this.afterTurn.push(async () => resolve(await go())));
   }
 
-  /** Values that must never leave in a push or the memory file: the session's proxy token and the real key. */
-  secretValues() { return [this.proxyToken, process.env.ANTHROPIC_API_KEY].filter(Boolean); }
+  /** Values that must never leave in a push or the memory file: the session's proxy token, the model key, the runner key. */
+  secretValues() { return [this.proxyToken, process.env.ANTHROPIC_API_KEY, this.deps.runnerKey].filter(Boolean); }
 
   /** Checkpoint and push through the runner's checks (ownership, symlinks, secrets); never throws. */
   save(reason) {
