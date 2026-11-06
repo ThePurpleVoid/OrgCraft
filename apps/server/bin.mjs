@@ -13,7 +13,8 @@
 //   AGENT_TEAM_STEP_UP_SECRET_HASH  scrypt hash of the step-up secret a person types before approving or raising a
 //                           budget. `agent-team-server --hash-step-up` reads a secret on stdin and prints its hash.
 //                           Local mode makes a secret in --data/step-up.secret
-//   CRON_SECRET             lets a cron call POST /v1/internal/tick (the server also ticks itself every 15 s)
+//   CRON_SECRET             lets a cron call POST /v1/internal/tick (the server also ticks itself every 15 s), and the
+//                           deploy smoke check GET /v1/internal/caller
 //
 // Signing in (hosted, docs/specs/m4-sign-in.md; off unless GITHUB_APP_CLIENT_ID is set, so local mode is unchanged):
 //   GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET   the deployment's GitHub App (its user authorization flow)
@@ -34,7 +35,7 @@ import { ensureTenant } from './store.mjs';
 import { startSinks } from './sinks.mjs';
 import { createControlPlane } from './server.mjs';
 import { hashStepUpSecret, stepUpVerifier } from './m3.mjs';
-import { createIdentity, callerIp, githubUpstream } from './identity.mjs';
+import { createIdentity, githubUpstream } from './identity.mjs';
 
 const { values: o } = parseArgs({ options: {
   port: { type: 'string', default: process.env.PORT ?? '4849' },
@@ -89,7 +90,7 @@ if (proxy.edgeSecret && proxy.edgeSecret.length < 32) { console.error('agent-tea
 const identity = env.GITHUB_APP_CLIENT_ID ? await createIdentity({
   db, key, tenant, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', ownerGithub: env.AGENT_TEAM_OWNER_GITHUB ?? null,
   upstream: githubUpstream({ clientId: env.GITHUB_APP_CLIENT_ID, clientSecret: env.GITHUB_APP_CLIENT_SECRET }),
-  clientIp: (req) => callerIp(req, proxy),
+  proxy,
 }) : null;
 const server = createControlPlane({ db, key, tenant, adminToken, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', sinks, stepUpVerifier: verifier, identity });
 server.listen(Number(o.port), o.host, () => {

@@ -23,6 +23,11 @@ Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD
 
 ## Unreleased
 
+### Control plane: signing in (M4)
+
+- **The deployment is its own OIDC issuer** (#68, ADR 0007, m4-sign-in.md). Built on oidc-provider, with GitHub as the upstream, the web's `__Host-agent-team` cookie with CSRF, and migration 004 (people, sessions, tokens, members, invitations). Off unless `GITHUB_APP_CLIENT_ID` is set. Rate limits read the caller's IP only from our own proxies (#73).
+- **Passkeys and step-up** (spec section 3, K2). `GET`/`POST /v1/me/passkeys`, `GET /v1/me/passkeys/options`, `DELETE /v1/me/passkeys/{id}`, `GET /v1/auth/step-up/challenge`, and `POST /v1/auth/step-up { webauthn }`, on @simplewebauthn/server. A `su_` token comes only from an assertion with user verification, and is bound to the person and the tenant. `GET /v1/internal/caller` (CRON_SECRET) is for the deploy's smoke check. Contracts: **a recorded exception to rule 7**. clients.md section 3 no longer accepts `auth_time` as a step-up, and a hosted deployment refuses `POST /auth/step-up { secret }`. Both changed before 1.0, before any client outside this repository called them.
+
 - **M3 design fix:** `run.resumed` now restarts every session a pause stopped, from its last checkpoint, after an owner's resume or the budget's next-day resume. Pause and resume handlers act only if the run's state and version still match (found in review of #54).
 
 ### Runner

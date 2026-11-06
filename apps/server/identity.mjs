@@ -182,10 +182,13 @@ function firstPartyPolicy() {
  * secret came through our Vercel rewrite, whose own entry sits one further left, so that is the caller. Anything a
  * client puts in the header lands to the left of those and is never read. With no hops configured, the socket address.
  */
-export function callerIp(req, { hops = 0, edgeSecret = null, edgeHeader = 'x-agent-team-edge' } = {}) {
+/** Whether a request came through our edge: it carries the edge secret (constant-time compared). */
+export const viaEdge = (req, { hops = 0, edgeSecret = null, edgeHeader = 'x-agent-team-edge' } = {}) => !!edgeSecret && hops > 0 && same(req.headers[edgeHeader] ?? '', edgeSecret);
+
+export function callerIp(req, proxy = {}) {
+  const { hops = 0 } = proxy;
   const list = String(req.headers['x-forwarded-for'] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-  const viaEdge = !!edgeSecret && hops > 0 && same(req.headers[edgeHeader] ?? '', edgeSecret);
-  const n = hops > 0 ? hops + (viaEdge ? 1 : 0) : 0;
+  const n = hops > 0 ? hops + (viaEdge(req, proxy) ? 1 : 0) : 0;
   const ip = n > 0 && list.length >= n ? list[list.length - n] : '';
   return (ip || req.socket?.remoteAddress || '').slice(0, 64);
 }
@@ -208,11 +211,11 @@ function limiter(now) {
  * The issuer. `publicUrl` is the issuer and the cookie origin (https). `tenant` is the workspace the first owner is
  * made in. `ownerGithub` is the first owner's numeric GitHub user id, read only while the deployment has no members.
  * `upstream` is githubUpstream(...) (or a stub with the same two methods). `clients` adds apps and the CLI:
- * [{ client_id, redirect_uris, application_type: 'native' }]. `clientIp(req)` names the caller for rate limits
- * (callerIp). There is no global cap: one would be a bucket anyone could empty for everyone (security review, #73);
+ * [{ client_id, redirect_uris, application_type: 'native' }]. `proxy` is { hops, edgeSecret } (callerIp), and
+ * `clientIp(req)` names the caller for rate limits. There is no global cap: one would be a bucket anyone could empty for everyone (security review, #73);
  * floods are for the host's concurrency limits and the edge.
  */
-export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), clientIp = (req) => callerIp(req) }) {
+export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), proxy = {}, clientIp = (req) => callerIp(req, proxy) }) {
   const issuer = new URL(publicUrl);
   if (issuer.protocol !== 'https:') throw new Error('sign-in needs an https AGENT_TEAM_PUBLIC_URL (the cookie is Secure and __Host-)');
   if (issuer.pathname !== '/' || issuer.search || issuer.hash) throw new Error('AGENT_TEAM_PUBLIC_URL must be an origin with no path for sign-in');
@@ -490,5 +493,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     await db.system("delete from oauth_tokens where expires_at < now() - interval '1 day'");
   }
 
-  return { get provider() { return provider; }, handle, sessionOf, workspaces, csrfOk, endSessions, sweep, origin, admit };
+  /** What the deploy smoke check reads (GET /v1/internal/caller): the caller as the limits see it, and the edge. */
+  const caller = (req) => ({ ip: clientIp(req), edge: viaEdge(req, proxy) });
+
+  return { get provider() { return provider; }, caller, handle, sessionOf, workspaces, csrfOk, endSessions, sweep, origin, admit };
 }
