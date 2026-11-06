@@ -104,7 +104,10 @@ export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), por
     // Same paths inside as outside, so repo.url (file:///…) and the control folder mean the same in both.
     // The runner and its sessions are other users in there: the stand-in remote and the control folder are shared.
     git(bare, 'config', 'core.sharedRepository', '0777');
-    execFileSync('chmod', ['-R', 'a+rwX', dir]);
+    // Only what the container's users must write: the stand-in remote and the control folder. The folder itself is
+    // only passable (state.json, the control plane's data and the team copy stay this user's).
+    execFileSync('chmod', ['a+x', dir]);
+    execFileSync('chmod', ['-R', 'a+rwX', bare, control]);
     const vol = `m3-dry-run-${randomBytes(4).toString('hex')}`;
     const run = (...cmd) => ['run', '--rm', '--network', 'host', '-v', `${vol}:/data`, '-v', `${dir}:${dir}`, '-e', 'AGENT_TEAM_RUNNER_ADAPTER', '-e', 'AGENT_TEAM_DRYRUN_CONTROL', '-e', 'AGENT_TEAM_PROPOSALS', '-e', 'AGENT_TEAM_RUNNER_GITCONFIG=/data/runner/gitconfig', image, ...cmd];
     // The runner's git trusts the folder it does not own (the bare repository, made by this user).
