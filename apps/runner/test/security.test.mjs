@@ -385,3 +385,23 @@ test('G1: the runner never follows a link the agent planted in its home, memory 
   // The runner key is a secret like the others.
   assert.deepEqual(findSecrets({ text: 'rnr_abcdefghijkl.abcdefghijklmnopqrstuvwxyz0123456789ABCD' }), ['memory: runner key']);
 });
+
+test('F3: when the leader exits (on TERM, or at a normal end), the rest of its group is killed too', async () => {
+  const { sandboxSpawn } = await import('../sandbox.mjs');
+  const { mkdtempSync, readFileSync: read, chmodSync: chmod } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'runner-kill2-'));
+  const fake = join(dir, 'setpriv');
+  writeFileSync(fake, '#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift\nexec "$@"\n');
+  chmod(fake, 0o755);
+  const gone = (pid) => { try { return read(`/proc/${pid}/stat`, 'utf8').split(') ')[1][0] === 'Z'; } catch { return true; } };
+  for (const [name, script, stop] of [['TERM', '(trap "" TERM; exec sleep 30) & echo $!; wait', true], ['normal end', '(trap "" TERM; exec sleep 30) & echo $!; exit 0', false]]) {
+    const child = sandboxSpawn({ uid: 10002, gid: 10010, exec: fake }, { grace: 60000 })({ command: '/bin/sh', args: ['-c', script], cwd: dir, env: { PATH: process.env.PATH } });
+    const bg = await new Promise((r) => child.stdout.once('data', (d) => r(Number(String(d).trim()))));
+    const exited = new Promise((r) => child.on('exit', r));
+    if (stop) child.kill('SIGTERM');
+    await exited;
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(gone(bg), `${name}: the background command is gone`);
+  }
+});

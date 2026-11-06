@@ -35,7 +35,9 @@ export function sandboxSpawn(sandbox, { grace = 5000 } = {}) {
     const child = spawn(pre[0], [...pre.slice(1), command, ...args], { cwd, env, detached: !!sandbox, stdio: ['pipe', 'pipe', 'pipe'] });
     if (sandbox) {
       let closed = false, timer = null;
-      child.on('exit', () => { closed = true; clearTimeout(timer); });
+      // When the leader exits, whatever it left in its group (a background command that ignored TERM, or one still
+      // running at a normal end) is killed too.
+      child.on('exit', () => { closed = true; clearTimeout(timer); groupKill('SIGKILL'); });
       const groupKill = (sig) => {
         const k = spawn(sandbox.exec ?? 'setpriv', [`--reuid=${sandbox.uid}`, `--regid=${sandbox.gid}`, '--clear-groups', '--inh-caps=-all', '--no-new-privs', '--', 'kill', `-${String(sig).replace(/^SIG/, '')}`, '--', `-${child.pid}`], { stdio: 'ignore' });
         k.on('error', () => {});
