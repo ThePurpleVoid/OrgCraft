@@ -84,6 +84,10 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
   await approval.getByRole('button', { name: 'Confirm' }).click();
   await approval.getByText('That token was not accepted').waitFor();
   await approval.getByLabel('Step-up secret').fill(cp.stepUpSecret);
+  // A live update redraws the chat while the secret is typed in: what was typed must survive it (qa-web, PR #53).
+  cp.say('A note that arrives while you type.');
+  await page.getByText('A note that arrives while you type.').waitFor();
+  assert.equal(await approval.getByLabel('Step-up secret').inputValue(), cp.stepUpSecret, 'the redraw kept the typed secret');
   await approval.getByRole('button', { name: 'Confirm' }).click();
   await approval.locator('.answer').waitFor();
   assert.match(await approval.locator('.answer').textContent(), /^Approve · owner/);
@@ -117,7 +121,89 @@ test('at 360px the chat fits, the cards answer, and the team is read-only', { sk
       await page.getByText('On a small screen the team is read-only').waitFor();
       assert.equal(await page.locator('#publish').isVisible(), false);
       assert.equal(await page.locator('#library input').first().isDisabled(), true);
+      // No drag or edit hints that contradict the read-only note.
+      assert.equal(await page.getByText('Switch roles on and off').isVisible(), false);
+      assert.equal(await page.getByText('Drag a card onto another').isVisible(), false);
+      const tab = await page.getByRole('button', { name: 'Chat' }).boundingBox();
+      assert.ok(tab.height >= 44, `the page tabs are touch targets (${tab.height}px)`);
+      await page.getByRole('button', { name: 'Chat' }).click();
+      const [pause, stop] = [await page.locator('#run-pause').boundingBox(), await page.locator('#run-stop').boundingBox()];
+      assert.ok(pause && stop && Math.abs(pause.y - stop.y) < 2, 'Pause and Stop share one line');
+      assert.ok(stop.height >= 44 && stop.x + stop.width <= 360, 'Stop is a touch target on screen');
     }
     await ctx.close();
   }
+});
+
+test('start a run: the published team, a daily cap first, step-up to set it, and the 409 when one is going', { skip }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'studio-e2e-start-'));
+  execFileSync('git', ['-C', root, 'init', '-q']);
+  execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
+  execFileSync('git', ['-C', root, 'add', '-A']);
+  execFileSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'team']);
+  // Published and pushed: a run is pinned to a commit its remote has.
+  const bare = mkdtempSync(join(tmpdir(), 'studio-e2e-origin-'));
+  execFileSync('git', ['init', '-q', '--bare', bare]);
+  execFileSync('git', ['-C', root, 'remote', 'add', 'origin', bare]);
+  execFileSync('git', ['-C', root, 'push', '-q', '-u', 'origin', 'HEAD:refs/heads/main']);
+  execFileSync('git', ['-C', root, 'branch', '-q', '--set-upstream-to=origin/main']);
+  const plane = await fakeControlPlane({ team: 'sample-app', running: false, perDay: null });
+  const s2 = createStudio({ root, env: plane.env });
+  await new Promise((r) => s2.listen(0, '127.0.0.1', r));
+  const at = `http://127.0.0.1:${s2.address().port}`;
+  try {
+    for (const [width, height, name] of [[1280, 860, 'desktop'], [360, 760, 'phone']]) {
+      const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: SHOTS ? 2 : 1 });
+      const page = await ctx.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(e.message));
+      await page.goto(`${at}/?t=${s2.launchToken}`);
+      await page.goto(`${at}/#chat`);
+      await page.locator('#run-state', { hasText: 'Not running' }).waitFor();
+      assert.equal(await page.locator('#run-pause').isVisible(), false, 'no pause without a run');
+      await page.getByRole('button', { name: 'Start a run' }).click();
+      const dlg = page.locator('#start-dialog');
+      await dlg.getByText('chief-of-staff reports to the owner').waitFor();
+      const go = dlg.getByRole('button', { name: 'Start', exact: true });
+      if (name === 'desktop') {
+        assert.equal(await go.isDisabled(), true, 'Start waits for a daily cap');
+        await dlg.getByLabel('Daily cap').fill('20');
+      } else {
+        await page.waitForFunction(() => document.querySelector('#start-cap').value === '20.00'); // the cap set on desktop
+      }
+      assert.equal(await go.isDisabled(), false);
+      if (SHOTS) await page.screenshot({ path: join(SHOTS, `start-${name}.png`) });
+      if (name === 'phone') {
+        // Someone started one elsewhere meanwhile: the control plane's 409 is shown, nothing else changes.
+        plane.runs.push({ id: 'run_elsewhere', state: 'running', started: new Date().toISOString() });
+        await go.click();
+        await dlg.getByText('run run_elsewhere is still going').waitFor();
+        assert.equal(plane.started.length, 1);
+        await dlg.getByRole('button', { name: 'Cancel' }).click();
+        await ctx.close();
+        break;
+      }
+      await go.click();
+      // The first cap lets the team spend at all, so it needs a recent sign-in.
+      const su = page.locator('#stepup-dialog');
+      await su.getByLabel('Step-up secret').fill('not it');
+      await su.getByRole('button', { name: 'Confirm' }).click();
+      await su.getByText('That secret was not accepted').waitFor();
+      await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
+      await su.getByRole('button', { name: 'Confirm' }).click();
+      await page.locator('#run-state', { hasText: 'Running' }).waitFor();
+      await dlg.waitFor({ state: 'hidden' });
+      assert.equal(plane.budget.perDay, 2000);
+      assert.equal(plane.started.length, 1);
+      assert.equal(plane.started[0].team.version, execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim());
+      await page.getByText('The team started a run').waitFor();
+      await page.getByRole('button', { name: 'Pause' }).waitFor();
+      // Stop it, so the phone pass finds no run going until the one "started elsewhere".
+      page.once('dialog', (d) => d.accept());
+      await page.getByRole('button', { name: 'Stop' }).click();
+      await page.getByRole('button', { name: 'Start a run' }).waitFor();
+      assert.deepEqual(errors, []);
+      await ctx.close();
+    }
+  } finally { s2.closeAllConnections?.(); s2.close(); plane.close(); }
 });

@@ -6,3 +6,5 @@ Taken by `tests/e2e/studio-chat.e2e.mjs` (`SCREENSHOTS=docs/product/screenshots/
 | --- | --- | --- |
 | Desktop, 1280px | [desktop-light.png](desktop-light.png) | [desktop-dark.png](desktop-dark.png) |
 | Phone, 360px | [phone-light.png](phone-light.png) | [phone-dark.png](phone-dark.png) |
+
+Start a run, light: [start-desktop.png](start-desktop.png) (1280px) and [start-phone.png](start-phone.png) (360px).
