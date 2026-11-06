@@ -137,7 +137,7 @@ Switch roles on and off from the library, drag a card onto another to change who
 
 The Studio, like the dashboard, answers only on `localhost`, `127.0.0.1`, `[::1]` and the address it is bound to. That way a web page on another domain cannot reach it by pointing a DNS name at your machine. To open it under another name, list that name in `STUDIO_ALLOWED_HOSTS` (comma-separated).
 
-**Chat** talks to your team's chief of staff through the control plane (set `AGENT_TEAM_SERVER`, `AGENT_TEAM_SERVER_TOKEN` and `AGENT_TEAM_SERVER_TEAM`). The Studio signs you in with the link it prints. To open it from a phone, start it with `--host 0.0.0.0` and open the network link it prints. That link is plain HTTP, so use it on trusted networks only.
+**Chat** talks to your team's chief of staff through the control plane (set `AGENT_TEAM_SERVER`, `AGENT_TEAM_SERVER_TOKEN` and `AGENT_TEAM_SERVER_TEAM`). With no run going, **Start a run…** starts one on the team as last published, once you set a daily cap. The Studio signs you in with the link it prints. To open it from a phone, start it with `--host 0.0.0.0` and open the network link it prints. That link is plain HTTP, so use it on trusted networks only.
 
 ## The board and the live dashboard
 
