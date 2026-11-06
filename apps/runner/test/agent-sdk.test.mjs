@@ -110,3 +110,32 @@ test('smoke: a real model reports through the team tools', { skip: smoke ? false
     await cp.close();
   }
 });
+
+test('the tier map and the cost fallback come from the shared price table; the SDK\'s reported cost wins when it has one', async () => {
+  const { agentSdkAdapter } = await import('../adapters/agent-sdk.mjs');
+  const { Session, PRICES } = await import('../session.mjs');
+  const { estimate } = await import('../../../packages/model-prices/index.mjs');
+  // A fake SDK (no model, no network): one result message with or without total_cost_usd.
+  const sdkWith = (result) => ({
+    createSdkMcpServer: () => ({}), tool: (name, d, s, fn) => ({ name, fn }),
+    query: () => (async function* () { yield { type: 'result', subtype: 'success', result: 'ok', session_id: 'x', ...result }; })(),
+  });
+  const usage = { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 2000, cache_creation_input_tokens: 0 };
+  const o = { env: { ANTHROPIC_API_KEY: 'st_session_token', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1/s/x' }, model: PRICES.tiers.routine, tools: [], callTool: async () => ({ text: '' }), signal: new AbortController().signal, preToolUse: async () => ({ allow: true }), prompt: 'p', systemPrompt: 's', cwd: process.cwd() };
+  const none = await agentSdkAdapter({ sdk: sdkWith({ usage }) }).turn(o);
+  assert.equal(none.usage.costUsd, estimate({ model: PRICES.tiers.routine, inputTokens: 1000, outputTokens: 500, cacheReadTokens: 2000 }, PRICES).usd);
+  assert.ok(none.usage.costUsd > 0, 'no reported cost: the list price, not zero');
+  // A model the table does not list is not free: it counts at the dearest listed model's prices.
+  const unlisted = await agentSdkAdapter({ sdk: sdkWith({ usage }) }).turn({ ...o, model: 'claude-not-in-the-table' });
+  const dearest = Math.max(...Object.keys(PRICES.models).map((id) => estimate({ model: id, inputTokens: 1000, outputTokens: 500, cacheReadTokens: 2000 }, PRICES).usd));
+  assert.ok(unlisted.usage.costUsd > 0, 'an unlisted model is never counted as free');
+  assert.ok(unlisted.usage.costUsd >= none.usage.costUsd && Math.abs(unlisted.usage.costUsd - dearest) < 1e-12, 'at the dearest listed model');
+  const reported = await agentSdkAdapter({ sdk: sdkWith({ usage, total_cost_usd: 0.1234 }) }).turn(o);
+  assert.equal(reported.usage.costUsd, 0.1234);
+
+  const model = (brief, deps = {}) => new Session({ session: 's', role: 'r', team: 't', prompt: { brief } }, { root: '/nonexistent', ...deps }).model;
+  assert.equal(model('**Model:** light'), PRICES.tiers.light);
+  assert.equal(model('**Model:** deep'), PRICES.tiers.deep);
+  assert.equal(model('no tier line'), PRICES.tiers.standard, 'no tier: standard');
+  assert.equal(model('**Model:** light', { tiers: { light: 'claude-other' } }), 'claude-other', 'the runner config overrides a tier');
+});

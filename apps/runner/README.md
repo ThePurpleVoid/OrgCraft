@@ -180,7 +180,9 @@ the machine happens to have.
 
 The whole M3 exit test on one machine with no model and no key (Pass A): the control plane, the Studio, and this
 runner with the scripted fake model in `adapters/dryrun.mjs` (a chief of staff, a builder and QA), against a fresh team
-whose remote is a bare repository on disk.
+whose remote is a bare repository on disk. The chief of staff asks you one decision card (step 7) and says back what you chose; the
+builder's change goes through QA's SIGNOFF to an approval card and a merge pinned to its head. Use `--runner docker`
+to exercise the sandbox (D2, D9) as well.
 
 ```bash
 npm ci --prefix apps/server && npm ci --prefix apps/runner

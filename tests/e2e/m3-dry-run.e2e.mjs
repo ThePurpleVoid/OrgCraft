@@ -74,7 +74,13 @@ test('a chat request ends in a pull request, an approval card with step-up, and 
   await waitFor(() => hk.log().some((l) => l.step === 'qa:waiting-for-signoff'), 60_000);
   hk.signoff({ evidence: ['qa/dry-run.log'], walked: 'the M3 exit test, step 6' });
 
-  // Steps 7 and 8: the approval card names the PR and its head; approved with step-up.
+  // Step 7: the chief of staff's decision card, answered with the other option; it says back what was chosen.
+  const decision = await waitFor(async () => (await cards()).find((x) => x.kind === 'decision' && x.state === 'open'), 60_000);
+  assert.deepEqual(decision.options.map((o) => o.id), ['home', 'new-page']);
+  await studio('POST', `/v1/team/cards/${encodeURIComponent(decision.id)}`, { kind: decision.kind, subject: decision.subject, option: 'new-page', version: decision.version, key: `e2e-${decision.id}` });
+  await waitFor(() => hk.log().some((l) => l.step === 'chief-of-staff:answered' && l.answer === 'new-page'), 60_000);
+
+  // Step 8: the approval card names the PR and its head; approved with step-up.
   const c = await openApproval();
   const head = execFileSync('git', ['-C', h.bare, 'rev-parse', `refs/heads/${opened.branch}`], { encoding: 'utf8' }).trim();
   assert.equal(c.data.pr, opened.ref, 'the approval card names the pull request');
