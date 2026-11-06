@@ -93,7 +93,7 @@ export function createChat({ root, onOpen } = {}) {
     connected: null, error: null, events: [], next: null, cards: new Map(), answers: new Map(), pending: [],
     notes: new Map(), // card id -> note shown above it (changed, step-up)
     run: null, cost: null, summary: null, busy: false, loaded: false, es: null, team: null,
-    runError: null, budget: null, plan: null, // GET /v1/team/budget and /v1/team/run/plan, read when the start dialog opens
+    runError: null, budget: null, plan: null, shaOpen: new Set(), // approval cards whose full sha is shown // GET /v1/team/budget and /v1/team/run/plan, read when the start dialog opens
     older: [], local: new Set(), // pages fetched with 'Show earlier'; events this page posted
 
   };
@@ -164,6 +164,20 @@ export function createChat({ root, onOpen } = {}) {
     return { answered: 'Answered', expired: 'Expired: nobody answered in time', superseded: 'No longer needed' }[card.state] ?? null;
   }
 
+  /**
+   * What a merge approval is bound to (m3-design D1): the PR and the head commit it may land, from the card's data.
+   * The short sha shows; a tap shows the full one, so the person can match it against the PR before approving.
+   */
+  function boundHtml(card) {
+    const pr = Number(card.data?.pr);
+    const sha = String(card.data?.headSha ?? '');
+    if (card.kind !== 'approval' || !Number.isInteger(pr) || pr < 1 || !/^[0-9a-f]{7,64}$/.test(sha)) return '';
+    return `<details class="bound" data-sha-card="${esc(card.id)}"${st.shaOpen.has(card.id) ? ' open' : ''}>
+      <summary>Pull request <strong>#${pr}</strong>, commit <code>${esc(sha.slice(0, 7))}</code></summary>
+      <p class="sha">Exactly commit <code>${esc(sha)}</code>. If the pull request moves on, this approval no longer counts and you are asked again.</p>
+    </details>`;
+  }
+
   function cardHtml(card, answered) {
     answered = answered || (card.state && card.state !== 'open' ? closedText(card) ?? human(card.state) : answered);
     const note = st.notes.get(card.id);
@@ -180,6 +194,7 @@ export function createChat({ root, onOpen } = {}) {
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
       ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="Step-up secret" placeholder="Step-up secret" required><button type="submit" class="primary">Confirm</button></form>` : ''}
       <h3>${esc(card.title)}</h3>
+      ${boundHtml(card)}
       ${card.body ? `<div class="md">${md(card.body)}</div>` : ''}
       ${card.recommendation?.why && !answered ? `<p class="muted why">${esc(card.recommendation.why)}</p>` : ''}
       ${links ? `<p class="links">${links}</p>` : ''}
@@ -499,6 +514,11 @@ export function createChat({ root, onOpen } = {}) {
     f.querySelector('input').value = '';
     answer(f.dataset.stepup, f.dataset.option, secret);
   });
+  // Keeps a card's full sha shown across live redraws.
+  log.addEventListener('toggle', (e) => {
+    const d = e.target.closest?.('details[data-sha-card]');
+    if (d) d.open ? st.shaOpen.add(d.dataset.shaCard) : st.shaOpen.delete(d.dataset.shaCard);
+  }, true);
   log.addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;

@@ -14,6 +14,14 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as store from './store.mjs';
 import { attachRunners } from './runners.mjs';
 import { createM3 } from './m3.mjs';
+import { createBus } from './bus.mjs';
+
+/** The bus hears every stored event (deliveries) and run and approval changes (stops, results). */
+function wireBus(m3, bus) {
+  m3.hooks.project = bus.project;
+  m3.hooks.runChanged = bus.runChanged;
+  m3.hooks.approvalDecided = bus.approvalDecided;
+}
 
 const { Problem } = store;
 const REPORTS_PER_MINUTE = 30;
@@ -80,13 +88,23 @@ function hub() {
  */
 export function createControlPlane(opts) {
   const server = createServer();
-  // Runners connect here over a WebSocket (runner-protocol.md). The ops they may send are wired in as M3 lands.
-  const runners = attachRunners(server, { db: opts.db, ...(opts.runnerOptions ?? {}) });
   const m3 = opts.m3 ?? createM3({ db: opts.db, now: opts.now, publicUrl: opts.publicUrl });
-  server.on('request', createHandler({ ...opts, runners, m3 }));
+  let runners = null;
+  // The bus: what wakes whom, and sending it to runners (m3-design sections 2 to 4, 7).
+  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl });
+  wireBus(m3, bus);
+  // Runners connect here over a WebSocket (runner-protocol.md).
+  runners = attachRunners(server, { db: opts.db, ops: bus.ops, welcome: bus.welcome, onLost: bus.onLost, ...(opts.runnerOptions ?? {}) });
+  server.on('request', createHandler({ ...opts, runners, m3, bus }));
+  // The tick runs in-process every 15 s; a deployment can also call POST /v1/internal/tick from a cron.
+  const tickMs = opts.tickMs ?? 15_000;
+  let ticking = false;
+  const timer = tickMs > 0 ? setInterval(() => { if (ticking) return; ticking = true; bus.tick().catch((e) => console.error(`tick: ${e.message}`)).finally(() => { ticking = false; }); }, tickMs) : null;
+  timer?.unref?.();
   server.runners = runners;
   server.m3 = m3;
-  server.on('close', () => runners.closeAll());
+  server.bus = bus;
+  server.on('close', () => { if (timer) clearInterval(timer); runners.closeAll(); });
   return server;
 }
 
@@ -95,11 +113,17 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null }) {
+  if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
+  let tickMisses = [];
+  const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl });
+  if (!givenBus) wireBus(m3, bus);
+  // Every write of the m3 module and the bus reaches the live streams and the sinks once it commits.
+  m3.onStored((stored) => { const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); });
   /** Runs an m3 write and tells the hub and sinks about what it stored. */
-  const did = async (p) => { const { result, stored } = await p; const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); return result; };
+  const did = async (p) => (await p).result;
   const etagged = async (req, res, seq, body, extra = '') => {
     const tag = `W/"${seq}-${Math.floor(now().getTime() / 60_000)}${extra ? `-${Buffer.from(extra).toString('base64url')}` : ''}"`;
     if (req.headers['if-none-match'] === tag) { res.writeHead(304, { etag: tag }); return res.end(); }
@@ -113,6 +137,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
 
   const person = (req) => {
     const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? '');
+    // D6: a session's token acts for a role, never for a person (approvals, cards, runs, budgets, step-up).
+    if (m && /^st_/.test(m[1])) throw new Problem(403, 'a session token cannot act for a person');
     if (!m || !adminToken || !same(m[1], adminToken)) throw new Problem(401, 'sign in: send Authorization: Bearer <token>');
     return tenant;
   };
@@ -242,6 +268,33 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return idempotent(req, res, t, principal, url.pathname, async () => send(res, 201, await store.registerRunner(db, body ?? {}), {}, { secrets: ['key'] }));
     }
 
+    // The team tools (team-tools.md), for a session: its token names the session; the actor comes from it alone.
+    if (a === 'sessions' && b === 'tools' && c && m === 'POST' && !parts[5]) {
+      const tok = /^Bearer (st_.+)$/.exec(req.headers.authorization ?? '')?.[1];
+      const sess = tok ? await bus.authSession(team, tok) : null;
+      if (!sess) throw new Problem(401, 'send this session\'s token: Authorization: Bearer st_…');
+      return idempotent(req, res, sess.tenant, `session:${sess.id}`, url.pathname, async () => {
+        const body = await readJson(req, 64 * 1024);
+        return send(res, 200, await bus.toolCall(sess, c, body));
+      });
+    }
+
+    // The tick for hosts without a long-lived process (a cron). Refused unless CRON_SECRET is set (issue #28 D8).
+    if (a === 'internal' && team === 'tick' && !b && m === 'POST') {
+      if (!cronSecret) throw new Problem(404, 'not found');
+      const at = now().getTime();
+      tickMisses = tickMisses.filter((x) => x > at - 60_000);
+      const got = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
+      // The right secret always passes, so wrong guesses cannot lock the real cron out; guesses are slowed.
+      if (!got || !same(got, cronSecret)) {
+        if (tickMisses.length >= 10) throw new Problem(429, 'too many wrong tick secrets; try again in a minute');
+        tickMisses.push(at);
+        throw new Problem(401, 'send Authorization: Bearer <CRON_SECRET>');
+      }
+      await bus.tick();
+      return send(res, 200, { ok: true });
+    }
+
     const t = person(req);
     return idempotent(req, res, t, 'admin', url.pathname, () => personRoute(req, res, t, url, parts));
   }
@@ -311,7 +364,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'budget' && !c && m === 'GET') return send(res, 200, await m3.getBudget(t, team));
       if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), 'admin', { stepUp })));
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
-      if (b === 'runs' && !c && m === 'POST') return send(res, 201, await did(m3.startRun(t, team, (await readJson(req, 512 * 1024)) ?? {}, 'admin')));
+      if (b === 'runs' && !c && m === 'POST') return send(res, 201, await did(m3.startRun(t, team, (await readJson(req, MAX_BODY)) ?? {}, 'admin')));
       if (b === 'chat' && !c && m === 'GET') return send(res, 200, await m3.getChat(t, team, Object.fromEntries(url.searchParams)));
       if (b === 'chat' && !c && m === 'POST') {
         const { created, event } = await did(m3.postChat(t, team, await readJson(req, 64 * 1024), 'admin'));

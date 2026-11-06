@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="agent-team-mode" content="hosted">
+  <meta name="referrer" content="no-referrer">
+  <title>Your account · Agent Team Studio</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body class="auth-page">
+  <main class="auth-card wide" aria-labelledby="account-title">
+    <p class="auth-brand row"><strong>Agent Team Studio</strong> <a href="/" class="muted">Back to the team</a></p>
+    <h1 id="account-title">Your account</h1>
+    <div id="account"><p class="muted">Loading…</p></div>
+  </main>
+  <dialog id="passkey-add" class="auth-dialog" aria-labelledby="passkey-add-title">
+    <form class="dialog" id="passkey-add-form">
+      <h2 id="passkey-add-title">Add a passkey</h2>
+      <p>A passkey is how you confirm it is you before you approve something, raise a budget or change who can do what. It uses this device's fingerprint, face or screen lock.</p>
+      <label>Name <input id="passkey-name" maxlength="60" placeholder="e.g. Work laptop" autocomplete="off"></label>
+      <p class="result error" role="alert" id="passkey-add-result"></p>
+      <div class="dialog-actions"><button type="button" id="passkey-add-cancel">Not now</button><button type="submit" class="primary">Create passkey</button></div>
+    </form>
+  </dialog>
+  <script type="module" src="/account.js"></script>
+</body>
+</html>

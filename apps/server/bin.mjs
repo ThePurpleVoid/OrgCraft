@@ -13,6 +13,7 @@
 //   AGENT_TEAM_STEP_UP_SECRET_HASH  scrypt hash of the step-up secret a person types before approving or raising a
 //                           budget. `agent-team-server --hash-step-up` reads a secret on stdin and prints its hash.
 //                           Local mode makes a secret in --data/step-up.secret
+//   CRON_SECRET             lets a cron call POST /v1/internal/tick (the server also ticks itself every 15 s)
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';

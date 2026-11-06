@@ -112,6 +112,39 @@ step-up is refused (`401 step-up-required`), never passed. A notification to the
 notification channels (M4). Local mode makes a
 secret in `--data/step-up.secret`. M4's sign-in replaces the secret; the header stays.
 
+## The bus: waking roles on runners
+
+A run's roles live on runners. The control plane decides who an event wakes and sends it:
+
+- the owner's chat message wakes the front door (the one role that reports to `owner`);
+- a HANDOFF, BUG, SIGNOFF or BLOCKED wakes its `to` (a BLOCKED with no `to` goes up the chain);
+- an answered decision card or a decided approval wakes the session that asked.
+
+Each wake is a `deliveries` row written with the event. It goes out as `session.message` to a live session, or as
+`session.start` (with the roster, the role's brief and areas, its worktree branch, a 15-minute session token and the
+tools URL) to the least busy connected runner. A run at its session cap queues the role (`session.queued`). Unacked
+sends are retried after 5 s, 30 s, 2 min, then every 10 min; after ten tries the delivery is dead and the front door
+gets a BLOCKED. While a run is paused or the day's budget is spent, deliveries are held and go out on resume. Pausing
+asks each live session for a checkpoint (its branch pushed, its memory file) and then stops it after the current step;
+the next start resumes from the checkpoint.
+
+A session's branch is `team/<role>/<run id>`, or the waking message's `branch` when that is the role's own `team/<role>/…`
+branch: never `main`, a `claude/**` branch or another role's.
+
+Sessions call the team tools at `POST /v1/sessions/{session}/tools/{tool}` with `Authorization: Bearer st_…`. The
+control plane checks `tools/1` again (it is the authority), takes the actor from the token, and audits each call. A
+session token is refused (`403`) on every person endpoint. An `accept` approval must name the `pr` and `headSha`, and
+`approval.result` carries the approved head.
+
+Runners may send `session.*`, `usage.recorded`, `report.heartbeat`, `proposal.*` and (the front door only)
+`chat.message` events, for sessions they run; the server sets the actor, run and team. Anything else is nacked and
+audited.
+
+**The tick** runs in-process every 15 s (`tickMs`): retries, expired approvals and cards (closed, with
+`approval.result` to the session), budget-paused runs on the next UTC day, queued sessions, and sockets of revoked
+runners. Rows are taken with `skip locked`, so instances can tick at once. A host without a long-lived process calls
+`POST /v1/internal/tick` with `Authorization: Bearer $CRON_SECRET`; with `CRON_SECRET` unset that path does not exist.
+
 ## Host it in another server
 
 `createHandler(opts)` from `server.mjs` is the API as a plain `(req, res)` handler, for serverless functions or a

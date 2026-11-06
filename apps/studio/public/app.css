@@ -198,6 +198,10 @@ a { color: var(--accent); }
 .card-msg h3 { font-size: 15px; margin: 2px 0 4px; }
 .card-meta { font-size: 12px; }
 .card-msg .why { font-size: 12.5px; margin: 4px 0; }
+.card-msg .bound { margin: 4px 0; font-size: 13px; }
+.card-msg .bound summary { cursor: pointer; min-height: 32px; display: list-item; padding: 4px 0; }
+.card-msg .bound code { font-size: 12.5px; }
+.card-msg .bound .sha { margin: 2px 0 0; font-size: 12.5px; overflow-wrap: anywhere; }
 .card-msg .links { font-size: 12.5px; margin: 4px 0; }
 .card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .card-actions button { min-height: 36px; padding: 6px 16px; }
@@ -239,3 +243,23 @@ a { color: var(--accent); }
 .start-dialog .result.error { color: var(--error); }
 .stepup-dialog p { margin: 0 0 10px; }
 @media (max-width: 640px) { .start-dialog, .stepup-dialog { width: calc(100vw - 24px); } .dialog-actions button { min-height: 44px; } }
+
+/* signing in to a hosted Studio (sign-in.html, account.html, the passkey dialogs in auth.js) */
+.auth-page { min-height: 100vh; min-height: 100dvh; display: flex; align-items: flex-start; justify-content: center; padding: max(8vh, 16px) 16px 16px; }
+.auth-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px; width: min(440px, 100%); }
+.auth-card.wide { width: min(560px, 100%); }
+.auth-card h1 { font-size: 22px; margin: 4px 0 12px; }
+.auth-card h2 { font-size: 15px; margin: 18px 0 6px; }
+.auth-brand { margin: 0; justify-content: space-between; }
+.auth-brand a { font-size: 13px; }
+a.button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 18px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); text-decoration: none; font-weight: 600; }
+a.button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+a.button.github { width: 100%; }
+.auth-card button { min-height: 40px; }
+.notice { padding: 8px 12px; border-radius: 8px; background: var(--off); border-left: 3px solid var(--warn); margin: 6px 0; }
+ul.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.passkey { justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.signout { margin-top: 24px; }
+.auth-dialog { width: min(440px, calc(100vw - 24px)); }
+.auth-dialog .result:empty, .auth-card .result:empty { display: none; }
+@media (max-width: 640px) { .auth-card { padding: 18px; } .auth-dialog .dialog-actions button { min-height: 44px; } }

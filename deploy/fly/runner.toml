@@ -1,6 +1,6 @@
 # Fly.io config for the runner, a second app in the same Fly organization and region as the control plane.
-# No public service: the runner only connects out, to the control plane's private
-# address (http://<FLY_APP>.internal:8080) or its public one.
+# No public service: the runner only connects out, to the control plane's public URL (https://<FLY_APP>.fly.dev).
+#   Deployed by .github/workflows/deploy.yml (job runner) when AGENT_TEAM_RUNNER=on; by hand:
 #   flyctl volumes create runner_data --app <FLY_APP>-runner --region iad --size 20
 #   flyctl deploy . --config deploy/fly/runner.toml --dockerfile apps/runner/Dockerfile --app <FLY_APP>-runner --ha=false
 
