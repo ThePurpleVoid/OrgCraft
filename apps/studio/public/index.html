@@ -22,6 +22,7 @@
       <button id="publish" type="button" class="primary">Publish…</button>
     </div>
   </header>
+  <section id="template-bar" class="template-bar team-only" aria-label="Starting team" hidden></section>
   <p class="readonly-note hint team-only">On a small screen the team is read-only. Edit it on a larger screen.</p>
   <main class="layout team-only">
     <aside class="palette" aria-label="Role library">
@@ -55,6 +56,7 @@
     </aside>
   </main>
   <section id="agent-editor" class="agent-editor team-only" aria-label="Agent editor" hidden></section>
+  <section id="gallery-page" class="gallery-page gallery-only" aria-label="Start a team"></section>
   <section id="meetings-page" class="meetings-page meetings-only" aria-label="Meetings"></section>
   <section id="chat-page" class="chat-page chat-only" aria-label="Chat with the chief of staff"></section>
   <dialog id="publish-dialog">
@@ -70,6 +72,20 @@
       <div class="dialog-actions">
         <button value="cancel" type="submit">Close</button>
         <button id="confirm" type="button" class="primary">Commit to branch</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="create-dialog" aria-labelledby="create-title">
+    <form id="create-form" class="dialog">
+      <h2 id="create-title">Use this template</h2>
+      <p id="create-what" class="muted"></p>
+      <label>Project name <input id="c-project" required maxlength="80" autocomplete="off"></label>
+      <label>Owner's name <input id="c-owner" maxlength="80" placeholder="the owner" autocomplete="name"><span class="hint">Who the team reports to. The chief of staff writes to this person.</span></label>
+      <label>Time zone <input id="c-zone" maxlength="64" autocomplete="off"><span class="hint">For schedules and meetings. This browser's, unless you change it.</span></label>
+      <p id="create-result" class="result error" role="status"></p>
+      <div class="dialog-actions">
+        <button type="button" id="create-cancel">Cancel</button>
+        <button type="submit" class="primary">Open the team</button>
       </div>
     </form>
   </dialog>
