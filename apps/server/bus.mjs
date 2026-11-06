@@ -116,12 +116,17 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       const wake = ev.envelope;
       const [s] = await q("select * from sessions where run = $1 and role = $2 and coalesce(instance, '') = coalesce($3, '') for update", [run.id, d.role, d.instance]);
       const conn = s?.runner ? reg()?.get(s.runner) : null;
+      if (s?.state === 'unknown') {
+        // Its runner went quiet but may still run it: wait for it to come back (or the tick to give it up).
+        await q('update deliveries set next_at = now() + make_interval(secs => 10) where id = $1', [d.id]);
+        return null;
+      }
       if (s && LIVE.includes(s.state) && conn) {
         await q("update deliveries set state = 'sent', session = $2, attempts = attempts + 1, next_at = now() + make_interval(secs => $3) where id = $1", [d.id, s.id, ACK_SECONDS]);
         return { d, conn, op: 'session.message', body: { session: s.id, message: wake, delivery: d.id } };
       }
       // No live session: start one, unless the run is at its session cap.
-      const [{ n }] = await q('select count(*)::int as n from sessions where run = $1 and state = any($2)', [run.id, LIVE]);
+      const [{ n }] = await q('select count(*)::int as n from sessions where run = $1 and state = any($2)', [run.id, [...LIVE, 'unknown']]);
       if (n >= sessionCap(run, money.budget)) {
         if (!s || s.state !== 'queued') {
           const sid = s?.id ?? id('ses');
@@ -217,10 +222,29 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   // ---- Run changes reach the runners (section 4) --------------------------------------------------------------------
 
   async function runChanged(tenant, team, rid, state, reason) {
+    // The version this change made (m3-design 2 and 6): a handler acts only while the run is still at it, so a late
+    // pause stops nothing and a late resume restarts nothing.
+    const [{ version } = {}] = await db.tenant(tenant, ({ q }) => q('select version from runs where id = $1 and state = $2', [rid, state]));
+    if (version === undefined) return;
     const live = await db.tenant(tenant, ({ q }) => q('select id, runner from sessions where run = $1 and state = any($2) and runner is not null', [rid, LIVE]));
     if (state === 'running') {
-      const held = await db.tenant(tenant, ({ q }) => q("update deliveries set state = 'pending', next_at = now() where run = $1 and state = 'held' returning id", [rid]));
-      for (const d of held) await deliver(tenant, d.id);
+      // Sessions the pause stopped start again from their checkpoint, woken by run.resumed; then the held messages.
+      const due = await db.tenant(tenant, async ({ q }) => {
+        const [still] = await q("select 1 from runs where id = $1 and state = 'running' and version = $2 for update", [rid, version]);
+        if (!still) return [];
+        const [ev] = await q("select id from events where team = $1 and type = 'run.resumed' and envelope->>'run' = $2 order by seq desc limit 1", [team, rid]);
+        const out = [];
+        if (ev) {
+          for (const s of await q("select role, instance from sessions where run = $1 and state = 'stopped'", [rid])) {
+            const [d] = await q('insert into deliveries(id, tenant, team, event, run, role, instance) values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing returning id',
+              [id('dlv'), tenant, team, ev.id, rid, s.role, s.instance]);
+            if (d) out.push(d);
+          }
+        }
+        out.push(...(await q("update deliveries set state = 'pending', next_at = now() where run = $1 and state = 'held' returning id", [rid])));
+        return out;
+      });
+      for (const d of due) await deliver(tenant, d.id);
       return;
     }
     for (const s of live) {
@@ -231,11 +255,13 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
           // Bring it to a safe point first: the branch pushed and the memory file sent (ADR 0004, budget).
           const cp = await conn.send('session.checkpoint', { session: s.id, reason }, { timeoutMs: CHECKPOINT_MS }).catch(() => null);
           if (cp && (cp.commit || cp.memory !== undefined)) await saveCheckpoint(tenant, s.id, cp);
-          await conn.send('session.stop', { session: s.id, mode: 'finish-step', reason }).catch(() => {});
+          // The checkpoint can take minutes: if the run was resumed meanwhile, the session carries on.
+          const stopped = await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where id = $1 and state = any($2) and exists (select 1 from runs where id = $3 and state = 'paused' and version = $4) returning id", [s.id, LIVE, rid, version]));
+          if (stopped.length) await conn.send('session.stop', { session: s.id, mode: 'finish-step', reason }).catch(() => {});
         } else {
+          await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where id = $1 and state = any($2)", [s.id, LIVE]));
           await conn.send('session.stop', { session: s.id, mode: 'now', reason }).catch(() => {});
         }
-        await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where id = $1 and state = any($2)", [s.id, LIVE]));
       })().catch((e) => log.error?.(`bus: stopping ${s.id}: ${e.message}`));
     }
   }
@@ -309,7 +335,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       } else {
         await ctx.q("update sessions set state = 'waiting' where id = $1", [sess.id]);
         const call = { command: redact(i.call), ...(i.pr ? { pr: i.pr } : {}), ...(i.headSha ? { headSha: i.headSha } : {}) };
-        const r = await m3.requestApproval(ctx, sess.team, { action: i.action, call, why: i.why, risk: i.risk, links: (i.links ?? []).map((url) => ({ rel: 'link', url })), session: sess.id, run: sess.run, role: sess.role });
+        const links = [...(prLink(roster.repo, i.pr) ? [{ rel: 'pull-request', url: prLink(roster.repo, i.pr) }] : []), ...(i.links ?? []).filter((u) => /^https:\/\//.test(u)).map((url) => ({ rel: 'link', url }))];
+        const r = await m3.requestApproval(ctx, sess.team, { action: i.action, call, why: i.why, risk: i.risk, links, session: sess.id, run: sess.run, role: sess.role });
         out = { approval: r.approval, card: r.card.id };
       }
       return out;
@@ -365,14 +392,23 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (body.resend && typeof a.id === 'string') {
         const [row] = await db.tenant(conn.tenant, ({ q }) => q('select id, card, state, session, decided_by, call from approvals where id = $1', [a.id]));
         if (!row) throw new Problem(404, `no approval ${a.id}`);
+        if (!row.session) throw new Problem(403, `approval ${a.id} is not a session's`);
+        await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, row.session));
+        if (body.session && body.session !== row.session) throw new Problem(403, `approval ${a.id} belongs to another session`);
         if (row.state !== 'pending') setImmediate(() => conn.send('approval.result', { approval: row.id, decision: row.state, by: row.decided_by, ...(row.call?.headSha ? { headSha: row.call.headSha } : {}) }).catch(() => {}));
         return { approval: row.id, card: row.card };
       }
       const { result } = await m3.tx(conn.tenant, async (ctx) => {
         const sess = await ownSession(ctx.q, conn, body.session);
+        // D1 on the policy path too: a merge approval is bound to a PR and the exact head sha.
+        const pr = Number.isSafeInteger(a.pr) && a.pr > 0 ? a.pr : null;
+        const headSha = typeof a.headSha === 'string' && /^[0-9a-f]{7,64}$/.test(a.headSha) ? a.headSha : null;
+        if (a.action === 'accept' && (!pr || !headSha)) throw new Problem(422, 'an accept approval needs pr and headSha, so the merge can only land on the commit that was approved');
         await ctx.q("update sessions set state = 'waiting' where id = $1", [sess.id]);
-        const call = { command: redact(typeof a.call === 'string' ? a.call : JSON.stringify(a.call ?? '')), ...(a.pr ? { pr: a.pr } : {}), ...(a.headSha ? { headSha: String(a.headSha).slice(0, 64) } : {}) };
-        const r = await m3.requestApproval(ctx, sess.team, { action: String(a.action ?? 'unclassified'), call, why: String(a.why ?? 'The team policy keeps this for a person.'), risk: a.risk, session: sess.id, run: sess.run, role: sess.role });
+        const call = { command: redact(typeof a.call === 'string' ? a.call : JSON.stringify(a.call ?? '')), ...(pr ? { pr } : {}), ...(headSha ? { headSha } : {}) };
+        const [run] = await ctx.q('select roster from runs where id = $1', [sess.run]);
+        const link = prLink(run?.roster?.repo, pr);
+        const r = await m3.requestApproval(ctx, sess.team, { action: String(a.action ?? 'unclassified'), call, why: String(a.why ?? 'The team policy keeps this for a person.'), risk: a.risk, links: link ? [{ rel: 'pull-request', url: link }] : [], session: sess.id, run: sess.run, role: sess.role });
         return { approval: r.approval, card: r.card.id };
       });
       return result;
@@ -408,7 +444,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
 
   /** The runner went quiet: its live sessions are unknown until it reconnects (runner-protocol, ping). */
   async function onLost(conn) {
-    await db.tenant(conn.tenant, ({ q }) => q("update sessions set state = 'unknown' where runner = $1 and state = any($2)", [conn.runner, LIVE])).catch(() => {});
+    await db.tenant(conn.tenant, ({ q }) => q("update sessions set state = 'unknown', last_seen = now() where runner = $1 and state = any($2)", [conn.runner, LIVE])).catch(() => {});
   }
 
   /** welcome.sessions: what this runner should resume after a reconnect (its sessions marked unknown). */
@@ -442,6 +478,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       for (const d of due) await deliver(tenant, d.id);
       await expire(tenant);
       await rollover(tenant);
+      // A runner gone for ten minutes is not coming back for its sessions: they can start elsewhere.
+      await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where state = 'unknown' and last_seen < now() - interval '10 minutes'"));
     }
     // A revoke on any instance closes the socket here.
     const live = reg();
@@ -492,7 +530,16 @@ export function branchFor(wake, role, run) {
     ? b : `team/${role}/${run}`;
 }
 
-/** Removes what looks like a secret from a command before it is stored or shown on a card. */
+/** The web page of a pull request, for GitHub-style https repos; null otherwise. */
+export function prLink(repo, pr) {
+  if (!pr || typeof repo?.url !== 'string' || !/^https:\/\//.test(repo.url)) return null;
+  return `${repo.url.replace(/\.git$/, '').replace(/\/+$/, '')}/pull/${pr}`;
+}
+
+/**
+ * Removes what looks like a secret from a command before it is stored or shown on a card. Best effort: the runner's
+ * own scans of what leaves a session are the real line; this only keeps the obvious shapes off cards and the log.
+ */
 export function redact(text) {
   return String(text ?? '')
     .replace(/\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9-_]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b/g, '[redacted]')

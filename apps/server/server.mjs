@@ -114,8 +114,10 @@ export function createControlPlane(opts) {
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
 export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null }) {
+  if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
+  let tickMisses = [];
   const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl });
   if (!givenBus) wireBus(m3, bus);
   // Every write of the m3 module and the bus reaches the live streams and the sinks once it commits.
@@ -279,8 +281,12 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
 
     // The tick for hosts without a long-lived process (a cron). Refused unless CRON_SECRET is set (issue #28 D8).
     if (a === 'internal' && team === 'tick' && !b && m === 'POST') {
+      if (!cronSecret) throw new Problem(404, 'not found');
+      const at = now().getTime();
+      tickMisses = tickMisses.filter((x) => x > at - 60_000);
+      if (tickMisses.length >= 10) throw new Problem(429, 'too many wrong tick secrets; try again in a minute');
       const got = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
-      if (!cronSecret || !got || !same(got, cronSecret)) throw new Problem(cronSecret ? 401 : 404, cronSecret ? 'send Authorization: Bearer <CRON_SECRET>' : 'not found');
+      if (!got || !same(got, cronSecret)) { tickMisses.push(at); throw new Problem(401, 'send Authorization: Bearer <CRON_SECRET>'); }
       await bus.tick();
       return send(res, 200, { ok: true });
     }

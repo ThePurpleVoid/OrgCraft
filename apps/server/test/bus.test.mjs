@@ -121,12 +121,20 @@ test('D1: an accept approval needs pr and headSha, and approval.result carries t
     assert.equal((await tool(p.call, s, 'request_approval', ask)).status, 422);
     const r = await tool(p.call, s, 'request_approval', { ...ask, pr: 7, headSha: 'abc1234' });
     assert.equal(r.status, 200, JSON.stringify(r.body));
+    const card = (await p.call('GET', `/cards/${r.body.card}`)).body;
+    assert.equal(card.title, 'chief-of-staff asks to merge #7 at abc1234', 'the person sees the PR and the head they approve');
+    assert.ok(card.links.some((l) => l.url === 'https://github.com/example/shop/pull/7'));
     const [a] = await p.db.system('select call from approvals where id = $1', [r.body.approval]);
     assert.deepEqual([a.call.pr, a.call.headSha], [7, 'abc1234']);
     assert.ok(!a.call.command.includes('ghp_'), 'a token in the command is redacted before it is stored');
     const ok = await p.call('POST', `/approvals/${r.body.approval}`, { decision: 'approved', version: 1 }, await p.su());
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     const res = await runner.next((f) => f.op === 'approval.result');
+    // The policy path is bound the same way.
+    const nope = await runner.request('approval.wait', { session: s.session, approval: { action: 'accept', call: 'gh pr merge 7', why: 'green' } });
+    assert.equal(nope.op, 'nack');
+    const yes = await runner.request('approval.wait', { session: s.session, approval: { action: 'accept', call: 'gh pr merge 7', why: 'green', pr: 7, headSha: 'def5678' } });
+    assert.equal(yes.op, 'ack');
     assert.deepEqual([res.body.approval, res.body.decision, res.body.headSha], [r.body.approval, 'approved', 'abc1234']);
   }, { tickMs: 0 });
 });
@@ -189,9 +197,72 @@ test('pause checkpoints then stops live sessions; messages while paused are held
     assert.equal(resumed.body.session, s.session);
     assert.equal(resumed.body.checkpoint.commit, 'c0ffee1');
     assert.equal(resumed.body.prompt.memory, '# notes');
-    assert.equal(resumed.body.wake.data.text, 'while paused');
+    // The session the pause stopped is started again (woken by run.resumed), and the held message reaches it.
+    const woke = [resumed.body.wake, ...runner.frames.filter((f) => f.op === 'session.message').map((f) => f.body.message)];
+    await waitFor(() => [resumed.body.wake, ...runner.frames.filter((f) => f.op === 'session.message').map((f) => f.body.message)].some((e) => e.data?.text === 'while paused'));
+    assert.ok(['run.resumed', 'chat.message'].includes(woke[0].type));
     assert.equal((await p.call('POST', `/runs/${run.id}/stop`)).status, 200);
     await runner.next((f) => f.op === 'session.stop' && f.body.mode === 'now');
+  }, { tickMs: 0 });
+});
+
+test('a pause with nothing said meanwhile still restarts the session on resume; a resume during the checkpoint keeps it', async () => {
+  let slowOnce = false;
+  await plane(async (p) => {
+    const { runner, run } = await setup(p, { reply: (f) => (f.op === 'session.checkpoint' ? (slowOnce ? { commit: 'c0ffee2' } : null) : {}) });
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    // First pause: the runner is slow to checkpoint (no ack yet), and the owner resumes before it answers.
+    await p.call('POST', `/runs/${run.id}/pause`);
+    const cp = await runner.next((f) => f.op === 'session.checkpoint');
+    await p.call('POST', `/runs/${run.id}/resume`);
+    runner.ws.send(JSON.stringify({ op: 'ack', id: 'late', ref: cp.id, body: { commit: 'c0ffee1' } }));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(!runner.frames.some((f) => f.op === 'session.stop'), 'a resumed run keeps its session');
+    const [row] = await p.db.system('select state from sessions where id = $1', [s.session]);
+    assert.notEqual(row.state, 'stopped');
+    // Second pause runs to the end; the resume restarts the session with nothing new said.
+    slowOnce = true;
+    await p.call('POST', `/runs/${run.id}/pause`);
+    await runner.next((f) => f.op === 'session.stop');
+    await waitFor(async () => (await p.db.system('select state from sessions where id = $1', [s.session]))[0].state === 'stopped');
+    await p.call('POST', `/runs/${run.id}/resume`);
+    const again = await runner.next((f) => f.op === 'session.start' && f.body.resume === true);
+    assert.deepEqual([again.body.session, again.body.wake.type, again.body.checkpoint.commit], [s.session, 'run.resumed', 'c0ffee2']);
+  }, { tickMs: 0 });
+});
+
+test('after a budget pause, run.resumed restarts every stopped session from its checkpoint', async () => {
+  await plane(async (p) => {
+    const { runner, run } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const front = (await start(runner, 'chief-of-staff')).body;
+    await tool(p.call, front, 'handoff', { to: 'web-dev', task: 'Cart', changed: 'x', verify: 'y', doneWhen: 'z' });
+    const web = (await start(runner, 'web-dev')).body;
+    const usage = { specversion: '1.0', id: 'u-all', type: 'usage.recorded', version: 1, source: '/tenants/acme/teams/shop', tenant: 'acme', team: 'shop', time: new Date().toISOString(), run: run.id, actor: { kind: 'role', id: 'web-dev', session: web.session }, data: { inputTokens: 1, outputTokens: 1, cost: 1000, currency: 'USD' } };
+    assert.equal((await runner.request('events', { events: [usage] })).op, 'ack');
+    await waitFor(async () => (await p.db.system("select count(*)::int as n from sessions where state = 'stopped'"))[0].n === 2);
+    const [card] = (await p.call('GET', '/me/inbox')).body.cards;
+    assert.equal((await p.call('POST', `/cards/${card.id}`, { option: 'raise', version: 1 }, await p.su())).status, 200);
+    const restarted = await Promise.all(['chief-of-staff', 'web-dev'].map((r) => runner.next((f) => f.op === 'session.start' && f.body.resume === true && f.body.role === r)));
+    for (const f of restarted) {
+      assert.equal(f.body.wake.type, 'run.resumed');
+      assert.equal(f.body.checkpoint.commit, 'c0ffee1');
+    }
+  }, { tickMs: 0 });
+});
+
+test('a session whose runner went quiet is not started a second time elsewhere', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    await p.db.system("update sessions set state = 'unknown' where id = $1", [s.session]);
+    await p.call('POST', '/teams/shop/chat', { text: 'still there?' });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(runner.frames.filter((f) => f.op === 'session.start').length, 1);
+    const [d] = await p.db.system("select state from deliveries order by created_at desc limit 1");
+    assert.equal(d.state, 'pending', 'it waits for the runner, or for the tick to give the session up');
   }, { tickMs: 0 });
 });
 
@@ -240,10 +311,13 @@ test('D8: /internal/tick is refused without CRON_SECRET and checks it', async ()
   await plane(async ({ call }) => {
     assert.equal((await call('POST', '/internal/tick', undefined, {})).status, 404);
   }, { tickMs: 0, cronSecret: null });
+  const secret = 'a-cron-secret-of-at-least-32-characters';
   await plane(async ({ call }) => {
-    assert.equal((await call('POST', '/internal/tick', undefined, { authorization: 'Bearer wrong' })).status, 401);
-    assert.equal((await call('POST', '/internal/tick', undefined, { authorization: 'Bearer a-cron-secret' })).status, 200);
-  }, { tickMs: 0, cronSecret: 'a-cron-secret' });
+    assert.equal((await call('POST', '/internal/tick', undefined, { authorization: `Bearer ${secret}` })).status, 200);
+    for (let i = 0; i < 10; i++) assert.equal((await call('POST', '/internal/tick', undefined, { authorization: 'Bearer wrong' })).status, 401);
+    assert.equal((await call('POST', '/internal/tick', undefined, { authorization: `Bearer ${secret}` })).status, 429, 'ten misses a minute and the path pauses');
+  }, { tickMs: 0, cronSecret: secret });
+  await assert.rejects(plane(async () => {}, { tickMs: 0, cronSecret: 'short' }), /at least 32 characters/);
 });
 
 async function waitFor(fn, ms = 5000) {

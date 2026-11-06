@@ -435,7 +435,11 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     const callText = typeof call === 'string' ? call : JSON.stringify(call);
     const card = await createCard(ctx, team, {
       kind: 'approval', subject: `approval/${apr}`, session, run, approval: apr,
-      title: `${role ?? 'A role'} asks to ${action}`,
+      // The person sees exactly what a merge is bound to (D1): the PR and the short head sha, not lost in the body.
+      title: call && typeof call === 'object' && call.pr && call.headSha
+        ? `${role ?? 'A role'} asks to ${action === 'accept' ? 'merge' : action} #${call.pr} at ${String(call.headSha).slice(0, 7)}`
+        : `${role ?? 'A role'} asks to ${action}`,
+      ...(call && typeof call === 'object' && call.pr ? { data: { pr: call.pr, ...(call.headSha ? { headSha: call.headSha } : {}) } } : {}),
       body: `${why}\n\n\`${callText.length > 500 ? `${callText.slice(0, 500)}…` : callText}\``,
       options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger', stepUp: false }],
       risk: r, expiresAt, links: links.filter((l) => l && typeof l.url === 'string').slice(0, 20),
