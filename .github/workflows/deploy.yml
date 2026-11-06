@@ -58,9 +58,10 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           AGENT_TEAM_MASTER_KEY: ${{ secrets.AGENT_TEAM_MASTER_KEY }}
           AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
+          AGENT_TEAM_EDGE_SECRET: ${{ secrets.AGENT_TEAM_EDGE_SECRET }}
         run: |
           missing=""
-          for n in FLY_API_TOKEN VERCEL_TOKEN DATABASE_URL AGENT_TEAM_MASTER_KEY AGENT_TEAM_ADMIN_TOKEN FLY_APP VERCEL_PROJECT; do
+          for n in FLY_API_TOKEN VERCEL_TOKEN DATABASE_URL AGENT_TEAM_MASTER_KEY AGENT_TEAM_ADMIN_TOKEN AGENT_TEAM_EDGE_SECRET FLY_APP VERCEL_PROJECT; do
             [ -n "${!n}" ] || missing="$missing $n"
           done
           if [ -n "$missing" ]; then
@@ -68,6 +69,7 @@ jobs:
             exit 1
           fi
           case "$DATABASE_URL" in *":6543/"*) echo "::error::DATABASE_URL is the transaction pooler (6543); use the session pooler (5432)"; exit 1;; esac
+          [ "${#AGENT_TEAM_EDGE_SECRET}" -ge 32 ] || { echo "::error::AGENT_TEAM_EDGE_SECRET must be 32 characters or more (openssl rand -base64 32)"; exit 1; }
           case "$DATABASE_URL" in *"sslmode=verify-full"*) ;; *) echo "::error::DATABASE_URL must use sslmode=verify-full (see docs/deploy/vercel-supabase.md)"; exit 1;; esac
 
       # Pinned by commit, and installed before any token is in scope: no token is visible to install scripts.
@@ -90,10 +92,18 @@ jobs:
           AGENT_TEAM_MASTER_KEY: ${{ secrets.AGENT_TEAM_MASTER_KEY }}
           AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
           AGENT_TEAM_STEP_UP_SECRET_HASH: ${{ secrets.AGENT_TEAM_STEP_UP_SECRET_HASH }}
+          AGENT_TEAM_EDGE_SECRET: ${{ secrets.AGENT_TEAM_EDGE_SECRET }}
         run: |
+          # CRON_SECRET is made here, fresh each deploy, and only the smoke test uses it (/v1/internal/caller); no
+          # outside cron calls this server, which ticks itself. It is masked in the log and kept in a 0600 file on
+          # this throwaway runner until the smoke step.
+          umask 077
+          cron="$(openssl rand -base64 32)"
+          echo "::add-mask::$cron"
+          printf '%s' "$cron" > "$RUNNER_TEMP/cron-secret"
           {
-            printf 'DATABASE_URL=%s\nAGENT_TEAM_MASTER_KEY=%s\nAGENT_TEAM_ADMIN_TOKEN=%s\n' \
-              "$DATABASE_URL" "$AGENT_TEAM_MASTER_KEY" "$AGENT_TEAM_ADMIN_TOKEN"
+            printf 'DATABASE_URL=%s\nAGENT_TEAM_MASTER_KEY=%s\nAGENT_TEAM_ADMIN_TOKEN=%s\nAGENT_TEAM_EDGE_SECRET=%s\nCRON_SECRET=%s\n' \
+              "$DATABASE_URL" "$AGENT_TEAM_MASTER_KEY" "$AGENT_TEAM_ADMIN_TOKEN" "$AGENT_TEAM_EDGE_SECRET" "$cron"
             # Optional until the M3 exit: without it, approvals that need step-up are refused, nothing else changes.
             [ -n "$AGENT_TEAM_STEP_UP_SECRET_HASH" ] && printf 'AGENT_TEAM_STEP_UP_SECRET_HASH=%s\n' "$AGENT_TEAM_STEP_UP_SECRET_HASH"
             true
@@ -119,6 +129,7 @@ jobs:
       - name: Deploy the site on Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          AGENT_TEAM_EDGE_SECRET: ${{ secrets.AGENT_TEAM_EDGE_SECRET }}
         run: |
           site="$RUNNER_TEMP/site"
           node deploy/vercel/build.mjs --api "https://$FLY_APP.fly.dev" --out "$site"
@@ -126,14 +137,27 @@ jobs:
           scope=(); [ -n "$VERCEL_SCOPE" ] && scope=(--scope "$VERCEL_SCOPE")
           vercel project add "$VERCEL_PROJECT" "${scope[@]}" --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
           vercel link --yes --project "$VERCEL_PROJECT" "${scope[@]}" --token "$VERCEL_TOKEN"
+          # The middleware reads it at run time; over stdin, as a sensitive variable nobody can read back.
+          printf '%s' "$AGENT_TEAM_EDGE_SECRET" | vercel env add AGENT_TEAM_EDGE_SECRET --environment production \
+            --sensitive --force --yes "${scope[@]}" --token "$VERCEL_TOKEN" >/dev/null
           vercel pull --yes --environment=production "${scope[@]}" --token "$VERCEL_TOKEN"
           vercel build --prod "${scope[@]}" --token "$VERCEL_TOKEN"
           vercel deploy --prebuilt --prod "${scope[@]}" --token "$VERCEL_TOKEN"
 
-      - name: Smoke test (read-only), including streams through the Vercel rewrite
+      # Exit 4: the caller's IP does not resolve through the site; keep sign-in off until it passes (#73).
+      - name: Smoke test (read-only), including streams and the caller's IP through the Vercel rewrite
         env:
           AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
-        run: node deploy/smoke.mjs --site "$PUBLIC_URL" --api "https://$FLY_APP.fly.dev"
+        run: |
+          code=0
+          CRON_SECRET="$(cat "$RUNNER_TEMP/cron-secret")" node deploy/smoke.mjs --site "$PUBLIC_URL" --api "https://$FLY_APP.fly.dev" || code=$?
+          if [ "$code" = 4 ]; then
+            # The sign-in gate fails closed, but the deploy itself is fine: say so loudly and keep the job green.
+            echo "::warning::Caller IP not verified through the site: keep sign-in off (docs/deploy/vercel-supabase.md)"
+            echo "### Caller IP not verified: keep sign-in off" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit "$code"
 
   runner:
     # The runner, a second Fly app next to the control plane, with one volume at /data. Off until the owner sets the

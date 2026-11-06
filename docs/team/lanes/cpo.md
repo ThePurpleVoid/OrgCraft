@@ -14,6 +14,7 @@ Owner of this file: cpo. Last updated 2026-11-06.
 | Change safety part 1 (PRD 6.9, mockup 06, issue #30) | Building: story confirmed below; library to kit-core-dev, screens to web-dev |
 | Meeting definitions editor (PRD 6.7 M8, mockup 03, issue #30) | Building: story confirmed below; sync side to kit-core-dev, editor to web-dev |
 | Team templates (PRD E6, demo step 2, issue #30) | Building: story confirmed below; kit side to kit-core-dev, picker to web-dev after meetings |
+| Neutral protocols for business-function teams (issue #30 follow-up) | Idea: story confirmed below, not yet scheduled |
 
 ## Priorities, in order
 
@@ -30,6 +31,7 @@ Owner of this file: cpo. Last updated 2026-11-06.
 4. **Change safety part 1 story confirmed** (2026-11-06, issue #30): board-only warnings and a recorded plan; nothing is stopped or restarted by the Studio until the runner's part 2 (phase 3).
 5. **Meeting definitions story confirmed** (2026-11-06, issue #30): the editor half only; meetings are defined and published in phase 2 and run from phase 3.
 6. **Team templates story confirmed** (2026-11-06, issue #30): a template is a whole starting team, applied once; a role pack adds agents to a team that exists. Two of the first templates are not engineering teams.
+7. **Neutral protocols story confirmed** (2026-11-06): kit 0.12.0 ships the support and content templates without it. The shared protocols and project instructions get a neutral core plus an engineering pack, so a business-function team never reads about PRs, merge gates or deploys.
 
 ## Story: custom agents (issue #30, demo step 14)
 
@@ -236,3 +238,36 @@ A template may carry custom agents inside it, in the role pack format, so a non-
 - **web-dev**: criteria 5 to 10, after the meetings editor.
 - **qa-web**: criterion 11.
 - **CPO**: signs off the copy of every shipped template (criterion 4) and reviews the picker against this story.
+
+## Story: neutral protocols for business-function teams (follow-up to the templates story)
+
+The owner's words (2026-11-06, as recorded in project memory): "not just for engineering companies ... the model, vocabulary and UI must let any industry use the tool eventually."
+
+What follows is the CPO's reading, labelled as mine.
+
+**As** the owner of a support team or a content studio, **I want** my agents' shared rules to talk about my work (drafts, approvals, sign-offs, sending and publishing), not pull requests, merge gates and deploys, **so** the team follows rules that fit what it does, and nothing in its instructions is noise or wrong.
+
+Found during the copy review of kit #79: every team gets the same `protocols.md` and `project-instructions.md`, and both assume engineering (section "Pull requests", HANDOFF fields "branch and commit, artifact (build path or preview URL)", BUG fields "screen, build", SIGNOFF "tested on (device or browser, OS, commit)", worktrees, hardware locks, the janitor). The four custom agents in the templates are neutral; the shared files around them are not.
+
+### Product decisions
+
+- **D37. A neutral core plus packs.** `protocols.md` and `project-instructions.md` split into a core every team gets (one door, the dilution rule, owner-steps-in, ownership and one writer per area, the four message kinds, reporting to the board, memory files, digest and meetings) and an **engineering pack** (pull requests, merge gate, worktrees, hardware locks, janitor, deploys, migrations). A team's packs come from its template or preset; existing teams get the engineering pack automatically, so CoachSpotter's and this kit's generated files do not change in meaning.
+- **D38. The four message kinds keep their names; their fields become neutral.** HANDOFF: task, from, to, **what changed and where it is** (a link, a file or a branch), how to check it, done when. BUG: task, **where** (a screen, a document, a page), steps or quote, expected, actual, evidence, severity. SIGNOFF: task, **what was checked and on what version**, result, evidence (required). The engineering pack adds its fields back (branch and commit, build, device and OS).
+- **D39. Owner-steps-in gets business examples.** Next to "data changes that cannot be undone", the core names: sending to customers or the public without an approved policy, spending money, legal commitments, and anything published under the owner's name. The engineering pack keeps destructive migrations and production deploys.
+- **D40. "Push before long steps" becomes "save your work where the team can see it before long steps".** In a repository that still means push; the core does not say so.
+- **D41. No behaviour change for engineering teams.** A team on the engineering preset gets generated files with the same rules as today (wording may move, not meaning); `sync.sh check` on CoachSpotter and on this kit's own team shows only the expected moves, reviewed by the CPO and the CTO.
+
+### Acceptance criteria
+
+1. The core files contain none of: pull request, PR, merge, branch, commit, deploy, CI, build, worktree, migration (a test enforces this, like the template copy test).
+2. The engineering pack holds every rule removed from the core; a diff review shows no rule lost.
+3. The support and content templates generate instructions with the core only; their briefs' "Every thread, every task" footer uses D40's wording.
+4. Existing teams (presets engineering, minimal, company) get core plus the engineering pack with no rule lost (D41).
+5. The Studio shows a team's packs in its settings, and the template gallery says which packs a template uses (no new choice for the owner yet).
+6. The CPO signs off the core copy; the CTO signs off the engineering pack.
+
+### Build split (for the CTO to confirm)
+
+- **kit-core-dev**: criteria 1 to 4, as a kit minor release after 0.12.0.
+- **web-dev**: criterion 5, small, alongside the template picker.
+- **CPO and CTO**: criterion 6.

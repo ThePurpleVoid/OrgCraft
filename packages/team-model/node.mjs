@@ -49,3 +49,26 @@ export function writeLayer(root, files) {
   }
   return changed;
 }
+
+/** One template folder (team/templates/<id>/) as the files the pure template functions take. */
+export function readTemplateDir(dir) {
+  const files = {};
+  const walk = (rel) => {
+    for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
+      const p = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(p);
+      else if (p === 'template.json' || /^roles\/[^/]+\.(md|json)$/.test(p)) files[p] = readFileSync(join(dir, p), 'utf8');
+    }
+  };
+  walk('');
+  return files;
+}
+
+/** The kit's team templates: { <id>: files }, in id order. */
+export function loadTemplates(kitDir = KIT_DIR) {
+  const root = join(kitDir, 'team/templates');
+  if (!existsSync(root)) return {};
+  const out = {};
+  for (const id of readdirSync(root).sort()) if (existsSync(join(root, id, 'template.json'))) out[id] = readTemplateDir(join(root, id));
+  return out;
+}

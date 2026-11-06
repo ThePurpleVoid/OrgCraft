@@ -42,6 +42,8 @@ before(async () => {
 after(async () => { await browser?.close(); studio?.closeAllConnections?.(); studio?.close(); });
 
 const brief = (title, slug, extra = '', tier = 'standard') => `# ${title}\n\n**Model:** ${tier}\n**Group:** localization\n**Reports to:** cto\n**Status:** active\n\n## Identity\nYou keep every string translated.${extra}\n\n## Owns (writes)\n- \`locales/${slug}/\`\n\n## Every thread, every task\n- \`scripts/agent-team/team-status.sh ${slug} status working --task "<task>"\`\n`;
+/** The brief as the editor holds it (its markdown view). */
+const editorBrief = async (page) => { await page.locator('#e-raw').waitFor({ state: 'attached' }); return page.locator('#e-raw').inputValue(); };
 const file = (name, text) => ({ name, mimeType: name.endsWith('.json') ? 'application/json' : 'text/markdown', buffer: Buffer.from(text) });
 
 test('new agents: blank in a new group, a copy, a kit slug only by replacing, a pack switched off, and a secret refused', { skip }, async () => {
@@ -63,6 +65,9 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   await dlg.locator('#a-manager').selectOption('cto');
   await dlg.getByRole('button', { name: 'Continue to the brief' }).click();
   assert.equal(await dlg.isVisible(), false);
+  // Straight into its editor; back to the team from there.
+  const md = await editorBrief(page);
+  await page.getByRole('button', { name: 'Back to the team' }).click();
 
   // Under Your agents, switched on, selected, and its brief is the kit's template with the choices made.
   const yours = page.locator('#library .lib-role', { hasText: 'Accessibility auditor' });
@@ -70,7 +75,6 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   assert.equal(await yours.locator('input[type=checkbox]').isChecked(), true);
   assert.match(await yours.locator('.tag').textContent(), /custom/);
   assert.equal(await page.locator('#library .group-title').first().textContent(), 'Your agents');
-  const md = await page.locator('#i-brief').inputValue();
   assert.match(md, /^# Accessibility auditor$/m);
   assert.match(md, /^\*\*Group:\*\* accessibility$/m);
   assert.match(md, /^\*\*Reports to:\*\* cto$/m);
@@ -93,7 +97,8 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   await dlg.getByLabel('Name', { exact: true }).fill('QA accessibility');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'new-agent-copy-desktop-light.png') });
   await dlg.getByRole('button', { name: 'Continue to the brief' }).click();
-  const copy = await page.locator('#i-brief').inputValue();
+  const copy = await editorBrief(page);
+  await page.getByRole('button', { name: 'Back to the team' }).click();
   assert.match(copy, /^# QA accessibility$/m);
   assert.match(copy, /team-status\.sh qa-a11y status/);
   assert.doesNotMatch(copy, /team-status\.sh qa-web /);
@@ -104,6 +109,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   await dlg.getByLabel('Name', { exact: true }).fill('Docs keeper');
   await dlg.getByLabel(/Replace the kit's role/).check();
   await dlg.getByRole('button', { name: 'Continue to the brief' }).click();
+  await page.getByRole('button', { name: 'Back to the team' }).click();
   const card = page.locator('#canvas .node', { hasText: 'Docs keeper' });
   await card.locator('text.meta', { hasText: 'replaces kit' }).waitFor();
   assert.match(await card.locator('title').textContent(), /replaces the kit's docs-keeper/);
@@ -155,6 +161,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   await page.waitForFunction(() => document.querySelector('#a-name').value === 'Glossary keeper'); // filled from the file's title
   await dlg.getByText('An imported agent is added switched off').waitFor();
   await dlg.getByRole('button', { name: 'Add it, switched off' }).click();
+  await page.getByRole('button', { name: 'Back to the team' }).click();
   assert.equal(await page.locator('#library .lib-role', { hasText: 'Glossary keeper' }).locator('input[type=checkbox]').isChecked(), false);
 
   await page.getByRole('button', { name: 'New agent' }).click();

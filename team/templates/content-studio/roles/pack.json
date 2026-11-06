@@ -1,0 +1,22 @@
+{
+  "schema": "agent-team/role-pack@1",
+  "roles": [
+    "editor",
+    "fact-checker"
+  ],
+  "needs": {
+    "tools": [
+      "content calendar",
+      "publishing tool"
+    ],
+    "resources": [
+      "website"
+    ],
+    "paths": [
+      "content/calendar.md",
+      "content/style-guide.md",
+      "content/published/",
+      "content/fact-checks/"
+    ]
+  }
+}
