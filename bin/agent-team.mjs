@@ -16,7 +16,7 @@
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.9.2 init --preset engineering --project "My App"
+//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.10.0 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -67,6 +67,7 @@ export function loadProject(root) {
     dashboard: team.dashboard ?? undefined,
     hooks: team.hooks ?? false,
     agentTeams: team.agentTeams ?? false,
+    replaces: team.replaces ?? [],
   };
 }
 
@@ -306,10 +307,30 @@ function readLock(root) {
   return existsSync(p) ? JSON.parse(read(p)) : { files: {} };
 }
 
+/**
+ * Custom agents (.agent-team/roles/<slug>.md) that this kit now ships a role for, when the kit the team last synced
+ * with did not (kit.lock.json "kitRoles"). Such an agent would silently replace the new kit role, so sync stops and
+ * says how to fix it. A slug listed in team.json "replaces" is a deliberate replacement.
+ */
+export function shadowedRoles(root, project = loadProject(root)) {
+  const lock = readLock(root);
+  if (!Array.isArray(lock.kitRoles)) return [];
+  const dir = join(root, LAYER, 'roles');
+  const own = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.md') && !f.endsWith('.extend.md') && !f.startsWith('_') && f !== 'README.md').map((f) => f.slice(0, -3)) : [];
+  const kit = new Set(kitRoleSlugs());
+  return own.filter((s) => kit.has(s) && !lock.kitRoles.includes(s) && !project.replaces.includes(s));
+}
+
+const shadowMessage = (slug) => `${LAYER}/roles/${slug}.md: Agent Team Kit ${VERSION} adds a role called ${slug}, the same name as your custom agent. `
+  + `Rename yours (move the file to a new slug and update "team-status.sh ${slug}" inside it), delete it to use the kit's, `
+  + `or keep it as a replacement by adding "${slug}" to "replaces" in ${LAYER}/team.json.`;
+
 export function sync(root, { quiet = false } = {}) {
+  const log = (s) => { if (!quiet) console.log(s); };
+  const shadowed = shadowedRoles(root);
+  if (shadowed.length) { for (const s of shadowed) console.error(`error: ${shadowMessage(s)}`); console.error('sync stopped; nothing was written'); return 1; }
   const { files, project, roles, warnings } = build(root);
   const lock = readLock(root);
-  const log = (s) => { if (!quiet) console.log(s); };
   for (const [rel, content] of files) {
     const p = join(root, rel);
     mkdirSync(dirname(p), { recursive: true });
@@ -330,7 +351,7 @@ export function sync(root, { quiet = false } = {}) {
     writeFileSync(settings.path, settings.after);
     log(`updated ${SETTINGS} (agent-team hooks${project.agentTeams ? ' and agent teams' : ''})`);
   }
-  const next = { kit: project.kit, version: VERSION, files: Object.fromEntries([...files].map(([k, v]) => [k, sha(v)]).sort()) };
+  const next = { kit: project.kit, version: VERSION, kitRoles: kitRoleSlugs(), files: Object.fromEntries([...files].map(([k, v]) => [k, sha(v)]).sort()) };
   writeFileSync(join(root, LOCK), JSON.stringify(next, null, 2) + '\n');
   for (const w of warnings) log(`warning: ${w}`);
   const roster = checkRoster(roles.map((r) => parseBrief(r.slug, r.md)));
@@ -362,6 +383,7 @@ export function findProblems(root) {
   const roster = checkRoster(roles.map((r) => parseBrief(r.slug, r.md)));
   for (const e of roster.errors) problems.push(`roster: ${e}`);
   if (settingsChange(root, project).changed) problems.push(`out of date: ${SETTINGS} (the agent-team hooks)`);
+  for (const s of shadowedRoles(root, project)) problems.push(`shadowed: ${shadowMessage(s)}`);
   return problems;
 }
 

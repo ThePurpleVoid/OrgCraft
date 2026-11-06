@@ -10,7 +10,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.9.2",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.10.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -55,9 +55,54 @@ api/, migrations/
 
 Copy `docs/team/role-template.md` into `.agent-team/roles/<new-role>.md`, fill it in, add its paths to `docs/team/ownership.md` and add it to its executive with a `## Direct reports` extension. Split a generic role this way, for example `mobile-dev` into `android-dev` and `ios-dev` (see [examples/native-mobile](../examples/native-mobile)).
 
+### Wakes on and sign-off evidence
+
+Two sections of a brief are also read as data (kit 0.10). Both are optional, and free text keeps working.
+
+`## Wakes on` lists the events that start a task, one `- ` line each. The runner reads lines in these forms and nothing else:
+
+| Line | Wakes the role when |
+| --- | --- |
+| `- handoff` | a HANDOFF is addressed to it |
+| `- meeting` | it is invited to a meeting |
+| `- pr-paths: apps/web/**, tests/a11y/` | a pull request changes one of these areas (comma-separated) |
+| `- label: a11y` | an issue or pull request gets this label |
+| `- issue-label: bug` | an issue gets this label |
+| `- schedule: mon-fri 09:30` | at this time in the team's `TIMEZONE`. Days are `mon` to `sun`, ranges (`mon-fri`), lists (`tue,thu`), `daily` or `weekdays` |
+
+`validate` warns about a malformed line of these kinds (a bad time, a missing value). For a custom agent it also warns about lines the runner does not read; kit roles are free text today.
+
+`## Sign-off evidence` lists, one `- ` line each, what a SIGNOFF from this role must carry (a screenshot of each changed screen, the test log, a link to the run). `validate` warns when a role whose `Hands to` mentions SIGNOFF has none.
+
+### Share an agent: role packs
+
+A role pack is a folder another team can import: `<slug>.md` and a `pack.json`. The Studio exports one from **Your agents**.
+
+```json
+{
+  "schema": "agent-team/role-pack@1",
+  "roles": ["accessibility-auditor"],
+  "kit": "0.10.0",
+  "needs": {
+    "tools": ["Playwright", "axe"],
+    "resources": ["postgres"],
+    "paths": ["tests/a11y/"],
+    "wakes": [{ "type": "pr-paths", "value": "apps/web/**" }]
+  }
+}
+```
+
+`roles` lists the briefs in the folder. `needs` says what the agent expects: tools, the types of systems it is bound to (never their details or secrets), the areas it writes and its structured wakes. `kit` and `needs.wakes` were added in 0.10; every field but `roles` is optional, and a folder of `.md` files without `pack.json` imports too. On import every brief gets the full checks, including the secret scan.
+
 ## Replace a kit role: `<role>.md`
 
 A file with a kit role's name replaces that brief entirely. Use it only when an extension cannot express the change.
+
+**When a new kit adds a role with your custom agent's name**, sync stops and says so, instead of letting your file silently replace the new kit role (kit.lock.json records which roles the kit had at your last sync). Rename your file to a new slug (and the `team-status.sh <slug>` lines inside it), delete it to use the kit's role, or keep it as a deliberate replacement by listing it in `team.json`:
+
+```json
+{ "replaces": ["qa-web"] }
+```
 
 ## Project-wide rules
 
