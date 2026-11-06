@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.1
+
+- **Fixed:** a role that owns no areas is allowed again. 0.11.1 made a missing or empty `## Owns (writes)` an error in `validate`, and sync's roster check had always refused it. So the Studio blocked importing, for example, a clerk or a reviewer that writes nothing of its own. Both now give a warning ("owns no areas"). A missing or empty `## Identity` is still an error in both.
+
 ## 0.12.0
 
 Team templates (CPO story "Team templates", criteria 1 to 4). Additive: existing teams are not affected.

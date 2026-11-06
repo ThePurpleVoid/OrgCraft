@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KIT } from '../bin/agent-team.mjs';
@@ -149,19 +149,32 @@ test('meeting estimate: each attendee once per round at its tier, the facilitato
   assert.deepEqual([d.perMeetingUsd, d.perMonthUsd, d.turns], [20.3, null, 8]);
 });
 
-test('validate refuses what sync refuses: an empty Identity or Owns section; the template\'s evidence line is not evidence', async () => {
+test('validate refuses what sync refuses: an empty Identity; a role with no areas is a warning in both; the template\'s evidence line is not evidence', async () => {
   const { signoffEvidence } = await import('../packages/team-model/index.mjs');
   const root = mkdtempSync(join(tmpdir(), 'roster-'));
   execFileSync('git', ['init', '-q', root]);
   execFileSync(process.execPath, [cli, 'init', '--preset', 'minimal', '--project', 'R', '--dir', root], { stdio: 'ignore' });
   const spec = importLayer(readLayer(root), kit);
-  const brief = '# Empty one\n\n**Model:** standard\n**Group:** quality\n**Reports to:** cto\n**Status:** active\n\n## Identity\n\n## Owns (writes)\n\n## Wakes on\n- handoff\n';
+  const brief = '# Empty one\n\n**Model:** standard\n**Group:** quality\n**Reports to:** chief-of-staff\n**Status:** active\n\n## Identity\n\n## Owns (writes)\n\n## Wakes on\n- handoff\n';
   spec.roles['empty-one'] = { source: 'project', enabled: true, brief };
   const issues = validate(spec, kit).filter((i) => i.where === 'roles/empty-one' && i.level === 'error');
-  assert.ok(issues.some((i) => /missing "## Identity"/.test(i.message)) && issues.some((i) => /missing "## Owns \(writes\)"/.test(i.message)), JSON.stringify(issues));
-  // sync agrees: it refuses the same brief.
+  assert.ok(issues.some((i) => /missing "## Identity"/.test(i.message)), JSON.stringify(issues));
+  assert.ok(!issues.some((i) => /Owns/.test(i.message)), JSON.stringify(issues));
+  // sync agrees: it refuses the same brief, for its Identity.
   writeFileSync(join(root, '.agent-team/roles/empty-one.md'), brief);
   assert.notEqual(spawnSync(process.execPath, [cli, 'sync', '--dir', root]).status, 0);
+  // A clerk that owns no areas (no Owns section at all): one warning in validate, and sync installs it.
+  const clerk = '# Clerk\n\n**Model:** routine\n**Group:** legal\n**Reports to:** chief-of-staff\n**Status:** active\n\n## Identity\nYou file every signed contract.\n\n## Wakes on\n- handoff\n';
+  rmSync(join(root, '.agent-team/roles/empty-one.md'));
+  const spec2 = importLayer(readLayer(root), kit);
+  spec2.roles.clerk = { source: 'project', enabled: true, brief: clerk };
+  const clerkIssues = validate(spec2, kit).filter((i) => i.where === 'roles/clerk');
+  assert.deepEqual(clerkIssues.filter((i) => i.level === 'error'), [], JSON.stringify(clerkIssues));
+  assert.ok(clerkIssues.some((i) => i.level === 'warning' && /owns no areas/.test(i.message)), JSON.stringify(clerkIssues));
+  writeFileSync(join(root, '.agent-team/roles/clerk.md'), clerk);
+  const r = spawnSync(process.execPath, [cli, 'sync', '--dir', root], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.ok(existsSync(join(root, 'docs/team/roles/clerk.md')));
   assert.deepEqual(signoffEvidence(kit.template), []);
   assert.deepEqual(signoffEvidence('## Sign-off evidence\n- What a SIGNOFF from this role must attach (x)\n- the test log\n'), ['the test log']);
 });

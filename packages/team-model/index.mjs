@@ -383,7 +383,8 @@ export function validate(spec, kit, { dailyCapUsd = spec.options?.budgets?.daily
     const tier = (/^[a-z]+/i.exec(field(installed.get(slug).md, 'Model'))?.[0] ?? '').toLowerCase();
     // The same sections sync's roster check requires: a heading with nothing under it fails there, so it fails here.
     if (!briefSection(installed.get(slug).md, 'identity')) add('error', `roles/${slug}`, 'missing "## Identity" (or it is empty); sync refuses a brief without it');
-    if (!briefSection(installed.get(slug).md, 'owns')) add('error', `roles/${slug}`, 'missing "## Owns (writes)" (or it is empty); sync refuses a brief without it');
+    // Some roles own no areas (a clerk, a reviewer, a responder who only drafts): a warning, as in sync, not a block.
+    if (!briefSection(installed.get(slug).md, 'owns')) add('warning', `roles/${slug}`, 'owns no areas ("## Owns (writes)" is missing or empty): it can read and message, but writes nothing of its own');
     if (!['deep', 'standard', 'routine', 'light'].includes(tier)) add('error', `roles/${slug}`, `model tier "${tier}" is not deep, standard, routine or light`);
   }
   for (const slug of manager.keys()) { // loops in the reporting lines
