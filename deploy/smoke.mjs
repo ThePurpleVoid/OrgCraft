@@ -41,7 +41,10 @@ if (!o['api-only']) try {
   if (!r.ok || !/<html/i.test(html)) bad(`site / answered ${r.status}`);
   else {
     // Every same-origin API path the page calls must be one the control plane answers through the rewrite.
-    const calls = [...new Set([...html.matchAll(/fetch\(\s*['"`](\/v1\/[^'"`?$]*)/g)].map((m) => m[1]))];
+    // The page's own scripts (same-origin src) are read too, since the CSP keeps them out of the HTML.
+    let code = html;
+    for (const [, src] of html.matchAll(/<script[^>]+src="(\/[^"]+)"/g)) code += await fetch(`${site}${src}`).then((x) => x.text()).catch(() => '');
+    const calls = [...new Set([...code.matchAll(/fetch\(\s*['"`](\/v1\/[^'"`?$]*)/g)].map((m) => m[1]))];
     const failing = [];
     for (const path of calls) {
       const c = await fetch(`${site}${path}`, { headers: auth, signal: AbortSignal.timeout(10_000) }).catch(() => null);
