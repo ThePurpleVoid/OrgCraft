@@ -564,3 +564,71 @@ Follows D12 to D18. The view answers one question: "has the team picked up what 
 2. Version-unknown roles are grey and outside the n of m count (D62).
 3. The mid-task line names the choice made at publish, read from the recorded plan (D12).
 4. The empty and pending-merge states show their copy.
+
+## Usability test script (phase 2 exit, 3 people)
+
+Delivery plan, phase 2 exit: "a usability test with 3 people that includes making one custom agent". The chief of staff schedules the sessions with the owner; the CPO runs them from this script and writes the findings into this lane.
+
+### Who
+
+Three people who have never seen the Studio, chosen so one test covers the "any industry" rule:
+1. A developer who already uses a coding agent.
+2. A founder or product person who does not write code.
+3. Someone who runs a non-engineering function (support, content, operations).
+
+None is on the team or has read our docs. Each gets a fresh sample repository with no `.agent-team/`, the hosted or local Studio, and their own phone.
+
+### Setup (moderator, before each session)
+
+- Empty sample repository; Studio open on "Start a team".
+- A seeded approval card ready to fire on the server (M3 dry run) for task 4, so the test does not wait on a live runner. If the runner is live, use a real one.
+- Notifications on: the participant's email verified in a warm-up, so the approval also arrives by email.
+- Screen and voice recording with consent; a timer; the observation sheet below.
+
+### Briefing (read aloud)
+
+> "We're testing the tool, not you. Please think out loud: say what you expect, what you look for, and what surprises you. I can't help during a task, but I'll answer everything afterwards. Stop any time."
+
+### Tasks
+
+Each task is given as a goal, never as a click path. Time limit in brackets; at the limit, note "not completed" and move on.
+
+1. **Start a team (8 min).** "You want a small team for {their world: a product / a help desk / a content calendar}. Set one up, with your name as the owner." Success: picks a fitting template, previews it, fills the create form, reaches the canvas draft. Watch: do they read the preview; do they understand "dormant"; do they look for a blank start.
+2. **Make your own agent (10 min).** "Your team needs someone who {does X from their world, e.g. writes release notes / tags incoming tickets / checks facts}. Add that team member." Success: New agent, a template or blank, name, what it does, what it owns, who it reports to, no check errors, added to the canvas. Watch: the "What it owns" field, Wakes on, the path-conflict choice if they pick an owned area.
+3. **Publish (6 min).** "Make this team real in the repository." Success: Publish, reads the checks and file review, opens the pull request (or commits locally). Second pass, after the moderator marks one role "working" on the board: "Switch off {that role} and publish again." Success: notices the amber mark, picks a choice in Work in progress or uses the recommendations. Watch: does the impact step scare or reassure; do they read the commit message preview.
+4. **Answer an approval on your phone (5 min).** Moderator fires the seeded approval. "Something on your phone needs you. Deal with it." Success: opens the email (or the Studio on the phone), signs in, passes step-up, reads the card, approves or declines with a reason. Watch: do they try to reply to the email; do they trust the card; what they want to see before approving.
+
+### After the tasks (5 min)
+
+- "In one sentence, what does this tool do?"
+- "What would you be nervous about letting it do without you?"
+- "What was the most confusing moment?"
+- "Would you use this for {their world}? What's missing?"
+- Single Ease Question (1 to 7) for each task.
+
+### Observation sheet (one per participant)
+
+| Task | Done (yes / with help / no) | Time | Errors and wrong turns | Quotes | Ease 1–7 |
+|---|---|---|---|---|---|
+| 1 Start a team | | | | | |
+| 2 Own agent | | | | | |
+| 3 Publish + change safety | | | | | |
+| 4 Phone approval | | | | | |
+
+### Pass bar (phase 2 exit)
+
+- At least 2 of 3 complete each task without help; all 3 complete task 2 (the delivery-plan criterion).
+- Start to first publish (tasks 1 to 3, first pass) under 10 minutes for at least 2 of 3 (PRD success metric).
+- No participant approves on the phone without seeing what they approve (a safety failure, fixed before exit whatever the counts).
+- Every problem seen twice becomes a BUG or a story change in this lane, severity by impact; the findings summary goes to the chief of staff as a HANDOFF.
+
+## Copy: "Ready to try" notification (sixth kind, email and Slack)
+
+The server added a sixth kind: a feature moved to "Ready to try" (lane status). Same rules as D49 to D60; off by default for people and channels.
+
+- Switch label: `Ready to try` · hint under it: `When something the team built is ready for you to look at.`
+- Email subject: `[{team}] Ready to try: {feature}` · body:
+  > {role} says "{feature}" is ready for you to try.
+  > {how_to_try_line, e.g. "Open the preview link" or nothing}
+- Email link and Slack button: `Try it in the Studio` (or `Open the preview` when the item has a preview link)
+- Slack fallback: `{team}: {feature} is ready to try` · DM and channel text: `*"{feature}" is ready to try.*` then `{role} finished it and it passed its checks.`
