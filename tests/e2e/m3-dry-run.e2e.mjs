@@ -150,6 +150,20 @@ test('meetings: a written round ends with the minutes in the chat; a turn that b
   assert.equal(run.run?.state, 'running', 'the meeting\'s cap stops the meeting, not the run');
 });
 
+test('G-15: "web dev and QA web on X, now" in the chat starts an ad hoc meeting; the minutes land in the chat', { skip, timeout: 120_000 }, async () => {
+  await studio('POST', '/v1/team/chat', { text: 'Web dev and QA web on the checkout errors, now', clientId: 'e2e-adhoc' });
+  const started = await waitFor(() => hk.log().find((l) => l.step === 'chief-of-staff:meeting-started'), 60_000);
+  assert.ok(started.ok, started.detail);
+  assert.deepEqual(started.attendees, ['web-dev', 'qa-web']);
+  const mid = started.meeting;
+  await waitFor(async () => (await hk.meetingNow(mid)).state === 'closed', 60_000);
+  const m = await hk.meetingNow(mid);
+  assert.deepEqual([m.adhoc, m.outcome, m.title], [true, 'completed', 'The checkout errors']);
+  assert.equal(m.cap, 50, 'no cap given: a tenth of the 500 daily cap');
+  const page = await studio('GET', '/v1/team/chat');
+  assert.ok((page.items ?? []).some((e) => e.type === 'chat.message' && e.data?.meeting === mid), 'the minutes are in the chat');
+});
+
 test('step 11: a turn that takes the day past the cap pauses the run and puts a budget card in the chat', { skip, timeout: 120_000 }, async () => {
   hk.spend(6);
   await studio('POST', '/v1/team/chat', { text: 'One more thing', clientId: 'e2e-ask-3' });

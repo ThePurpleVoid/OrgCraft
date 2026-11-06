@@ -398,6 +398,9 @@ test('G-12 ready_to_try: front door only, only after a merge, preview from the r
     assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, url: 'http://insecure.example' })] })).op, 'nack', 'only https');
     assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, state: 'failure' })] })).op, 'nack', 'only a successful deployment');
     assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, url: 'https://user:pw@evil.example' })] })).op, 'nack', 'no user or password in the link');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, sha: 'b'.repeat(40) })] })).op, 'nack', 'only the merge commit of the approved merge');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, sha: undefined })] })).op, 'nack', 'the sha is required');
+    assert.equal((await runner.request('events', { events: [env('proposal.previewed', { ...prev, ref: 8 })] })).op, 'nack', 'not for a PR that has not merged');
     assert.equal((await runner.request('events', { events: [env('proposal.previewed', prev)] })).op, 'ack');
     assert.equal((await runner.request('events', { events: [env('proposal.previewed', prev)] })).op, 'ack', 'a repeat is fine');
     assert.equal((await p.call('GET', '/teams/shop/events?type=proposal.previewed')).body.events.length, 1, 'stored once per deployment');

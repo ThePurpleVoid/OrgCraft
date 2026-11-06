@@ -291,7 +291,7 @@ paths:
       x-min-role: editor
       tags: [meetings]
       summary: "Start a meeting now: an instance (mtg_…) of a definition the running run was started with. 404 for an unknown definition; 409 when no run is running, the definition is already open, or today's budget has less left than the meeting's cap"
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [meeting], properties: { meeting: { type: string, description: The definition id } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, description: "Either meeting or adhoc", properties: { meeting: { type: string, description: The definition id }, adhoc: { type: object, description: "Additive (G-15): an unscheduled meeting run by the front door, with next-pause. Without cap, the budget's meetingCap applies; a cap above the meetingCap is refused (409), and open meetings hold what is left of their caps against today's budget", required: [title, attendees], properties: { title: { type: string, maxLength: 200 }, agenda: { type: string, maxLength: 4000 }, attendees: { type: array, maxItems: 20, items: { type: string } }, cap: { type: object, required: [amount, currency], properties: { amount: { type: integer, minimum: 1, description: Minor units }, currency: { type: string, description: "The budget's currency" } } } } } } } } } }
       responses: { "201": { description: "The meeting: { id, definition, title, facilitator, attendees, state, outcome, capped, turn, replies, skipped, minutes, cap, spent, currency, run }" } }
   /teams/{team}/meetings/{meeting}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: meeting, in: path, required: true, schema: { type: string } } ]
@@ -712,6 +712,7 @@ components:
         perDay: { type: [integer, "null"], description: Minor units }
         perRun: { type: [integer, "null"] }
         sessions: { type: integer, default: 3, description: Live sessions at once }
+        meetingCap: { type: [integer, "null"], description: "Additive (G-15). The cap of a meeting started without one, in minor units; null means a tenth of perDay. At most perDay (lowering perDay below it brings it down too); raising it needs step-up" }
         currency: { type: string }
         today: { type: object, readOnly: true, properties: { day: { type: string, format: date }, spent: { type: integer }, raised: { type: integer }, state: { type: string } } }
     ToolResult:

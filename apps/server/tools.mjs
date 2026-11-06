@@ -2,7 +2,7 @@
 // first for quick feedback (apps/runner/tools.mjs); this is the authority (m3-design section 3), so it shares no
 // code with the runner and needs no dependency. Pure: no I/O. Returns { input } (cleaned) or { problems }.
 
-export const TOOL_NAMES = ['report', 'handoff', 'bug', 'signoff', 'blocked', 'ask_owner', 'request_approval', 'meeting_reply', 'meeting_close', 'ready_to_try'];
+export const TOOL_NAMES = ['report', 'handoff', 'bug', 'signoff', 'blocked', 'ask_owner', 'request_approval', 'meeting_reply', 'meeting_close', 'meeting_start', 'ready_to_try'];
 const MEETING = /^mtg_[A-Za-z0-9_-]{1,60}$/;
 const MAX = 4000;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -116,6 +116,23 @@ export function checkTool(name, input, ctx) {
       else if (out.action === 'accept' && out.headSha && !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(out.headSha)) problems.push('an accept approval needs the full head sha (40 or 64 hex characters)');
       if (out.action === 'accept' && (!out.pr || !out.headSha)) problems.push('an accept approval needs pr and headSha, so the merge can only land on the commit that was approved');
       break;
+    case 'meeting_start': {
+      // G-15: an unscheduled meeting from the chat, run by the front door (the server checks attendees and the cap).
+      if (!ctx.frontDoor) return { problems: [`Only the front door starts a meeting: send a BLOCKED to ${ctx.frontDoorRole ?? 'the front door'} asking for one`], forbidden: true };
+      out = { title: f.text('title', { need: true, max: 200 }), agenda: f.text('agenda') };
+      const at = f.a.attendees;
+      if (!Array.isArray(at) || !at.length || at.length > 20 || at.some((x) => typeof x !== 'string' || !SLUG.test(x))) problems.push('attendees is a list of 1 to 20 role slugs');
+      else {
+        out.attendees = at;
+        for (const x of at) if (ctx.roster?.length && !ctx.roster.includes(x)) problems.push(`${x} is not a role on this team (roles: ${ctx.roster.join(', ')})`);
+      }
+      if (f.a.cap !== undefined) {
+        const c = f.a.cap;
+        if (!c || !Number.isSafeInteger(c.amount) || c.amount <= 0 || typeof c.currency !== 'string' || !/^[A-Z]{3}$/.test(c.currency)) problems.push('cap is { amount: whole minor units, currency: like USD }');
+        else out.cap = { amount: c.amount, currency: c.currency };
+      }
+      break;
+    }
     case 'ready_to_try':
       // Demo step 12: only the front door tells the owner. The server checks the PR merged and adds the preview itself.
       if (!ctx.frontDoor) return { problems: [`Only ${ctx.frontDoorRole ?? 'the front door'} tells the owner a change is ready to try: send it a handoff with the PR`], forbidden: true };

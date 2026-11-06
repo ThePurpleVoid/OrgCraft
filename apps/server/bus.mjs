@@ -328,8 +328,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         if (tool === 'blocked') await ctx.emit(sess.team, 'report.status', { status: 'blocked', task: i.task, issue: i.issue, detail: i.need }, opts);
         out = { event: ev.id };
         await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: ev.id });
-      } else if (tool === 'meeting_reply' || tool === 'meeting_close') {
-        const r = await meetings.tool(ctx, sess, tool, i, roster);
+      } else if (tool === 'meeting_reply' || tool === 'meeting_close' || tool === 'meeting_start') {
+        const r = tool === 'meeting_start' ? await meetings.startAdhoc(ctx, sess, i, roster) : await meetings.tool(ctx, sess, tool, i, roster);
         if (r.problems) {
           const ev = await ctx.emit(sess.team, 'session.tool', { tool: `team.${tool}`, decision: 'refused', rule: 'meetings', detail: r.problems.join(' ') }, opts);
           await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'refused', rule: 'meetings', event: ev.id, detail: { problems: r.problems } });
@@ -399,7 +399,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
             actor: { kind: 'role', id: sess.role, instance: sess.instance ?? null, session: sess.id, via: e.actor?.via === 'tool' ? 'tool' : 'hook' } };
           if (e.type === 'chat.message') env.data = { ...(e.data ?? {}), from: sess.role };
           // One stored event per deployment, whatever id the frame had, so a repeat after a reconnect is a no-op.
-          if (e.type === 'proposal.previewed') { env.data = m3.checkPreviewed(e.data); env.id = `previewed-${env.data.ref}-${env.data.deployment}`; }
+          if (e.type === 'proposal.previewed') { env.data = m3.checkPreviewed(e.data); env.id = `previewed-${env.data.ref}-${env.data.deployment}`; await m3.previewForMerge(ctx, sess.team, env.data); }
           const out = await m3.appendIn(ctx, sess.team, [env]);
           if (e.type === 'proposal.previewed' && out.length) await m3.previewArrived(ctx, sess.team, env.data);
           if (e.type === 'chat.message' && out.length) {

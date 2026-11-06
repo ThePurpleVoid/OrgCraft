@@ -130,6 +130,19 @@ Only the meeting's facilitator, on its closing turn (also when the meeting reach
 
 Emits `meeting.closed` (outcome `completed` or `capped`); the minutes as a `chat.message` from the facilitator when the definition's `owner.minutes` is set (the default); a `report.note` linking the meeting page; a `message.handoff` per action item; and per decision a `decision` card when the facilitator is the front door, otherwise a `message.blocked` to the front door with `needFrom: owner` and the recommendation, because no other role asks the owner directly. All carry `data.meeting`. Minutes are never committed to a repository. Result: `{ "event": "<id>" }`.
 
+## `meeting_start`
+
+Only the team's **front door** may call it. Any other role is refused with 403: "Only the front door starts a meeting: send a BLOCKED to <front door> asking for one". It opens an unscheduled meeting in the written-round format, run by the front door, with `ifBusy: next-pause`.
+
+| Field | Required | Check |
+| --- | --- | --- |
+| `title` | yes | at most 200 characters |
+| `agenda` | no | |
+| `attendees` | yes | 1 to 20 role slugs of this team, the caller left out |
+| `cap` | no | `{ amount, currency }`: whole minor units in the budget's currency, **at most the team's meeting cap** (`meetingCap`, or a tenth of `perDay` when that is null). Without it the meeting cap applies |
+
+Refused with 422 when there is no run, the cap is above the meeting cap, or today's budget (less what open meetings still hold) is below the cap. Only a person raises the meeting cap, with step-up. Emits `meeting.opened` with `adhoc: true` and the first `meeting.turn`. Result: `{ "meeting": "mtg_…", "attendees": [...], "cap": <minor units>, "currency": "USD" }`.
+
 ## `ready_to_try`
 
 Only the front door, after a pull request merged with an approval (demo step 12: "Dark mode is Ready to try", with the preview link). Any other role sends the front door a `handoff` with the PR instead.
