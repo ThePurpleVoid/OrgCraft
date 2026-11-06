@@ -99,3 +99,10 @@ test('the edge middleware replaces a client x-agent-team-edge with the secret, k
     if (was === undefined) delete process.env.AGENT_TEAM_EDGE_SECRET; else process.env.AGENT_TEAM_EDGE_SECRET = was;
   }
 });
+
+test('every path the site rewrites to the control plane runs through the edge middleware', async () => {
+  const matcher = MIDDLEWARE.match(/matcher: (\[[^\]]*\])/)[1].replace(/'/g, '"');
+  const m = JSON.parse(matcher);
+  const covered = (src) => m.some((x) => x === src || (x.endsWith('/:path*') && (src === x.slice(0, -7) || src.startsWith(x.slice(0, -6)))));
+  for (const { source } of siteConfig('https://api.example').rewrites) assert.ok(covered(source), `${source} is rewritten but not in the middleware matcher`);
+});
