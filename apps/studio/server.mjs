@@ -8,8 +8,9 @@
 // and commits the result on a branch. The repository stays the source of truth (docs/adr/0001).
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
@@ -20,6 +21,7 @@ import { hostGuard } from '../../tools/hosts.mjs';
 import { ownershipFromMarkdown, suggestAreas, suggestChecks } from './suggest.mjs';
 import { loadKit, readLayer, writeLayer } from '../../packages/team-model/node.mjs';
 import { liveSource } from './live.mjs';
+import { chatSource } from './chat.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(HERE, 'public');
@@ -117,18 +119,61 @@ export function suggestions(root, spec) {
 
 const send = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 
-export function createStudio({ root, env = process.env }) {
+/**
+ * The Studio's own sign-in, Jupyter style: a launch token printed in the URL it opens. The first visit with ?t=<token>
+ * sets an HttpOnly, SameSite=Strict cookie, and every other request must carry it. Without it, anything that can reach the
+ * port (another process, a machine on the network, a rebinding page) could read the chat or answer as the owner, since
+ * this server holds the control plane's token and, for a few minutes, a step-up token.
+ */
+const COOKIE = 'studio_session';
+const same = (a, b) => { const x = Buffer.from(String(a ?? '')), y = Buffer.from(String(b ?? '')); return x.length === y.length && timingSafeEqual(x, y); };
+const cookieOf = (req) => (String(req.headers.cookie ?? '').split(';').map((c) => c.trim().split('=')).find(([k]) => k === COOKIE) ?? [])[1];
+
+export function createStudio({ root, env = process.env, launchToken = randomBytes(24).toString('base64url') }) {
   const live = liveSource(root, env);
+  const chat = chatSource(env);
+  // The cookie holds a session id of its own, not the launch token: browsers send localhost cookies to every port, so
+  // another local dev server could read it, and it should not be a link that signs in.
+  const session = randomBytes(24).toString('base64url');
+  /** Chat calls: the control plane's answer, or its error with its status (a stale card's 409 carries the card). */
+  const relay = async (res, fn) => {
+    if (!chat.connected) return send(res, 503, { connected: false, error: 'connect a control plane: set AGENT_TEAM_SERVER, AGENT_TEAM_SERVER_TOKEN and AGENT_TEAM_SERVER_TEAM' });
+    try { return send(res, 200, await fn()); } catch (e) {
+      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(e.status === 409 && e.body?.id ? { card: e.body } : {}) });
+      return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
+    }
+  };
   const server = createServer(async (req, res) => {
-    // DNS rebinding: answer only the names this server is really reached by (tools/hosts.mjs), on every route.
+    // DNS rebinding: answer only the names this server is really reached by (tools/hosts.mjs), on every route,
+    // before the launch link and the session cookie.
     if (!allowed(req)) return send(res, 403, { error: 'host not allowed (add it to STUDIO_ALLOWED_HOSTS)' });
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
+      if (req.method === 'GET' && url.searchParams.has('t')) {
+        if (!same(url.searchParams.get('t'), launchToken)) throw new HttpError(401, 'that link is out of date: open the one the Studio printed when it started');
+        url.searchParams.delete('t');
+        res.writeHead(302, { location: url.pathname + url.search, 'set-cookie': `${COOKIE}=${session}; HttpOnly; SameSite=Strict; Path=/`, 'cache-control': 'no-store' });
+        return res.end();
+      }
+      if (!same(cookieOf(req), session)) {
+        if (url.pathname.startsWith('/v1/')) throw new HttpError(401, 'open the Studio with the link it printed when it started (it ends in ?t=…)');
+        res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end('<!doctype html><meta charset="utf-8"><title>Agent Team Studio</title><p style="font:15px system-ui;margin:2em">Open the Studio with the link it printed when it started. It ends in <code>?t=…</code>.</p>');
+      }
       // The Studio's API, versioned like the public API it will become (ADR 0005): additive changes only within /v1/.
       if (req.method === 'GET' && url.pathname === '/v1/team') return send(res, 200, state(root));
       // The live board, and a stream that says when it changed (the page then fetches the board again).
       if (req.method === 'GET' && url.pathname === '/v1/team/board') {
         try { return send(res, 200, { source: live.kind, where: live.where, board: await live.board() }); } catch (e) { return send(res, 502, { source: live.kind, where: live.where, error: e.message }); }
+      }
+      // The chat with the chief of staff. The page refreshes it when the board stream says something changed.
+      if (req.method === 'GET' && url.pathname === '/v1/team/chat') {
+        if (!chat.connected) return send(res, 200, { connected: false, items: [] });
+        return relay(res, async () => ({ connected: true, team: chat.team, ...(await chat.chat({ before: url.searchParams.get('before') ?? undefined })) }));
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/team/run') {
+        if (!chat.connected) return send(res, 200, { connected: false });
+        return relay(res, async () => ({ connected: true, ...(await chat.run()) }));
       }
       if (req.method === 'GET' && url.pathname === '/v1/team/board/stream') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
@@ -152,6 +197,21 @@ export function createStudio({ root, env = process.env }) {
         if (url.pathname === '/v1/team/publish') return send(res, 200, publish(root, input.spec, input));
         if (url.pathname === '/v1/team/graph') return send(res, 200, graph(input.spec));
         if (url.pathname === '/v1/team/suggestions') return send(res, 200, suggestions(root, input.spec));
+        if (url.pathname === '/v1/team/chat') {
+          const text = typeof input.text === 'string' ? input.text : '';
+          if (!text.trim()) throw new HttpError(400, 'say something');
+          if (text.length > 20_000) throw new HttpError(413, 'a message is at most 20,000 characters');
+          // Verbatim: the text goes on exactly as typed, untrimmed (the dilution rule).
+          return relay(res, () => chat.say({ text, clientId: typeof input.clientId === 'string' ? input.clientId.slice(0, 80) : undefined, replyTo: input.replyTo }));
+        }
+        const card = /^\/v1\/team\/cards\/([^/]+)$/.exec(url.pathname);
+        if (card) return relay(res, () => chat.answer({ card: decodeURIComponent(card[1]), kind: input.kind, subject: input.subject, option: input.option, version: input.version, key: input.key }));
+        const action = /^\/v1\/team\/run\/(pause|resume|stop)$/.exec(url.pathname);
+        if (action) return relay(res, () => chat.control(action[1], input.key, input.run));
+        if (url.pathname === '/v1/team/step-up') {
+          if (typeof input.secret !== 'string' || !input.secret) throw new HttpError(400, 'send the secret');
+          return relay(res, () => chat.stepUp(input.secret));
+        }
         throw new HttpError(404, 'no such endpoint');
       }
       if (req.method === 'GET' || req.method === 'HEAD') {
@@ -168,6 +228,7 @@ export function createStudio({ root, env = process.env }) {
     }
   });
   const allowed = hostGuard(server, env.STUDIO_ALLOWED_HOSTS ?? '');
+  server.launchToken = launchToken;
   return server;
 }
 
@@ -180,8 +241,13 @@ export function run(argv) {
   const server = createStudio({ root });
   return new Promise((done) => {
     server.listen(port, host, () => {
-      const where = `http://${host === '0.0.0.0' ? 'localhost' : host}:${server.address().port}`;
-      console.log(`Agent Team Studio for ${root}\n  ${where}\nCtrl-C stops it.`);
+      const p = server.address().port, t = `/?t=${server.launchToken}`;
+      const where = `http://${host === '0.0.0.0' || host === '::' ? 'localhost' : host}:${p}${t}`;
+      // On every interface, also print this machine's network addresses: that is the link to type on a phone.
+      const lan = host === '0.0.0.0' || host === '::'
+        ? Object.values(networkInterfaces()).flat().filter((i) => i && !i.internal && i.family === 'IPv4').map((i) => `http://${i.address}:${p}${t}`)
+        : [];
+      console.log(`Agent Team Studio for ${root}\n  ${where}${lan.map((u) => `\n  ${u}   (from a phone on this network; plain HTTP, so trusted networks only)`).join('')}\nOpen a link to sign in to this Studio. Ctrl-C stops it.`);
       if (argv.includes('--open')) { try { execFileSync(process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open', [where], { stdio: 'ignore' }); } catch { /* no browser */ } }
     });
     server.on('close', () => done(0));

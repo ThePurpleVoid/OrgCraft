@@ -279,8 +279,12 @@ test('the Studio shows a team\'s live board from the control plane, without the 
     await new Promise((r) => studio.listen(0, '127.0.0.1', r));
     const sbase = `http://127.0.0.1:${studio.address().port}`;
     try {
+      // Sign in the way the page does: the launch link sets the Studio's session cookie.
+      const launch = await fetch(`${sbase}/?t=${studio.launchToken}`, { redirect: 'manual' });
+      const headers = { cookie: launch.headers.get('set-cookie').split(';')[0] };
+      assert.equal((await fetch(`${sbase}/v1/team/board`)).status, 401, 'no session cookie, no board');
       const ctl = new AbortController();
-      const res = await fetch(`${sbase}/v1/team/board/stream`, { signal: ctl.signal });
+      const res = await fetch(`${sbase}/v1/team/board/stream`, { signal: ctl.signal, headers });
       const reader = res.body.getReader();
       const changed = (async () => {
         const dec = new TextDecoder();
@@ -292,7 +296,7 @@ test('the Studio shows a team\'s live board from the control plane, without the 
       await call('POST', '/teams/studio-team/reports', { role: 'chief-of-staff', kind: 'status', status: 'working', task: 'Plan the week' }, { 'x-team-token': token });
       assert.ok(await changed);
       ctl.abort();
-      const text = await (await fetch(`${sbase}/v1/team/board`)).text();
+      const text = await (await fetch(`${sbase}/v1/team/board`, { headers })).text();
       assert.ok(!text.includes(ADMIN), 'the token stays on the server');
       const body = JSON.parse(text);
       assert.equal(body.source, 'server');

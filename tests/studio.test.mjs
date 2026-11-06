@@ -24,12 +24,15 @@ function repo() {
   return root;
 }
 
+const signIn = async (base, server) => (await fetch(`${base}/?t=${server.launchToken}`, { redirect: 'manual' })).headers.get('set-cookie').split(';')[0];
+
 async function serve(root, fn) {
   const server = createStudio({ root });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
+  const cookie = await signIn(base, server);
   const call = async (path, body, headers = {}) => {
-    const res = await fetch(base + path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json', origin: base, ...headers }, body: JSON.stringify(body) });
+    const res = await fetch(base + path, body === undefined ? { headers: { cookie, ...headers } } : { method: 'POST', headers: { 'content-type': 'application/json', origin: base, cookie, ...headers }, body: JSON.stringify(body) });
     return { status: res.status, type: res.headers.get('content-type'), body: res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text() };
   };
   try { await fn(call); } finally { server.close(); }
@@ -181,12 +184,13 @@ test('the live board comes from the local event log, and the stream says when it
   const base = `http://127.0.0.1:${server.address().port}`;
   const report = (...a) => execFileSync('bash', [join(root, 'scripts/agent-team/team-status.sh'), ...a], { env, stdio: 'ignore' });
   try {
-    const empty = await (await fetch(`${base}/v1/team/board`)).json();
+    const headers = { cookie: await signIn(base, server) };
+    const empty = await (await fetch(`${base}/v1/team/board`, { headers })).json();
     assert.equal(empty.source, 'log');
     assert.deepEqual(empty.board.current, []);
 
     const ctl = new AbortController();
-    const res = await fetch(`${base}/v1/team/board/stream`, { signal: ctl.signal });
+    const res = await fetch(`${base}/v1/team/board/stream`, { signal: ctl.signal, headers });
     assert.equal(res.headers.get('content-type'), 'text/event-stream');
     const reader = res.body.getReader();
     const changed = (async () => {
@@ -200,10 +204,33 @@ test('the live board comes from the local event log, and the stream says when it
     assert.ok(await changed, 'a report on this machine reaches the page');
     ctl.abort();
 
-    const { board } = await (await fetch(`${base}/v1/team/board`)).json();
+    const { board } = await (await fetch(`${base}/v1/team/board`, { headers })).json();
     assert.equal(board.current[0].role, 'web-dev');
     assert.equal(board.current[0].task, 'Invoices page');
   } finally { server.closeAllConnections(); server.close(); }
+});
+
+test('only the launch link opens the Studio: it sets an HttpOnly cookie that every request needs', async () => {
+  const root = repo();
+  const server = createStudio({ root, launchToken: 'launch-123' });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.equal((await fetch(`${base}/v1/team`)).status, 401, 'no cookie: a LAN client or another process gets nothing');
+    assert.equal((await fetch(`${base}/`)).status, 401);
+    assert.equal((await fetch(`${base}/v1/team`, { headers: { cookie: 'studio_session=guess' } })).status, 401);
+    assert.equal((await fetch(`${base}/?t=wrong`, { redirect: 'manual' })).status, 401);
+    const launch = await fetch(`${base}/?t=launch-123`, { redirect: 'manual' });
+    assert.equal(launch.status, 302);
+    assert.equal(launch.headers.get('location'), '/');
+    const set = launch.headers.get('set-cookie');
+    assert.match(set, /^studio_session=[A-Za-z0-9_-]{20,};/);
+    assert.doesNotMatch(set, /launch-123/, 'the cookie is a session id of its own, not the launch token');
+    assert.match(set, /HttpOnly/);
+    assert.match(set, /SameSite=Strict/);
+    assert.equal((await fetch(`${base}/v1/team`, { headers: { cookie: 'studio_session=launch-123' } })).status, 401, 'the launch token is not a session');
+    assert.equal((await fetch(`${base}/v1/team`, { headers: { cookie: set.split(';')[0] } })).status, 200);
+  } finally { server.close(); }
 });
 
 test('DNS rebinding: the Studio answers only its own host names, on every route', async () => {
@@ -224,7 +251,8 @@ test('DNS rebinding: the Studio answers only its own host names, on every route'
       }
     }
     // The origin check still refuses a cross-site POST from an allowed host.
-    assert.equal((await raw(port, '/v1/team/graph', { host: `localhost:${port}`, method: 'POST', headers: { ...json, origin: 'https://evil.example' }, body: '{}' })).status, 403);
+    const cookie = await signIn(`http://127.0.0.1:${port}`, server);
+    assert.equal((await raw(port, '/v1/team/graph', { host: `localhost:${port}`, method: 'POST', headers: { ...json, cookie, origin: 'https://evil.example' }, body: '{}' })).status, 403);
   } finally {
     server.close();
   }
