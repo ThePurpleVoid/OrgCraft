@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Design: one Studio, local or deployed, and mounted in your own app** (issue #123, ADR 0008, `docs/specs/studio-embed.md`). It defines one `RepoBackend` interface with `local` (git and gh) and `github` (a GitHub App handler a host mounts in its own server) backends, a shared sync core so both produce byte-identical commits, `createStudioHandler` and `AgentTeamStudio.mount` for step 1 (edit and publish, no control plane), the security requirements E1 to E10, and step 2 through the control plane after M4.
+
 ## 0.17.0
 
 - **`report.mjs published`: the repository says when a team version reached main** (CTO, so the rollout view does not depend on the Studio being open when the pull request merges). The team's CI runs `node scripts/agent-team/report.mjs published` on main after a change to `.agent-team/`; docs/customizing.md#ci has the snippet. It posts through the existing `TEAM_REPORT_URL` and token, and the mirror. The version is the last commit on the main line that changed `.agent-team/` (the merge commit), with when it merged, the pull request, the roles in `docs/team/roles/`, the ones it removed, the changed paths, who published, and the Studio's "Work in progress" plan read back from the commit message (`parsePlan`). It never fails the build and writes nothing to the local log.
