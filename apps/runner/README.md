@@ -16,8 +16,21 @@ ANTHROPIC_API_KEY=… node bin.mjs start
 `register` trades the code for a runner key, kept in `~/.agent-team/runner/runner.json` (readable only by you).
 `start` connects with it. A deployment sets `AGENT_TEAM_SERVER` and `AGENT_TEAM_RUNNER_KEY` instead.
 
-**Run it in the container** (`Dockerfile`). That is the supported deployment: the runner runs as `runner` and every
-session as `agent`. Outside it (no `AGENT_TEAM_SANDBOX_UID`), sessions share the runner's OS user and could read its
+**Run it in the container** (`Dockerfile`). That is the supported deployment. The runner runs as `runner`, and
+every live session runs as an agent user of its own, from a pool of eight (`agent0` to `agent7`,
+`AGENT_TEAM_SANDBOX_UIDS=10100-10107`), so one session cannot read another's working copy, home or memory, even for
+another customer.
+- A session's folders are in its user's group.
+- The folders on the way are traverse only.
+- A working copy no session holds is closed to every agent user and wholly the runner's.
+- At a session's end, every process of its user is stopped and its temporary files and IPC are removed. The user
+  is checked empty before the next session gets it.
+- The pool needs `fs.protected_hardlinks=1`, which is the Linux default.
+- Where the platform allows it, also mount `/proc` with `hidepid=invisible`. No secret is ever on a command line,
+  but without it one agent user can see another's processes.
+
+The older single user (`AGENT_TEAM_SANDBOX_UID`) still works but serves one team only. Outside the container (no
+sandbox settings), sessions share the runner's OS user and could read its
 environment, so that is for development only: with `ANTHROPIC_API_KEY` set and no sandbox the runner refuses to
 start (`AGENT_TEAM_RUNNER_UNSANDBOXED=1` overrides that for development). On a Mac, run it through Docker:
 

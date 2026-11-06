@@ -9,8 +9,8 @@ import { dirname, join } from 'node:path';
 import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
-import { safeRead, safeWrite, sharedDir } from './sandbox.mjs';
-import { checkHead, checkpoint as saveWork, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
+import { park, reap, safeRead, safeWrite, sandboxPool, sharedDir } from './sandbox.mjs';
+import { checkHead, checkpoint as saveWork, copyPath, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
 // Which model each tier runs on comes from the kit's one price table (packages/model-prices), not a copy here.
@@ -129,7 +129,13 @@ export class Session {
   async start() {
     const b = this.body;
     try {
-      const sb = this.deps.sandbox ?? null;
+      // The session's own agent user (#28): a slot of the runner's pool, the one its working copy last had if free.
+      this.pool = sandboxPool(this.deps.sandbox ?? null);
+      if (this.pool) {
+        this.slot = this.pool.take(copyPath({ work: this.work, repo: b.repo, worktree: b.worktree, session: this.id }));
+        if (!this.slot) throw Object.assign(new Error('every agent user of this runner is in use'), { capacity: true });
+      }
+      const sb = this.slot ?? null;
       this.copy = await prepare({ root: this.deps.root, work: this.work, repo: b.repo, worktree: b.worktree, session: this.id, sandbox: sb });
       sharedDir(join(this.work, 'memory'), sb);
       sharedDir(dirname(this.memoryPath), sb, { leaf: true });
@@ -153,7 +159,9 @@ export class Session {
       }
       if (b.instance) this.env.AGENT_TEAM_INSTANCE = String(b.instance);
     } catch (e) {
-      await this.emit('session.ended', { role: this.role, reason: 'failed', detail: `could not start: ${e.message}` });
+      if (this.copy) release(this.copy.cwd, this.id);
+      this.endSlot();
+      await this.emit('session.ended', { role: this.role, reason: e.capacity ? 'capacity' : 'failed', detail: `could not start: ${e.message}` });
       this.state = 'ended';
       this._ended();
       return;
@@ -217,7 +225,7 @@ export class Session {
     let out;
     try {
       out = await this.deps.adapter.turn({
-        session: this.id, role: this.role, model: this.model, cwd: this.copy.cwd, env: this.env, resume: this.resume, sandbox: this.deps.sandbox ?? null,
+        session: this.id, role: this.role, model: this.model, cwd: this.copy.cwd, env: this.env, resume: this.resume, sandbox: this.slot ?? null,
         systemPrompt: systemPrompt(this.body.prompt, this.role, this.memoryPath), prompt: this.takeNote(wakePrompt(message, this.role, { resume })),
         signal: this.abort.signal, maxBudgetUsd: remaining === null ? undefined : remaining / 100, mcp: this.body.tools?.mcp ?? {},
         tools: Object.entries(TOOLS).map(([name, t]) => ({ name, description: t.description, shape: t.shape })),
@@ -464,6 +472,7 @@ export class Session {
     if (this.copy) release(this.copy.cwd, this.id);
     this.deps.modelProxy?.unregister(this.id);
     await this.record({}, { last: true });
+    this.endSlot();
     await this.emit('report.heartbeat', { status: 'idle', detail: reason === 'budget' ? 'stopped: the session reached its budget' : `stopped (${reason})`, source: 'hook' }, { via: 'hook' });
     await this.emit('session.ended', { role: this.role, reason, branch: this.copy?.branch, commit: saved.commit, pushed: saved.pushed ?? false, ...(saved.error ? { detail: saved.error } : {}) });
     this.state = 'ended';
@@ -473,6 +482,21 @@ export class Session {
 
   emit(type, data, opts = {}) {
     return this.deps.emit(this, type, data, opts);
+  }
+
+  /**
+   * Hand the session's agent user back (#28). A slot of its own is emptied first (reap: every process, its temporary
+   * files, its home and memory folder) and its working copy parked (closed, and all of it the runner's). A slot
+   * that does not come back empty is kept out of the pool for good, and the runner says so.
+   */
+  endSlot() {
+    const slot = this.slot;
+    if (!slot || this.slotDone) return;
+    this.slotDone = true;
+    if (!slot.own) return this.pool.give(slot);
+    const r = reap(slot, [this.home, dirname(this.memoryPath)].filter((p) => p && existsSync(p)), { stopped: () => this.copy && park(this.copy.cwd) });
+    if (r.ok) this.pool.give(slot);
+    else this.deps.log?.(`agent user ${slot.uid} is kept out of use: ${r.problems.join('; ')}`);
   }
 
   /**
