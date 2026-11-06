@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Design: one Studio, local or deployed, and mounted in your own app** (issue #123, ADR 0008, `docs/specs/studio-embed.md`). It defines one `RepoBackend` interface with `local` (git and gh) and `github` (a GitHub App handler a host mounts in its own server) backends, a shared sync core so both produce byte-identical commits, `createStudioHandler` and `AgentTeamStudio.mount` for step 1 (edit and publish, no control plane), the security requirements E1 to E10, and step 2 through the control plane after M4.
 ## 0.16.0
 
 The rollout view's data (demo step 17, CPO copy "Rollout view after a publish", D61 to D63), plus the Studio work since 0.15.
