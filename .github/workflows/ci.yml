@@ -103,7 +103,7 @@ jobs:
       - name: The server through a transaction pooler, and the smoke test
         run: |
           d="$RUNNER_TEMP/pgb"; mkdir -p "$d"
-          printf '[databases]\n* = host=127.0.0.1 port=5432\n[pgbouncer]\nlisten_addr = 127.0.0.1\nlisten_port = 6543\nauth_type = plain\nauth_file = %s/users.txt\npool_mode = transaction\ndefault_pool_size = 3\n' "$d" > "$d/pgbouncer.ini"
+          printf '[databases]\n* = host=127.0.0.1 port=5432\n[pgbouncer]\nlisten_addr = 127.0.0.1\nlisten_port = 6543\nauth_type = plain\nauth_file = %s/users.txt\npool_mode = transaction\ndefault_pool_size = 3\npidfile = %s/pgbouncer.pid\nlogfile = %s/pgbouncer.log\n' "$d" "$d" "$d" > "$d/pgbouncer.ini"
           printf '"agent_team_owner" "ci-only"\n' > "$d/users.txt"
           pgbouncer -d "$d/pgbouncer.ini"
           export AGENT_TEAM_ADMIN_TOKEN=adm_ci_only AGENT_TEAM_MASTER_KEY="$(openssl rand -base64 32)"
