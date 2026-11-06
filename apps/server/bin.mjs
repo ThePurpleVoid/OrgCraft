@@ -53,6 +53,6 @@ server.listen(Number(o.port), o.host, () => {
   console.log(`Agent Team control plane on http://${o.host}:${server.address().port}/v1 (${db.kind}${local ? `, data in ${data}` : ''})`);
   if (local) console.log(`Admin token: ${join(data, 'admin.token')}`);
 });
-const stop = async () => { sinks.stop(); server.close(); await db.close(); process.exit(0); };
+const stop = async () => { sinks.stop(); server.runners.closeAll(); server.close(); await db.close(); process.exit(0); };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
