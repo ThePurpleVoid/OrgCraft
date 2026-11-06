@@ -19,6 +19,7 @@ import { graphFrom } from '../../tools/roster-graph.mjs';
 import { ownershipFromMarkdown, suggestAreas, suggestChecks } from './suggest.mjs';
 import { loadKit, readLayer, writeLayer } from '../../packages/team-model/node.mjs';
 import { liveSource } from './live.mjs';
+import { chatSource } from './chat.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(HERE, 'public');
@@ -118,6 +119,15 @@ const send = (res, status, body) => { res.writeHead(status, { 'content-type': 'a
 
 export function createStudio({ root, env = process.env }) {
   const live = liveSource(root, env);
+  const chat = chatSource(env);
+  /** Chat calls: the control plane's answer, or its error with its status (a stale card's 409 carries the card). */
+  const relay = async (res, fn) => {
+    if (!chat.connected) return send(res, 503, { connected: false, error: 'connect a control plane: set AGENT_TEAM_SERVER, AGENT_TEAM_SERVER_TOKEN and AGENT_TEAM_SERVER_TEAM' });
+    try { return send(res, 200, await fn()); } catch (e) {
+      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(e.status === 409 && e.body?.id ? { card: e.body } : {}) });
+      return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
+    }
+  };
   return createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
@@ -126,6 +136,15 @@ export function createStudio({ root, env = process.env }) {
       // The live board, and a stream that says when it changed (the page then fetches the board again).
       if (req.method === 'GET' && url.pathname === '/v1/team/board') {
         try { return send(res, 200, { source: live.kind, where: live.where, board: await live.board() }); } catch (e) { return send(res, 502, { source: live.kind, where: live.where, error: e.message }); }
+      }
+      // The chat with the chief of staff. The page refreshes it when the board stream says something changed.
+      if (req.method === 'GET' && url.pathname === '/v1/team/chat') {
+        if (!chat.connected) return send(res, 200, { connected: false, events: [] });
+        return relay(res, async () => ({ connected: true, team: chat.team, ...(await chat.chat({ before: url.searchParams.get('before') ?? undefined })) }));
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/team/run') {
+        if (!chat.connected) return send(res, 200, { connected: false });
+        return relay(res, async () => ({ connected: true, ...(await chat.run()) }));
       }
       if (req.method === 'GET' && url.pathname === '/v1/team/board/stream') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
@@ -149,6 +168,17 @@ export function createStudio({ root, env = process.env }) {
         if (url.pathname === '/v1/team/publish') return send(res, 200, publish(root, input.spec, input));
         if (url.pathname === '/v1/team/graph') return send(res, 200, graph(input.spec));
         if (url.pathname === '/v1/team/suggestions') return send(res, 200, suggestions(root, input.spec));
+        if (url.pathname === '/v1/team/chat') {
+          const text = typeof input.text === 'string' ? input.text : '';
+          if (!text.trim()) throw new HttpError(400, 'say something');
+          if (text.length > 20_000) throw new HttpError(413, 'a message is at most 20,000 characters');
+          // Verbatim: the text goes on exactly as typed, untrimmed (the dilution rule).
+          return relay(res, () => chat.say({ text, clientId: typeof input.clientId === 'string' ? input.clientId.slice(0, 100) : undefined, replyTo: input.replyTo }));
+        }
+        const card = /^\/v1\/team\/cards\/([^/]+)$/.exec(url.pathname);
+        if (card) return relay(res, () => chat.answer({ card: decodeURIComponent(card[1]), kind: input.kind, subject: input.subject, option: input.option, version: input.version, key: input.key }));
+        const action = /^\/v1\/team\/run\/(pause|resume|stop)$/.exec(url.pathname);
+        if (action) return relay(res, () => chat.control(action[1], input.key));
         throw new HttpError(404, 'no such endpoint');
       }
       if (req.method === 'GET' || req.method === 'HEAD') {

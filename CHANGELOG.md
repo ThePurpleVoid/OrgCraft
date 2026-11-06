@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Chat with the chief of staff in the Studio** (milestone M3, issue #28). A Chat page next to the team: your messages are sent and shown exactly as you type them, with a client id so a retry lands once; the team's replies appear as they arrive, in a small Markdown subset; decision and approval cards are built from their fields (never HTML) and every answer sends the card version it saw, so a card that changed first comes back refreshed instead of being answered blind. The header shows the run's state, today's cost against the daily cap, and Pause, Resume and Stop. Like the live board, the Studio's server calls the control plane, so the token never reaches the page. It works at 360px wide; on a small screen the team itself is read-only.
+- A browser test (Playwright) drives the chat against a stand-in control plane with a stubbed runner, and CI runs it.
+
 ## 0.8.0
 
 - **Contracts for the online product** ([docs/contracts/](docs/contracts/README.md), milestone M1 of the MVP). They are written before the code that implements them:
