@@ -17,6 +17,7 @@ Owner of this file: cpo. Last updated 2026-11-06.
 | Neutral protocols for business-function teams (issue #30 follow-up) | Idea: story confirmed below, not yet scheduled |
 | Other coding agents (PRD G3 b, issue #30 follow-up) | Idea: story confirmed below; kit-core-dev after "PR through gh" |
 | Email notifications (PRD 6.8 O1 to O7, phase 3) | Building: story and copy confirmed below; kit-core-dev builds the email sink |
+| Slack notifications (PRD 6.8 O1, O4, phase 4) | Building: story and copy confirmed below; kit-core-dev builds the Slack sink |
 
 ## Priorities, in order
 
@@ -36,6 +37,7 @@ Owner of this file: cpo. Last updated 2026-11-06.
 7. **Neutral protocols story confirmed** (2026-11-06): kit 0.12.0 ships the support and content templates without it. The shared protocols and project instructions get a neutral core plus an engineering pack, so a business-function team never reads about PRs, merge gates or deploys.
 8. **Other coding agents story confirmed** (2026-11-06): the first cut is one vendor-neutral `AGENTS.md` target, not one adapter per tool. Claude Code stays the default and loses nothing.
 9. **Email notifications copy confirmed** (2026-11-06): every email is short, names the team, carries one link, and never lets an email reply approve anything.
+10. **Slack notifications copy confirmed** (2026-11-06): the same five kinds as email, sent as a DM to people who opt in or to channels an admin picks; nothing in Slack approves or decides anything in the first cut.
 
 ## Story: custom agents (issue #30, demo step 14)
 
@@ -419,3 +421,112 @@ Placeholders in braces are filled by the sink. `{team}` is the team's name, `{ro
 - **kit-core-dev** (as the CTO assigned): the email sink, templates from this copy, criteria 1 to 5.
 - **web-dev**: the opt-in section of the Notifications page with this copy.
 - **CPO**: criterion 6.
+
+## Story: Slack notifications (PRD 6.8 O1 and O4, phase 4)
+
+The owner's words (PRD 4): "When something needs me, I want to hear about it where I already am (email, Slack), for the triggers and roles I care about, and nothing else."
+
+What follows is the CPO's reading, labelled as mine. It reuses the email story (D49 to D54) wherever it can, so the two channels say the same thing.
+
+**As** a team owner or member who lives in Slack, **I want** the same alerts I can get by email, in a DM or in a team channel, **so** I see what needs me without opening the Studio, and the channel sees only what the team agreed to share.
+
+### Product decisions
+
+- **D55. Two destinations, two owners.** *DMs* are per person and opt-in, exactly like email (D49): a person links their Slack account and switches kinds on. *Channel posts* are chosen by an owner or admin of the team, per channel and per kind. A channel never gets anything until an admin picks it. Nobody else's DM settings are visible to an admin.
+- **D56. Linking a person is proof, not typing.** A person links Slack from the Studio's Notifications page with "Connect Slack", which signs them in to Slack (OAuth, user identity only). No code is pasted. The workspace connection itself (the bot) is a connector an admin adds once, inert until its credential is stored by name in the vault; local mode connects it the same way.
+- **D57. Nothing is decided in Slack, in the first cut.** Every message has one link button into the Studio. No button approves, answers, pauses or spends. Approvals stay in the signed-in Studio with step-up (D51). PRD O4 allows reversible BLOCKED answers by Slack button later; that is a separate story once the runner is live and needs its own security review.
+- **D58. Channels see less than DMs.** In a channel, an approval or BLOCKED post names the role and the summary but not the recommendation, and the link opens the Studio's sign-in, so a channel member who is not on the team sees nothing more. Meeting minutes in a channel show only the meeting name and counts. Budget posts are the same in both.
+- **D59. Same limits as email.** One link, links expire (approval links 24 hours, others 7 days), outside text quoted and cut to 120 characters, role titles not slugs, neutral words with no branches, commits or CI (D50, D52, D53). The notification fallback text (what a phone lock screen and screen readers get) is the first line, alone, with no team content beyond the team name and role title.
+- **D60. Turning it off is one step, in Slack or the Studio.** Every DM ends with a small context line linking "Turn off these messages" (the same ask-first page as email, D54) and "Manage". A channel post ends with "Posted here by {admin}'s choice · Manage" for admins. Unlinking Slack in the Studio stops all DMs at once.
+
+### Copy
+
+Placeholders as in the email copy, plus `{channel}` and `{admin}`. Messages use plain Slack blocks: a section of text, one button, one context line.
+
+**Approval needed** (breaks through quiet hours)
+- Fallback text: `{team}: {role} needs your approval`
+- DM:
+  > *{role} needs your approval before it can go on.*
+  > "{summary}"
+  > Recommendation: {recommendation}
+  > Nothing happens until you approve in the Studio. You can't approve from Slack.
+- Channel:
+  > *{role} is waiting for an approval.*
+  > "{summary}"
+  > An owner approves in the Studio.
+- Button: `Review in the Studio`
+
+**Budget at 80%**
+- Fallback text: `{team}: 80% of today's budget used`
+- Text (DM and channel):
+  > *{spent} of {cap} used today.*
+  > Work carries on. At 100% only release-blocking fixes and checks keep running.
+- Button: `See today's usage`
+
+**Budget at 100%** (breaks through quiet hours)
+- Fallback text: `{team}: daily budget reached, new work paused`
+- Text (DM and channel):
+  > *Daily budget of {cap} reached. New work is paused until {reset_time}.*
+  > An owner can raise the cap in the Studio to resume sooner.
+- Button: `See usage and the cap`
+
+**BLOCKED**
+- Fallback text: `{team}: {role} is waiting on a decision`
+- DM:
+  > *{role} is blocked on:* "{question}"
+  > Recommendation: {recommendation}
+  > It keeps working on the recommendation unless the step cannot be undone.
+- Channel:
+  > *{role} is waiting on a decision from the owner.*
+  > "{question}"
+- Button: `Answer in the Studio`
+
+**Meeting minutes**
+- Fallback text: `{team}: minutes from {meeting}`
+- DM:
+  > *Minutes: {meeting} ({date})*
+  > {decisions_count} decisions and {actions_count} action items.
+  > {first_decision_or_"No decisions this time."}
+  > {needs_you_line or nothing}
+- Channel:
+  > *Minutes: {meeting} ({date})*
+  > {decisions_count} decisions and {actions_count} action items.
+- Button: `Read the minutes`
+
+**Context line, last block of every message**
+- DM: `{team} · You turned on "{kind}" messages · <Turn off these messages> · <Manage>`
+- Channel: `{team} · Posted in #{channel} by {admin}'s choice · <Manage>`
+
+**First message after a person links Slack** (DM, no button)
+> You'll get {team} messages here for: {kinds_list}. You can't approve or decide anything from Slack; every message links to the Studio. Change this any time in Notifications.
+
+**First message in a channel an admin picks**
+> {admin} set this channel to get {team} updates: {kinds_list}. Messages here leave out recommendations and details; those stay in the Studio for the team.
+
+**Studio, Notifications page, Slack section**
+- Heading: `Slack`
+- Not connected (admin view): `Connect your Slack workspace so the team can message you there.` · button `Add to Slack`
+- Not connected (member view): `Slack isn't connected for this team yet. Ask an owner to add it.`
+- Person: `Get messages as a Slack DM.` · button `Connect Slack` → after: `Connected as @{slack_name}.` then the same five switches as email: `Approval needed`, `Budget at 80%`, `Budget at 100%`, `A role is blocked`, `Meeting minutes`
+- Under the approval switch: `The message links to the Studio. You always approve there, never in Slack.`
+- Channels (admins only): heading `Team channels`, text `Post updates to a channel everyone on it can read. Channels get less detail than DMs.` · button `Add a channel` → channel picker, then the five switches, approval and BLOCKED off by default.
+- Health line (O1): `Slack · working` / `Slack · failing since {time}, sending by email instead`
+- Unlink: `Disconnect Slack` → confirm `Stop all Slack DMs from {team}? Channel posts an admin chose keep going.`
+
+### Acceptance criteria
+
+1. Nothing is posted until the workspace credential is stored in the vault and (DM) a person linked and switched a kind on, or (channel) an admin picked a channel and kinds (D55, D56). Local mode connects the same way.
+2. Every message has the fallback text, at most four text lines, exactly one link button, and the context line; a test checks each kind for DM and channel (D59).
+3. No button or reply in Slack changes anything in the team; the Slack app requests no interactivity scope in this cut (D57). Approval links expire in 24 hours and need sign-in plus step-up.
+4. Channel posts leave out recommendations and meeting decisions (D58); a test compares DM and channel output per kind.
+5. Outside text quoted and cut to 120 characters; role titles not slugs (D59).
+6. "Turn off these messages" opens the ask-first page and turns off one kind for that person (D60); Disconnect stops all DMs; channel posts stop only when an admin removes the channel.
+7. When Slack fails, the health line says so and the message goes by email if the person has email on (O1).
+8. The CPO signs off rendered messages (screenshots of each kind, DM and channel, plus fallback text).
+
+### Build split
+
+- **kit-core-dev** (as the CTO assigned): the Slack sink and messages from this copy, criteria 1 to 7.
+- **web-dev**: the Slack section of the Notifications page with this copy.
+- **security-reviewer**: the Slack app scopes (bot: post messages; user sign-in: identity only) and the vault binding.
+- **CPO**: criterion 8.
