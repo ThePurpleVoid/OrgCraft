@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **M3 design fix:** `run.resumed` now restarts every session a pause stopped, from its last checkpoint, after an owner's resume or the budget's next-day resume. Pause and resume handlers act only if the run's state and version still match (found in review of #54).
+
 ### Studio (nothing changes on sync)
 
 - **Start a run from the Studio's Chat page** (milestone M3, issue #28). With no run going, the header offers **Start a run…**. The dialog says what will run: the team as last published (the commit, not the unsaved canvas), how many roles, and which one reports to you. **Start** stays off until a daily cap is set; setting or raising the cap asks for the step-up secret, lowering it never does. The Studio's server builds the run request from the repository: the commit SHA, the origin URL with any credentials stripped, a summary, and for each role its manager, the paths it writes, its model and its rendered brief (at most 20 KB). It refuses with "publish first" when the team's files have changes nobody published, and with "push first" when the published commit is not on the branch's upstream (publish commits but does not push, and the team's sessions check out from the remote); the run's `repo.ref` is that upstream branch. The control plane's 409s are shown as it words them, for example a run that is already going or today's cap being spent.
