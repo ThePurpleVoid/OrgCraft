@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
   && apt-get purge -y libcap2-bin && apt-get autoremove -y
 WORKDIR /app
 COPY packages/events/ packages/events/
+COPY packages/github-app/ packages/github-app/
 COPY packages/model-prices/ packages/model-prices/
 COPY apps/runner/package.json apps/runner/package-lock.json apps/runner/
 RUN npm ci --omit=dev --prefix apps/runner
