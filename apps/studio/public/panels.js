@@ -36,7 +36,7 @@ export function renderSystemsStrip(el, ctx, selectedSystem) {
 }
 
 /** A template's system types, in the Studio's words: a type the Studio has no word for is "Other", by its name. */
-const TYPE_WORDS = { github: 'repository', gitlab: 'repository', git: 'repository', postgres: 'database', mysql: 'database', supabase: 'database', vercel: 'hosting', netlify: 'hosting', sentry: 'observability' };
+const TYPE_WORDS = { github: 'repository', gitlab: 'repository', git: 'repository', postgres: 'database', mysql: 'database', supabase: 'database', vercel: 'hosting', netlify: 'hosting', website: 'hosting', sentry: 'observability' };
 export const systemType = (t) => (SYSTEM_TYPES.some(([k]) => k === t) ? t : TYPE_WORDS[t] ?? 'other');
 
 /**

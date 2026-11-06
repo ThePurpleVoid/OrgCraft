@@ -10,10 +10,10 @@ export function rolesLine(card) {
   return `${card.on} role${card.on === 1 ? '' : 's'} on${d ? ` · ${d} dormant` : ''}`;
 }
 
-/** Whether a card matches the search box: its title, summary, group or a suggested system. */
+/** Whether a card matches the search box: its title, summary, group, suggested systems, starter meetings or roles. */
 export function matches(card, q) {
   const words = String(q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
-  const text = [card.title, card.summary, card.groupTitle, ...(card.systems ?? []).map((s) => s.name)].join(' ').toLowerCase();
+  const text = [card.title, card.summary, card.groupTitle, ...(card.systems ?? []).map((s) => s.name), ...(card.meetings ?? []).map((m) => m.title), ...(card.roles ?? []).map((r) => r.replace(/-/g, ' '))].join(' ').toLowerCase();
   return words.every((w) => text.includes(w));
 }
 

@@ -7,7 +7,7 @@
 // reads the team from .agent-team/, previews what a publish changes, and publishes: it writes the layer, runs sync
 // and commits the result on a branch. The repository stays the source of truth (docs/adr/0001).
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { networkInterfaces, tmpdir } from 'node:os';
@@ -83,6 +83,28 @@ export function fromTemplate(root, { id, project, owner, timezone } = {}) {
   return { spec, card: id === ALMOST_EMPTY.id ? null : templateCard(files, kit) };
 }
 
+/** What a first publish may touch, as it was before: which paths existed, and .gitignore's text. */
+function snapshot(root) {
+  const gi = join(root, '.gitignore');
+  const parents = [...new Set(PUBLISHED.filter((p) => p.includes('/')).map((p) => dirname(p)))];
+  return { existed: PUBLISHED.filter((p) => existsSync(join(root, p))), parents: parents.filter((d) => !existsSync(join(root, d))), gitignore: existsSync(gi) ? readFileSync(gi, 'utf8') : null };
+}
+
+/**
+ * Undoes a failed first publish. The publish starts only when the team's paths have no changes, so a path that
+ * existed goes back to what git has, and one that did not is removed.
+ */
+function restore(root, { existed, parents, gitignore }) {
+  tryGit(root, 'reset', '-q', '--', ...PUBLISHED, '.gitignore');
+  for (const p of PUBLISHED) {
+    if (existed.includes(p)) { tryGit(root, 'checkout', '-q', '--', p); tryGit(root, 'clean', '-fdq', '--', p); }
+    else rmSync(join(root, p), { recursive: true, force: true });
+  }
+  for (const d of parents) { try { if (!readdirSync(join(root, d)).length) rmSync(join(root, d), { recursive: true }); } catch { /* already gone */ } }
+  const gi = join(root, '.gitignore');
+  if (gitignore === null) rmSync(gi, { force: true }); else writeFileSync(gi, gitignore);
+}
+
 /** The files `agent-team init` writes once besides the layer (config.sh, ownership.md, the lane template, .gitignore). */
 function extras(dir, layer) {
   const values = JSON.parse(layer['team.json']).values ?? {};
@@ -143,18 +165,28 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
     if (tryGit(root, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`)) throw new HttpError(409, `branch ${branch} already exists`);
     git(root, 'checkout', '-q', '-b', branch);
   }
-  const fresh = !hasTeam(root);
-  const layer = compileLayer(spec, kit);
-  const written = writeLayer(root, layer);
-  // A team made in the Studio gets the files `agent-team init` writes once, so both make the same repository.
-  if (fresh) extras(root, layer);
-  const code = sync(root, { quiet: true });
-  if (code !== 0) throw new HttpError(500, 'sync reported roster errors; nothing was committed');
-  git(root, 'add', '-A', '--', ...PUBLISHED.filter((p) => existsSync(join(root, p))), ...(fresh && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
-  const staged = tryGit(root, 'diff', '--cached', '--name-only').split('\n').filter(Boolean);
-  if (!staged.length) return { branch: gitState(root).branch, commit: null, files: [], note: 'nothing changed' };
+  // The first publish of a team: team.json is not in git yet (decided from git, not the disk, so a retry after a
+  // failed first publish is still the first).
+  const fresh = !tryGit(root, 'ls-files', '--', '.agent-team/team.json');
+  const before = fresh ? snapshot(root) : null;
   const text = message?.trim() || 'Update the agent team (Agent Team Studio)';
-  git(root, 'commit', '-q', '-m', text);
+  let written, staged;
+  try {
+    const layer = compileLayer(spec, kit);
+    written = writeLayer(root, layer);
+    // A team made in the Studio gets the files `agent-team init` writes once, so both make the same repository.
+    if (fresh) extras(root, layer);
+    const code = sync(root, { quiet: true });
+    if (code !== 0) throw new HttpError(500, 'sync reported roster errors; nothing was committed');
+    git(root, 'add', '-A', '--', ...PUBLISHED.filter((p) => existsSync(join(root, p))), ...(fresh && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
+    staged = tryGit(root, 'diff', '--cached', '--name-only').split('\n').filter(Boolean);
+    if (staged.length) git(root, 'commit', '-q', '-m', text);
+  } catch (e) {
+    // A first publish that fails leaves the repository as it found it, so the retry starts clean.
+    if (before) restore(root, before);
+    throw e;
+  }
+  if (!staged.length) return { branch: gitState(root).branch, commit: null, files: [], note: 'nothing changed' };
   const out = { branch: gitState(root).branch, commit: git(root, 'rev-parse', '--short', 'HEAD'), files: staged, written };
   if (pr === true) {
     // Into the branch the publish started from; on the branch itself, the remote's default branch.

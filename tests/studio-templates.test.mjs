@@ -112,3 +112,24 @@ test('a gallery card counts dormant roles only when there are some (D33)', async
   assert.ok(matches(card, 'help ARTICLES'));
   assert.ok(!matches(card, 'payroll'));
 });
+
+test('a first publish that fails leaves the repository as it was, and the retry is still the first (review of #114)', async () => {
+  const root = emptyRepo('shop');
+  const { writeFileSync, chmodSync, existsSync } = await import('node:fs');
+  // A pre-commit hook that refuses the first commit only.
+  const hook = join(root, '.git/hooks/pre-commit');
+  writeFileSync(hook, `#!/bin/sh\nif [ ! -f "${join(root, '.git/once')}" ]; then touch "${join(root, '.git/once')}"; echo refused >&2; exit 1; fi\n`);
+  chmodSync(hook, 0o755);
+  await serve(root, async (call) => {
+    const { body: { spec } } = await call('/v1/team/from-template', { id: 'customer-support-team', project: 'Shop' });
+    const first = await call('/v1/team/publish', { spec, message: 'Start the team' });
+    assert.ok(first.status >= 400, 'the hook refused the commit');
+    assert.deepEqual(readdirSync(root), ['.git'], 'nothing is left behind');
+    assert.equal((await call('/v1/team')).body.noTeam, true, 'the Studio is still at the gallery');
+    const second = await call('/v1/team/publish', { spec, message: 'Start the team' });
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    assert.ok(second.body.files.includes('.gitignore'), 'the retry commits .gitignore, as a first publish');
+    assert.equal(git(root, 'status', '--porcelain'), '');
+    assert.ok(existsSync(join(root, '.agent-team/team.json')));
+  });
+});

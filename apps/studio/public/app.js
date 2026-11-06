@@ -820,6 +820,7 @@ async function previewPublish() {
 }
 
 async function openPublish() {
+  if (locked()) return flash(lockedNote());
   const dlg = $('#publish-dialog');
   $('#publish-result').textContent = '';
   $('#publish-result').className = 'result';
