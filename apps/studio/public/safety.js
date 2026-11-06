@@ -1,0 +1,121 @@
+// Change safety, part 1 (PRD 6.9 X1, X5, X9; CPO story "change safety part 1"; mockup 06). Board-only: the Studio
+// warns and records, it never stops or restarts anything (D12). Which roles are in flight comes from the board (the
+// local event log or the control plane), so every list here says how old that is (D14). A team with no board reports
+// shows none of it (D15, criterion 12).
+import { diffTeams, impact, inventoryFromBoard, meetingAttendees, versionName } from './team-model.mjs';
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+export const QUIET_S = 2 * 3600; // D14: a report older than this is shown with its age, in grey
+
+/** How long ago, in words: "12 min", "3 h", "2 days". */
+export function ago(seconds) {
+  const s = Math.max(0, Math.round(seconds ?? 0));
+  if (s < 90) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  if (s < 172800) return `${Math.round(s / 3600)} h`;
+  return `${Math.round(s / 86400)} days`;
+}
+
+/** A role's own board row (not a per-PR instance), or null. */
+export const rowOf = (board, slug) => (board?.current ?? []).find((c) => c.role === slug && !c.instance) ?? null;
+
+/** The words a card and a library row show for a role's state: "working", or "last heard 3 h ago" when quiet (D14). */
+export function stateWord(row) {
+  if (!row) return '';
+  if ((row.age_s ?? 0) > QUIET_S) return `last heard ${ago(row.age_s)} ago`;
+  return row.waiting_on ? `${row.status} on ${row.waiting_on}` : row.status;
+}
+
+/** The task as people say it: "#153 Backfill theme default". */
+export const taskOf = (row) => [row?.issue ? `#${row.issue}` : '', row?.task ?? ''].filter(Boolean).join(' ');
+
+/** The short reason under a card's name for an amber mark (criterion 3). */
+export function reasonOf(item) {
+  return ({
+    'role-off': 'switched off in this draft', 'role-removed': 'removed in this draft', 'role-dormant': 'dormant in this draft',
+    'path-moved': 'area moves away', 'path-removed': 'area loses its writer', 'brief': 'rules changed', 'tier': 'tier changed',
+    'reports-to': 'reports elsewhere', 'binding-removed': 'loses a system', 'binding-narrowed': 'system access narrowed',
+  })[item.kind] ?? 'changed in this draft';
+}
+
+/** "Undo switch off" and the like, for the popover's first button. */
+export function undoLabel(item) {
+  return ({
+    'role-off': 'Undo switch off', 'role-removed': 'Undo removal', 'role-dormant': 'Undo dormant', 'path-moved': 'Undo area move',
+    'path-removed': 'Undo area removal', 'brief': 'Undo brief changes', 'tier': 'Undo tier change', 'reports-to': 'Undo reporting change',
+    'binding-removed': 'Undo system change', 'binding-narrowed': 'Undo system change',
+  })[item.kind] ?? 'Undo this change';
+}
+
+/**
+ * Everything the screens need, from the published team, the draft and the board: { on, changes, items, hot, newest,
+ * version }. `hot` maps a role to its items that touch work in flight; `on` is false when the board has no reports.
+ */
+export function assess({ published, draft, kit, board, head }) {
+  const on = !!board?.current?.length;
+  const version = head?.sha ? versionName(head.sha, head.at) : '';
+  if (!on || !published) return { on, changes: [], items: [], hot: new Map(), newest: null, version };
+  const changes = diffTeams(published, draft, kit);
+  const items = impact(changes, inventoryFromBoard(board));
+  const hot = new Map();
+  for (const i of items) if (i.inFlight && i.role) hot.set(i.role, [...(hot.get(i.role) ?? []), i]);
+  const newest = board.current.reduce((m, c) => (!m || c.last_at > m ? c.last_at : m), null);
+  return { on, changes, items, hot, newest, version };
+}
+
+/** The meetings a role attends, by name and when (from the draft's meetings.json). */
+function meetingsOf(spec, roles, slug) {
+  return (spec.meetings?.meetings ?? []).filter((m) => meetingAttendees(m, roles).roles.includes(slug)).map((m) => m.name ?? m.id);
+}
+
+/** What is in flight for a role, as list items: the task, branch and PR, and its meetings (criteria 4 and 5). */
+export function inFlightList(row, spec, roles, slug) {
+  if (!row) return [];
+  const out = [];
+  const task = taskOf(row);
+  out.push(`${esc(stateWord(row))}${row.status_at || row.last_at ? ` · ${esc(ago(row.age_s))}${(row.age_s ?? 0) > 90 ? ' ago' : ''}` : ''}${task ? `: <strong>${esc(task)}</strong>` : ''}`);
+  if (row.branch || row.pr) out.push([row.branch ? `branch <code>${esc(row.branch)}</code>` : '', row.pr ? `PR #${esc(row.pr)}` : ''].filter(Boolean).join(' · '));
+  if (row.waiting_on) out.push(`waiting on ${esc(row.waiting_on)}`);
+  for (const m of meetingsOf(spec, roles, slug)) out.push(`invited to ${esc(m)}`);
+  return out;
+}
+
+/** The note every in-flight list carries (D14, X9). */
+export function staleNote(newest) {
+  if (!newest) return '';
+  const t = new Date(newest);
+  return `Based on board reports; may be out of date. Newest report ${Number.isNaN(t.getTime()) ? newest : t.toLocaleString('en', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}.`;
+}
+
+/** The popover by an amber card (criterion 4): what is in flight, and Undo / Review the impact. */
+export function popoverHtml({ slug, title, items, row, spec, roles, newest }) {
+  const first = items[0];
+  return `<div class="impact-pop" role="dialog" aria-label="${esc(title)} is working right now" data-slug="${esc(slug)}">
+    <p><strong>${esc(title)} ${row && (row.age_s ?? 0) <= QUIET_S ? 'is working right now' : 'has work in flight'}.</strong> ${esc(items.map((i) => reasonOf(i)).join(', '))}.</p>
+    <ul>${inFlightList(row, spec, roles, slug).map((l) => `<li>${l}</li>`).join('')}</ul>
+    <p class="hint">Nothing changes for it yet. When you publish, you choose what happens to this work. ${esc(staleNote(newest))}</p>
+    <div class="row"><button type="button" data-pop="undo" data-item="${esc(first.id)}">${esc(undoLabel(first))}</button><button type="button" class="primary" data-pop="review">Review the impact</button><button type="button" class="link" data-pop="close">Close</button></div>
+  </div>`;
+}
+
+/** Puts one change back as it is in the published team (the popover's Undo). */
+export function revert(spec, published, item) {
+  const clone = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
+  if (['role-off', 'role-removed', 'role-dormant', 'brief', 'tier', 'reports-to'].includes(item.kind)) {
+    spec.roles[item.role] = clone(published.roles[item.role]);
+    return;
+  }
+  if (item.kind === 'path-moved' || item.kind === 'path-removed') {
+    const path = item.id.split(':').slice(2).join(':');
+    const was = (published.ownership?.rows ?? []).find((r) => r.path === path);
+    spec.ownership ??= { rows: [] };
+    spec.ownership.rows = [...(spec.ownership.rows ?? []).filter((r) => r.path !== path), ...(was ? [clone(was)] : [])];
+    return;
+  }
+  if (item.kind === 'binding-removed' || item.kind === 'binding-narrowed') {
+    const resource = item.id.split(':').at(-1);
+    const was = (published.resources?.bindings ?? []).find((b) => b.role === item.role && b.resource === resource);
+    spec.resources ??= { resources: [], bindings: [] };
+    spec.resources.bindings = [...(spec.resources.bindings ?? []).filter((b) => !(b.role === item.role && b.resource === resource)), ...(was ? [clone(was)] : [])];
+  }
+}

@@ -40,7 +40,9 @@ class HttpError extends Error { constructor(status, message) { super(message); t
 export function gitState(root) {
   const branch = tryGit(root, 'branch', '--show-current');
   const dirty = tryGit(root, 'status', '--porcelain', '--', ...PUBLISHED).split('\n').filter(Boolean);
-  return { repo: !!tryGit(root, 'rev-parse', '--git-dir'), branch, dirty };
+  // The live version: the last commit that changed the team (change safety names versions by commit, D16).
+  const [sha, at] = tryGit(root, 'log', '-1', '--format=%H%n%cI', '--', '.agent-team').split('\n');
+  return { repo: !!tryGit(root, 'rev-parse', '--git-dir'), branch, dirty, head: sha ? { sha, at: at ?? null } : null };
 }
 
 /** Everything the page needs to start: the team as a TeamSpec, the kit's library, and where it lives. */

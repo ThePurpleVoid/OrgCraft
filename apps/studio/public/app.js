@@ -4,6 +4,7 @@ import { checkUpgrade, resolveSpec, setEnabled, setField, splitBrief, validate }
 import { createChat } from './chat.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
+import { QUIET_S, assess, inFlightList, popoverHtml, reasonOf, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
 import { bind, renderAreas, renderChecks, renderSystemInspector, renderSystemsStrip, roleSystemsHtml, wireBindings } from './panels.js';
 
 const $ = (s) => document.querySelector(s);
@@ -37,6 +38,10 @@ let live = null; // { on, source, where, board, error, es } when the live board 
 let chat = null; // the chief-of-staff chat, made the first time it is opened
 let editor = null; // the custom agent editor (agent-editor.js)
 let lastEdit = { key: '', at: 0 }; // typing in one field folds into one undo step
+// Change safety part 1: the team as last published (what is running), the board, and the open popover.
+let published = null;
+let board = null; // summarize() output from /v1/team/board, kept fresh by its stream; null until read
+let pop = null; // the slug whose in-flight popover is open
 /** Phones get the control room (chat, live board) and a read-only team: building the team needs a large screen. */
 const small = matchMedia('(max-width: 640px)');
 
@@ -59,7 +64,8 @@ function derive() {
     };
   };
   const all = Object.keys(spec.roles).sort().map(info);
-  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team: all.filter((r) => r.enabled && bySlug.has(r.slug)), issues: checksOf(spec) };
+  const safety = assess({ published, draft: spec, kit: S.kit, board, head: S.git?.head });
+  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team: all.filter((r) => r.enabled && bySlug.has(r.slug)), issues: checksOf(spec), safety };
 }
 
 /**
@@ -90,7 +96,10 @@ function change(fn, { quiet = false, key = '' } = {}) {
   }
   lastEdit = { key, at: now };
   redo.length = 0;
+  const hotBefore = new Set(view?.safety?.hot.keys() ?? []);
   fn(spec);
+  // Making a change that touches work in flight opens its explanation in place (criterion 4).
+  if (!quiet) { const after = assess({ published, draft: spec, kit: S.kit, board, head: S.git?.head }); pop = [...after.hot.keys()].find((k) => !hotBefore.has(k)) ?? (after.hot.has(pop) ? pop : null); }
   if (quiet && editor?.slug) { view = derive(); renderIssues(); renderLibrary(); editor.live(); syncUndo(); return; }
   render();
 }
@@ -151,7 +160,8 @@ const ctx = {
 
 // ------------------------------------------------------------------------------------------------ canvas
 
-const W = 176, H = 54, GX = 22, GY = 48, IND = 22, ROW = H + 12;
+const W = 176, GX = 22, GY = 48, IND = 22;
+let H = 54, ROW = H + 12; // a third line, the board state, when the team is running (change safety, criterion 1)
 
 /**
  * An org chart that stays readable with forty roles. Managers of managers spread out sideways; a small subtree
@@ -240,7 +250,7 @@ function systemsLine(slug) {
 
 /** The newest live status of a role (any instance), and how many of its threads are active. */
 function liveOf(slug) {
-  const rows = (live?.board?.current ?? []).filter((c) => c.role === slug);
+  const rows = ((live?.board ?? board)?.current ?? []).filter((c) => c.role === slug);
   if (!rows.length) return null;
   const active = rows.filter((c) => c.status !== 'done' && c.status !== 'idle');
   return { ...rows[0], threads: active.length };
@@ -253,18 +263,30 @@ function liveLine(l) {
 }
 
 function nodeSvg(r, p, extra = '') {
-  const l = live?.on && mode !== 'systems' ? liveOf(r.slug) : undefined;
-  if (live?.on && mode !== 'systems') extra += l ? ` live s-${l.status}${l.stale ? ' stale' : ''}` : ' live none';
+  const sf = view.safety;
+  // A running team (board reports): every card has a third line with its state, and amber when the draft touches its
+  // work (change safety criteria 1 and 3). Otherwise, the Live toggle's two-line view as before.
+  const three = sf.on && mode !== 'systems';
+  const l = (live?.on || three) && mode !== 'systems' ? liveOf(r.slug) : undefined;
   const replaces = r.source === 'project-replaces-kit';
-  const tier = l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}${replaces ? ' · replaces kit' : ''}` : '';
+  const hot = three ? sf.hot.get(r.slug) : null;
+  const own = three ? rowOf(board, r.slug) : null;
+  if (three) extra += `${hot ? ' amber' : ''}${own ? ` live s-${own.status}${(own.age_s ?? 0) > QUIET_S ? ' quiet' : ''}` : ' live none'}${r.enabled ? '' : ' ghost'}`;
+  else if (live?.on && mode !== 'systems') extra += l ? ` live s-${l.status}${l.stale ? ' stale' : ''}` : ' live none';
+  // The reason replaces the tier on an amber card: it is what the owner needs to read there (criterion 3).
+  const tier = three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : ''].filter(Boolean).join(' · '))
+    : l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}${replaces ? ' · replaces kit' : ''}` : '';
+  const state = three ? (own ? [stateWord(own), taskOf(own)].filter(Boolean).join(' · ') : 'no reports') : '';
   const flag = view.issues.some((i) => i.level === 'error' && i.where === `roles/${r.slug}`) ? ' ⚠' : r.changed ? ' •' : '';
-  return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${extra}" data-slug="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}">
+  const tip = three && own ? `${r.title}: ${stateWord(own)}${taskOf(own) ? ` · ${taskOf(own)}` : ''}${own.branch ? ` · branch ${own.branch}` : ''}${own.pr ? ` · PR #${own.pr}` : ''}${hot ? ` · ${hot.map(reasonOf).join(', ')}` : ''}` : '';
+  return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${extra}" data-slug="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}${hot ? `, ${esc(hot.map(reasonOf).join(', '))}, work in progress` : ''}">
     <rect class="card" width="${W}" height="${H}"></rect>
     <rect class="stripe" width="4" height="${H - 16}" x="8" y="8" fill="${groupColor(r.group)}"></rect>
     <text class="title" x="20" y="23">${esc(r.title.length > 21 ? r.title.slice(0, 20) + '…' : r.title)}${flag}</text>
     <text class="meta" x="20" y="41">${esc(tier.length > 28 ? tier.slice(0, 27) + '…' : tier)}</text>
-    ${replaces && !l ? `<title>${esc(view.issues.find((i) => i.where === `roles/${r.slug}` && /replaces the kit/.test(i.message))?.message ?? 'Replaces the kit role of this name on this team')}</title>` : ''}
-    ${l ? `<circle class="dot" cx="${W - 14}" cy="16" r="5"></circle>${l.threads > 1 ? `<text class="threads" x="${W - 24}" y="20" text-anchor="end">${l.threads}</text>` : ''}<title>${esc(`${r.title}: ${liveLine(l)}${l.pr ? ` · PR #${l.pr}` : ''}${l.issue ? ` · issue #${l.issue}` : ''}`)}</title>` : ''}
+    ${three ? `<circle class="dot" cx="24" cy="${H - 15}" r="4"></circle><text class="state" x="33" y="${H - 11}">${esc(state.length > 25 ? state.slice(0, 24) + '…' : state)}</text>${tip ? `<title>${esc(tip)}</title>` : ''}`
+    : `${replaces && !l ? `<title>${esc(view.issues.find((i) => i.where === `roles/${r.slug}` && /replaces the kit/.test(i.message))?.message ?? 'Replaces the kit role of this name on this team')}</title>` : ''}
+    ${l ? `<circle class="dot" cx="${W - 14}" cy="16" r="5"></circle>${l.threads > 1 ? `<text class="threads" x="${W - 24}" y="20" text-anchor="end">${l.threads}</text>` : ''}<title>${esc(`${r.title}: ${liveLine(l)}${l.pr ? ` · PR #${l.pr}` : ''}${l.issue ? ` · issue #${l.issue}` : ''}`)}</title>` : ''}`}
   </g>`;
 }
 
@@ -279,7 +301,13 @@ function renderCanvas() {
     (mode === 'areas' ? renderAreas : renderChecks)($('#canvas'), ctx, sugg);
     return;
   }
-  const lay = layout(view.team);
+  const sf = view.safety;
+  H = sf.on && mode !== 'systems' ? 70 : 54;
+  ROW = H + 12;
+  // A role switched off in the draft while it has work in flight stays on the canvas, greyed, so its work is seen.
+  const ghosts = sf.on ? view.all.filter((r) => !r.enabled && sf.hot.has(r.slug)) : [];
+  const cards = [...view.team, ...ghosts];
+  const lay = layout(cards);
   const { pos, w, h } = lay;
   let edges = lay.edges.map((d) => `<path class="edge" d="${d}"></path>`);
   if (mode === 'flow') {
@@ -292,7 +320,7 @@ function renderCanvas() {
   scale = zoom === 'fit' ? Math.max(0.4, fit) : zoom;
   $('#zoom-level').textContent = `${Math.round(scale * 100)}%`;
   const owner = pos.get('owner');
-  const nodes = view.team.map((r) => nodeSvg(r, pos.get(r.slug))).join('');
+  const nodes = cards.filter((r) => pos.has(r.slug)).map((r) => nodeSvg(r, pos.get(r.slug))).join('');
   $('#canvas').innerHTML = `<svg width="${(w + PAD * 2) * scale}" height="${(h + PAD * 2) * scale}" viewBox="${-PAD} ${-PAD} ${w + PAD * 2} ${h + PAD * 2}">
     <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"></path></marker><marker id="arrow-in" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead in"></path></marker></defs>
     ${edges.join('')}
@@ -300,6 +328,7 @@ function renderCanvas() {
       <text class="title" x="20" y="23">${esc(spec.values?.OWNER || 'The owner')}</text><text class="meta" x="20" y="41">owner</text></g>
     ${nodes}</svg>`;
   if (live?.on) $('#summary').textContent += ` · ${liveSummary()}`;
+  renderPopover();
   if (mode === 'flow') {
     const mine = selected ? flow.edges.filter((x) => x.from === selected || x.to === selected) : flow.edges;
     $('#summary').textContent += selected ? ` · ${view.bySlug.get(selected)?.title}: ${mine.filter((x) => x.from === selected).length} out, ${mine.filter((x) => x.to === selected).length} in` : ` · ${flow.edges.length} hand-offs`;
@@ -313,6 +342,22 @@ function liveSummary() {
   for (const c of live.board.current) if (view.bySlug.has(c.role)) n[c.status] = (n[c.status] ?? 0) + 1;
   const parts = ['working', 'waiting', 'blocked', 'review'].filter((k) => n[k]).map((k) => `${n[k]} ${k}`);
   return `live: ${parts.join(', ') || 'nobody working'} (${live.source === 'server' ? 'control plane' : 'this machine'})`;
+}
+
+/** The board, for change safety: read at start and on every change the stream reports. */
+async function loadBoard() {
+  try {
+    const r = await fetch('/v1/team/board');
+    const body = await r.json();
+    const next = r.ok ? body.board ?? null : null;
+    const was = !!board?.current?.length;
+    board = next;
+    if (!was && !board?.current?.length) return; // nothing running before or now: nothing to redraw
+  } catch { board = null; }
+  if (!view) return;
+  // With the agent editor open, only what shows the board changes; the form being typed in is left alone.
+  if (editor?.slug) { view = derive(); renderLibrary(); renderIssues(); return; }
+  render();
 }
 
 async function loadLive() {
@@ -397,7 +442,7 @@ function wireCanvas() {
     if (!drag) return;
     const d = drag;
     drag = null;
-    if (!d.moved) { select(d.slug); return; }
+    if (!d.moved) { pop = view.safety.hot.has(d.slug) ? d.slug : null; select(d.slug); return; }
     const t = target(e, d);
     if (t?.dataset.slug) setManager(d.slug, t.dataset.slug); else render();
   });
@@ -418,6 +463,12 @@ function wireCanvas() {
 
 // ------------------------------------------------------------------------------------------------ library
 
+/** The same state word as the card, on a library row (criterion 1). */
+function libState(slug) {
+  const row = view.safety.on && rowOf(board, slug);
+  return row ? `<span class="state s-${esc(row.status)}${(row.age_s ?? 0) > QUIET_S ? ' quiet' : ''}">${esc(stateWord(row))}</span>` : '';
+}
+
 function renderLibrary() {
   const q = query.toLowerCase();
   const groups = new Map();
@@ -430,7 +481,7 @@ function renderLibrary() {
   }
   const row = (r) => `<label class="lib-role${r.slug === selected ? ' selected' : ''}" draggable="true" data-slug="${r.slug}">
       <input type="checkbox" ${r.enabled ? 'checked' : ''} data-toggle="${r.slug}" aria-label="${r.enabled ? 'Switch off' : 'Switch on'} ${esc(r.title)}">
-      <span class="name">${esc(r.title)}</span><span class="tag${isCustom(spec.roles[r.slug]) ? ' has-export' : ''}">${r.source === 'project-replaces-kit' ? 'replaces kit' : imported.has(r.slug) ? 'imported' : isCustom(spec.roles[r.slug]) ? 'custom' : r.source === 'kit' ? '' : 'yours'}${r.dormant ? ' dormant' : ''}</span>${isCustom(spec.roles[r.slug]) ? `<button type="button" class="link export" data-export="${r.slug}" aria-label="Export ${esc(r.title)} as a role pack" title="Export as a role pack">Export</button>` : ''}</label>`;
+      <span class="name">${esc(r.title)}</span>${libState(r.slug)}<span class="tag${isCustom(spec.roles[r.slug]) ? ' has-export' : ''}">${r.source === 'project-replaces-kit' ? 'replaces kit' : imported.has(r.slug) ? 'imported' : isCustom(spec.roles[r.slug]) ? 'custom' : r.source === 'kit' ? '' : 'yours'}${r.dormant ? ' dormant' : ''}</span>${isCustom(spec.roles[r.slug]) ? `<button type="button" class="link export" data-export="${r.slug}" aria-label="Export ${esc(r.title)} as a role pack" title="Export as a role pack">Export</button>` : ''}</label>`;
   const byTitle = (a, b) => a.title.localeCompare(b.title);
   const keys = [...groups.keys()].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
   // Your agents: the custom roles on this team, on or off (PRD 6.6 A6), each still in its own group's colour.
@@ -476,6 +527,18 @@ function wireLibrary() {
 
 // ------------------------------------------------------------------------------------------------ inspector
 
+/** "Now, on the live version": the role's work in flight, above its fields (change safety criterion 5). */
+function nowOnLive(r) {
+  const sf = view.safety;
+  const row = sf.on && rowOf(board, r.slug);
+  if (!row) return '';
+  const hot = sf.hot.get(r.slug);
+  return `<section class="now-live${hot ? ' amber' : ''}"><h2>Now, on the live version${sf.version ? ` (${esc(sf.version.split(',')[0])})` : ''}</h2>
+    <ul>${inFlightList(row, spec, view.team.map((x) => ({ slug: x.slug, md: x.md })), r.slug).map((l) => `<li>${l}</li>`).join('')}</ul>
+    ${hot ? `<p class="reason">${esc(hot.map(reasonOf).join(', '))}: you choose what happens to this work when you publish.</p>` : ''}
+    <p class="hint">${esc(staleNote(sf.newest))}</p></section>`;
+}
+
 function renderInspector() {
   const el = $('#inspector');
   if (selectedSystem) return renderSystemInspector(el, ctx, selectedSystem);
@@ -488,6 +551,7 @@ function renderInspector() {
   const head = `<div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(r.title)}</h2>
       <span class="badge${r.changed ? ' changed' : ''}">${ownProject ? 'your role' : r.changed ? 'kit role, changed' : 'kit role'}</span></div>
     <p class="muted"><code>${esc(r.slug)}</code></p>
+    ${nowOnLive(r)}
     <label class="row"><input type="checkbox" id="i-enabled" style="width:auto" ${r.enabled ? 'checked' : ''}> On this team</label>
     <div class="field"><span>Model tier</span><select id="i-tier">${TIERS.map((t) => `<option ${t === r.tier ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     <div class="field"><span>Reports to</span><select id="i-manager">
@@ -534,7 +598,36 @@ function renderInspector() {
   }
 }
 
+/** The top bar's "N changes · M touch work in progress" and the draft banner (change safety criteria 2 and 6). */
+function renderSafety() {
+  const sf = view.safety;
+  const m = [...sf.hot.values()].reduce((n, l) => n + l.length, 0);
+  const pill = $('#impact-pill');
+  pill.hidden = !m;
+  pill.textContent = `${sf.changes.length} change${sf.changes.length === 1 ? '' : 's'} · ${m} touch${m === 1 ? 'es' : ''} work in progress`;
+  const banner = $('#draft-banner');
+  banner.hidden = !(sf.on && sf.changes.length);
+  banner.textContent = `Editing a draft. The team keeps running the live version${sf.version ? ` (${sf.version})` : ''} until you publish.${m ? ' Amber: your change touches that role\'s current work.' : ''}`;
+}
+
+/** The explanation by an amber card (criterion 4), placed next to it on the canvas. */
+function renderPopover() {
+  $('#canvas').querySelector('.impact-pop')?.remove();
+  const items = pop && view.safety.hot.get(pop);
+  const card = items && $('#canvas').querySelector(`.node[data-slug="${CSS.escape(pop)}"]`);
+  if (!card) { pop = null; return; }
+  const r = view.bySlug.get(pop);
+  const html = popoverHtml({ slug: pop, title: r?.title ?? pop, items, row: rowOf(board, pop), spec, roles: view.team.map((x) => ({ slug: x.slug, md: x.md })), newest: view.safety.newest });
+  const canvas = $('#canvas');
+  canvas.insertAdjacentHTML('beforeend', html);
+  const el = canvas.querySelector('.impact-pop');
+  const c = card.getBoundingClientRect(), b = canvas.getBoundingClientRect();
+  el.style.left = `${Math.min(c.right - b.left + canvas.scrollLeft + 10, canvas.scrollWidth - 340)}px`;
+  el.style.top = `${c.top - b.top + canvas.scrollTop}px`;
+}
+
 function renderIssues() {
+  renderSafety();
   const list = view.issues;
   const errors = list.filter((i) => i.level === 'error').length;
   const pill = $('#checks');
@@ -672,6 +765,7 @@ async function confirmPublish() {
     const fresh = await api('/v1/team');
     S = fresh;
     spec = fresh.spec;
+    published = structuredClone(fresh.spec);
     undo.length = 0; redo.length = 0;
     sugg = null;
     render();
@@ -701,6 +795,9 @@ async function start() {
     return;
   }
   spec = S.spec;
+  published = structuredClone(S.spec);
+  loadBoard();
+  try { new EventSource('/v1/team/board/stream').addEventListener('changed', loadBoard); } catch { /* no stream: the first read stands */ }
   $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${S.root}${S.git.branch ? ` · ${S.git.branch}` : ''}`;
   wireCanvas();
   wireLibrary();
@@ -711,6 +808,18 @@ async function start() {
   $('#undo').onclick = () => step(undo, redo);
   $('#redo').onclick = () => step(redo, undo);
   $('#publish').onclick = openPublish;
+  $('#impact-pill').onclick = openPublish;
+  $('#canvas').addEventListener('click', (e) => {
+    const b = e.target.closest('.impact-pop [data-pop]');
+    if (!b) return;
+    e.stopPropagation();
+    const slug = b.closest('.impact-pop').dataset.slug;
+    if (b.dataset.pop === 'close') { pop = null; return renderPopover(); }
+    if (b.dataset.pop === 'review') { pop = null; renderPopover(); return openPublish(); }
+    const item = view.safety.hot.get(slug)?.find((i) => i.id === b.dataset.item);
+    if (item) { change((sp) => revert(sp, published, item)); pop = null; render(); }
+  });
+  $('#canvas').addEventListener('pointerdown', (e) => { if (e.target.closest('.impact-pop')) e.stopPropagation(); }, true);
   $('#live').onclick = toggleLive;
   $('#confirm').onclick = confirmPublish;
   $('#issues').addEventListener('click', (e) => {
