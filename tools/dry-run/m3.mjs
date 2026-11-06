@@ -48,10 +48,13 @@ export function teamRepo(dir) {
   writeFileSync(join(root, '.agent-team/ownership.json'), JSON.stringify({ rows: [
     { writer: BUILDER.role, path: 'app/**' }, { writer: 'qa-web', path: 'qa/**' }, { writer: 'chief-of-staff', path: 'notes/**' },
   ] }, null, 2));
-  // One meeting: a written round of the builder and QA, run by the front door, with a small cap.
+  // Two meetings, run by the front door with a small cap: a written round of the builder and QA, and a discussion.
   writeFileSync(join(root, '.agent-team/meetings.json'), JSON.stringify({ meetings: [
     { id: 'standup', title: 'Daily standup', when: { days: ['mon', 'tue', 'wed', 'thu', 'fri'], at: '09:00' }, attendees: { roles: [BUILDER.role, 'qa-web'] }, facilitator: 'chief-of-staff',
       format: 'round', agenda: 'What you did, what is next, what blocks you.', ifBusy: 'next-pause', owner: { minutes: true, speaks: false }, capUsd: 0.5 },
+    // And a discussion (phase 4): the same two answer each other for up to three rounds.
+    { id: 'planning', title: 'Checkout planning', attendees: { roles: [BUILDER.role, 'qa-web'] }, facilitator: 'chief-of-staff',
+      format: 'discussion', rounds: 3, agenda: 'Cards first or pay later first?', ifBusy: 'next-pause', owner: { minutes: true, speaks: false }, capUsd: 0.5 },
   ] }, null, 2));
   for (const d of ['app', 'qa', 'notes']) { mkdirSync(join(root, d), { recursive: true }); writeFileSync(join(root, d, 'README.md'), `# ${d}\n`); }
   git(root, 'add', '-A');

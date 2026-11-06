@@ -4,7 +4,7 @@
 // request, then the approval card answered with step-up. The run must end in a merge pinned to the approved head.
 // A second request walks step 9b: a push after the approval makes the merge fail head-moved, and a new card asks again.
 // After the merge, step 12: Ready to try, with the preview link the runner reads from the (stand-in) host.
-// Then a meeting (a written round, minutes in the chat) and its cap, and step 11, the daily cap.
+// Then a meeting (a written round, minutes in the chat) and its cap, a discussion, and step 11, the daily cap.
 //
 //   npm ci --prefix apps/server && npm ci --prefix apps/runner && node --test tests/e2e/m3-dry-run.e2e.mjs
 //   M3_DRY_RUN_RUNNER=docker uses the runner image (docker build -f apps/runner/Dockerfile -t agent-team-runner .;
@@ -158,6 +158,24 @@ test('meetings: a written round ends with the minutes in the chat; a turn that b
   assert.ok(hk.log().some((l) => l.step === 'meeting:closed' && l.meeting === c.id && l.capped), 'the facilitator wrote partial minutes');
   const run = await studio('GET', '/v1/team/run');
   assert.equal(run.run?.state, 'running', 'the meeting\'s cap stops the meeting, not the run');
+});
+
+test('phase 4: a discussion: the attendees answer each other in later rounds, and the facilitator closes with an action item', { skip, timeout: 120_000 }, async () => {
+  const m = await hk.meeting('planning');
+  assert.deepEqual([m.format, m.rounds], ['discussion', 3]);
+  await waitFor(async () => (await hk.meetingNow(m.id)).state === 'closed', 60_000);
+  const done = await hk.meetingNow(m.id);
+  assert.equal(done.outcome, 'completed');
+  assert.deepEqual(done.replies.map((r) => [r.role, r.round]), [['qa-web', 1], ['web-dev', 1], ['qa-web', 2], ['web-dev', 2]], 'round 2 answers round 1');
+  assert.match(done.replies[2].text, /qa-web: agree with web-dev/);
+  assert.match(done.replies[3].text, /web-dev: agree with qa-web/, 'each answers the last other speaker');
+  assert.equal(done.round, 2, 'everyone was done after round 2 of 3, so the facilitator closed early');
+  const closed = hk.log().find((l) => l.step === 'meeting:closed' && l.meeting === m.id);
+  assert.deepEqual([closed.ok, closed.discussion, closed.replies, closed.actions], [true, true, 4, 1], closed.detail);
+  const page = await studio('GET', '/v1/team/chat');
+  const minutes = (page.items ?? []).find((e) => e.type === 'chat.message' && e.data?.meeting === m.id);
+  assert.match(minutes?.data?.text ?? '', /agree with/, 'the minutes are in the chat');
+  await waitFor(() => hk.log().find((l) => l.step === 'meeting:action-item' && l.role === 'qa-web'), 30_000);
 });
 
 test('G-15: "web dev and QA web on X, now" in the chat starts an ad hoc meeting; the minutes land in the chat', { skip, timeout: 120_000 }, async () => {

@@ -129,26 +129,43 @@ export function dryrunAdapter({ control, qaRole = 'qa-web', frontDoor = 'chief-o
       return { usage: usage() };
     },
   };
-  // Meetings (written round): an attendee answers its turn; the facilitator writes the minutes from the replies.
+  // Meetings: an attendee answers its turn; the facilitator writes the minutes from the replies. In a discussion
+  // (the turn says "round r of n") an attendee answers the last other speaker from round 2 on and is then done, so
+  // a discussion of several rounds closes once everyone has answered someone; the facilitator adds an action item.
   const meeting = async (t) => {
     const id = /\(meeting (mtg_[\w-]+)\)/.exec(t.prompt)?.[1];
     if (!id) return null;
     // meeting-spend.json { "usd": 1 }: this attendee's turn costs that much and ends before it answers (the cap path).
     const blew = !/close this meeting/.test(t.prompt) && take('meeting-spend.json');
     if (blew) { log(t, 'meeting:spent', { meeting: id, usd: blew.usd }); return { usage: { inputTokens: 1000, outputTokens: 200, costUsd: Number(blew.usd) } }; }
+    const said = [...t.prompt.matchAll(/^- ([a-z0-9][\w#-]*)(?: \(round (\d+)\))?, verbatim:\n {2}> (.*)$/gm)].map((x) => ({ role: x[1], round: Number(x[2] ?? 1), text: x[3] }));
     if (/close this meeting/.test(t.prompt)) {
-      const said = [...t.prompt.matchAll(/^- ([a-z0-9][\w#-]*), verbatim:\n {2}> (.*)$/gm)].map((x) => `${x[1]}: ${x[2]}`);
       const capped = /cost cap/.test(t.prompt);
-      const minutes = `${said.length ? said.join('\n') : 'Nobody spoke.'}${capped ? '\n\nThe meeting reached its cost cap; these minutes are partial.' : ''}`;
-      const r = await t.call('meeting_close', { meeting: id, minutes });
-      log(t, 'meeting:closed', { meeting: id, capped, replies: said.length, ok: !r.isError, detail: r.isError ? r.text : undefined });
+      const discussion = /the discussion is over|Transcript/.test(t.prompt);
+      const minutes = `${said.length ? said.map((x) => `${x.role}: ${x.text}`).join('\n') : 'Nobody spoke.'}${capped ? '\n\nThe meeting reached its cost cap; these minutes are partial.' : ''}`;
+      const first = said.find((x) => x.role !== t.role)?.role;
+      const actionItems = discussion && first ? [{ to: first, task: 'Follow up on what the discussion agreed', doneWhen: 'the agreed change is on the board' }] : undefined;
+      const r = await t.call('meeting_close', { meeting: id, minutes, ...(actionItems ? { actionItems } : {}) });
+      log(t, 'meeting:closed', { meeting: id, capped, discussion, replies: said.length, actions: actionItems?.length ?? 0, ok: !r.isError, detail: r.isError ? r.text : undefined });
     } else {
-      const r = await t.call('meeting_reply', { meeting: id, text: `${t.role}: on track, nothing blocks me.` });
-      log(t, 'meeting:replied', { meeting: id, ok: !r.isError, detail: r.isError ? r.text : undefined });
+      const [, round] = /round (\d+) of (\d+)/.exec(t.prompt) ?? [];
+      const other = [...said].reverse().find((x) => x.role !== t.role);
+      const answer = Number(round) > 1 && other;
+      const r = await t.call('meeting_reply', answer
+        ? { meeting: id, text: `${t.role}: agree with ${other.role}; nothing more to add.`, done: true }
+        : { meeting: id, text: `${t.role}: on track, nothing blocks me.` });
+      log(t, 'meeting:replied', { meeting: id, round: round ? Number(round) : undefined, done: Boolean(answer), ok: !r.isError, detail: r.isError ? r.text : undefined });
     }
     return { usage: usage() };
   };
-  for (const [k, f] of Object.entries(script)) script[k] = async (t) => (await meeting(t)) ?? f(t);
+  // A meeting's action item (a HANDOFF whose changed says so) is noted, not worked: the dry run's builder and QA
+  // scripts belong to the chat request, and a follow-up from a discussion must not start a second one.
+  const actionItem = (t) => {
+    if (!/^changed: an action item from /m.test(t.prompt)) return null;
+    log(t, 'meeting:action-item', { role: t.role });
+    return { usage: usage() };
+  };
+  for (const [k, f] of Object.entries(script)) script[k] = async (t) => (await meeting(t)) ?? actionItem(t) ?? f(t);
   if (!existsSync(control)) throw new Error(`the control folder ${control} does not exist`);
   return { ...stubAdapter(script), runtime: 'dryrun' };
 }
