@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1
+
+- **The merge gate and hardware locks run without bash** ([Windows and machines without bash](docs/windows.md)). `scripts/agent-team/merge-gate.mjs` and `with-lock.mjs` take the same arguments as `merge-gate.sh` and `with-lock.sh`, and give the same summary, `.merge-gate/` logs, lock folders and exit codes (64 for usage, 75 when no slot frees up). Both kinds share one pool on a machine. The Node gate runs `.agent-team/gates.json` targets. Each step goes to `bash -c` when bash is installed and to the system shell otherwise. A target that is only a bash function in `config.sh` is handed to `merge-gate.sh` when bash is installed, and refused with a clear message when it is not.
+- **Fixed:** `validate` now refuses a brief whose `## Identity` or `## Owns (writes)` is missing or empty, as sync's roster check does. Before, the Studio could say "No problems" for a brief that sync then refused. The role template's placeholder evidence line no longer counts as sign-off evidence.
+- **What existing teams see on sync:** two new files in `scripts/agent-team/`, plus the version stamps. The bash scripts are unchanged.
+
 ## 0.11.0
 
 Meeting definitions, kit side (PRD 6.7 M8, CPO story criteria 11 and 12, issue #30), and one shared model price table. Additive: a team without `meetings.json` behaves as before.

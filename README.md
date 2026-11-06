@@ -35,7 +35,7 @@ Requirements: git and Node 18+, plus bash and `jq` for the merge gate and locks 
 
 ```sh
 cd ~/code/my-app
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.11.0 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.11.1 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
 ```
 
 Then:
@@ -43,7 +43,7 @@ Then:
 1. Edit `docs/team/ownership.md` so the paths match your layout.
 2. Edit the gates and hardware pools in `.agent-team/config.sh`.
 3. Paste `docs/team/project-instructions.md` into your Claude project's instructions (or into `CLAUDE.md`).
-4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI. `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.11.0 doctor` smoke-tests the whole setup.
+4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI. `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.11.1 doctor` smoke-tests the whole setup.
 5. Open the chief of staff: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."*
 6. Ask for something. Watch it live with `node scripts/agent-team/dashboard.mjs` (a web dashboard at http://localhost:4747) or `scripts/agent-team/team-board.sh` in the terminal.
 
@@ -128,7 +128,7 @@ tests/                          tests for the CLI, scripts and tools, smoke scen
 ## Build the team visually: Agent Team Studio
 
 ```sh
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.11.0 studio --open   # opens http://localhost:4848/?t=<launch token>
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.11.1 studio --open   # opens http://localhost:4848/?t=<launch token>
 ```
 
 Switch roles on and off from the library, drag a card onto another to change who it reports to, and set each role's model tier, status and duties in the inspector. **Flow** shows who hands work to whom. In **Systems**, add your database, hosting or any MCP server and drag it onto the roles that may use it. **Owned areas** and **Checks** are suggested from your repository's folders and build files. The kit's rules run on every change. **Publish** shows every file that would change, then commits the team and its generated files on a new branch for you to push and review.
@@ -185,7 +185,7 @@ There are many projects for running teams of agents. Most of them overlap with o
 
 What the kit has that we have not found together elsewhere: a whole company org (48 briefs, with model tiers and reporting lines checked by `roster.mjs`), presets, a pinned-version sync into your repository with a CI drift check, one writer per path, merge gates and hardware locks, hook-based reports with a `doctor` smoke test, and a dashboard that runs locally or on a hosted site.
 
-Limits today: a thread's own session is reported by the hooks only when its checkout names its role (`AGENT_TEAM_ROLE` in `.agent-team/local.env` or the environment); subagents and teammates are always reported. The merge gate and locks still need bash and `jq` (Git Bash or WSL on Windows); and it works with Claude Code only.
+Limits today: a thread's own session is reported by the hooks only when its checkout names its role (`AGENT_TEAM_ROLE` in `.agent-team/local.env` or the environment); subagents and teammates are always reported. The merge gate and locks run on Node alone for gates in `.agent-team/gates.json` (`merge-gate.mjs`, `with-lock.mjs`); gates written as bash functions, `team-board.sh` and `janitor.sh` still need bash (Git Bash or WSL on Windows); and it works with Claude Code only.
 
 ## Recommended plugins
 

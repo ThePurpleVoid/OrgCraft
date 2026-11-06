@@ -381,6 +381,9 @@ export function validate(spec, kit, { dailyCapUsd = spec.options?.budgets?.daily
     if (!m) add('error', `roles/${slug}`, 'has no "Reports to" line');
     else if (m !== 'owner' && !installed.has(m)) add('error', `roles/${slug}`, `reports to "${m}", which is not on the team`);
     const tier = (/^[a-z]+/i.exec(field(installed.get(slug).md, 'Model'))?.[0] ?? '').toLowerCase();
+    // The same sections sync's roster check requires: a heading with nothing under it fails there, so it fails here.
+    if (!briefSection(installed.get(slug).md, 'identity')) add('error', `roles/${slug}`, 'missing "## Identity" (or it is empty); sync refuses a brief without it');
+    if (!briefSection(installed.get(slug).md, 'owns')) add('error', `roles/${slug}`, 'missing "## Owns (writes)" (or it is empty); sync refuses a brief without it');
     if (!['deep', 'standard', 'routine', 'light'].includes(tier)) add('error', `roles/${slug}`, `model tier "${tier}" is not deep, standard, routine or light`);
   }
   for (const slug of manager.keys()) { // loops in the reporting lines
@@ -612,8 +615,11 @@ const bullets = (text) => text.split('\n').map((l) => l.trim()).filter(Boolean);
 
 /** The artefacts a SIGNOFF from this role must carry, from "## Sign-off evidence": one string per "- " bullet (prose is ignored). */
 export function signoffEvidence(md) {
-  return bullets(briefSection(md, 'sign-off evidence')).filter((l) => /^[-*]\s/.test(l)).map((l) => l.replace(/^[-*]\s*/, '').trim()).filter(Boolean);
+  return bullets(briefSection(md, 'sign-off evidence')).filter((l) => /^[-*]\s/.test(l)).map((l) => l.replace(/^[-*]\s*/, '').trim())
+    .filter((l) => l && !l.startsWith(TEMPLATE_EVIDENCE));
 }
+/** The role template's placeholder evidence line, which is not evidence. */
+const TEMPLATE_EVIDENCE = 'What a SIGNOFF from this role must attach';
 
 /** Sets "## Sign-off evidence" to these items (an empty list removes the section). */
 export function setSignoffEvidence(md, items) {
