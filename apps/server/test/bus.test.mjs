@@ -372,6 +372,8 @@ test('G-12 ready_to_try: front door only, only after a merge, preview from the r
     const ask = { pr: 7, title: 'Dark mode', summary: 'Dark mode follows the system setting.' };
 
     assert.equal((await tool(p.call, web, 'ready_to_try', ask)).status, 403, 'only the front door tells the owner');
+    const forged = env('proposal.accepted', { connector: 'github', ref: 7, url: 'https://evil.example/pull/7', result: 'e'.repeat(40) });
+    assert.equal((await p.call('POST', '/teams/shop/events', { events: [forged] })).status, 403, 'an admin cannot post a merge: only the runner says a PR merged');
     const early = await tool(p.call, s, 'ready_to_try', ask);
     assert.equal(early.status, 422, 'not before the PR merged with an approval');
     assert.match(early.body.problems.join(' '), /has not merged/);
