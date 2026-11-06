@@ -323,6 +323,26 @@ test('a runner that restarted gets its sessions started again with what woke the
   }, { tickMs: 0 });
 });
 
+test('a run paused while its runner was away: back, the session goes through the pause path (checkpoint, then stop)', async () => {
+  await plane(async (p) => {
+    const { runner, run, runnerId, key } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    const row = async () => (await p.db.system('select state, checkpoint from sessions where id = $1', [s.session]))[0];
+    runner.close();
+    await waitFor(async () => (await row()).state === 'unknown');
+    assert.equal((await p.call('POST', `/runs/${run.id}/pause`)).status, 200);
+    const back = await fakeRunner(p.base, key, { runner: runnerId, sessions: [s.session], reply: (f) => (f.op === 'session.checkpoint' ? { commit: 'beef123', memory: '# newest' } : {}) });
+    const cp = await back.next((f) => f.op === 'session.checkpoint' && f.body.session === s.session);
+    const stop = await back.next((f) => f.op === 'session.stop' && f.body.session === s.session);
+    assert.ok(back.frames.indexOf(cp) < back.frames.indexOf(stop), 'checkpoint first');
+    assert.deepEqual([stop.body.mode, stop.body.reason], ['finish-step', 'run-paused']);
+    const r = await row();
+    assert.deepEqual([r.state, r.checkpoint.commit, r.checkpoint.memory], ['stopped', 'beef123', '# newest'], 'the resume starts from the newest work');
+    back.close();
+  }, { tickMs: 0 });
+});
+
 test('an approved merge is not let go to the runner while its run is not running, not even on a resend', async () => {
   await plane(async (p) => {
     const { runner, run } = await setup(p);

@@ -520,9 +520,21 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     // paused, or the session was given up) stop now, before anything else it sends is handled.
     const gone = [...still].filter((x) => !kept.includes(x));
     // The reason is the run's, so the session.ended the runner sends says why (run-stopped, run-paused).
-    const runOf = gone.length ? new Map((await db.tenant(conn.tenant, ({ q }) => q('select s.id, r.state from sessions s join runs r on r.id = s.run where s.id = any($1) and s.runner = $2', [gone, conn.runner]))).map((r) => [r.id, r.state])) : new Map();
+    const runOf = gone.length ? new Map((await db.tenant(conn.tenant, ({ q }) => q('select s.id, s.run, r.state from sessions s join runs r on r.id = s.run where s.id = any($1) and s.runner = $2', [gone, conn.runner]))).map((r) => [r.id, r])) : new Map();
     for (const sid of gone) {
-      const reason = runOf.get(sid) === 'stopped' ? 'run-stopped' : runOf.get(sid) === 'paused' ? 'run-paused' : 'stopped';
+      const r = runOf.get(sid);
+      if (r?.state === 'paused') {
+        // A pause goes through the pause path, so the resume starts from the newest work: checkpoint, then stop.
+        setImmediate(() => (async () => {
+          const cp = await conn.send('session.checkpoint', { session: sid, reason: 'run-paused' }, { timeoutMs: CHECKPOINT_MS }).catch(() => null);
+          if (cp && (cp.commit || cp.memory !== undefined)) await saveCheckpoint(conn.tenant, sid, cp);
+          // The checkpoint's session.idle marked it idle: stopped again, while the run is still paused.
+          await db.tenant(conn.tenant, ({ q }) => q("update sessions set state = 'stopped' where id = $1 and exists (select 1 from runs where id = $2 and state = 'paused')", [sid, r.run]));
+          await conn.send('session.stop', { session: sid, mode: 'finish-step', reason: 'run-paused' }).catch(() => {});
+        })().catch((e) => log.error?.(`bus: pausing ${sid}: ${e.message}`)));
+        continue;
+      }
+      const reason = r?.state === 'stopped' ? 'run-stopped' : 'stopped';
       setImmediate(() => conn.send('session.stop', { session: sid, mode: 'now', reason }).catch(() => {}));
     }
     // Whatever waited for a runner can go now.

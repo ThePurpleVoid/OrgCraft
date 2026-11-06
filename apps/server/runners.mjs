@@ -49,9 +49,12 @@ export function attachRunners(server, { db, ops = {}, welcome = async () => ({})
       send(op, body = {}, { ref, timeoutMs = 30_000 } = {}) {
         const id = frameId();
         const frame = { op, id, ...(ref ? { ref } : {}), body };
-        if (ws.readyState !== ws.OPEN) return Promise.reject(new Error('runner is not connected'));
+        const answer = ['ack', 'nack', 'pong', 'ping', 'welcome'].includes(op);
+        // An answer to a runner that has gone is dropped: it reconnects and resends what was not acknowledged.
+        // Only a request (which someone awaits) rejects, so nothing is left as an unhandled rejection.
+        if (ws.readyState !== ws.OPEN) return answer ? Promise.resolve(null) : Promise.reject(new Error('runner is not connected'));
         ws.send(JSON.stringify(frame));
-        if (['ack', 'nack', 'pong', 'ping', 'welcome'].includes(op)) return Promise.resolve(null);
+        if (answer) return Promise.resolve(null);
         return new Promise((resolve, reject) => {
           const timer = setTimeout(() => { conn.pending.delete(id); reject(new Error(`no ack for ${op} within ${timeoutMs} ms`)); }, timeoutMs);
           timer.unref?.();
