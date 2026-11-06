@@ -56,7 +56,7 @@ Hooks are a Claude Code feature. With `"targets": ["claude-code", "agents-md"]`,
 ## Check the setup
 
 ```sh
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.17.0 doctor
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.17.1 doctor
 ```
 
 `doctor` checks the tools the scripts need, that the generated files and the hooks match `.agent-team/`, the roster and its hand-offs, and runs a hook event through the reporter into a scratch board to prove the pipeline works. `--ping` also posts a note to `TEAM_REPORT_URL`. It exits 1 when anything fails, so it can run in CI next to `sync.sh check`.
