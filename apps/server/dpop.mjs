@@ -4,10 +4,12 @@
 // and the same rules: typ dpop+jwt, an asymmetric alg, the method and URL of this request, a fresh iat, ath of this
 // token, the key's thumbprint equal to the token's jkt, and a jti never seen before (kept 5 minutes).
 import { createHash } from 'node:crypto';
-import { EmbeddedJWK, calculateJwkThumbprint, jwtVerify } from 'jose';
+import { EmbeddedJWK, calculateJwkThumbprint, decodeProtectedHeader, jwtVerify } from 'jose';
 import { Problem } from './store.mjs';
 
-const ALGS = ['ES256', 'EdDSA', 'PS256', 'RS256'];
+// The algorithms the issuer accepts for DPoP (identity.mjs dPoP), no wider.
+const ALGS = ['ES256', 'EdDSA'];
+const PRIVATE = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'k', 'oth'];
 const IAT_SKEW = 60;
 const JTI_SECONDS = 300;
 const sha = (s) => createHash('sha256').update(String(s)).digest('hex');
@@ -31,6 +33,9 @@ export async function appCaller({ db, provider, origin, now = () => new Date() }
   if (!at.jkt) throw unauthorized('only device-bound tokens are accepted');
   let header, payload;
   try {
+    // A proof carries the device's public key only; a key with private members is refused outright.
+    const jwk = decodeProtectedHeader(proof).jwk;
+    if (!jwk || typeof jwk !== 'object' || PRIVATE.some((k) => k in jwk)) throw new Error('jwk');
     ({ protectedHeader: header, payload } = await jwtVerify(proof, EmbeddedJWK, { algorithms: ALGS, typ: 'dpop+jwt' }));
   } catch { throw unauthorized('the DPoP proof did not verify'); }
   const t = Math.floor(now().getTime() / 1000);

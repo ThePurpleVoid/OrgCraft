@@ -71,9 +71,11 @@ test('refused: no proof, the Bearer scheme, another key, method, URL or token, a
   cases['another URL'] = { p: await proof(phone, 'GET', `${ORIGIN}/v1/teams`, { ath: ath(t2) }) };
   cases['another token'] = { p: await proof(phone, 'GET', url, { ath: ath(token) }) };
   cases['no ath'] = { p: await proof(phone, 'GET', url) };
+  const leaky = { privateKey: phone.privateKey, jwk: await exportJWK(phone.privateKey) };
+  cases['a private key in the header'] = { p: await proof(leaky, 'GET', url, { ath: ath(t2) }) };
   cases['a stale proof'] = { p: await proof(phone, 'GET', url, { ath: ath(t2) }, Math.floor(Date.now() / 1000) - 600) };
   const why = { 'no proof': /proof is required/, 'Bearer scheme': /sign in|Bearer/, 'another key': /another key/, 'another method': /another method/, 'another URL': /another URL/,
-    'another token': /another token/, 'no ath': /another token/, 'a stale proof': /not fresh/ };
+    'another token': /another token/, 'no ath': /another token/, 'a stale proof': /not fresh/, 'a private key in the header': /did not verify/ };
   for (const [what, opts] of Object.entries(cases)) {
     const via = ['no proof', 'Bearer scheme', 'another key'].includes(what) ? call : c2;
     const res = await via('GET', '/me', undefined, opts);
