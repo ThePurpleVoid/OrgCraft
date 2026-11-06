@@ -8,7 +8,7 @@ import { fresh, key, ADMIN } from './helpers.mjs';
 import { ORIGIN, OWNER, issuer, owner } from './sign-in-helpers.mjs';
 import * as store from '../store.mjs';
 import { createControlPlane } from '../server.mjs';
-import { createIdentity } from '../identity.mjs';
+import { createIdentity, issuerKeys } from '../identity.mjs';
 import { REFUSED } from '../../../tests/fixtures/return-paths.mjs';
 
 
@@ -312,20 +312,21 @@ test('the signing key rotates from the tick after 90 days, and the old one stays
   let t = Date.now();
   await issuer(async ({ local, identity }) => {
     const kids = async () => (await (await fetch(`${local}/oauth/jwks`)).json()).keys.map((k) => k.kid);
-    const [first] = await kids();
+    const first = await kids();
+    assert.equal(first.length, 2, 'a P-256 key and an RSA key');
     await identity.sweep();
-    assert.deepEqual(await kids(), [first], 'nothing to rotate yet');
+    assert.deepEqual(await kids(), first, 'nothing to rotate yet');
     const before = identity.provider;
     t += 91 * 86400_000;
     await identity.sweep();
-    const both = await kids();
-    assert.equal(both.length, 2);
-    assert.equal(both[1], first);
+    const all = await kids();
+    assert.equal(all.length, 4, 'both rotate together');
+    assert.deepEqual(all.filter((k) => first.includes(k)).sort(), [...first].sort());
     // The library was rebuilt around the new key, so new ID tokens are signed with it.
     assert.notEqual(identity.provider, before);
     t += 2 * 86400_000;
     await identity.sweep();
-    assert.deepEqual(await kids(), [both[0]]);
+    assert.deepEqual((await kids()).sort(), all.filter((k) => !first.includes(k)).sort());
   }, { now: () => new Date(t) });
 });
 
@@ -372,3 +373,96 @@ test('the issuer refuses a non-https public URL and a login in place of the owne
   await assert.rejects(createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub: 'octo', upstream }), /numeric/);
   await db.close();
 });
+
+// The conformance harness (conformance/op.mjs) loosens the issuer through `configure`; nothing else may (security
+// review of #113). Without it: no client registration, and PKCE for every client, confidential ones too.
+test('the deployment issuer: registration off, and PKCE required for every client', () => issuer(async ({ local, gh, browser }) => {
+  const meta = await (await fetch(`${local}/.well-known/openid-configuration`)).json();
+  assert.equal(meta.registration_endpoint, undefined);
+  const reg = await fetch(`${local}/oauth/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['https://evil.example/cb'] }) });
+  assert.equal(reg.status, 404);
+  gh.as = owner;
+  const redirect = 'https://partner.example/cb';
+  for (const client of ['agent-team-ios', 'agent-team-android', 'partner']) {
+    const uri = client === 'partner' ? redirect : `${ORIGIN}/app/${client.slice(11)}/callback`;
+    const q = new URLSearchParams({ response_type: 'code', client_id: client, redirect_uri: uri, scope: 'openid', state: 's', nonce: 'n' });
+    const r = await browser().fetch(`${ORIGIN}/oauth/authorize?${q}`);
+    const at = new URL(r.headers.get('location') ?? 'x:', ORIGIN);
+    assert.equal(at.searchParams.get('error'), 'invalid_request', client);
+    assert.match(at.searchParams.get('error_description') ?? '', /requires PKCE/, client);
+  }
+}, { clients: [
+  { client_id: 'agent-team-ios', redirect_uris: [`${ORIGIN}/app/ios/callback`] },
+  { client_id: 'agent-team-android', redirect_uris: [`${ORIGIN}/app/android/callback`] },
+  { client_id: 'partner', client_secret: 'a-long-enough-client-secret-for-the-test', token_endpoint_auth_method: 'client_secret_basic', application_type: 'web', redirect_uris: ['https://partner.example/cb'], dpop_bound_access_tokens: false },
+] }));
+
+// RS256 is offered because OpenID Connect requires it (conformance, security review of #113); our own clients stay on
+// ES256, and the RSA key is a separate key of its own.
+test('the JWKS has a P-256 and an RSA-2048 key; a first-party ID token is ES256', () => issuer(async ({ local, gh, browser }) => {
+  const { keys } = await (await fetch(`${local}/oauth/jwks`)).json();
+  assert.deepEqual(keys.map((k) => `${k.kty}:${k.alg}:${k.use}`).sort(), ['EC:ES256:sig', 'RSA:RS256:sig']);
+  assert.notEqual(keys[0].kid, keys[1].kid);
+  const rsa = keys.find((k) => k.kty === 'RSA');
+  assert.ok(Buffer.from(rsa.n, 'base64url').length * 8 >= 2048);
+  assert.ok(keys.every((k) => !('d' in k)), 'public keys only');
+  const meta = await (await fetch(`${local}/.well-known/openid-configuration`)).json();
+  assert.deepEqual(meta.id_token_signing_alg_values_supported, ['ES256', 'RS256']);
+  // The iPhone app signs in: its ID token is ES256, under the EC key.
+  gh.as = owner;
+  const redirect = `${ORIGIN}/app/ios/callback`;
+  const verifier = randomBytes(32).toString('base64url');
+  const b = browser({ ip: 'alg' });
+  const first = await b.go(`${ORIGIN}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: 'agent-team-ios', redirect_uri: redirect, scope: 'openid', state: 's', nonce: 'n', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' })}`);
+  const uid = new URL(first.at).searchParams.get('interaction');
+  const code = new URL((await b.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at).searchParams.get('code');
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const dpop = await new SignJWT({ htm: 'POST', htu: `${ORIGIN}/oauth/token`, jti: randomUUID() }).setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: await exportJWK(publicKey) }).setIssuedAt().sign(privateKey);
+  const tok = await (await fetch(`${local}/oauth/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', dpop }, body: new URLSearchParams({ client_id: 'agent-team-ios', grant_type: 'authorization_code', code, redirect_uri: redirect, code_verifier: verifier }) })).json();
+  const header = JSON.parse(Buffer.from(tok.id_token.split('.')[0], 'base64url'));
+  assert.equal(header.alg, 'ES256');
+  assert.equal(header.kid, keys.find((k) => k.kty === 'EC').kid);
+}));
+
+test('a deployment from before RS256 keeps its P-256 key and gains an RSA key', async () => {
+  const db = await fresh();
+  try {
+    const [ec] = (await issuerKeys(db, key)).filter((k) => k.kty === 'EC');
+    await db.system("delete from issuer_keys where kid <> $1", [ec.kid]);
+    const after = await issuerKeys(db, key);
+    assert.deepEqual(after.map((k) => k.kty), ['EC', 'RSA']);
+    assert.equal(after[0].kid, ec.kid, 'not rotated');
+    assert.deepEqual((await issuerKeys(db, key)).map((k) => k.kid), after.map((k) => k.kid), 'and stable from then on');
+  } finally { await db.close(); }
+});
+
+// prompt=consent from a signed-in person's client: no page, no second trip to GitHub (every client is ours).
+test('prompt=consent for a signed-in person finishes without a page or GitHub', () => issuer(async ({ gh, browser }) => {
+  gh.as = owner;
+  const b = browser({ ip: 'consent' });
+  const redirect = `${ORIGIN}/app/ios/callback`;
+  const ask = (extra) => {
+    const verifier = randomBytes(32).toString('base64url');
+    return `${ORIGIN}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: 'agent-team-ios', redirect_uri: redirect, scope: 'openid offline_access', state: 's', nonce: 'n', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', ...extra })}`;
+  };
+  const first = await b.go(ask({}));
+  const uid = new URL(first.at).searchParams.get('interaction');
+  assert.ok(new URL((await b.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at).searchParams.get('code'));
+  const signIns = gh.issued.length;
+
+  // The consent step, taken one redirect at a time: another browser presenting the same uid is refused.
+  const start = await b.fetch(ask({ prompt: 'consent' }));
+  const step = start.headers.get('location');
+  const cuid = /\/oauth\/interaction\/([^/]+)\/consent$/.exec(new URL(step, ORIGIN).pathname)?.[1];
+  assert.ok(cuid, step);
+  const stranger = await browser({ ip: 'other' }).fetch(`${ORIGIN}/oauth/interaction/${cuid}/consent`);
+  assert.match(stranger.headers.get('location') ?? '', /sign-in\?error=expired/);
+  // A uid other than the cookie's, in the right browser, is refused too.
+  const wrong = await b.fetch(`${ORIGIN}/oauth/interaction/${cuid.slice(1)}x/consent`);
+  assert.match(wrong.headers.get('location') ?? '', /sign-in\?error=expired/);
+
+  const again = await b.go(`${ORIGIN}/oauth/interaction/${cuid}/consent`);
+  assert.ok(again.at?.startsWith(redirect), again.at);
+  assert.ok(new URL(again.at).searchParams.get('code'));
+  assert.equal(gh.issued.length, signIns, 'no second GitHub sign-in');
+}));

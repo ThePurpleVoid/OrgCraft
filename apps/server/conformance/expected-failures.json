@@ -1,0 +1,47 @@
+[
+  {
+    "test-name": "oidcc-scope-profile",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "current-block": "",
+    "condition": "VerifyScopesReturnedInUserInfoClaims",
+    "expected-result": "warning",
+    "comment": "Feature not offered: the profile scope releases name and preferred_username only. The deployment holds no picture, birthdate, locale and so on (data minimisation, docs/specs/m4-sign-in.md)."
+  },
+  {
+    "test-name": "oidcc-claims-essential",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "current-block": "",
+    "condition": "EnsureUserInfoContainsName",
+    "expected-result": "warning",
+    "comment": "Feature not offered: the claims request parameter. Claims come from scopes only; the module asks for name through the claims parameter with scope openid alone."
+  },
+  {
+    "test-name": "oidcc-ensure-request-with-acr-values-succeeds",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "current-block": "Verify authorization endpoint response",
+    "condition": "ValidateIdTokenACRClaimAgainstAcrValuesRequest",
+    "expected-result": "warning",
+    "comment": "Feature not offered: acr values. Sign-in has one level (GitHub); step-up is a separate passkey check on /v1, not an acr."
+  },
+  {
+    "test-name": "oidcc-ensure-post-request-succeeds",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "current-block": "",
+    "condition": "WebRunner",
+    "expected-result": "failure",
+    "comment": "Feature not offered: authorization requests by HTTP POST. oidc-provider allows POST only with the session cookie on SameSite=None, which would drop the browser's CSRF protection for every sign-in; GET (with PKCE and state) is the only method. Security review of #113."
+  },
+  {
+    "test-name": "oidcc-ensure-post-request-succeeds",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "current-block": "",
+    "condition": "oidcc-ensure-post-request-succeeds",
+    "expected-result": "failure",
+    "comment": "Feature not offered: authorization requests by HTTP POST. oidc-provider allows POST only with the session cookie on SameSite=None, which would drop the browser's CSRF protection for every sign-in; GET (with PKCE and state) is the only method. Security review of #113."
+  }
+]

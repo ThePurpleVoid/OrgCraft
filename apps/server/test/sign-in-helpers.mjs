@@ -9,8 +9,9 @@ import { createIdentity, githubUpstream } from '../identity.mjs';
 export const ORIGIN = 'https://studio.example';
 export const OWNER = '1001';
 
-/** A stand-in GitHub: the user authorization flow with PKCE, /user and /user/emails. Tests set `as`. */
-export async function stubGitHub() {
+/** A stand-in GitHub: the user authorization flow with PKCE, /user and /user/emails. Tests set `as`. The conformance
+ *  harness listens on another host and port, and names the URL the suite's browser reaches it by. */
+export async function stubGitHub({ host = '127.0.0.1', port = 0, url = null } = {}) {
   const codes = new Map(), tokens = new Map();
   const gh = { as: null, issued: [], directory: [] };
   const server = createServer(async (req, res) => {
@@ -50,8 +51,8 @@ export async function stubGitHub() {
     if (url.pathname === '/user/emails') return json(200, user.emails ?? []);
     return json(404, {});
   });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  gh.url = `http://127.0.0.1:${server.address().port}`;
+  await new Promise((r) => server.listen(port, host, r));
+  gh.url = url ?? `http://${host}:${server.address().port}`;
   gh.close = () => { server.closeAllConnections(); server.close(); };
   return gh;
 }
@@ -108,12 +109,12 @@ export function browser(local, { ip = 'browser' } = {}) {
   return b;
 }
 
-export async function issuer(fn, { ownerGithub = OWNER, now, clientIp = (req) => req.headers['x-test-ip'] ?? '', cronSecret } = {}) {
+export async function issuer(fn, { ownerGithub = OWNER, now, clientIp = (req) => req.headers['x-test-ip'] ?? '', cronSecret, clients } = {}) {
   const db = await fresh();
   await store.ensureTenant(db, 'acme');
   const gh = await stubGitHub();
   const upstream = githubUpstream({ clientId: 'Iv1.test', clientSecret: 'gh-secret', url: gh.url, apiUrl: gh.url });
-  const identity = await createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub, upstream, ...(clientIp ? { clientIp } : {}), ...(now ? { now } : {}) });
+  const identity = await createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub, upstream, ...(clientIp ? { clientIp } : {}), ...(now ? { now } : {}), ...(clients ? { clients } : {}) });
   const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, publicUrl: ORIGIN, identity, tickMs: 0, stepUpVerifier: verifier, ...(cronSecret ? { cronSecret } : {}), ...(now ? { now } : {}) });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const local = `http://127.0.0.1:${server.address().port}`;
