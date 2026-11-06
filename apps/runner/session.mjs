@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
+import { sharedDir } from './sandbox.mjs';
 import { checkpoint as saveWork, outOfArea, prepare, release } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
@@ -77,7 +78,8 @@ export class Session {
     this.woken = new Set();
     this.ended = new Promise((r) => (this._ended = r));
     this.stopped = new Promise((r) => (this._stopped = r));
-    this.memoryPath = join(deps.root, 'memory', safe(this.id), `${safe(this.role)}.md`);
+    this.work = deps.work ?? deps.root; // what the agent may reach; deps.root stays the runner's own
+    this.memoryPath = join(this.work, 'memory', safe(this.id), `${safe(this.role)}.md`);
     const brief = body.prompt?.brief ?? '';
     this.frontDoor = body.frontDoor ?? /\*\*Reports to:\*\*\s*owner\b/i.test(brief);
   }
@@ -98,11 +100,14 @@ export class Session {
   async start() {
     const b = this.body;
     try {
-      this.copy = await prepare({ root: this.deps.root, repo: b.repo, worktree: b.worktree, session: this.id });
-      mkdirSync(dirname(this.memoryPath), { recursive: true });
+      const sb = this.deps.sandbox ?? null;
+      this.copy = await prepare({ root: this.deps.root, work: this.work, repo: b.repo, worktree: b.worktree, session: this.id, sandbox: sb });
+      for (const d of [join(this.work, 'memory'), dirname(this.memoryPath)]) sharedDir(d, sb);
       // A home of its own, with no credentials in it: nothing of the runner user's (ssh, gh, git, the runner key).
-      this.home = join(this.deps.root, 'homes', safe(this.id));
-      mkdirSync(join(this.home, 'tmp'), { recursive: true });
+      this.home = join(this.work, 'homes', safe(this.id));
+      for (const d of [join(this.work, 'homes'), this.home, join(this.home, 'tmp')]) sharedDir(d, sb);
+      // The agent runs git in a clone the runner owns; this lets it, and names its commits.
+      writeFileSync(join(this.home, '.gitconfig'), `[safe]\n\tdirectory = ${this.copy.cwd}\n[user]\n\tname = ${this.role}\n\temail = ${this.role}@agent-team.invalid\n`);
       const memory = b.checkpoint?.memory ?? b.prompt?.memory;
       if (memory !== undefined && memory !== null) writeFileSync(this.memoryPath, String(memory));
       else if (!existsSync(this.memoryPath)) writeFileSync(this.memoryPath, '');
@@ -165,7 +170,7 @@ export class Session {
     let out;
     try {
       out = await this.deps.adapter.turn({
-        session: this.id, role: this.role, model: this.model, cwd: this.copy.cwd, env: this.env, resume: this.resume,
+        session: this.id, role: this.role, model: this.model, cwd: this.copy.cwd, env: this.env, resume: this.resume, sandbox: this.deps.sandbox ?? null,
         systemPrompt: systemPrompt(this.body.prompt, this.role, this.memoryPath), prompt: wakePrompt(message, this.role, { resume }),
         signal: this.abort.signal, maxBudgetUsd: remaining === null ? undefined : remaining / 100, mcp: this.body.tools?.mcp ?? {},
         tools: Object.entries(TOOLS).map(([name, t]) => ({ name, description: t.description, shape: t.shape })),

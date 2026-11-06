@@ -16,6 +16,8 @@ export function teamToolDefinitions(tool, tools, callTool) {
   }));
 }
 
+import { sandboxSpawn } from '../sandbox.mjs';
+
 export function agentSdkAdapter({ effort, settingSources = [], executable, sdk: given } = {}) {
   // settingSources is empty by default (security review R3): a branch's own .claude settings, hooks, env and
   // .mcp.json could otherwise run code or redirect the model key outside the runner's policy.
@@ -61,6 +63,8 @@ export function agentSdkAdapter({ effort, settingSources = [], executable, sdk: 
           settingSources,
           ...(o.maxBudgetUsd !== undefined ? { maxBudgetUsd: o.maxBudgetUsd } : {}),
           ...(executable ? { pathToClaudeCodeExecutable: executable } : {}),
+          // In the container, Claude Code (and every command it runs) starts as the agent user (F3).
+          ...(o.sandbox ? { spawnClaudeCodeProcess: sandboxSpawn(o.sandbox) } : {}),
           abortController,
         },
       });

@@ -15,8 +15,14 @@
 //   AGENT_TEAM_RUNNER_GITCONFIG  a git config with the runner's push credential (a helper for a token that can push
 //                            branches but not the default branch); sessions never see it
 //
-// Run it in a container as its own user (Dockerfile). On a bare machine, sessions share the OS user with the runner,
-// which this process cannot fully wall off; that is not a supported deployment.
+//   AGENT_TEAM_SANDBOX_UID, AGENT_TEAM_SANDBOX_GID, AGENT_TEAM_SANDBOX_EXEC
+//                            run every session as this user and group, switched with this setpriv (the Dockerfile
+//                            sets all three). The data folder is then closed to sessions; their clones, homes and
+//                            memory files live in AGENT_TEAM_RUNNER_WORK
+//   AGENT_TEAM_RUNNER_WORK   the folder sessions may reach (default: the data folder, when there is no sandbox)
+//
+// Run it in the container (Dockerfile): the runner as one user, sessions as another. Without the sandbox settings,
+// sessions share the runner's OS user and could read its environment; that is for development only.
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -24,6 +30,7 @@ import { parseArgs } from 'node:util';
 import { agentSdkAdapter } from './adapters/agent-sdk.mjs';
 import { startRunner } from './runner.mjs';
 import { useGitConfig } from './worktree.mjs';
+import { privateDir } from './sandbox.mjs';
 
 const { values: o, positionals: [cmd] } = parseArgs({ allowPositionals: true, options: {
   server: { type: 'string', default: process.env.AGENT_TEAM_SERVER },
@@ -61,10 +68,22 @@ const server = o.server ?? saved.server;
 const key = process.env.AGENT_TEAM_RUNNER_KEY ?? saved.key;
 if (!server || !key) fail('not registered: run agent-team-runner register --server <url> --code <code> first');
 mkdirSync(data, { recursive: true, mode: 0o700 });
+const id = (v) => (v === undefined || v === '' ? undefined : Number(v));
+const sandbox = process.env.AGENT_TEAM_SANDBOX_UID ? { uid: id(process.env.AGENT_TEAM_SANDBOX_UID), gid: id(process.env.AGENT_TEAM_SANDBOX_GID), exec: process.env.AGENT_TEAM_SANDBOX_EXEC || 'setpriv' } : null;
+let work = data;
+if (sandbox) {
+  if (!process.env.AGENT_TEAM_RUNNER_WORK) fail('a sandbox needs AGENT_TEAM_RUNNER_WORK, a folder outside the data folder');
+  work = resolve(process.env.AGENT_TEAM_RUNNER_WORK);
+  if (work === data || work.startsWith(`${data}/`)) fail('AGENT_TEAM_RUNNER_WORK must be outside the data folder, which sessions cannot reach');
+  process.umask(0o007); // what the runner makes for a session is shared with it through the group, and no one else
+  privateDir(data);
+} else {
+  console.error('[runner] warning: no sandbox (AGENT_TEAM_SANDBOX_UID); sessions run as this user and could read its environment. Development only.');
+}
 useGitConfig(process.env.AGENT_TEAM_RUNNER_GITCONFIG ?? join(data, 'gitconfig'));
 
 const runner = startRunner({
-  server, key, root: data, id: saved.id ?? o.name, maxSessions: Number(o['max-sessions']) || 8,
+  server, key, root: data, work, sandbox, id: saved.id ?? o.name, maxSessions: Number(o['max-sessions']) || 8,
   adapter: agentSdkAdapter({ effort: o.effort }),
   log: (m) => console.error(`[runner] ${m}`),
 });
