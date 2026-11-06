@@ -13,11 +13,47 @@ This is how the kit was born, and it scales best.
 Where threads run:
 
 - **Remote Control on your own machine** gives threads your devices, emulators, simulators and signed-in tools. Size `AGENT_TEAM_POOLS` in `.agent-team/config.sh` for that machine.
-- **Cloud sessions** are fine for roles that only read and write files (executives, writers, reviewers, business roles). Point them at the [hosted board](../board/supabase/README.md) or at your local [dashboard](dashboard.md) so their reports land in one place.
+- **Cloud sessions** are fine for roles that only read and write files (executives, writers, reviewers, business roles). Point them at the [hosted board](../board/supabase/README.md) or at your local [dashboard](dashboard.md) so their reports land in one place, or at a shared folder (below).
+
+### One board when every thread has its own machine
+
+Cloud threads each run in their own container, so the default event log (`~/.agent-team/<project>/events.jsonl`) is private to each thread. When the host gives every thread a shared folder, point the board there and nothing else is needed:
+
+```sh
+# ~/.agent-team/<project>/team.env, .agent-team/config.sh, or .agent-team/local.env
+AGENT_TEAM_HOME=/path/to/shared-folder/agent-team-board
+```
+
+Every report then goes to `<that folder>/<project>/events.jsonl`, and `team-board.sh`, the dashboard and the hooks read and write the same file. Put it in `config.sh` when every checkout of the repository should use it, or in `team.env` or `local.env` when only some machines mount the folder. The environment still wins over all three.
+
+### Which role a thread plays
+
+Each role thread works in its own checkout. Give the checkout its role once, in `.agent-team/local.env` (sync adds it to `.gitignore`; it is never committed):
+
+```sh
+AGENT_TEAM_ROLE=backend-dev
+```
+
+Then `team-status.sh status working --task "..."` works without the role, and the Claude Code hooks report the thread's own session as that role. `AGENT_TEAM_ROLE` in the environment wins over the file. `doctor` prints the role a checkout reports as.
+
+### The chief of staff as a thread
+
+Some hosts already have a coordinator of their own (the session that answers the owner in the project chat and opens threads). Then the chief of staff runs as a thread:
+
+- The owner keeps talking to the coordinator. The coordinator relays every request to the chief of staff's thread verbatim, quoted, and relays the chief of staff's questions and digests back. That chat is the owner's channel the briefs refer to.
+- The chief of staff dispatches by asking the coordinator to open or wake role threads, or by messaging them directly where the host allows threads to message each other. Executives and roles answer the chief of staff's thread, never the owner.
+- The chief of staff's own card on the board comes from its thread like any other role: `AGENT_TEAM_ROLE=chief-of-staff` in its `local.env`.
+
+Nothing else changes: the same briefs, protocols, board and gates.
 
 ### Routines
 
-Schedule these as recurring tasks (or cron on the team machine):
+Each routine belongs to a role, and that role's thread schedules it:
+
+- **From a thread**: use the host's scheduler. In Claude projects that is a scheduled or recurring task (a routine) whose prompt names the role and the job, for example *"You are the docs keeper: read docs/team/roles/docs-keeper.md, then run the nightly docs drift check."* A thread that can only schedule its own next wake-up re-schedules at the end of each run.
+- **On a machine you run**: cron or launchd, calling `claude -p` with the same prompt, or a script for the machine's own jobs.
+
+A routine reports to the board like any task: `status working` first, and `done` or `idle` at the end.
 
 | When | Who | What |
 | --- | --- | --- |

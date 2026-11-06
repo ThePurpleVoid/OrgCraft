@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0
+
+Running a team from project threads, where every thread has its own machine (issue #29). Existing teams see these changes on their next sync:
+
+- **One board for threads on separate machines.** `AGENT_TEAM_HOME` can now be set in `.agent-team/config.sh`, `~/.agent-team/<project>/team.env` or `.agent-team/local.env` as well as the environment, so every thread can point at a folder they all share. `team-status.sh`, `report.mjs`, the hooks, `team-board.sh` and the dashboard all follow it. A state folder set this way can hold its own `team.env`, for a shared board's URL and token. The environment still wins.
+- **Each checkout knows its role.** `.agent-team/local.env` (`AGENT_TEAM_ROLE=<role>`) names the role a checkout plays. The hooks report the thread's own session as that role without anything in the environment, and `team-status.sh status working --task "..."` and `report.mjs` work without the role argument. Sync adds `.agent-team/local.env` to `.gitignore` (one line, once). `doctor` prints the role a checkout reports as, and fails when `local.env` is committed or names a role that is not on the team.
+- **Briefs, protocols and project instructions:** "the main project chat" is now "the owner's channel". The protocols define it and describe **the chief of staff as a thread**: when the host has its own coordinator, the owner keeps talking to the coordinator, the coordinator relays to the chief of staff's thread verbatim, and the chief of staff dispatches through the coordinator. Nothing else changes. Role threads may leave the role out of `team-status.sh` when `local.env` names it.
+- **Running the team:** sections on one board for threads on separate machines, the role of a checkout, the chief of staff as a thread, and routines scheduled from a thread (a scheduled task whose prompt names the role and the job) rather than only cron.
+- `templates/config.sh` documents `AGENT_TEAM_HOME`.
+
 ## 0.8.0
 
 - **Contracts for the online product** ([docs/contracts/](docs/contracts/README.md), milestone M1 of the MVP). They are written before the code that implements them:

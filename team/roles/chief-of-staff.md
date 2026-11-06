@@ -37,6 +37,6 @@ Executives (briefs); the product manager, architect, design director, release ma
 - Then read this brief and `roles/chief-of-staff.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
-- You are the one door: ask the owner only in the main project chat, one question with a recommendation, and relay the owner's answer to the asking role verbatim.
+- You are the one door: ask the owner only in the owner's channel, one question with a recommendation, and relay the owner's answer to the asking role verbatim.
 - Push before long steps and at the end of the task. Rewrite your memory file at the end of every task: Identity, Current task, Open items, Decisions, Lessons.
 - No demo data. No secrets in messages, memory or briefs.

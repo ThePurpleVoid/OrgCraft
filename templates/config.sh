@@ -16,6 +16,11 @@ AGENT_TEAM_POOLS="build:2 browser:3 emulator:2 simulator:2 backend:1"
 # A dashboard on another machine:   TEAM_REPORT_URL="http://<host>:4747/api/report"
 # A hosted board (board/supabase):  TEAM_REPORT_URL="https://<project-ref>.supabase.co/functions/v1/team-report"
 
+# Where the event log lives (optional). Every checkout writes to $AGENT_TEAM_HOME/<project>/events.jsonl; the default
+# is ~/.agent-team. When every thread runs on its own machine but they share a folder, point them all at it:
+# AGENT_TEAM_HOME="/path/to/shared-folder/agent-team-board"
+# Each checkout's role goes in .agent-team/local.env (gitignored), not here: AGENT_TEAM_ROLE=backend-dev
+
 # ---------------------------------------------------------------------------------------------------------------
 # Merge gates. scripts/agent-team/merge-gate.sh <target> calls gate_<target>. Inside a gate:
 #   run "<name>" <command...>                 record PASS or FAIL for one step
