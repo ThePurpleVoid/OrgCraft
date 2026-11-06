@@ -1,0 +1,159 @@
+// The runner: one outbound link to the control plane, and the role sessions it was asked to run.
+// docs/contracts/runner-protocol.md is the contract, and docs/product/m3-design.md section 4 the subset M3 builds:
+// hello/welcome (with sessions to resume), session.start/message/stop/checkpoint, events, approval.wait/result,
+// session.renew/token, ping/pong, ack/nack.
+import { checkEvent, SPEC, VERSION } from '../../packages/events/index.mjs';
+import { connect, ulid } from './link.mjs';
+import { Session } from './session.mjs';
+import { toolServer } from './toolserver.mjs';
+
+export const PROTOCOL = 'runner/1';
+const RUNNER_VERSION = '0.1.0';
+/** What the runner key may send as events (runner-protocol.md, "What each credential may send"). */
+const MAY_EMIT = (type, frontDoor) => /^session\./.test(type) || type === 'usage.recorded' || type === 'report.heartbeat' || (type === 'chat.message' && frontDoor);
+const RENEW_BEFORE_MS = 2 * 60_000;
+
+/**
+ * Start a runner. `server` is the control plane's base URL, `key` the runner key, `root` the working folder for
+ * clones, worktrees and memory files, `adapter` the runtime (agentSdkAdapter() or stubAdapter(...)).
+ * Returns { sessions, link, ready, close() }; ready resolves with the first welcome.
+ */
+export function startRunner({ server, key, root, adapter, id = 'runner', maxSessions = 8, tiers, rules, log = () => {}, fetch, link: makeLink = connect }) {
+  const sessions = new Map();
+  const approvals = new Map(); // approval id -> { resolve, early }
+  const renewals = new Map(); // session id -> resolve of a pending session.renew
+  let tenant = null;
+  let readyResolve;
+  const ready = new Promise((r) => (readyResolve = r));
+
+  const link = makeLink({
+    server, key, log,
+    hello: () => ({ runner: id, version: RUNNER_VERSION, protocol: PROTOCOL, capabilities: { sandboxes: ['process'], runtimes: [adapter.runtime ?? 'agent-sdk'], maxSessions, slots: {} }, sessions: [...sessions.values()].filter((s) => s.state !== 'ended').map((s) => s.id) }),
+  });
+
+  /** Values that must never leave the runner in an event: the model key and the session's tool token. */
+  const scrub = (s, event) => {
+    const values = [process.env.ANTHROPIC_API_KEY, s.token].filter((v) => typeof v === 'string' && v.length >= 8);
+    let json = JSON.stringify(event), hit = false;
+    for (const v of values) if (json.includes(v)) { json = json.split(v).join('[redacted]'); hit = true; }
+    const out = JSON.parse(json);
+    if (hit) out.data.redacted = true;
+    return out;
+  };
+
+  function emit(s, type, data, { via = 'hook' } = {}) {
+    if (!MAY_EMIT(type, s.frontDoor)) { log(`not sent: the runner key may not send ${type}`); return Promise.resolve(); }
+    const b = s.body;
+    const event = {
+      specversion: SPEC, id: ulid(), type, version: VERSION,
+      source: `/tenants/${tenant}/teams/${b.team}`, tenant, team: b.team, time: new Date().toISOString(),
+      actor: { kind: 'role', id: s.role, instance: b.instance ?? null, session: s.id, via },
+      subject: `role/${s.role}`, run: b.run ?? null, teamVersion: b.teamVersion ?? null,
+      data: Object.fromEntries(Object.entries(data ?? {}).filter(([, v]) => v !== undefined)),
+    };
+    const clean = scrub(s, event);
+    const problems = checkEvent(clean);
+    if (problems.length) { log(`dropped a malformed ${type} event: ${problems.join('; ')}`); return Promise.resolve(); }
+    link.send('events', { events: [clean] });
+    return Promise.resolve();
+  }
+
+  /** Wait for approval.result on an approval id; a result that arrived first is kept. */
+  function awaitApproval(approvalId) {
+    const got = approvals.get(approvalId);
+    if (got?.early) { approvals.delete(approvalId); return Promise.resolve(got.early); }
+    return new Promise((resolve) => approvals.set(approvalId, { resolve }));
+  }
+
+  /** The policy path: approval.wait, whose ack names the approval the control plane minted. */
+  async function approve(s, req) {
+    const ack = await link.send('approval.wait', { session: s.id, approval: { action: req.action, call: req.call, why: req.why } });
+    if (ack.nack || !ack.approval) return { decision: 'denied', note: ack.nack ?? 'the control plane did not record the approval' };
+    return awaitApproval(ack.approval);
+  }
+
+  function renew(s) {
+    return new Promise((resolve) => {
+      renewals.set(s.id, resolve);
+      link.send('session.renew', { session: s.id });
+      setTimeout(() => { if (renewals.get(s.id) === resolve) { renewals.delete(s.id); resolve(null); } }, 30_000).unref?.();
+    });
+  }
+
+  function setToken(s, token, expires) {
+    s.token = token;
+    s.tools.setToken(token);
+    clearTimeout(s.renewTimer);
+    const at = Date.parse(expires ?? '') - Date.now() - RENEW_BEFORE_MS;
+    if (Number.isFinite(at)) { s.renewTimer = setTimeout(() => renew(s), Math.max(at, 1000)); s.renewTimer.unref?.(); }
+  }
+
+  function startSession(body) {
+    if (!body?.session || !body.role || !body.team) return log('session.start needs session, role and team');
+    const running = sessions.get(body.session);
+    if (running && running.state !== 'ended') { if (body.wake) running.deliver(body.wake); return; } // a resend, or a wake for a live session
+    if ([...sessions.values()].filter((s) => s.state !== 'ended').length >= maxSessions) {
+      emit({ id: body.session, role: body.role, body, frontDoor: false }, 'session.ended', { role: body.role, reason: 'capacity', detail: `this runner already runs ${maxSessions} sessions` });
+      return;
+    }
+    let s;
+    const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
+    s = new Session(body, { adapter, root, tiers, rules, log, tools, emit, approve: (r) => approve(s, r), awaitApproval });
+    s.tools = tools;
+    setToken(s, body.token, body.tokenExpires);
+    sessions.set(body.session, s);
+    s.ended.then(() => {
+      clearTimeout(s.renewTimer);
+      setTimeout(() => sessions.get(body.session) === s && sessions.delete(body.session), 60_000).unref?.();
+    });
+    s.start();
+  }
+
+  link.on('welcome', (w) => {
+    tenant = w.tenant ?? tenant ?? 'local';
+    // Sessions to resume after a reconnect: ids this runner still runs are kept; full bodies are (re)started.
+    for (const a of w.sessions ?? w.assignments ?? []) if (a && typeof a === 'object') startSession({ resume: true, ...a });
+    readyResolve(w);
+  });
+
+  link.on('frame', async (f) => {
+    const b = f.body ?? {};
+    switch (f.op) {
+      case 'session.start': return startSession(b);
+      case 'session.message': {
+        const s = sessions.get(b.session);
+        if (!s?.deliver(b.message)) log(`no running session ${b.session} for a message`);
+        return;
+      }
+      case 'session.checkpoint': {
+        const s = sessions.get(b.session);
+        return f.reply(s ? await s.checkpoint(b.reason) : { problem: `no session ${b.session} on this runner` });
+      }
+      case 'session.stop': return sessions.get(b.session)?.stop(b.mode ?? 'finish-step', b.reason ?? 'stopped');
+      case 'session.token': {
+        const s = sessions.get(b.session);
+        if (s) setToken(s, b.token, b.tokenExpires);
+        const r = renewals.get(b.session);
+        if (r) { renewals.delete(b.session); r(b.token); }
+        return;
+      }
+      case 'approval.result': {
+        const d = { decision: b.decision, by: b.by, note: b.note };
+        const r = approvals.get(b.approval);
+        if (r?.resolve) { approvals.delete(b.approval); r.resolve(d); } else approvals.set(b.approval, { early: d });
+        return;
+      }
+      default: return log(`unknown op ${f.op}`);
+    }
+  });
+
+  return {
+    sessions, ready, link,
+    async close({ mode = 'finish-step' } = {}) {
+      await Promise.all([...sessions.values()].map((s) => s.stop(mode, 'runner-shutdown')));
+      // Let the last events reach the control plane before the link goes.
+      for (let i = 0; i < 50 && link.pending?.() > 0; i++) await new Promise((r) => setTimeout(r, 100));
+      link.close();
+    },
+  };
+}
