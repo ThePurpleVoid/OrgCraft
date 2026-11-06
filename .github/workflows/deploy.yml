@@ -1,0 +1,113 @@
+# Deploys this repository's own hosted instance after CI passes on main: Postgres on Supabase, the control plane
+# container on Fly.io (migrations run first, as its release command), the static Studio on Vercel in front.
+# Off until the owner sets the repository variable AGENT_TEAM_DEPLOY to "on". Setup: docs/deploy/vercel-supabase.md.
+# Secrets come from the "production" environment and are never printed; the step that hands them to Fly reads them
+# from the environment and pipes them over stdin.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      allow_destructive:
+        description: "Run migrations flagged as destructive (only with the owner's OK)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      vars.AGENT_TEAM_DEPLOY == 'on' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      FLY_APP: ${{ vars.FLY_APP }}
+      FLY_ORG: ${{ vars.FLY_ORG || 'personal' }}
+      FLY_REGION: ${{ vars.FLY_REGION || 'iad' }}
+      VERCEL_PROJECT: ${{ vars.VERCEL_PROJECT }}
+      VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
+      TENANT: ${{ vars.AGENT_TEAM_TENANT || 'main' }}
+      PUBLIC_URL: ${{ vars.AGENT_TEAM_PUBLIC_URL || format('https://{0}.vercel.app', vars.VERCEL_PROJECT) }}
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check that every secret and variable is set (names only)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AGENT_TEAM_MASTER_KEY: ${{ secrets.AGENT_TEAM_MASTER_KEY }}
+          AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
+        run: |
+          missing=""
+          for n in FLY_API_TOKEN VERCEL_TOKEN DATABASE_URL AGENT_TEAM_MASTER_KEY AGENT_TEAM_ADMIN_TOKEN FLY_APP VERCEL_PROJECT; do
+            [ -n "${!n}" ] || missing="$missing $n"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Not set in the production environment:$missing (see docs/deploy/vercel-supabase.md)"
+            exit 1
+          fi
+          case "$DATABASE_URL" in *":6543/"*) echo "::error::DATABASE_URL is the transaction pooler (6543); use the session pooler (5432)"; exit 1;; esac
+
+      - name: Install flyctl and the Vercel CLI
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+          npm install --global vercel@65.12.0
+
+      - name: Create the Fly app if it does not exist yet
+        run: flyctl status --app "$FLY_APP" >/dev/null 2>&1 || flyctl apps create "$FLY_APP" --org "$FLY_ORG"
+
+      - name: Stage the control plane's secrets on Fly
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AGENT_TEAM_MASTER_KEY: ${{ secrets.AGENT_TEAM_MASTER_KEY }}
+          AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
+        run: |
+          printf 'DATABASE_URL=%s\nAGENT_TEAM_MASTER_KEY=%s\nAGENT_TEAM_ADMIN_TOKEN=%s\n' \
+            "$DATABASE_URL" "$AGENT_TEAM_MASTER_KEY" "$AGENT_TEAM_ADMIN_TOKEN" \
+            | flyctl secrets import --stage --app "$FLY_APP" >/dev/null
+
+      - name: Deploy the control plane (migrations run first; destructive ones need the owner's OK)
+        env:
+          ALLOW: ${{ inputs.allow_destructive && '1' || '0' }}
+        run: |
+          flyctl deploy . --app "$FLY_APP" --config deploy/fly/server.toml --dockerfile deploy/server/Dockerfile \
+            --remote-only --ha=false --primary-region "$FLY_REGION" --wait-timeout 5m \
+            --env AGENT_TEAM_PUBLIC_URL="$PUBLIC_URL" --env AGENT_TEAM_TENANT="$TENANT" --env DATABASE_POOL=5 \
+            --env ALLOW_DESTRUCTIVE="$ALLOW"
+
+      - name: Deploy the Studio site on Vercel
+        run: |
+          site="$RUNNER_TEMP/site"
+          node deploy/vercel/build.mjs --api "https://$FLY_APP.fly.dev" --out "$site"
+          cd "$site"
+          scope=(); [ -n "$VERCEL_SCOPE" ] && scope=(--scope "$VERCEL_SCOPE")
+          vercel project add "$VERCEL_PROJECT" "${scope[@]}" --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
+          vercel link --yes --project "$VERCEL_PROJECT" "${scope[@]}" --token "$VERCEL_TOKEN"
+          vercel pull --yes --environment=production "${scope[@]}" --token "$VERCEL_TOKEN"
+          vercel build --prod "${scope[@]}" --token "$VERCEL_TOKEN"
+          vercel deploy --prebuilt --prod "${scope[@]}" --token "$VERCEL_TOKEN"
+
+      - name: Smoke test (read-only), including streams through the Vercel rewrite
+        env:
+          AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
+        run: node deploy/smoke.mjs --site "$PUBLIC_URL" --api "https://$FLY_APP.fly.dev"

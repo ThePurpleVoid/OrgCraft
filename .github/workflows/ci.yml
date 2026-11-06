@@ -49,3 +49,67 @@ jobs:
         run: |
           psql -h localhost -U owner -d postgres -c "create role kit login createrole password 'kit'" -c "create database kit owner kit"
           TEST_DATABASE_URL=postgres://kit:kit@localhost:5432/kit npm test --prefix apps/server
+
+  runner:
+    # apps/runner's own tests. Never real model calls: no ANTHROPIC_API_KEY and no RUNNER_SMOKE here. The steps skip
+    # until apps/runner exists on the branch.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Runner tests
+        if: hashFiles('apps/runner/package.json') != ''
+        run: npm ci --prefix apps/runner && npm test --prefix apps/runner
+
+  deploy-path:
+    # The hosted deploy path on a Postgres shaped like Supabase (anon and authenticated roles with default grants on
+    # public, a CREATEROLE owner that is not a superuser), behind pgbouncer in transaction mode. A cluster of its own:
+    # agent_team_app is a cluster-wide role, created here by the bootstrap's login.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: owner, POSTGRES_PASSWORD: owner, POSTGRES_DB: postgres }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: |
+          npm ci --prefix apps/server
+          sudo apt-get install -y -q pgbouncer >/dev/null
+      - name: A Supabase-shaped database, and the bootstrap
+        env: { PGPASSWORD: owner }
+        run: |
+          psql -v ON_ERROR_STOP=1 -h localhost -U owner -d postgres \
+            -c "create role anon nologin" -c "create role authenticated nologin" \
+            -c "create role sb login createrole password 'sb'" -c "alter database postgres owner to sb" \
+            -c "alter schema public owner to sb" -c "grant usage on schema public to anon, authenticated" \
+            -c "alter default privileges for role sb in schema public grant all on tables to anon, authenticated"
+          sed "s/REPLACE_WITH_A_GENERATED_PASSWORD/ci-only/" deploy/supabase/bootstrap.sql > "$RUNNER_TEMP/bootstrap.sql"
+          PGPASSWORD=sb psql -v ON_ERROR_STOP=1 -h localhost -U sb -d postgres -f "$RUNNER_TEMP/bootstrap.sql"
+          PGPASSWORD=sb psql -v ON_ERROR_STOP=1 -h localhost -U sb -d postgres -f "$RUNNER_TEMP/bootstrap.sql"
+      - name: Migrate refuses the exposed public schema
+        run: |
+          if DATABASE_URL=postgres://sb:sb@localhost:5432/postgres node deploy/server/migrate.mjs; then echo "should have refused"; exit 1; fi
+      - name: Migrate as agent_team_owner, twice
+        env: { DATABASE_URL: "postgres://agent_team_owner:ci-only@localhost:5432/postgres" }
+        run: node deploy/server/migrate.mjs && node deploy/server/migrate.mjs
+      - name: The server through a transaction pooler, and the smoke test
+        run: |
+          d="$RUNNER_TEMP/pgb"; mkdir -p "$d"
+          printf '[databases]\n* = host=127.0.0.1 port=5432\n[pgbouncer]\nlisten_addr = 127.0.0.1\nlisten_port = 6543\nauth_type = plain\nauth_file = %s/users.txt\npool_mode = transaction\ndefault_pool_size = 3\n' "$d" > "$d/pgbouncer.ini"
+          printf '"agent_team_owner" "ci-only"\n' > "$d/users.txt"
+          pgbouncer -d "$d/pgbouncer.ini"
+          export AGENT_TEAM_ADMIN_TOKEN=adm_ci_only AGENT_TEAM_MASTER_KEY="$(openssl rand -base64 32)"
+          DATABASE_URL=postgres://agent_team_owner:ci-only@127.0.0.1:6543/postgres DATABASE_POOL=3 PORT=4849 node apps/server/bin.mjs &
+          sleep 3
+          curl -fsS -H "authorization: Bearer $AGENT_TEAM_ADMIN_TOKEN" -H 'content-type: application/json' -d '{"id":"ci"}' localhost:4849/v1/teams
+          node deploy/smoke.mjs --site http://127.0.0.1:4849 --api http://127.0.0.1:4849 --api-only --wait 25
+      - name: The Vercel site builds
+        run: node deploy/vercel/build.mjs --api https://example.invalid --out "$RUNNER_TEMP/site" && test -f "$RUNNER_TEMP/site/vercel.json"
