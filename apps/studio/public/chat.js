@@ -362,6 +362,9 @@ export function createChat({ root, onOpen, runs = true } = {}) {
 
   function renderRun() {
     const s = st.summary, state = st.run?.state ?? s?.run ?? null;
+    // A run that is going again (a budget card's Add half again, another tab) has nothing left to refuse: the run state
+    // can arrive on its own (loadRun), so the log is redrawn without the spent line here too.
+    if (state === 'running' && st.runError === SPENT) { st.runError = null; st.raiseNote = null; return draw(); }
     const c = st.cost ?? s?.cost;
     $('#chat-where', root).textContent = st.team ? `· ${st.team}` : '';
     const pill = $('#run-state', root);
@@ -493,7 +496,11 @@ export function createChat({ root, onOpen, runs = true } = {}) {
         e.preventDefault();
         const secret = input.value;
         input.value = '';
-        const r = await api('/v1/team/step-up', { secret });
+        // One check at a time: the control plane refuses a second one while the first runs (429), so a double tap waits.
+        const confirm = form.querySelector('button[type="submit"]');
+        if (confirm?.disabled) return;
+        if (confirm) confirm.disabled = true;
+        const r = await api('/v1/team/step-up', { secret }).finally(() => { if (confirm) confirm.disabled = false; });
         if (r.ok) return finish(true);
         $('#stepup-result', root).textContent = r.status === 401 ? 'That secret was not accepted. Try again.' : r.data.error ?? `HTTP ${r.status}`;
         input.focus();

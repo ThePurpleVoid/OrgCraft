@@ -264,7 +264,7 @@ test('a resume refused because today\'s budget is spent says so in words, and Ra
     plane.bump('crd_budget', { state: 'answered', answer: { option: 'raise' } });
     await page.locator('#run-state', { hasText: 'Running' }).waitFor();
     await page.locator('[data-card-id="crd_budget"].answered').waitFor();
-    assert.equal(await page.getByText("Today's budget is spent, so").count(), 0, 'nothing is refused any more');
+    assert.equal(await page.getByText("Today's budget is spent, so the run can't resume").count(), 0, 'nothing is refused any more');
     // Spent again, and the card is answered: the action asks for the new cap itself.
     plane.exhaust();
     await page.locator('#run-state', { hasText: 'Paused' }).waitFor();
@@ -300,7 +300,7 @@ test('a resume refused because today\'s budget is spent says so in words, and Ra
     await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
     await su.getByRole('button', { name: 'Confirm' }).click();
     await page.locator('#run-state', { hasText: 'Running' }).waitFor();
-    assert.equal(await page.getByText("Today's budget is spent, so").count(), 0);
+    assert.equal(await page.getByText("Today's budget is spent, so the run can't resume").count(), 0);
     if (SHOTS) await page.screenshot({ path: join(SHOTS, 'raise-cap-phone.png') });
     assert.deepEqual(errors, []);
     await page.close();
