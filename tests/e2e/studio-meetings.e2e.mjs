@@ -87,7 +87,8 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   assert.equal(Number(await page.locator('#m-cap').inputValue()), Math.max(1, Math.ceil(Number(perMeeting.slice(1)))), 'a new limit starts at the estimate, rounded up');
   // Criterion 5: discussion is allowed, with the honest note, and it costs more.
   await view.getByText('Discussion', { exact: true }).click();
-  await view.getByText('Discussion meetings run as a written round until the runner supports them.').waitFor();
+  await view.getByText("Each round, attendees read the others' answers and reply. It ends early when no one has more to add.").waitFor();
+  assert.equal(await view.getByText('until the runner supports').count(), 0);
   assert.notEqual(await side.locator('.estimate .total td').last().textContent(), perMeeting, 'the estimate follows the format');
   await view.getByText('Written round', { exact: true }).click();
   await view.getByText('Answer from its board reports').click();
