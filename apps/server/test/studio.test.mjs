@@ -138,3 +138,61 @@ test('roles: a viewer reads, an editor publishes, only an admin changes commands
     assert.ok(gh.calls.every((c) => !c.auth.includes('secret')));
   } finally { await gh.close(); }
 });
+
+test('delegated publish: a host server reads, previews and publishes for its user; C1 to C5 and no publish-code through a host', async () => {
+  const gh = await fakeGitHub({ bare: bareTeam(), installation: 77 });
+  try {
+    let consented = true;
+    const rows = [];
+    const hosted = createHostedStudio({ origin: ORIGIN, appId: 1, privateKey: PEM, api: gh.url, teamRepo: async () => 'acme/shop', boundInstallations: async () => ['77'],
+      audit: (r) => rows.push(r), hosts: { consented: async () => consented, nameOf: async () => 'Shop @admin' }, hostLimits: { publish: { limit: 2, windowMs: 60_000 }, work: { limit: 3, windowMs: 60_000 } } });
+    // The host's server: DPoP-bound token, no cookie, no browser headers (C1).
+    const server = (method, path, extra = {}) => ({ method, url: `/v1/teams/shop/studio${path}`, headers: { authorization: 'DPoP tok', dpop: 'proof', 'sec-fetch-site': 'cross-site', ...(method === 'POST' ? { 'content-type': 'application/json' } : {}), ...extra } });
+    const host = (role) => ({ tenant: 'acme', role, principal: `p-${role}`, via: 'host', client: 'host_shop12345', session: { name: role } });
+    const body = (o) => Buffer.from(JSON.stringify(o));
+    const read = await hosted.handle(server('GET', '/v1/team'), host('editor'), 'shop');
+    assert.equal(read.status, 200, read.body.toString());
+    const { spec, base } = JSON.parse(read.body.toString());
+    assert.equal((await hosted.handle(server('POST', '/v1/team/preview'), host('editor'), 'shop', body({ spec, base }))).status, 200);
+    // C1: a cookie caller on the host path keeps every browser check: no Origin, refused.
+    const browser = { method: 'POST', url: '/v1/teams/shop/studio/v1/team/graph', headers: { cookie: 'agent_team_session=x', 'x-agent-team-studio': '1', 'content-type': 'application/json' } };
+    assert.equal((await hosted.handle(browser, host('editor'), 'shop', body({ spec }))).status, 403);
+
+    // C2: no publish until the person said yes to the text that says the host opens pull requests. Reads still work.
+    consented = false;
+    spec.values = { ...spec.values, PROJECT_NAME: 'Shop via host' };
+    const no = await hosted.handle(server('POST', '/v1/team/publish'), host('editor'), 'shop', body({ spec, base, message: 'Rename' }));
+    assert.deepEqual([no.status, JSON.parse(no.body.toString()).type], [403, 'consent']);
+    assert.equal((await hosted.handle(server('GET', '/v1/team'), host('editor'), 'shop')).status, 200);
+    consented = true;
+
+    // C3, C4: the person is the actor and the trailer; the host and its user only in the PR body and the audit detail.
+    const pub = await hosted.handle(server('POST', '/v1/team/publish', { 'x-agent-team-host-user': 'ana `x`\t@bob' }), host('editor'), 'shop', body({ spec, base, message: 'Rename' }));
+    assert.equal(pub.status, 200, pub.body.toString());
+    const out = JSON.parse(pub.body.toString());
+    const pr = gh.pulls.at(-1);
+    assert.match(pr.body, /Published through Shop &#64;admin for `ana x &#64;bob`\./);
+    assert.ok(!/@/.test(pr.body.split('Published through')[1].split('\n')[0]), 'no @ from the host');
+    const msg = gh.git(['log', '-1', '--format=%B', out.commit]);
+    assert.match(msg, /Published-by: editor \(p-editor\) via Agent Team Studio/);
+    assert.ok(!/ana|Shop/.test(msg.split('Published-by:')[1]), 'the trailer is our person only');
+    const audited = rows.find((r) => r.action === 'publish' && r.decision === 'allowed');
+    assert.equal(audited.actorId, 'p-editor');
+    assert.deepEqual([audited.detail.host, audited.detail.hostName, audited.detail.hostUser], ['host_shop12345', 'Shop &#64;admin', 'ana x &#64;bob']);
+
+    // D2: a change to commands the team runs is never published through a host, even by an admin.
+    const gated = structuredClone(spec);
+    gated.gates = { ...(gated.gates ?? {}), targets: { web: [{ name: 'lint', run: 'npm run lint', pool: '' }] } };
+    const code = await hosted.handle(server('POST', '/v1/team/publish'), host('admin'), 'shop', body({ spec: gated, base: out.commit ? JSON.parse((await hosted.handle(server('GET', '/v1/team'), host('admin'), 'shop')).body.toString()).base : base, message: 'gate' }));
+    assert.equal(code.status, 403, code.body.toString());
+
+    // D4: per host, publishes (2 in this test's window: one above, one refused for commands, then the limit).
+    const over = await hosted.handle(server('POST', '/v1/team/publish'), host('admin'), 'shop', body({ spec, base, message: 'again' }));
+    assert.deepEqual([over.status, JSON.parse(over.body.toString()).type, over.headers['retry-after']], [429, 'rate', '60']);
+    assert.ok(rows.some((r) => r.decision === 'refused' && r.rule === 'rate' && r.detail.host === 'host_shop12345'));
+    // C5: previews too (3 in this window: the preview and the cookie call above, then one more).
+    for (let i = 0; i < 1; i++) assert.equal((await hosted.handle(server('POST', '/v1/team/preview'), host('editor'), 'shop', body({ spec, base }))).status, 200);
+    assert.equal((await hosted.handle(server('POST', '/v1/team/preview'), host('editor'), 'shop', body({ spec, base }))).status, 429);
+
+  } finally { await gh.close(); }
+});

@@ -210,6 +210,7 @@ test('H2: a host gets a real consent page; prompt=none before it, deny, and unli
   assert.match(page.consent.html, /Allow Admin at shop\.example to use Agent Team for you\?/);
   assert.match(page.consent.html, /https:\/\/shop\.example/);
   assert.match(page.consent.html, /cannot approve anything/);
+  assert.match(page.consent.html, /open pull requests that change your team/, 'consent v2 says the host can publish (security C2)');
   // Signed in now, but not linked: prompt=none is refused.
   const none = await hostAuthorize(b, host, { prompt: 'none', challenge });
   assert.equal(none.callback?.searchParams.get('error'), 'consent_required', JSON.stringify(none));
@@ -227,6 +228,15 @@ test('H2: a host gets a real consent page; prompt=none before it, deny, and unli
   assert.deepEqual(links.map((l) => [l.id, l.name]), [[host.id, HOST.name]]);
   const again = await hostAuthorize(b, host, { prompt: 'none', challenge });
   assert.ok(again.callback?.searchParams.get('code'), 'linked: prompt=none now works');
+  // A link agreed to the older consent text (before publishing): the host keeps its token for reads, but asks again.
+  await p.db.system('update host_links set consent_version = 1 where host = $1', [host.id]);
+  assert.equal((await h.call('GET', '/me')).status, 200, 'reads keep working');
+  assert.equal(await p.identity.hosts.linked(host.id, (await p.db.system('select person from host_links where host = $1', [host.id]))[0].person), false, 'publishing waits for the new consent');
+  const stale = await hostAuthorize(b, host, { prompt: 'none', challenge });
+  assert.equal(stale.callback?.searchParams.get('error'), 'consent_required', 'an older consent shows the page again');
+  const re = await hostAuthorize(b, host, { decision: 'allow', challenge });
+  assert.ok(re.callback?.searchParams.get('code'));
+  assert.equal((await p.db.system('select consent_version from host_links where host = $1', [host.id]))[0].consent_version, 2);
 
   // Unlink: the host's tokens for this person stop at once, and it must ask again.
   assert.equal((await b.call('DELETE', `/me/hosts/${host.id}`, {})).status, 200);

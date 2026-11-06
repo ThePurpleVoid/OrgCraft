@@ -276,7 +276,9 @@ OpenID-Certified library: `identity.mjs` holds its storage adapter and our polic
   every token it holds at once. Live updates: `POST /v1/teams/{team}/stream-tickets` gives a single-use, 60-second,
   read-only ticket for one team; the host's page opens `…/events/stream?ticket=…` here directly. That stream answers
   CORS only for the minting host's own origins, never with credentials, and ends when the person leaves the
-  workspace or the host is revoked. Keep `ticket` out of the edge's access logs.
+  workspace or the host is revoked. Keep `ticket` out of the edge's access logs. A host may also publish for its user
+  through the hosted Studio routes (delegated publish, studio-embed.md section 6): never a change to commands the team
+  runs, only after the person agreed to the consent text that says so, and at most 10 publishes in 10 minutes per host.
 - **GitHub App installations the workspace proved it owns** (`github.mjs`, docs/specs/studio-embed.md S9). The
   deployment's GitHub App key can mint tokens for every customer, so the hosted Studio and the runner use only
   installations bound to the tenant here. An admin starts with `POST /v1/github/installations` (step-up), which gives

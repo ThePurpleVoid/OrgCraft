@@ -34,7 +34,8 @@ const json = (status, body, extra = {}) => new Response(JSON.stringify(body), {
 });
 
 /** A display name and id from `authorize`, cleaned for the trailer (S5). */
-const userOf = (u) => (u && typeof u === 'object' && u.id !== undefined && u.id !== null ? { id: core.cleanName(u.id), name: core.cleanName(u.name ?? u.id) } : null);
+const userOf = (u) => (u && typeof u === 'object' && u.id !== undefined && u.id !== null
+  ? { id: core.cleanName(u.id), name: core.cleanName(u.name ?? u.id), ...(u.via && typeof u.via === 'object' ? { via: core.cleanVia(u.via) } : {}) } : null);
 
 /** A request path that could reach outside the manifest, or confuse a router: encoded dots or slashes, backslashes, doubled slashes, dot segments (S2). */
 const unsafePath = (raw) => {
@@ -52,7 +53,9 @@ const BRANCH = /^[A-Za-z0-9._/-]{1,100}$/;
  *   repo                 "owner/name", the repository the team lives in
  *   basePath             where the host mounts the handler, e.g. "/api/agent-team/studio"
  *   allowedOrigins       the host's page origin(s), exact (required, E2)
- *   authorize(request, action) → { id, name } or null; action is 'read', 'publish' or 'publish-code' (E1, S1)
+ *   authorize(request, action) → { id, name, via? } or null; action is 'read', 'publish' or 'publish-code' (E1, S1).
+ *                        via: { host, user }, a deployment publishing for another site (studio-embed.md section 6):
+ *                        named in the PR body and the publish log, never in the commit trailer
  *   getInstallationToken({ repo, permissions }) → { token, permissions, repositories } as GitHub minted it (E3, S7)
  *   branchPrefix         every Studio branch starts with it (default "agent-team/", E4)
  *   limiter(key, { limit, windowSeconds }) → true to allow (optional; a shared store, S6, E8)
@@ -231,9 +234,9 @@ export function createStudioHandler(opts = {}) {
     const out = await backend.publish({
       base, into: info.defaultBranch, branch, message: core.commitMessage(message, user),
       changes: p.changes.map(({ path, content, mode }) => ({ path, content, mode })),
-      pr: core.pullRequestBody(message, { commands: p.commands, kitUpgrade }),
+      pr: core.pullRequestBody(message, { commands: p.commands, kitUpgrade, via: user.via ?? null }),
     });
-    try { logger({ event: 'agent-team-studio.publish', user: user.id, branch: out.branch, commit: out.commit, pr: out.pr?.url ?? null, files: out.files.length }); } catch { /* the host's logger */ }
+    try { logger({ event: 'agent-team-studio.publish', user: user.id, branch: out.branch, commit: out.commit, pr: out.pr?.url ?? null, files: out.files.length, ...(user.via ? { via: user.via } : {}) }); } catch { /* the host's logger */ }
     return json(200, { branch: out.branch, commit: out.commit, files: out.files, pr: out.pr, commands: p.commands });
   }
 

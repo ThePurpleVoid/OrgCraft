@@ -156,6 +156,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     origin: studioOrigin,
     // The installations this workspace proved (S9) and the team's repository, unless the caller brings its own.
     ...(installations ? { teamRepo: (tn, tm) => installations.teamRepo(tn, tm), boundInstallations: (tn) => installations.bound(tn) } : {}),
+    // Delegated publish: the person's consent on the host's current text, and the host's name for the PR line.
+    ...(identity ? { hosts: { consented: (h, p) => identity.hosts.linked(h, p), nameOf: (h) => identity.hosts.nameOf(h) } } : {}),
     ...studioOpts,
     audit: (row) => m3.tx(row.tenant, (ctx) => ctx.audit({ team: row.team, actorKind: row.actorId ? 'person' : 'system', actorId: row.actorId ?? 'control-plane', action: row.action, target: row.target, decision: row.decision, rule: row.rule ?? null, detail: row.detail ?? null })),
   } : null);
