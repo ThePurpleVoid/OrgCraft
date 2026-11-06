@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Studio: AGENTS.md switch and "self-reported" cards** (CPO story "other coding agents", criteria 6 and 8; D45, D46). The team settings (no role picked) have "Also write AGENTS.md, for coding agents other than Claude Code". It sets `targets` in team.json, and switching it back off removes the key, so the team's files are byte-identical to before. Publish then shows and commits `AGENTS.md`, keeping the repository's own text outside the kit's markers, and the `.gitignore` line for role memory. Publish now commits `.gitignore` changes from sync whenever the file had no changes of the owner's own. A role that reports with no hook events reads "self-reported" on its card, in its tooltip and under "Now, on the live version".
+
 ## 0.17.0
 
 - **`report.mjs published`: the repository says when a team version reached main** (CTO, so the rollout view does not depend on the Studio being open when the pull request merges). The team's CI runs `node scripts/agent-team/report.mjs published` on main after a change to `.agent-team/`; docs/customizing.md#ci has the snippet. It posts through the existing `TEAM_REPORT_URL` and token, and the mirror. The version is the last commit on the main line that changed `.agent-team/` (the merge commit), with when it merged, the pull request, the roles in `docs/team/roles/`, the ones it removed, the changed paths, who published, and the Studio's "Work in progress" plan read back from the commit message (`parsePlan`). It never fails the build and writes nothing to the local log.
