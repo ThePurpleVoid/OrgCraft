@@ -33,8 +33,9 @@ tags:
   - { name: me, description: "The signed-in person across teams: inbox, summary, devices (clients.md)" }
 paths:
   /teams:
-    get: { tags: [teams], summary: Teams in the workspaces I can see, responses: { "200": { $ref: "#/components/responses/TeamList" } } }
+    get: { x-min-role: viewer, tags: [teams], summary: Teams in the workspaces I can see, responses: { "200": { $ref: "#/components/responses/TeamList" } } }
     post:
+      x-min-role: admin
       tags: [teams]
       summary: Connect a team (a repository with .agent-team/, or a new Studio-managed team repository)
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TeamCreate" } } } }
@@ -42,12 +43,14 @@ paths:
   /teams/{team}:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
+      x-min-role: viewer
       tags: [teams]
       summary: The team, its live version (commit SHA), and its spec at that version as a TeamSpec
       responses: { "200": { $ref: "#/components/responses/Team" } }
   /teams/{team}/preview:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post:
+      x-min-role: editor
       tags: [teams]
       summary: Every file a publish of this spec would change, and the validate issues
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SpecBody" } } } }
@@ -55,6 +58,7 @@ paths:
   /teams/{team}/publish:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post:
+      x-min-role: admin
       tags: [teams]
       summary: Compile, sync with the pinned kit, and propose (a pull request) or commit
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Publish" } } } }
@@ -77,6 +81,7 @@ paths:
   /teams/{team}/events:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
+      x-min-role: viewer
       tags: [events]
       summary: The event log, newest last, filtered by type prefix, actor and time
       parameters:
@@ -87,6 +92,7 @@ paths:
         - { $ref: "#/components/parameters/limit" }
       responses: { "200": { description: Events, content: { application/json: { schema: { type: object, properties: { events: { type: array, items: { $ref: "schema/event.v1.json" } }, next: { type: string } } } } } } }
     post:
+      x-min-role: admin
       tags: [events]
       summary: Append envelopes (runners and integrations). Ids make retries safe
       security: [ { session: [] }, { runner: [] } ]
@@ -95,28 +101,32 @@ paths:
   /teams/{team}/events/stream:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
+      x-min-role: viewer
       tags: [events]
       summary: Live events as server-sent events; resumes from Last-Event-ID
       responses: { "200": { description: text/event-stream of envelopes, content: { text/event-stream: {} } } }
   /teams/{team}/board:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
+      x-min-role: viewer
       tags: [events]
       summary: Where every role stands now (the board projection)
       responses: { "200": { description: Board, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } } }
   /teams/{team}/report-tokens:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post:
+      x-min-role: admin
       tags: [events]
       summary: Mint a report token for TEAM_REPORT_TOKEN (shown once; append-only for this team)
       responses: { "201": { description: The token, content: { application/json: { schema: { type: object, properties: { id: { type: string }, token: { type: string }, url: { type: string } } } } } } }
   /teams/{team}/report-tokens/{token}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: token, in: path, required: true, schema: { type: string } } ]
-    delete: { tags: [events], summary: Revoke a report token, responses: { "200": { description: Revoked } } }
+    delete: { x-min-role: admin, tags: [events], summary: Revoke a report token, responses: { "200": { description: Revoked } } }
   /teams/{team}/sinks:
     parameters: [ { $ref: "#/components/parameters/team" } ]
-    get: { tags: [connectors], summary: Where this team's events are forwarded, responses: { "200": { description: Sinks } } }
+    get: { x-min-role: admin, tags: [connectors], summary: Where this team's events are forwarded, responses: { "200": { description: Sinks } } }
     post:
+      x-min-role: admin
       tags: [connectors]
       summary: Forward events to a URL, in order, at least once (kit-report keeps a board the team already runs working)
       requestBody:
@@ -135,12 +145,13 @@ paths:
       responses: { "201": { description: The sink } }
   /teams/{team}/sinks/{sink}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: sink, in: path, required: true, schema: { type: string } } ]
-    delete: { tags: [connectors], summary: Stop forwarding, responses: { "200": { description: Removed } } }
+    delete: { x-min-role: admin, tags: [connectors], summary: Stop forwarding, responses: { "200": { description: Removed } } }
   /secrets:
-    get: { tags: [connectors], summary: Secret names and when they changed (never values), responses: { "200": { description: Names } } }
+    get: { x-min-role: admin, tags: [connectors], summary: Secret names and when they changed (never values), responses: { "200": { description: Names } } }
   /secrets/{name}:
     parameters: [ { name: name, in: path, required: true, schema: { type: string, pattern: "^[A-Z][A-Z0-9_]{0,63}$" } } ]
     put:
+      x-min-role: admin
       tags: [connectors]
       summary: Store a secret (write-only; sealed with the server's master key). Needs step-up
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
@@ -150,14 +161,16 @@ paths:
     get: { tags: [teams], security: [], summary: The server is up, responses: { "200": { description: OK } } }
   /teams/{team}/runs:
     parameters: [ { $ref: "#/components/parameters/team" } ]
-    get: { tags: [runs], summary: Runs, responses: { "200": { description: Runs } } }
+    get: { x-min-role: viewer, tags: [runs], summary: Runs, responses: { "200": { description: Runs } } }
     post:
+      x-min-role: editor
       tags: [runs]
       summary: Start a run (mode, caps). The chief of staff starts first
       requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/RunCreate" } } } }
       responses: { "201": { description: The run } }
   /runs/{run}/{action}:
     post:
+      x-min-role: editor
       tags: [runs]
       summary: Pause, resume or stop a run
       parameters:
@@ -169,27 +182,31 @@ paths:
   /teams/{team}/chat:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
+      x-min-role: viewer
       tags: [chat]
       summary: The chat with the chief of staff (chat.*, decision.*, approval.*, card.updated, run.* and budget.* events), with the current cards, the run and today's cost (docs/product/m3-design.md section 5)
       parameters: [ { name: before, in: query, schema: { type: string }, description: An event id; pages backwards from it }, { $ref: "#/components/parameters/limit" } ]
       responses: { "200": { description: Messages, content: { application/json: { schema: { $ref: "#/components/schemas/ChatPage" } } } } }
     post:
+      x-min-role: editor
       tags: [chat]
       summary: Say something to the chief of staff. Stored verbatim
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [text], properties: { text: { type: string, maxLength: 20000 }, replyTo: { type: string }, clientId: { type: string, maxLength: 80, description: "Made by the client (a ULID). A repeat returns the first message with 200" } } } } } }
       responses: { "200": { description: The chat.message event already stored for this clientId }, "201": { description: The chat.message event } }
   /approvals/{approval}:
     post:
+      x-min-role: approver
       tags: [approvals]
       summary: Approve or deny. Checks the person's role in the workspace and a recent sign-in (step-up, clients.md section 3)
       parameters: [ { name: approval, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [decision], properties: { decision: { enum: [approved, denied] }, note: { type: string }, version: { type: integer, description: "The card version seen. Optional in /v1/ for older clients; a stale one gets 409" } } } } } }
       responses: { "200": { description: The approval.decided event }, "401": { description: "Step-up required (problem type step-up-required)" }, "403": { $ref: "#/components/responses/Problem" }, "409": { description: The approval changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
   /connectors:
-    get: { tags: [connectors], summary: Connector manifests this deployment offers (connectors.md), responses: { "200": { description: Manifests } } }
+    get: { x-min-role: viewer, tags: [connectors], summary: Connector manifests this deployment offers (connectors.md), responses: { "200": { description: Manifests } } }
   /teams/{team}/resources:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post:
+      x-min-role: admin
       tags: [connectors]
       summary: Connect a resource (a connector instance). Secret values go to the vault and are never returned
       responses: { "201": { description: The resource, with secret names only } }
@@ -200,9 +217,10 @@ paths:
       security: []
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name], properties: { code: { type: string }, name: { type: string }, capabilities: { type: object } } } } } }
       responses: { "201": { description: "Runner id and key (`<id>.<secret>`, shown once)" }, "401": { description: The code is unknown, used or expired } }
-    get: { tags: [runners], summary: "Registered runners: name, capabilities, version, last seen, revoked (never keys)", responses: { "200": { description: Runners } } }
+    get: { x-min-role: admin, tags: [runners], summary: "Registered runners: name, capabilities, version, last seen, revoked (never keys)", responses: { "200": { description: Runners } } }
   /runners/codes:
     post:
+      x-min-role: admin
       tags: [runners]
       summary: Mint a one-time registration code (XXXX-XXXX-XXXX, case and separators ignored), valid for 15 minutes and one use. Needs step-up
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
@@ -210,6 +228,7 @@ paths:
       responses: { "201": { description: "The code and when it expires", content: { application/json: { schema: { type: object, properties: { code: { type: string }, expires: { type: string, format: date-time } } } } } }, "401": { description: "Step-up required (problem type step-up-required)" } }
   /runners/{runner}:
     delete:
+      x-min-role: admin
       tags: [runners]
       summary: Revoke a runner's key. Its connection and sessions end
       parameters: [ { name: runner, in: path, required: true, schema: { type: string } } ]
@@ -230,6 +249,7 @@ paths:
         "422": { description: The input was refused, content: { application/json: { schema: { type: object, properties: { problems: { type: array, items: { type: string } } } } } } }
   /auth/step-up:
     post:
+      x-min-role: viewer
       tags: [me]
       summary: "A single-use step-up token (su_, 5 minutes), bound to the person and the tenant. Only ever minted from a proof that the person is present now: on a hosted deployment a passkey assertion with user verification ({ webauthn }, after GET /auth/step-up/challenge); in local mode the typed step-up secret ({ secret }; the deployment holds only its scrypt hash, AGENT_TEAM_STEP_UP_SECRET_HASH). A hosted deployment refuses { secret } (400, problem type step-up-method). A sign-in, however recent, is never a step-up. Five failures in 15 minutes lock it (429)"
       requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { webauthn: { type: object, description: "AuthenticationResponseJSON (WebAuthn Level 3)" }, secret: { type: string, writeOnly: true, description: Local mode only } } } } } }
@@ -263,8 +283,9 @@ paths:
       responses: { "200": { description: Caller, content: { application/json: { schema: { type: object, properties: { ip: { type: string }, edge: { type: boolean } } } } } } }
   /teams/{team}/budget:
     parameters: [ { $ref: "#/components/parameters/team" } ]
-    get: { tags: [runs], summary: "The team's caps and today's spend", responses: { "200": { description: Budget, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } } } }
+    get: { x-min-role: viewer, tags: [runs], summary: "The team's caps and today's spend", responses: { "200": { description: Budget, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } } } }
     put:
+      x-min-role: admin
       tags: [runs]
       summary: Set the caps. A run needs a daily cap before it starts. Raising or clearing a cap needs step-up; lowering one does not
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
@@ -277,29 +298,34 @@ paths:
       responses: { "200": { description: Me, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }, "401": { description: "Not signed in (problem type unauthenticated)" } }
   /me/inbox:
     get:
+      x-min-role: viewer
       tags: [me]
       summary: Everything waiting for me across teams, as cards, most urgent first (clients.md section 5)
       parameters: [ { $ref: "#/components/parameters/cursor" }, { $ref: "#/components/parameters/limit" } ]
       responses: { "200": { description: Cards, content: { application/json: { schema: { type: object, properties: { asOf: { type: string }, cards: { type: array, items: { $ref: "#/components/schemas/Card" } }, next: { type: string } } } } } } }
   /me/summary:
     get:
+      x-min-role: viewer
       tags: [me]
       summary: Each of my teams at a glance (live version, run state, roles by status, cost today, inbox count)
       responses: { "200": { description: Summary, content: { application/json: { schema: { $ref: "#/components/schemas/Summary" } } } } }
   /me/stream:
     get:
+      x-min-role: viewer
       tags: [me]
       summary: Live events for every team I can see, and my cards, as server-sent events; resumes from Last-Event-ID
       responses: { "200": { description: text/event-stream of envelopes, content: { text/event-stream: {} } } }
   /me/devices:
-    get: { tags: [me], summary: My registered devices, responses: { "200": { description: Devices, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { $ref: "#/components/schemas/Device" } } } } } } } } }
+    get: { x-min-role: viewer, tags: [me], summary: My registered devices, responses: { "200": { description: Devices, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { $ref: "#/components/schemas/Device" } } } } } } } } }
     post:
+      x-min-role: viewer
       tags: [me]
       summary: Register this client install (platform, app version, push token, step-up public key)
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
       responses: { "201": { description: The device, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } } }
   /me/devices/{device}:
     delete:
+      x-min-role: viewer
       tags: [me]
       summary: Remove a device and revoke its tokens
       parameters: [ { name: device, in: path, required: true, schema: { type: string } } ]
@@ -307,17 +333,58 @@ paths:
   /teams/{team}/roles/{role}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: role, in: path, required: true, schema: { type: string } } ]
     get:
+      x-min-role: viewer
       tags: [events]
       summary: One role's page (current task, branch, PR, recent reports, evidence, meetings), with asOf
       responses: { "200": { description: Role page } }
   /cards/{card}:
-    get: { tags: [approvals], summary: "One card as it is now (the deep link /t/{team}/cards/{id} opens it)", parameters: [ { name: card, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: The card, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } } }
+    get: { x-min-role: viewer, tags: [approvals], summary: "One card as it is now (the deep link /t/{team}/cards/{id} opens it)", parameters: [ { name: card, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: The card, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } } }
     post:
+      x-min-role: approver
       tags: [approvals]
       summary: Answer a decision or ongoing-work card. Send the version you saw; a stale version gets 409 with the current card
       parameters: [ { name: card, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [option, version], properties: { option: { type: string }, version: { type: integer }, note: { type: string } } } } } }
       responses: { "200": { description: The answer event }, "409": { description: The card changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
+  /members:
+    get:
+      x-min-role: viewer
+      tags: [members]
+      summary: "The workspace's members and their roles. Roles, each including the ones before it: viewer, editor, approver, admin, owner (docs/specs/m4-sign-in.md section 4)"
+      responses: { "200": { description: Members, content: { application/json: { schema: { type: object, properties: { members: { type: array, items: { $ref: "#/components/schemas/Member" } } } } } } } }
+  /members/{member}:
+    parameters: [ { name: member, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/stepUp" } ]
+    patch:
+      x-min-role: admin
+      tags: [members]
+      summary: "Change a member's role. Needs step-up. Only an owner makes or changes an owner; the last owner cannot be demoted (409, problem type last-owner). Audited"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [role], properties: { role: { $ref: "#/components/schemas/Role" } } } } } }
+      responses: { "200": { description: The member's role, content: { application/json: { schema: { type: object, properties: { id: { type: string }, role: { $ref: "#/components/schemas/Role" } } } } } }, "401": { description: Step-up required }, "403": { $ref: "#/components/responses/Problem" }, "404": { description: No such member }, "409": { description: The last owner } }
+    delete:
+      x-min-role: admin
+      tags: [members]
+      summary: "Remove a member. Needs step-up. Their access to this workspace ends on their next request; a person left in no workspace is signed out everywhere, app tokens included. Only an owner removes an owner; never the last one (409). Audited"
+      responses: { "200": { description: Removed }, "401": { description: Step-up required }, "403": { $ref: "#/components/responses/Problem" }, "404": { description: No such member }, "409": { description: The last owner } }
+  /invitations:
+    get:
+      x-min-role: admin
+      tags: [members]
+      summary: Open invitations
+      responses: { "200": { description: Invitations, content: { application/json: { schema: { type: object, properties: { invitations: { type: array, items: { $ref: "#/components/schemas/Invitation" } } } } } } } }
+    post:
+      x-min-role: admin
+      tags: [members]
+      summary: "Invite someone by GitHub login or numeric user id. The server resolves a login to its numeric id once, here, and the invitation holds the id (a login can change hands). Needs step-up; only an owner invites an owner. A newer invitation for the same person replaces an open one. 404 (no-such-github-user), 409 (already-member)"
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [github, role], properties: { github: { type: string, description: "A login (octocat) or numeric id" }, role: { $ref: "#/components/schemas/Role" }, days: { type: integer, minimum: 1, maximum: 30, default: 7 } } } } } }
+      responses: { "201": { description: The invitation, content: { application/json: { schema: { $ref: "#/components/schemas/Invitation" } } } }, "401": { description: Step-up required }, "403": { $ref: "#/components/responses/Problem" }, "404": { description: GitHub has no such user }, "409": { description: Already a member } }
+  /invitations/{invitation}:
+    delete:
+      x-min-role: admin
+      tags: [members]
+      summary: Withdraw an open invitation. Audited
+      parameters: [ { name: invitation, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: Withdrawn }, "404": { description: No such open invitation } }
 components:
   securitySchemes:
     person: { type: http, scheme: bearer, description: OIDC sign-in; a cookie in the browser }
@@ -336,6 +403,13 @@ components:
     Team: { description: A team, content: { application/json: { schema: { $ref: "#/components/schemas/Team" } } } }
     TeamList: { description: Teams, content: { application/json: { schema: { type: object, properties: { teams: { type: array, items: { $ref: "#/components/schemas/Team" } }, next: { type: string } } } } } }
   schemas:
+    Role: { type: string, enum: [viewer, editor, approver, admin, owner], description: "Each includes the ones before it. Every operation states its minimum as x-min-role" }
+    Member:
+      type: object
+      properties: { id: { type: string, description: "mem_…" }, person: { type: string, description: "per_…" }, login: { type: string }, name: { type: string }, role: { $ref: "#/components/schemas/Role" }, since: { type: string, format: date-time } }
+    Invitation:
+      type: object
+      properties: { id: { type: string, description: "inv_…" }, github: { type: string, description: The numeric GitHub user id }, login: { type: [string, "null"] }, email: { type: [string, "null"] }, role: { $ref: "#/components/schemas/Role" }, invitedBy: { type: string }, createdAt: { type: string, format: date-time }, expiresAt: { type: string, format: date-time } }
     Passkey:
       type: object
       properties: { id: { type: string, description: "pk_…" }, name: { type: string }, createdAt: { type: string, format: date-time }, lastUsed: { type: [string, "null"], format: date-time } }

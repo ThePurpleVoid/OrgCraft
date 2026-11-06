@@ -173,8 +173,21 @@ OpenID-Certified library: `identity.mjs` holds its storage adapter and our polic
   `GET /v1/auth/step-up/challenge`, then `POST /v1/auth/step-up { webauthn }`, which returns a single-use `su_` for
   this person in this workspace. The typed secret is refused once sign-in is on.
 
-Still to come (order 2): roles on every route (until then a member can read, and only an owner can write), bearer
-tokens from the apps on `/v1`, member management, and retiring the admin token.
+- **Roles on every route** (`roles.mjs`). viewer < editor < approver < admin < owner, each including the ones before
+  it: a viewer reads, an editor chats and runs, an approver answers approvals and cards, an admin manages teams,
+  budgets, runners, tokens, secrets and members, an owner makes owners. Every route a person can call is listed with
+  its minimum, `api-v1.yaml` states the same as `x-min-role` (a test checks they agree), and an unlisted route is
+  refused. Step-up never lifts a role: a viewer with a fresh `su_` still cannot approve.
+- **Members and invitations** (`members.mjs`). `GET /v1/members`, `PATCH`/`DELETE /v1/members/{id}`, and
+  `GET`/`POST`/`DELETE /v1/invitations` (`{ github: login or id, role }`; the login is resolved to its numeric id
+  once). Changes need step-up and are audited. Only an owner makes or removes an owner, and nobody removes or demotes
+  the last one. Membership is read on every request, so a removed member is refused on their next one; a person left
+  in no workspace is signed out everywhere, app tokens included.
+- **The admin token is retired** once anyone owns the deployment (401, `admin-token-retired`). The host's way back in
+  when no owner can sign in is `agent-team-server admin reset-owner <github-user-id>` (on Fly:
+  `fly ssh console -C "agent-team-server admin reset-owner 1234"`), an owner invitation valid for one day.
+
+Still to come (order 2): bearer tokens from the apps on `/v1`, and the `oidc-conformance` CI job.
 
 ## Host it in another server
 

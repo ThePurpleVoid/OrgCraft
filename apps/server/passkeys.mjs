@@ -161,5 +161,5 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
     try { return await m3.requireStepUp(who.tenant, who.principal, token, what); } catch (e) { if (e?.type === 'step-up-required') throw new StepUpNeeded(what); throw e; }
   }
 
-  return { list, registrationOptions, register, remove, challenge, stepUp, rpID };
+  return { list, registrationOptions, register, remove, challenge, stepUp, requireStepUp, rpID };
 }
