@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isLayerPath } from './index.mjs';
+import { PACK_DOCS, isLayerPath } from './index.mjs';
 
 export const KIT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LAYER = '.agent-team';
@@ -18,7 +18,16 @@ export function loadKit(kitDir = KIT_DIR) {
     presets[f.slice(0, -4)] = slugs[0] === '*' ? Object.keys(roles) : slugs;
   }
   const template = existsSync(join(rolesDir, '_template.md')) ? readFileSync(join(rolesDir, '_template.md'), 'utf8') : undefined;
-  return { roles, presets, template };
+  // The protocol core and its packs (kit 0.13): team/<doc> and team/packs/<pack>/<doc>.
+  const docs = {};
+  for (const f of PACK_DOCS) if (existsSync(join(kitDir, 'team', f))) docs[f] = readFileSync(join(kitDir, 'team', f), 'utf8');
+  const packs = {};
+  const packsDir = join(kitDir, 'team/packs');
+  if (existsSync(packsDir)) for (const p of readdirSync(packsDir).filter((x) => existsSync(join(packsDir, x, 'protocols.md')) || existsSync(join(packsDir, x, 'project-instructions.md'))).sort()) {
+    packs[p] = {};
+    for (const f of PACK_DOCS) if (existsSync(join(packsDir, p, f))) packs[p][f] = readFileSync(join(packsDir, p, f), 'utf8');
+  }
+  return { roles, presets, template, docs, packs };
 }
 
 /** The layer files a TeamSpec is made from, as relative path → content. */

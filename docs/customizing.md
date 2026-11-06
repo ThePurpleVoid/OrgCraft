@@ -52,7 +52,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.12.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.13.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -170,6 +170,18 @@ A file with a kit role's name replaces that brief entirely. Use it only when an 
 ```json
 { "replaces": ["qa-web"] }
 ```
+
+## Protocol packs: `packs`
+
+`docs/team/protocols.md` and `project-instructions.md` are made of a neutral core that every team gets, plus packs. The core covers the one door, the dilution rule, when the owner steps in, ownership, the four message kinds, board reports, memory files, the digest and meetings. The kit has one pack, `engineering`, which covers pull requests, the merge gate, worktrees, hardware locks, the janitor, deploys and migrations, and the engineering fields of HANDOFF, BUG and SIGNOFF.
+
+```json
+{ "packs": [] }
+```
+
+A `team.json` without `packs` gets `["engineering"]`, so a team made before 0.13 keeps its rules word for word. The support and content templates set `"packs": []`. A team without the engineering pack also reads "save your work where the team can see it" in place of "push" in every brief's footer. `validate` and `sync` refuse a pack the kit does not have.
+
+In the kit, a core file marks each place a pack can change with `<!-- slot:name -->` and `<!-- /slot -->` around the core's own wording. `team/packs/<pack>/<file>` has a `<!-- fill:name -->` block for each slot it replaces.
 
 ## Project-wide rules
 

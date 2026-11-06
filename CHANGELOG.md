@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.0
+
+Neutral protocols (CPO story "Neutral protocols for business-function teams", criteria 1 to 4, D37 to D41).
+
+- **`protocols.md` and `project-instructions.md` are a neutral core plus packs** ([customizing](docs/customizing.md#protocol-packs-packs)). The core uses no engineering words; a test enforces this. **The `engineering` pack** holds every rule that was taken out of the core: pull requests, the merge gate, worktrees, hardware locks, the janitor, deploys, migrations, and the architect-first list.
+- **Message fields go neutral in the core** (D38). HANDOFF has task, from, to, what changed and where it is, how to check it, and done when. BUG has task, where, steps or a quote, expected, actual, evidence and severity. SIGNOFF has task, what was checked and on what version, result and evidence. The engineering pack keeps the fields it had: branch and commit, build, device and OS.
+- **When the owner steps in, the core adds business examples** (D39): sending to customers or the public without an approved policy, legal commitments, and anything published under the owner's name.
+- **Without the engineering pack, every brief's footer says "save your work where the team can see it"** in place of "push" (D40). The role template gets a neutral group and manager.
+- **`team.json` `packs`**: a team without it gets `["engineering"]`. The support and content templates use `[]`. `templateCard` returns `packs`. New in `packages/team-model`: `DEFAULT_PACKS`, `teamPacks`, `parseFills`, `docSlots`, `composeDoc`, `teamDoc`, `fitToPacks`, `roleTemplateFor`, `checkPacks`. `loadKit` returns `docs` and `packs`.
+- **What existing teams see on sync** (D41): only the version stamps. The core plus the engineering pack is byte-identical to the 0.12 text, and a test checks it against a saved copy.
+
+## 0.12.1
+
+- **Fixed:** a role that owns no areas is allowed again. 0.11.1 made a missing or empty `## Owns (writes)` an error in `validate`, and sync's roster check had always refused it. So the Studio blocked importing, for example, a clerk or a reviewer that writes nothing of its own. Both now give a warning ("owns no areas"). A missing or empty `## Identity` is still an error in both.
+
 ## 0.12.0
 
 Team templates (CPO story "Team templates", criteria 1 to 4). Additive: existing teams are not affected.
@@ -55,6 +70,9 @@ Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD
 - **M3 on a Mac** (apps/runner/README.md): the control plane, Studio and runner on one Mac. The deploy key and merger app key are installed into the runner's closed folder from a one-off container, and the git config pushes over ssh with a pinned GitHub host key.
 
 ### Studio (nothing changes on sync)
+- The agent editor resolves path conflicts where they happen (#30, criterion 9): an area another role writes is held, never written as a second writer, until the owner picks "Read only, send fixes as BUG", "Take a narrower area" (checked again) or "Move the whole area to this agent". A move asks twice when the board says the writer is working on it now.
+- An imported role pack's `needs.resources` show as "Needs a <type>: connect one or skip", bound only on Connect (criterion 12). Its areas go through the same conflict choices.
+- Hands to: the role picker starts on "Choose a role" and adds roles by name. Clearing Identity is now an error from the kit's own check (0.11.1), no longer refilled with the template text.
 
 - **The agent editor** (PRD 6.6 A2, A3; mockup 02): a custom agent opens on a page of its own.
   - The left column lists the brief's sections (Identity, Place in the team, What it owns, Tools and systems, Wakes on, Hands to, Rules, Sign-off evidence), each marked done, optional or what is left to fix.
