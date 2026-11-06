@@ -59,6 +59,8 @@
     <form method="dialog" class="dialog">
       <h2>Publish the team</h2>
       <p class="muted">Writes <code>.agent-team/</code>, runs sync, and commits the result on a branch. Review the changes, then open a pull request as usual.</p>
+      <div id="impact"></div>
+      <div id="plan" class="plan-preview" hidden></div>
       <div id="changes" class="changes"></div>
       <label>Branch <input id="branch" required pattern="[A-Za-z0-9._/\-]+"></label>
       <label>Commit message <input id="message"></label>

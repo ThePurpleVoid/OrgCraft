@@ -30,6 +30,7 @@ function team(reports, ownership) {
   execFileSync('git', ['-C', root, 'init', '-q']);
   execFileSync('git', ['-C', root, 'config', 'user.name', 'Studio test']);
   execFileSync('git', ['-C', root, 'config', 'user.email', 'studio-test@example.com']);
+  execFileSync('git', ['-C', root, 'config', 'commit.gpgsign', 'false']); // a signing setup on the machine is not the test's
   execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
   if (ownership) writeFileSync(join(root, '.agent-team/ownership.json'), JSON.stringify({ rows: ownership }, null, 2) + '\n');
   execFileSync('git', ['-C', root, 'add', '-A']);
@@ -40,10 +41,12 @@ function team(reports, ownership) {
     mkdirSync(dirname(log), { recursive: true });
     writeFileSync(log, reports.map((r, i) => JSON.stringify({ id: `e2e-${i}`, kind: 'status', ...r })).join('\n') + '\n');
   }
-  return createStudio({ root, env });
+  const studio = createStudio({ root, env });
+  studio.root = root;
+  return studio;
 }
 
-let busy, quiet, base, baseQuiet, browser;
+let busy, quiet, pubA, pubB, base, baseQuiet, browser;
 before(async () => {
   if (skip) return;
   const now = Date.now();
@@ -53,13 +56,16 @@ before(async () => {
     { at: at(180), role: 'qa-web', status: 'idle', task: '' },
   ], [{ path: 'web/', writer: 'web-dev', notes: '' }]);
   quiet = team(null);
-  for (const s of [busy, quiet]) await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  const reports = [{ at: at(34), role: 'web-dev', status: 'working', issue: '142', task: 'Dark mode', branch: 'web/142-dark-mode', pr: '142' }];
+  pubA = team(reports, [{ path: 'web/', writer: 'web-dev', notes: '' }]);
+  pubB = team(reports, [{ path: 'web/', writer: 'web-dev', notes: '' }]);
+  for (const s of [busy, quiet, pubA, pubB]) await new Promise((r) => s.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${busy.address().port}`;
   baseQuiet = `http://127.0.0.1:${quiet.address().port}`;
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 });
-after(async () => { await browser?.close(); for (const s of [busy, quiet]) { s?.closeAllConnections?.(); s?.close(); } });
+after(async () => { await browser?.close(); for (const s of [busy, quiet, pubA, pubB]) { s?.closeAllConnections?.(); s?.close(); } });
 
 test('a running team: states on cards, an amber mark with its reason, the popover, the inspector and the count', { skip }, async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: SHOTS ? 2 : 1 });
@@ -167,6 +173,86 @@ test('Undo area move after the editor\'s Move leaves one writer: the table row a
   await page.locator('#checks', { hasText: /^No problems/ }).waitFor();
   await page.locator('#library .lib-role', { hasText: 'Site builder' }).locator('.name').click();
   assert.doesNotMatch(await page.locator('#e-raw').inputValue(), /`web\/`/, 'the new agent no longer writes the area');
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+const git = (root, ...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+
+test('the impact step: choices with the recommendation, a hand-off target, and the plan in the commit message only (criteria 8 to 10)', { skip }, async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: SHOTS ? 2 : 1 });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`http://127.0.0.1:${pubA.address().port}/?t=${pubA.launchToken}`);
+  await page.locator('#canvas .node[data-slug="web-dev"] .state').waitFor();
+  await page.locator('#library .lib-role[data-slug="web-dev"] input').uncheck();
+  await page.locator('#impact-pill').click();
+  const box = page.locator('#impact');
+  await box.getByRole('heading', { name: 'Work in progress' }).waitFor();
+  await box.getByRole('heading', { name: 'Web dev' }).waitFor();
+  await box.getByText('#142 Dark mode').waitFor();
+  await box.getByText('Based on board reports; may be out of date.').waitFor();
+  const finish = box.getByRole('radio', { name: /Let it finish its current task first/ });
+  assert.equal(await finish.isChecked(), true, 'the recommendation is preselected');
+  // A hand-off asks for a target among the roles that are on, never the role itself.
+  await box.getByRole('radio', { name: /Hand the work off now/ }).check();
+  const target = box.getByLabel("Hand Web dev's work to");
+  const options = await target.locator('option').evaluateAll((os) => os.map((o) => o.value));
+  assert.ok(!options.includes('web-dev') && options.length > 0);
+  assert.ok(options.includes(await target.inputValue()));
+  await target.selectOption('qa-web');
+  const plan = page.locator('#plan pre');
+  await plan.getByText(/^- Web dev \(web-dev\): Dark mode, branch web\/142-dark-mode, PR #142\. Switched off in this draft: hand the work off now, to qa-web\.$/m).waitFor();
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'publish-impact-light.png') });
+  // "Use the recommendations" puts every item back on its recommendation.
+  await box.getByRole('button', { name: 'Use the recommendations' }).click();
+  assert.equal(await box.getByRole('radio', { name: /Let it finish/ }).isChecked(), true);
+  await plan.getByText(/Switched off in this draft: let it finish its current task first\./).waitFor();
+
+  await page.locator('#confirm').click();
+  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  const msg = git(pubA.root, 'log', '-1', '--format=%B');
+  assert.match(msg, /^Work in progress$/m);
+  assert.match(msg, /^- Web dev \(web-dev\): .*let it finish its current task first\.$/m);
+  // git grep exits 1 when nothing matches: no file holds the plan.
+  assert.throws(() => execFileSync('git', ['-C', pubA.root, 'grep', '-l', 'Work in progress', 'HEAD', '--', '.agent-team'], { stdio: 'pipe' }), 'no file holds the plan');
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('never two writers: "move after the PR merges" keeps the writer in the files and the checks remind (criterion 11)', { skip }, async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`http://127.0.0.1:${pubB.address().port}/?t=${pubB.launchToken}`);
+  await page.locator('#canvas .node[data-slug="web-dev"] .state').waitFor();
+  await page.getByRole('button', { name: 'New agent' }).click();
+  const dlg = page.locator('#agent-dialog');
+  await dlg.locator('#a-name').fill('Site builder');
+  await dlg.locator('#a-group').selectOption('engineering');
+  await dlg.getByRole('button', { name: 'Continue to the brief' }).click();
+  const ed = page.locator('#agent-editor');
+  await ed.getByLabel('Area to add').fill('web/');
+  await ed.getByLabel('Area to add').press('Enter');
+  await ed.locator('.conflict').getByRole('button', { name: 'Move the whole area to this agent…' }).click();
+  await ed.locator('.conflict').getByRole('button', { name: 'Move it anyway' }).click();
+  await page.getByRole('button', { name: 'Back to the team' }).click();
+
+  await page.locator('#impact-pill').click();
+  const box = page.locator('#impact');
+  const after = box.getByRole('radio', { name: /Move the area after PR #142 merges/ });
+  assert.equal(await after.isChecked(), true);
+  await box.getByText('The published files keep the current writer').waitFor();
+  await page.locator('#plan pre').getByText(/Area web\/ moves from web-dev to site-builder: move the area after PR #142 merges\./).waitFor();
+  await page.locator('#confirm').click();
+  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  const rows = JSON.parse(git(pubB.root, 'show', 'HEAD:.agent-team/ownership.json')).rows;
+  assert.equal(rows.find((r) => r.path === 'web/').writer, 'web-dev', 'the files keep the current writer');
+  assert.doesNotMatch(git(pubB.root, 'show', 'HEAD:.agent-team/roles/site-builder.md'), /`web\/`/, 'and the new agent does not write it yet');
+  // The checks keep a reminder, and the draft still carries the move for the next publish.
+  await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
+  await page.locator('#issues li', { hasText: 'web/ moves from web-dev to site-builder after PR #142 merges. Publish again then' }).waitFor();
+  await page.locator('#impact-pill', { hasText: 'touches work in progress' }).waitFor();
   assert.deepEqual(errors, []);
   await page.close();
 });

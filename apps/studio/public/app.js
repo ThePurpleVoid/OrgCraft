@@ -4,7 +4,7 @@ import { checkUpgrade, resolveSpec, setEnabled, setField, splitBrief, validate }
 import { createChat } from './chat.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
-import { QUIET_S, assess, inFlightList, popoverHtml, reasonOf, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
+import { QUIET_S, assess, impactHtml, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
 import { bind, renderAreas, renderChecks, renderSystemInspector, renderSystemsStrip, roleSystemsHtml, wireBindings } from './panels.js';
 
 const $ = (s) => document.querySelector(s);
@@ -42,6 +42,11 @@ let lastEdit = { key: '', at: 0 }; // typing in one field folds into one undo st
 let published = null;
 let board = null; // summarize() output from /v1/team/board, kept fresh by its stream; null until read
 let pop = null; // the slug whose in-flight popover is open
+let picks = new Map(); // impact step: item id -> { choice, target } (criteria 8 and 10)
+let followUps = []; // areas published with "move after merge": [{ path, from, to, pr }] (criterion 11)
+const followKey = () => `agent-team-followups:${S?.root ?? ''}`;
+function saveFollowUps() { try { localStorage.setItem(followKey(), JSON.stringify(followUps)); } catch { /* private mode: this session only */ } }
+function loadFollowUps() { try { followUps = JSON.parse(localStorage.getItem(followKey()) ?? '[]'); } catch { followUps = []; } }
 /** Phones get the control room (chat, live board) and a read-only team: building the team needs a large screen. */
 const small = matchMedia('(max-width: 640px)');
 
@@ -630,9 +635,16 @@ function renderPopover() {
   el.style.top = `${Math.max(0, c.top + el.offsetHeight > bottom && up >= 0 ? up : top)}px`;
 }
 
+/** Criterion 11: an area published to move after its open work merges needs one more publish; until then, a reminder. */
+function reminders() {
+  const writer = (sp, path) => (sp?.ownership?.rows ?? []).find((r) => r.path === path)?.writer;
+  followUps = followUps.filter((f) => writer(published, f.path) === f.from && writer(spec, f.path) === f.to);
+  return followUps.map((f) => ({ level: 'warning', where: 'ownership', message: `${f.path} moves from ${f.from} to ${f.to} after ${f.pr ? `PR #${f.pr} merges` : 'its current work is done'}. Publish again then, so it has one writer.` }));
+}
+
 function renderIssues() {
   renderSafety();
-  const list = view.issues;
+  const list = [...view.issues, ...reminders()];
   const errors = list.filter((i) => i.level === 'error').length;
   const pill = $('#checks');
   pill.className = `pill ${errors ? 'error' : 'ok'}`;
@@ -735,17 +747,45 @@ async function api(path, body) {
   return data;
 }
 
-async function openPublish() {
-  const dlg = $('#publish-dialog');
-  $('#publish-result').textContent = '';
-  $('#publish-result').className = 'result';
-  $('#changes').innerHTML = '<p class="muted" style="padding:10px">Working out what changes…</p>';
-  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-  $('#branch').value ||= `agent-team/publish-${stamp}`;
-  $('#message').value ||= 'Update the agent team (Agent Team Studio)';
-  dlg.showModal();
+/** The roles on in the draft, for hand-off targets (criterion 10: never one that is off). */
+const onRoles = () => view.team.map((r) => ({ slug: r.slug, title: r.title }));
+const roleTitle = (slug) => view.bySlug.get(slug)?.title ?? slug;
+
+/** The impact step and the commit message it adds (criteria 8 and 9). */
+function renderImpact() {
+  const items = view.safety.on ? view.safety.items : [];
+  for (const id of [...picks.keys()]) if (!items.some((i) => i.id === id)) picks.delete(id);
+  const rec = recommendations(items, spec, onRoles());
+  for (const [id, p] of rec) if (!picks.has(id)) picks.set(id, p);
+  $('#impact').innerHTML = impactHtml({ items, picks, on: onRoles(), titleOf: roleTitle, board, newest: view.safety.newest, spec, roles: view.team.map((x) => ({ slug: x.slug, md: x.md })) });
+  const plan = planText(items, picks, roleTitle);
+  $('#plan').hidden = !plan;
+  $('#plan').innerHTML = plan ? `<details open><summary>Commit message: Work in progress</summary><pre>${esc(plan)}</pre></details>` : '';
+  return plan;
+}
+
+function wireImpact() {
+  const box = $('#impact');
+  box.addEventListener('change', (e) => {
+    const r = e.target.closest('[data-pick]');
+    const t = e.target.closest('[data-target]');
+    if (r) { const p = picks.get(r.dataset.pick) ?? {}; picks.set(r.dataset.pick, { ...p, choice: r.value }); }
+    if (t) { const p = picks.get(t.dataset.target) ?? {}; picks.set(t.dataset.target, { ...p, target: t.value }); }
+    if (r || t) { renderImpact(); previewPublish(); }
+  });
+  box.addEventListener('click', (e) => {
+    if (e.target.id !== 'impact-recommend') return;
+    picks = recommendations(view.safety.items, spec, onRoles());
+    renderImpact();
+    previewPublish();
+  });
+}
+
+/** The file review, of what will be published: a deferred move keeps its writer in these files (criterion 11). */
+async function previewPublish() {
   try {
-    const { changes, issues } = await api('/v1/team/preview', { spec });
+    const { spec: out } = publishable(spec, published, view.safety.on ? view.safety.items : [], picks);
+    const { changes, issues } = await api('/v1/team/preview', { spec: out });
     const errors = issues.filter((i) => i.level === 'error');
     $('#confirm').disabled = !changes.length || errors.length > 0;
     $('#changes').innerHTML = errors.length ? `<p class="result error" style="padding:10px">Fix ${errors.length} error${errors.length > 1 ? 's' : ''} before publishing.</p>` :
@@ -757,19 +797,41 @@ async function openPublish() {
   }
 }
 
+async function openPublish() {
+  const dlg = $('#publish-dialog');
+  $('#publish-result').textContent = '';
+  $('#publish-result').className = 'result';
+  $('#changes').innerHTML = '<p class="muted" style="padding:10px">Working out what changes…</p>';
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+  $('#branch').value ||= `agent-team/publish-${stamp}`;
+  $('#message').value ||= 'Update the agent team (Agent Team Studio)';
+  renderImpact();
+  dlg.showModal();
+  await previewPublish();
+}
+
 async function confirmPublish() {
   const out = $('#publish-result');
   $('#confirm').disabled = true;
   out.className = 'result';
   out.textContent = 'Publishing…';
   try {
-    const r = await api('/v1/team/publish', { spec, branch: $('#branch').value.trim(), message: $('#message').value });
+    const items = view.safety.on ? view.safety.items : [];
+    const plan = renderImpact();
+    const { spec: toPublish, deferred } = publishable(spec, published, items, picks);
+    const draft = spec;
+    const message = plan ? `${$('#message').value.trim()}\n\n${plan}` : $('#message').value;
+    const r = await api('/v1/team/publish', { spec: toPublish, branch: $('#branch').value.trim(), message });
     out.className = 'result ok';
     out.textContent = r.commit ? `Committed ${r.commit} on ${r.branch} (${r.files.length} files). Push it and open a pull request: git push -u origin ${r.branch}` : `Nothing changed on ${r.branch}.`;
     const fresh = await api('/v1/team');
     S = fresh;
-    spec = fresh.spec;
     published = structuredClone(fresh.spec);
+    // A deferred move stays in the draft, so the next publish carries it; the checks remind until then (criterion 11).
+    spec = deferred.length ? draft : fresh.spec;
+    followUps = [...followUps.filter((f) => !deferred.some((d) => d.path === f.path)), ...deferred];
+    saveFollowUps();
+    picks = new Map();
     undo.length = 0; redo.length = 0;
     sugg = null;
     render();
@@ -800,6 +862,8 @@ async function start() {
   }
   spec = S.spec;
   published = structuredClone(S.spec);
+  loadFollowUps();
+  wireImpact();
   loadBoard();
   try { new EventSource('/v1/team/board/stream').addEventListener('changed', loadBoard); } catch { /* no stream: the first read stands */ }
   $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${S.root}${S.git.branch ? ` · ${S.git.branch}` : ''}`;

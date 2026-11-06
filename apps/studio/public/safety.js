@@ -195,3 +195,97 @@ export function revert(spec, published, item) {
     spec.resources.bindings = [...(spec.resources.bindings ?? []).filter((b) => !(b.role === item.role && b.resource === resource)), ...(was ? [clone(was)] : [])];
   }
 }
+
+// ------------------------------------------------------------------------------------------------ the impact step
+// Criteria 8 to 11: in Publish, between the checks and the file review. Every item has a recommended choice, nothing
+// here blocks Publish (D15), and the chosen plan goes into the commit message only (D12), never a file.
+
+/** The words for a choice, with the PR named only when the work has one (D18). */
+export function choiceLabel(id, item) {
+  const pr = item?.inFlight?.pr;
+  return ({
+    finish: 'Let it finish its current task first',
+    handoff: 'Hand the work off now',
+    pause: 'Pause the work',
+    'move-after-merge': pr ? `Move the area after PR #${pr} merges` : 'Move the area after the current work is done',
+    'move-and-handover': 'Move the area now and hand the files over',
+  })[id] ?? id;
+}
+
+/** The role a hand-off goes to by default (criterion 10): the area's new owner, else the role's manager, if on. */
+export function defaultTarget(item, spec, on) {
+  const ok = (slug) => slug && slug !== item.role && on.some((r) => r.slug === slug);
+  if (item.kind === 'path-moved') {
+    const path = item.id.split(':').slice(2).join(':');
+    const to = (spec.ownership?.rows ?? []).find((r) => r.path === path)?.writer;
+    if (ok(to)) return to;
+  }
+  const brief = spec.roles[item.role]?.brief ?? '';
+  const mgr = (fieldRe('Reports to').exec(brief)?.[1] ?? spec.roles[item.role]?.extension?.fields?.find((f) => f.name === 'Reports to')?.value ?? '').split(/\s/)[0]?.toLowerCase();
+  if (ok(mgr)) return mgr;
+  return on.find((r) => r.slug !== item.role)?.slug ?? '';
+}
+
+/** Each item that asks for a choice gets its recommendation, and a hand-off target where one can be needed. */
+export function recommendations(items, spec, on) {
+  const out = new Map();
+  for (const i of items) if (i.severity !== 'safe') out.set(i.id, { choice: i.recommended, target: i.choices.includes('handoff') || i.choices.includes('move-and-handover') ? defaultTarget(i, spec, on) : '' });
+  return out;
+}
+
+const needsTarget = (choice) => choice === 'handoff' || choice === 'move-and-handover';
+
+/** The impact step's HTML. `picks` maps item id to { choice, target }; `on` lists the roles on in the draft. */
+export function impactHtml({ items, picks, on, titleOf, board, newest, spec, roles }) {
+  const asks = items.filter((i) => i.severity !== 'safe');
+  const safe = items.filter((i) => i.severity === 'safe');
+  if (!asks.length && !safe.length) return '';
+  const groups = new Map();
+  for (const i of asks) groups.set(i.role, [...(groups.get(i.role) ?? []), i]);
+  const targetSelect = (i, p) => `<label class="target">To <select data-target="${esc(i.id)}" aria-label="Hand ${esc(titleOf(i.role))}'s work to">
+    ${on.filter((r) => r.slug !== i.role).map((r) => `<option value="${esc(r.slug)}"${r.slug === p.target ? ' selected' : ''}>${esc(r.title)}</option>`).join('')}</select></label>`;
+  const itemHtml = (i) => {
+    const p = picks.get(i.id) ?? { choice: i.recommended, target: '' };
+    return `<fieldset class="impact-item" data-item="${esc(i.id)}"><legend>${esc(reasonOf(i).replace(/^./, (c) => c.toUpperCase()))}</legend>
+      ${i.choices.map((c) => `<label class="choice"><input type="radio" name="pick-${esc(i.id)}" value="${esc(c)}" data-pick="${esc(i.id)}"${c === p.choice ? ' checked' : ''}> ${esc(choiceLabel(c, i))}${c === i.recommended ? ' <span class="muted">(recommended)</span>' : ''}</label>`).join('')}
+      ${needsTarget(p.choice) ? targetSelect(i, p) : ''}
+      ${p.choice === 'move-after-merge' ? '<p class="hint">The published files keep the current writer until you publish again after that. The checks panel reminds you.</p>' : ''}
+    </fieldset>`;
+  };
+  return `<section class="impact" aria-labelledby="impact-title">
+    <div class="row impact-head"><h3 id="impact-title">Work in progress</h3>${asks.length ? '<button type="button" id="impact-recommend">Use the recommendations</button>' : ''}</div>
+    ${asks.length ? `<p class="muted">Nothing stops or restarts now. Your chief of staff carries these out when this change is merged.</p>` : ''}
+    ${[...groups].map(([slug, list]) => `<div class="impact-role"><h4>${esc(titleOf(slug))}</h4><ul class="plain">${inFlightList(rowOf(board, slug), spec, roles, slug).map((l) => `<li>${l}</li>`).join('')}</ul>${list.map(itemHtml).join('')}</div>`).join('')}
+    ${safe.length ? `<details class="impact-safe"${asks.length ? '' : ' open'}><summary>Applies at each role's next task (${safe.length})</summary><ul>${safe.map((i) => `<li>${esc(i.detail)}</li>`).join('')}</ul></details>` : ''}
+    <p class="hint">${esc(staleNote(newest))}</p>
+  </section>`;
+}
+
+/** The plan for the commit message (criterion 9): one line per item that asked for a choice. '' when there is none. */
+export function planText(items, picks, titleOf) {
+  const lines = items.filter((i) => i.severity !== 'safe').map((i) => {
+    const p = picks.get(i.id) ?? { choice: i.recommended, target: '' };
+    const w = i.inFlight;
+    const work = w ? [w.task || 'current work', w.branch ? `branch ${w.branch}` : '', w.pr ? `PR #${w.pr}` : ''].filter(Boolean).join(', ') : 'current work';
+    // A path keeps its case: "Area web/ moves from ...", never "Web/".
+    const what = i.kind === 'path-moved' || i.kind === 'path-removed' ? `Area ${i.detail}` : reasonOf(i).replace(/^./, (c) => c.toUpperCase());
+    return `- ${titleOf(i.role)} (${i.role}): ${work}. ${what}: ${choiceLabel(p.choice, i).replace(/^./, (c) => c.toLowerCase())}${needsTarget(p.choice) && p.target ? `, to ${p.target}` : ''}.`;
+  });
+  return lines.length ? `Work in progress\n\n${lines.join('\n')}\n\nYour chief of staff carries these out when this change is merged. Based on board reports; may be out of date.` : '';
+}
+
+/**
+ * What is published (criterion 11): the draft, except that an area set to move after its open work merges keeps its
+ * current writer in the files, so there are never two writers. Returns { spec, deferred: [{ path, from, to }] }.
+ */
+export function publishable(draft, published, items, picks) {
+  const out = clone(draft);
+  const deferred = [];
+  for (const i of items) {
+    if (i.kind !== 'path-moved' || (picks.get(i.id)?.choice ?? i.recommended) !== 'move-after-merge' || i.severity === 'safe') continue;
+    const path = i.id.split(':').slice(2).join(':');
+    deferred.push({ path, from: i.role, to: (draft.ownership?.rows ?? []).find((r) => r.path === path)?.writer ?? '', pr: i.inFlight?.pr ?? null });
+    revert(out, published, i);
+  }
+  return { spec: out, deferred };
+}
