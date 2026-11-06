@@ -178,3 +178,11 @@ test('validate refuses what sync refuses: an empty Identity; a role with no area
   assert.deepEqual(signoffEvidence(kit.template), []);
   assert.deepEqual(signoffEvidence('## Sign-off evidence\n- What a SIGNOFF from this role must attach (x)\n- the test log\n'), ['the test log']);
 });
+
+test('checkMeetings: one same-time warning per pair of meetings, naming every shared day', () => {
+  const roles = [{ slug: 'a', md: '' }, { slug: 'b', md: '' }, { slug: 'c', md: '' }].map((r) => ({ ...r, md: `---\nname: ${r.slug}\n---\n` }));
+  const m = (id) => ({ id, title: id, when: { days: ['mon', 'tue', 'wed'], at: '09:00' }, attendees: { roles: ['a', 'b', 'c'] }, facilitator: 'a', agenda: 'x', capUsd: 1 });
+  const same = checkMeetings({ meetings: [m('one'), m('two')] }, roles).filter((i) => /same time/.test(i.message));
+  assert.equal(same.length, 1);
+  assert.match(same[0].message, /same time as one \(mon, tue, wed 09:00\)/);
+});

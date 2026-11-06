@@ -69,8 +69,10 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   assert.equal(await view.getByLabel('Run by').inputValue(), 'chief-of-staff');
   await view.getByLabel('Add roles or a whole lane').selectOption('lane:cto');
   await view.locator('.chip', { hasText: "CTO's lane" }).waitFor();
-  await view.getByLabel('Add roles or a whole lane').selectOption('role:release-manager');
-  await view.locator('.chip', { hasText: 'Release manager' }).waitFor();
+  // A role already in the CTO's lane is not offered again (QA note a).
+  assert.equal(await view.getByLabel('Add roles or a whole lane').locator('option[value="role:release-manager"]').count(), 0);
+  await view.getByLabel('Add roles or a whole lane').selectOption('role:product-manager');
+  await view.locator('.chip', { hasText: 'Product manager' }).waitFor();
   // Criteria 8 and 9: the run in words and the estimate, from the definition.
   const side = page.locator('.m-side');
   await side.getByText(/Chief of staff opens the meeting and sends the agenda to \d+ attendees\./).waitFor();
@@ -112,7 +114,7 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   const m = file.meetings[0];
   assert.equal(m.id, 'daily-standup');
   assert.deepEqual(m.when, { days: ['mon', 'tue', 'wed', 'thu', 'fri'], at: '09:00' });
-  assert.deepEqual(m.attendees, { roles: ['release-manager'], lanes: ['cto'], rule: null });
+  assert.deepEqual(m.attendees, { roles: ['product-manager'], lanes: ['cto'], rule: null });
   assert.equal(m.facilitator, 'chief-of-staff');
   assert.equal(m.format, 'round');
   assert.equal(m.ifBusy, 'proxy');

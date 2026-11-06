@@ -74,7 +74,8 @@ export function createMeetings({ root, ctx }) {
     const others = list().filter((m) => m.id !== (selected === 'new' ? null : selected));
     const all = { meetings: [...others, form] };
     const mine = checkMeetings(all, ctx.resolved(), { dailyCapUsd: ctx.dailyCapUsd() }).filter((i) => i.where === `meetings/${form.id}` || (i.where === 'meetings' && i.message.includes(`"${form.id}"`)));
-    if (others.some((m) => m.id === form.id)) mine.unshift({ level: 'error', message: 'another meeting already has this name' });
+    const same = list().filter((m) => m.id === form.id).length;
+    if (same > (selected === 'new' || selected !== form.id ? 0 : 1)) mine.unshift({ level: 'error', message: 'another meeting already has this name' });
     return mine;
   }
 
@@ -85,7 +86,7 @@ export function createMeetings({ root, ctx }) {
       const who = meetingAttendees(m, ctx.resolved());
       const n = who.roles.filter((s) => s !== m.facilitator).length;
       const people = `${n} role${n === 1 ? '' : 's'}${who.dynamic ? ' + who worked' : ''}`;
-      return `<li><button type="button" class="meeting-row${m.id === selected ? ' selected' : ''}" data-meeting="${esc(m.id)}"><strong>${esc(m.title || m.id)}</strong><span class="muted">${esc(meetingWhen(m.when).replace(/`/g, ''))} · ${esc(people)} · ${m.format === 'discussion' ? 'discussion' : 'written round'}</span></button></li>`;
+      return `<li><button type="button" class="meeting-row${m.id === selected ? ' selected' : ''}" data-meeting="${esc(m.id)}"><strong>${esc(m.title || m.id)}</strong>${list().filter((x) => x.id === m.id).length > 1 ? '<span class="error-text">Same name as another meeting. Rename one in .agent-team/meetings.json.</span>' : ''}<span class="muted">${esc(meetingWhen(m.when).replace(/`/g, ''))} · ${esc(people)} · ${m.format === 'discussion' ? 'discussion' : 'written round'}</span></button></li>`;
     }).join('');
     return `<div class="row meetings-head"><h2>Meetings</h2>${ctx.small() ? '' : `<details class="new-meeting"><summary class="primary-link">New meeting</summary><div class="menu">${Object.entries(STARTER_LABEL).map(([k, l]) => `<button type="button" data-starter="${k}">${esc(l)}</button>`).join('')}</div></details>`}</div>
       ${items ? `<ul class="plain meeting-list">${items}</ul>` : '<p class="muted">No meetings yet.</p>'}
@@ -107,7 +108,8 @@ export function createMeetings({ root, ctx }) {
     const a = f.attendees;
     const dormantLane = (a.lanes ?? []).some((lane) => on.some((r) => r.dormant && reportsUp(r.slug, lane)));
     const radio = (name, value, title, text, checked) => `<label class="radio-card${checked ? ' on' : ''}"><input type="radio" name="${name}" value="${value}"${checked ? ' checked' : ''}><span><strong>${esc(title)}</strong><span class="muted">${esc(text)}</span></span></label>`;
-    const pickable = on.filter((r) => !(a.roles ?? []).includes(r.slug) && r.slug !== f.facilitator);
+    const inLanes = new Set(meetingAttendees({ ...f, attendees: { roles: [], lanes: a.lanes ?? [], rule: null } }, ctx.resolved()).roles);
+    const pickable = on.filter((r) => !(a.roles ?? []).includes(r.slug) && !inLanes.has(r.slug) && r.slug !== f.facilitator);
     const lanesFree = lanes().filter((r) => !(a.lanes ?? []).includes(r.slug));
     return `<form id="m-form" class="m-form" autocomplete="off">
       <label>Name <input id="m-title" value="${esc(f.title)}" maxlength="80" placeholder="e.g. Daily standup"></label>
