@@ -1,6 +1,7 @@
 // New agent (PRD 6.6 A1, A5, A6; mockup 01): start a custom agent from the kit's template, from a copy of a role as
 // this team runs it, or from a file another team shared (a role .md, or a role pack: the .md files and pack.json).
 // The brief is built by the team model's own helpers, so the file publish writes is the one the CLI would.
+import { $ as inStudio } from './env.js';
 import { addAgent, checkPack, checkSlug, draftRole, readPack, rolePack, SLUG, slugify, validate } from './team-model.mjs';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -68,7 +69,7 @@ async function readFiles(list) {
  * { spec(), kit, kitVersion (the team's pinned kit), roles(): the derived roles, change(fn), select(slug), edit(slug, origin) }.
  */
 export function openNewAgent(app) {
-  const dlg = document.getElementById('agent-dialog');
+  const dlg = inStudio('#agent-dialog');
   const st = { start: 'blank', from: null, q: '', imported: null, importError: '', packIssues: [], slugEdited: false, replaceKit: false };
   const spec = app.spec();
   const kit = app.kit;
@@ -98,7 +99,7 @@ export function openNewAgent(app) {
       <label id="a-newgroup-l" hidden>New group name <input id="a-newgroup" autocomplete="off" maxlength="31" placeholder="for example localization"></label>
       <label>Reports to <select id="a-manager"><option value="owner">The owner</option>${team.map((r) => `<option value="${esc(r.slug)}">${esc(r.title)}</option>`).join('')}</select></label>
       <p id="a-check" class="check-line" role="status"></p>
-      <label id="a-replace-l" class="row hint" hidden><input type="checkbox" id="a-replace" style="width:auto"> Replace the kit's role of this name on this team (a kit upgrade will not change yours)</label>
+      <label id="a-replace-l" class="row hint" hidden><input type="checkbox" id="a-replace"> Replace the kit's role of this name on this team (a kit upgrade will not change yours)</label>
     </div>
     <p id="a-off" class="hint agent-note" hidden>An imported agent is added switched off, under Your agents. Switch it on when its checks pass.</p>
     <div id="a-pack" class="pack-list" hidden></div>

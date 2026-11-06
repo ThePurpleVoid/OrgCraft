@@ -3,6 +3,8 @@
 // the team's replies in a small Markdown subset, cards built from their fields, today's cost against the cap, and
 // pause and stop for the run. The Studio server holds the token; this page only talks to it.
 
+import { apiUrl, ask, requestJson } from './env.js';
+
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const human = (slug) => { const s = String(slug ?? '').replace(/[-_]+/g, ' ').trim(); return s ? s[0].toUpperCase() + s.slice(1) : 'Someone'; };
@@ -102,7 +104,7 @@ function cardFrom(e) {
   return { id: d.cardId || subjectId(e.subject) || e.id, kind: 'decision', subject: e.subject, version: d.version ?? 1, title: d.question ?? d.title ?? 'A decision', body: d.body ?? '', options: opts, recommendation: rec };
 }
 
-export function createChat({ root, onOpen } = {}) {
+export function createChat({ root, onOpen, runs = true } = {}) {
   const st = {
     connected: null, error: null, events: [], next: null, cards: new Map(), answers: new Map(), pending: [],
     notes: new Map(), // card id -> note shown above it (changed, step-up)
@@ -174,11 +176,13 @@ export function createChat({ root, onOpen } = {}) {
       <button type="submit" class="primary" id="chat-send">Send</button>
     </form>`;
 
+  // Runs off (a host that offers chat without runs): no run controls at all.
+  $('.chat-run', root).hidden = !runs;
   const log = $('#chat-log', root);
   const text = $('#chat-text', root);
 
   async function api(path, body) {
-    const res = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+    const res = await requestJson(path, body);
     let data = {};
     try { data = await res.json(); } catch { /* empty */ }
     return { ok: res.ok, status: res.status, data };
@@ -347,7 +351,10 @@ export function createChat({ root, onOpen } = {}) {
     const cost = $('#cost', root);
     if (c && typeof c.today === 'number') {
       const pct = c.capPerDay ? Math.min(100, Math.round((c.today / c.capPerDay) * 100)) : null;
-      cost.innerHTML = `Today ${esc(fmtMoney(c.today, c.currency))}${c.capPerDay ? ` of ${esc(fmtMoney(c.capPerDay, c.currency))}` : ', no daily cap'}${pct !== null ? `<span class="meter${pct >= 80 ? ' high' : ''}" aria-hidden="true"><span style="width:${pct}%"></span></span>` : ''}`;
+      cost.innerHTML = `Today ${esc(fmtMoney(c.today, c.currency))}${c.capPerDay ? ` of ${esc(fmtMoney(c.capPerDay, c.currency))}` : ', no daily cap'}${pct !== null ? `<span class="meter${pct >= 80 ? ' high' : ''}" aria-hidden="true"><span></span></span>` : ''}`;
+      // The bar's width through the DOM: a strict CSP refuses style="" in markup (embed spec 4).
+      const bar = cost.querySelector('.meter > span');
+      if (bar) bar.style.width = `${pct}%`;
       cost.title = c.capPerDay ? `${pct}% of today's cap${c.state === 'exhausted' ? ': the cap is reached' : ''}` : '';
       cost.classList.toggle('over', c.state === 'exhausted');
     } else cost.textContent = '';
@@ -481,7 +488,7 @@ export function createChat({ root, onOpen } = {}) {
   const needsStepUp = (r) => r.status === 401 && /step-up-required$/.test(r.data.type ?? '');
 
   async function control(action) {
-    if (action === 'stop' && !confirm('Stop the run? Every role session stops after its current step. You can start a new run later.')) return;
+    if (action === 'stop' && !(await ask('Stop the run? Every role session stops after its current step. You can start a new run later.', { ok: 'Stop the run', cancel: 'Keep it running', danger: true }))) return;
     st.busy = true; renderRun();
     let r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
     // Resuming a run the budget paused needs a recent sign-in.
@@ -638,11 +645,13 @@ export function createChat({ root, onOpen } = {}) {
     open() {
       if (st.es) return;
       load();
-      st.es = new EventSource('/v1/team/board/stream');
+      st.es = new EventSource(apiUrl('/v1/team/board/stream'));
       let t = null;
       st.es.addEventListener('changed', () => { clearTimeout(t); t = setTimeout(load, 100); });
       onOpen?.();
       setTimeout(() => text.focus({ preventScroll: true }), 0);
     },
+    /** Stops listening (the Studio is unmounted). */
+    close() { st.es?.close(); st.es = null; },
   };
 }
