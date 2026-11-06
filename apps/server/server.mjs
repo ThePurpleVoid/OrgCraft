@@ -34,6 +34,7 @@ const { Problem } = store;
 const REPORTS_PER_MINUTE = 30;
 
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const NOTICE_ACTIONS = ['passkey.added', 'passkey.removed', 'passkey.sign-count-flagged', 'step-up.locked', 'sessions.ended', 'member.role-changed', 'member.removed'];
 
 /** The JSON body for a Problem: { error }, plus RFC 9457 type, title and status when it has a type, plus any body
  *  it carries (a 409 for a changed card carries the current card itself, as api-v1.yaml says). */
@@ -380,7 +381,12 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   async function meView(who) {
     if (who.via === 'admin') return { id: 'admin', login: null, name: 'Admin token', workspaces: [{ tenant, role: 'owner' }], passkeys: 0, authTime: null };
     const [{ n }] = await db.system('select count(*)::int as n from passkeys where person = $1', [who.principal]);
-    return { id: who.principal, login: who.session.login, name: who.session.name ?? who.session.login, workspaces: who.workspaces.map((w) => ({ tenant: w.tenant, role: w.role })), passkeys: Number(n), authTime: who.session.authTime };
+    // S5, until the notifications channel delivers them: the person's own security changes of the last 30 days, so the
+    // Studio can show "a passkey was added to your account" on their next visit.
+    const notices = await db.system(`select action, at, detail from identity_audit where person = $1 and at > now() - interval '30 days'
+      and action = any($2) order by at desc, id desc limit 20`, [who.principal, NOTICE_ACTIONS]);
+    return { id: who.principal, login: who.session.login, name: who.session.name ?? who.session.login, workspaces: who.workspaces.map((w) => ({ tenant: w.tenant, role: w.role })), passkeys: Number(n), authTime: who.session.authTime,
+      notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}) })) };
   }
 
   async function personRoute(req, res, who, url, parts) {
@@ -416,7 +422,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (a === 'runs' && team && b && !c && m === 'POST') return send(res, 200, await did(m3.controlRun(t, team, b, me, { stepUp })));
     if (a === 'approvals' && team && !b && m === 'POST') return send(res, 200, await did(m3.decideApproval(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
     if (a === 'cards' && team && !b && m === 'GET') return send(res, 200, await m3.getCard(t, team));
-    if (a === 'cards' && team && !b && m === 'POST') return send(res, 200, await did(m3.answerCard(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
+    if (a === 'cards' && team && !b && m === 'POST') return send(res, 200, await did(m3.answerCard(t, team, await readJson(req, 16 * 1024), me, { stepUp, role: who.role })));
     if (a === 'runners' && team === 'codes' && !b && m === 'POST') {
       const body = req.headers['content-type'] ? (await readJson(req, 16 * 1024)) ?? {} : {};
       await m3.requireStepUp(t, me, stepUp, 'Adding a runner');

@@ -354,7 +354,7 @@ paths:
     post:
       x-min-role: approver
       tags: [approvals]
-      summary: Answer a decision or ongoing-work card. Send the version you saw; a stale version gets 409 with the current card
+      summary: "Answer a decision or ongoing-work card. Send the version you saw; a stale version gets 409 with the current card. x-min-role is the least for any card; each kind needs its own: approval and decision cards an approver, a budget card (and any kind not named here) an admin, else 403 forbidden"
       parameters: [ { name: card, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [option, version], properties: { option: { type: string }, version: { type: integer }, note: { type: string } } } } } }
       responses: { "200": { description: The answer event }, "409": { description: The card changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
@@ -435,6 +435,7 @@ components:
         workspaces: { type: array, items: { type: object, properties: { tenant: { type: string }, role: { type: string, enum: [owner, admin, editor, viewer, approver] } } } }
         passkeys: { type: integer }
         authTime: { type: [string, "null"], format: date-time }
+        notices: { type: array, description: "The person's own security changes of the last 30 days, newest first (at most 20): passkey.added, passkey.removed, passkey.sign-count-flagged, step-up.locked, sessions.ended, member.role-changed, member.removed. Shown until the notifications channel delivers them (S5)", items: { type: object, properties: { action: { type: string }, at: { type: string, format: date-time }, passkey: { type: string }, name: { type: string }, tenant: { type: string }, role: { type: string } } } }
     Team:
       type: object
       properties:

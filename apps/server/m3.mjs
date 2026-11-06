@@ -3,6 +3,7 @@
 // The rule that holds it together: every change is an event appended in the same transaction as the projection
 // row it changes (runs, cards, approvals, chat_messages, budget_days), so the log stays the system of record. Each
 // function here returns { result, stored }: `stored` is what was appended, for the live hub and the sinks.
+import { atLeast } from './roles.mjs';
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
@@ -375,13 +376,19 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   }
 
   /** Answers a decision or budget card (POST /v1/cards/{card}). Approval cards are answered through /approvals. */
-  async function answerCard(tenant, cid, body, by, { stepUp = null } = {}) {
+  /** The least role that may answer each kind of card: a budget card raises spending, an admin's call like PUT budget. */
+  const CARD_ROLE = { approval: 'approver', decision: 'approver', budget: 'admin' };
+
+  async function answerCard(tenant, cid, body, by, { stepUp = null, role = 'owner' } = {}) {
     const { option, version, note } = body ?? {};
     if (!isInt(version)) throw new Problem(400, 'send the version of the card you saw');
     if (typeof option !== 'string' || !option) throw new Problem(400, 'send the option you chose');
     if (note !== undefined && (typeof note !== 'string' || note.length > 4000)) throw new Problem(400, 'a note is text of at most 4,000 characters');
     return tx(tenant, async (ctx) => {
       const row = await lockOpenCard(ctx, cid, version);
+      // A kind not listed needs an admin, so a new kind is never answerable by less by accident.
+      const need = CARD_ROLE[row.kind] ?? 'admin';
+      if (!atLeast(role, need)) throw new Problem(403, `a ${row.kind} card needs the ${need} role or above; you are ${role}`, { type: 'forbidden' });
       if (row.kind === 'approval') {
         const [a] = await ctx.q('select id from approvals where card = $1', [cid]);
         return decideIn(ctx, a.id, { decision: option === 'approve' ? 'approved' : option === 'deny' ? 'denied' : null, note, version }, by, stepUp);
