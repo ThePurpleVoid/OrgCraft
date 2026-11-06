@@ -13,9 +13,9 @@
 //   AGENT_TEAM_ADMIN_TOKEN=… CRON_SECRET=… node deploy/smoke.mjs --site https://<site> --api https://<container host>
 //   --api-only skips the Studio page check (when --site is the container itself, as in CI).
 //
-// Exit 0 when all pass, 1 when the deployment is broken, 3 before 4: 4 when the caller's IP does not resolve through the site
-// (keep sign-in off until it does), 3 when only the stream check fails (then clients must reach
-// streams on the container host directly: name it for streams in discovery, docs/deploy/vercel-supabase.md).
+// Exit 0 when all pass, 1 when the deployment is broken, 3 when the stream check fails (then clients must reach
+// streams on the container host directly: name it for streams in discovery, docs/deploy/vercel-supabase.md), and
+// otherwise 4 when the caller's IP is not verified through the site (keep sign-in off until it is).
 import { parseArgs } from 'node:util';
 
 const { values: o } = parseArgs({ options: { site: { type: 'string' }, api: { type: 'string' }, wait: { type: 'string', default: '30' }, 'api-only': { type: 'boolean' } } });
