@@ -1,0 +1,103 @@
+#!/usr/bin/env node
+// Writes the Vercel site: a status page (or, with --studio, the static Studio), plus rewrites that send /v1/* and /.well-known/agent-team to the control
+// plane container, so people, phones and the kit's report scripts all use one host. No functions and no crons run
+// on Vercel; the API, live streams, timers and the runner socket all live in the container (m3-design.md §8).
+//
+//   node deploy/vercel/build.mjs --api https://<app>.fly.dev [--out .vercel-site] [--studio]
+//
+// The Studio page today talks to the local Studio server's own API (/v1/team/…), which the control plane does not
+// serve, so a hosted copy would load and then fail every call. Until the Studio has a hosted mode, the site is a
+// status page that calls /v1/health through the rewrite. --studio ships apps/studio/public instead, for that day.
+//
+// Then, in the output folder: vercel pull, vercel build --prod, vercel deploy --prebuilt --prod (see deploy.yml).
+import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/** The vercel.json for a site that fronts the control plane at `api` (an https origin, no path). */
+export function siteConfig(api) {
+  const u = new URL(api);
+  if (u.protocol !== 'https:' || (u.pathname !== '/' && u.pathname !== '') || u.search || u.hash || u.username) {
+    throw new Error(`--api must be an https origin with no path, query or credentials (got ${api})`);
+  }
+  const origin = u.origin;
+  return {
+    $schema: 'https://openapi.vercel.sh/vercel.json',
+    framework: null,
+    buildCommand: '',
+    installCommand: '',
+    outputDirectory: 'public',
+    cleanUrls: false,
+    rewrites: [
+      { source: '/v1', destination: `${origin}/v1` },
+      { source: '/v1/:path*', destination: `${origin}/v1/:path*` },
+      { source: '/.well-known/agent-team', destination: `${origin}/.well-known/agent-team` },
+    ],
+    headers: [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'x-content-type-options', value: 'nosniff' },
+          { key: 'referrer-policy', value: 'strict-origin-when-cross-origin' },
+          { key: 'x-frame-options', value: 'DENY' },
+          { key: 'strict-transport-security', value: 'max-age=63072000; includeSubDomains' },
+        ],
+      },
+    ],
+  };
+}
+
+/** The status page shown until the Studio has a hosted mode. It makes one call, the one the smoke test checks. */
+export const STATUS_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Team</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1d1d1f; --muted: #6e6e73; --bg: #fbfbfd; --ok: #1a7f37; --bad: #b42318; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #f5f5f7; --muted: #a1a1a6; --bg: #111113; --ok: #3fb950; --bad: #f85149; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, sans-serif; }
+  main { max-width: 34rem; margin: 15vh auto; padding: 0 16px; }
+  h1 { font-size: 1.5rem; margin: 0 0 .5rem; }
+  p { color: var(--muted); margin: .25rem 0; }
+  a { color: inherit; }
+  #status.ok { color: var(--ok); } #status.bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agent Team</h1>
+  <p id="status" data-health>Checking the control plane…</p>
+  <p>The hosted Studio arrives in milestone M4. Until then this site fronts the API at <code>/v1</code>.</p>
+  <p><a href="https://github.com/PurpleGiragge/Agent-Team-Kit/blob/main/docs/deploy/vercel-supabase.md">How this deployment works</a></p>
+</main>
+<script>
+  const el = document.getElementById('status');
+  fetch('/v1/health', { cache: 'no-store' }).then((r) => r.json()).then((b) => {
+    el.textContent = b.ok ? 'Control plane is up.' : 'Control plane answered, but not ok.';
+    el.className = b.ok ? 'ok' : 'bad';
+  }).catch(() => { el.textContent = 'Control plane is not reachable.'; el.className = 'bad'; });
+</script>
+</body>
+</html>
+`;
+
+export function buildSite({ api, out, studio = false }) {
+  const dir = resolve(out);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(join(dir, 'public'), { recursive: true });
+  if (studio) cpSync(join(ROOT, 'apps', 'studio', 'public'), join(dir, 'public'), { recursive: true });
+  else writeFileSync(join(dir, 'public', 'index.html'), STATUS_PAGE);
+  writeFileSync(join(dir, 'vercel.json'), `${JSON.stringify(siteConfig(api), null, 2)}\n`);
+  return dir;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const { values: o } = parseArgs({ options: { api: { type: 'string' }, out: { type: 'string', default: '.vercel-site' }, studio: { type: 'boolean' } } });
+  if (!o.api) { console.error('build: pass --api https://<control plane host>'); process.exit(2); }
+  try { console.log(`build: site in ${buildSite(o)}, /v1 → ${new URL(o.api).origin}`); } catch (e) { console.error(`build: ${e.message}`); process.exit(2); }
+}

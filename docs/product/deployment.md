@@ -30,6 +30,10 @@ deploy/
 - **Upgrades:** images follow semver. Database migrations are additive within a major version and run before the new version takes traffic. Events are upcast on read, so history never needs rewriting. Rolling upgrades never interrupt running sessions: runners drain and checkpoint first (the same `checkpoint()` as [ADR 0004](../adr/0004-team-versions-and-transitions.md)).
 - **Backups:** Postgres point-in-time recovery on managed databases (nightly `pg_dump` in Compose). Teams themselves are in Git. A tenant export (team files, events, evidence) is one command.
 
+### Vercel, Supabase and one container host
+
+A ready target for teams already on these providers, and the one this repository's own instance runs on: the static Studio on Vercel, rewriting `/v1/*` and discovery to one always-on `apps/server` container (Fly.io), with runners beside it and Postgres on Supabase in a dedicated schema. No functions or crons on Vercel. Setup, the owner's checklist, costs and rollback: [docs/deploy/vercel-supabase.md](../deploy/vercel-supabase.md). The same image (`deploy/server/Dockerfile`) and migrator (`deploy/server/migrate.mjs`) serve every other host.
+
 ## 2. Hosted by us
 
 The same images, run by us, with the same release cadence as self-hosted. Launching it commercially (billing, terms) is the owner's call. The architecture assumes it from the start.
