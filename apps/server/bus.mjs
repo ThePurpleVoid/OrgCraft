@@ -9,6 +9,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Problem, id, sha } from './store.mjs';
 import { checkTool, detailOf } from './tools.mjs';
 import { personActor } from './m3.mjs';
+import { createMeetings } from './meetings.mjs';
 
 export const SESSION_TOKEN_MINUTES = 15;
 const ACK_SECONDS = 30;
@@ -23,8 +24,9 @@ const SESSION_STATE = { 'session.started': 'running', 'session.idle': 'idle', 's
 const utcDay = (d) => d.toISOString().slice(0, 10);
 const backoff = (attempts) => BACKOFF[Math.min(Math.max(attempts - 1, 0), BACKOFF.length - 1)];
 
-export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console }) {
+export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes }) {
   const reg = () => (typeof runners === 'function' ? runners() : runners);
+  const meetings = createMeetings({ db, m3, publicUrl, ...(meetingTurnMinutes ? { turnMinutes: meetingTurnMinutes } : {}) });
   const toolsUrl = () => String(publicUrl || '').replace(/\/+$/, '');
 
   // ---- What wakes whom ----------------------------------------------------------------------------------------------
@@ -51,6 +53,9 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (to === 'owner') to = roster.frontDoor;
       const [role, instance] = String(to ?? '').split('#');
       add(role, instance || null);
+    } else if (event.type === 'meeting.turn') {
+      // A turn goes to the role; a pool role's lowest-numbered live instance takes it (meetings, A8).
+      add(event.data?.to, await meetings.instanceFor(q, run.id, event.data?.to));
     } else if ((event.type === 'decision.answered' || event.type === 'approval.decided') && event.data?.session) {
       const [s] = await q('select role, instance from sessions where id = $1', [event.data.session]);
       if (s) add(s.role, s.instance);
@@ -62,11 +67,12 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   async function project(ctx, { event }) {
     if (!event.team) return;
     const { q } = ctx;
+    await meetings.project(ctx, event);
     if (SESSION_STATE[event.type] && event.actor?.session) {
       await q('update sessions set state = $2, last_seen = now() where id = $1 and state <> $2', [event.actor.session, SESSION_STATE[event.type]]);
       if (event.type === 'session.ended') ctx.after.push(() => startQueued(ctx.tenant, event.team));
     }
-    if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided'].includes(event.type)) return;
+    if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided', 'meeting.turn'].includes(event.type)) return;
     const run = await activeRun(q, event.team);
     if (!run) return;
     for (const t of await targets(q, run, event)) {
@@ -121,6 +127,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         await q('update deliveries set next_at = now() + make_interval(secs => 10) where id = $1', [d.id]);
         return null;
       }
+      if (wake.type === 'meeting.turn') await meetings.sent(q, wake.id);
       if (s && LIVE.includes(s.state) && conn) {
         await q("update deliveries set state = 'sent', session = $2, attempts = attempts + 1, next_at = now() + make_interval(secs => $3) where id = $1", [d.id, s.id, ACK_SECONDS]);
         return { d, conn, op: 'session.message', body: { session: s.id, message: wake, delivery: d.id } };
@@ -321,6 +328,15 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         if (tool === 'blocked') await ctx.emit(sess.team, 'report.status', { status: 'blocked', task: i.task, issue: i.issue, detail: i.need }, opts);
         out = { event: ev.id };
         await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: ev.id });
+      } else if (tool === 'meeting_reply' || tool === 'meeting_close') {
+        const r = await meetings.tool(ctx, sess, tool, i, roster);
+        if (r.problems) {
+          const ev = await ctx.emit(sess.team, 'session.tool', { tool: `team.${tool}`, decision: 'refused', rule: 'meetings', detail: r.problems.join(' ') }, opts);
+          await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'refused', rule: 'meetings', event: ev.id, detail: { problems: r.problems } });
+          return { refused: r.problems };
+        }
+        if (tool === 'meeting_reply') await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: r.event });
+        out = r;
       } else if (tool === 'ask_owner') {
         const expiresAt = i.expires ? new Date(i.expires) : new Date(ctx.now.getTime() + 7 * 86_400_000);
         const card = await m3.createCard(ctx, sess.team, {
@@ -477,6 +493,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       for (const d of due) await deliver(tenant, d.id);
       await expire(tenant);
       await rollover(tenant);
+      await meetings.tick(tenant);
       // A runner gone for ten minutes is not coming back for its sessions: they can start elsewhere.
       await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where state = 'unknown' and last_seen < now() - interval '10 minutes'"));
     }
@@ -515,7 +532,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     });
   }
 
-  return { project, deliver, tick, toolCall, authSession, ops, onLost, welcome, runChanged, approvalDecided, saveCheckpoint };
+  return { project, deliver, tick, toolCall, authSession, ops, onLost, welcome, runChanged, approvalDecided, saveCheckpoint, meetings };
 }
 
 /**

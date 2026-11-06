@@ -10,6 +10,7 @@ import { z } from 'zod';
 export const TOOLS_VERSION = 'tools/1';
 const MAX_TEXT = 4000;
 const slug = /^[a-z0-9][a-z0-9-]*$/;
+const meetingId = /^mtg_[A-Za-z0-9_-]{1,60}$/;
 const role = z.string().regex(/^[a-z0-9][a-z0-9-]*(#[A-Za-z0-9._-]+)?$/, 'must be a role slug, such as web-dev or code-reviewer#57');
 const issue = z.union([z.number().int().positive(), z.string().regex(/^#?[1-9]\d*$/)]).transform((v) => Number(String(v).replace(/^#/, '')));
 const posInt = z.number().int().positive();
@@ -61,6 +62,30 @@ export const TOOLS = {
   request_approval: {
     description: 'Ask the owner to approve a step the protocols keep for them (data that cannot be undone, a secret, money, a message to people outside the team, accepting a change, a production deploy). Name the exact call that will run. Waits until a person decides.',
     shape: { action: need(80), call: need(), why: need(), risk: z.enum(['low', 'medium', 'high']).optional(), links: links.optional() },
+  },
+  meeting_reply: {
+    description: 'Your turn in a meeting: answer the agenda in a few sentences. It goes verbatim into the minutes, and later attendees read it. Only on your own turn, once.',
+    shape: { meeting: z.string().regex(meetingId, 'is the meeting id from your turn, such as mtg_01…'), text: need(8000) },
+  },
+  meeting_close: {
+    description: 'Facilitator only, on the closing turn: write the minutes and close the meeting. Action items become HANDOFFs to their roles. Decisions go to the owner (as a card from the front door, otherwise as a BLOCKED to the front door).',
+    shape: {
+      meeting: z.string().regex(meetingId, 'is the meeting id from your turn, such as mtg_01…'), minutes: need(20_000),
+      actionItems: z.array(z.object({ to: role, task: need(200), doneWhen: need() })).max(20, 'holds at most 20 items').optional(),
+      decisions: z.array(z.object({
+        question: need(300), options: z.array(z.object({ id: z.string().regex(slug, 'must be a slug'), label: need(40), consequence: need(200) })).min(2, 'needs 2 to 4 options').max(4, 'needs 2 to 4 options'),
+        recommended: z.string(), why: text(200).optional(),
+      })).max(4, 'holds at most 4 decisions').optional(),
+    },
+    check: (a, ctx) => {
+      for (const it of a.actionItems ?? []) {
+        const base = it.to.split('#')[0];
+        if (base === ctx.role) return 'an action item goes to another role, never to yourself';
+        if (ctx.roster?.length && !ctx.roster.includes(base)) return `${base} is not a role on this team (roles: ${ctx.roster.join(', ')})`;
+      }
+      for (const d of a.decisions ?? []) if (!d.options.some((o) => o.id === d.recommended)) return 'every decision\'s recommended must be one of its option ids';
+      return null;
+    },
   },
 };
 

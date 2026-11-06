@@ -6,8 +6,10 @@
 //   qa-signoff.json   { "evidence": [...], "walked": "...", "testedOn": "...", "result": "pass" } QA's SIGNOFF; the
 //                     QA role waits for it after its HANDOFF (step 6), then the file is used up
 //   spend.json        { "usd": 6 } the next turn reports that cost, then the file is used up (step 11)
+//   meeting-spend.json { "usd": 1 } the next attendee's meeting turn costs that and does not answer (the cap path)
 //
-// The front door also asks the owner one decision (step 7) and says what they chose when the answer comes.
+// The front door also asks the owner one decision (step 7) and says what they chose when the answer comes. In a
+// meeting every role answers its turn and the facilitator closes it with minutes made of the replies.
 // Every step is written to the control folder's log.jsonl with the run and session ids.
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -99,6 +101,26 @@ export function dryrunAdapter({ control, qaRole = 'qa-web', frontDoor = 'chief-o
       return { usage: usage() };
     },
   };
+  // Meetings (written round): an attendee answers its turn; the facilitator writes the minutes from the replies.
+  const meeting = async (t) => {
+    const id = /\(meeting (mtg_[\w-]+)\)/.exec(t.prompt)?.[1];
+    if (!id) return null;
+    // meeting-spend.json { "usd": 1 }: this attendee's turn costs that much and ends before it answers (the cap path).
+    const blew = !/close this meeting/.test(t.prompt) && take('meeting-spend.json');
+    if (blew) { log(t, 'meeting:spent', { meeting: id, usd: blew.usd }); return { usage: { inputTokens: 1000, outputTokens: 200, costUsd: Number(blew.usd) } }; }
+    if (/close this meeting/.test(t.prompt)) {
+      const said = [...t.prompt.matchAll(/^- ([a-z0-9][\w#-]*), verbatim:\n {2}> (.*)$/gm)].map((x) => `${x[1]}: ${x[2]}`);
+      const capped = /cost cap/.test(t.prompt);
+      const minutes = `${said.length ? said.join('\n') : 'Nobody spoke.'}${capped ? '\n\nThe meeting reached its cost cap; these minutes are partial.' : ''}`;
+      const r = await t.call('meeting_close', { meeting: id, minutes });
+      log(t, 'meeting:closed', { meeting: id, capped, replies: said.length, ok: !r.isError, detail: r.isError ? r.text : undefined });
+    } else {
+      const r = await t.call('meeting_reply', { meeting: id, text: `${t.role}: on track, nothing blocks me.` });
+      log(t, 'meeting:replied', { meeting: id, ok: !r.isError, detail: r.isError ? r.text : undefined });
+    }
+    return { usage: usage() };
+  };
+  for (const [k, f] of Object.entries(script)) script[k] = async (t) => (await meeting(t)) ?? f(t);
   if (!existsSync(control)) throw new Error(`the control folder ${control} does not exist`);
   return { ...stubAdapter(script), runtime: 'dryrun' };
 }
