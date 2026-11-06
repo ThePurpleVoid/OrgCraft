@@ -20,6 +20,8 @@
 //                            sets all three). The data folder is then closed to sessions; their clones, homes and
 //                            memory files live in AGENT_TEAM_RUNNER_WORK
 //   AGENT_TEAM_RUNNER_WORK   the folder sessions may reach (default: the data folder, when there is no sandbox)
+//   AGENT_TEAM_RUNNER_UNSANDBOXED=1  start without a sandbox even with a model key set (development only; without it
+//                            the runner refuses)
 //
 // Run it in the container (Dockerfile): the runner as one user, sessions as another. Without the sandbox settings,
 // sessions share the runner's OS user and could read its environment; that is for development only.
@@ -77,6 +79,9 @@ if (sandbox) {
   if (work === data || work.startsWith(`${data}/`)) fail('AGENT_TEAM_RUNNER_WORK must be outside the data folder, which sessions cannot reach');
   process.umask(0o007); // what the runner makes for a session is shared with it through the group, and no one else
   privateDir(data);
+} else if (process.env.ANTHROPIC_API_KEY && process.env.AGENT_TEAM_RUNNER_UNSANDBOXED !== '1') {
+  // A real model key in a runner whose sessions share its user would be readable by every session (F3).
+  fail('refusing to start: ANTHROPIC_API_KEY is set but there is no sandbox. Run the runner in its container (apps/runner/Dockerfile); for development only, AGENT_TEAM_RUNNER_UNSANDBOXED=1 overrides this');
 } else {
   console.error('[runner] warning: no sandbox (AGENT_TEAM_SANDBOX_UID); sessions run as this user and could read its environment. Development only.');
 }

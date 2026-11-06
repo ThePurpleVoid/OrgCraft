@@ -273,7 +273,9 @@ test('when the remote cannot be reached, the push is refused and the session is 
 });
 
 // Needs root (to switch uid without the container's capability-carrying setpriv) and setpriv; skips otherwise.
-const canSwitch = process.getuid?.() === 0 && (() => { try { execFileSync('setpriv', ['--version']); return true; } catch { return false; } })();
+// In the container image (CI's runner-image job) it runs as the runner user with the image's own sandbox settings.
+const IMAGE = process.env.AGENT_TEAM_SANDBOX_EXEC ? { uid: Number(process.env.AGENT_TEAM_SANDBOX_UID), gid: Number(process.env.AGENT_TEAM_SANDBOX_GID), exec: process.env.AGENT_TEAM_SANDBOX_EXEC } : null;
+const canSwitch = !!IMAGE || (process.getuid?.() === 0 && (() => { try { execFileSync('setpriv', ['--version']); return true; } catch { return false; } })());
 test('F3: a session runs as another user and cannot read the runner\'s environment or data folder', { skip: canSwitch ? false : 'needs root and setpriv to switch users (the container image has both)' }, async () => {
   const { Session } = await import('../session.mjs');
   const { sandboxSpawn, privateDir } = await import('../sandbox.mjs');
@@ -285,9 +287,12 @@ test('F3: a session runs as another user and cannot read the runner\'s environme
   const root = join(top, 'data'), work = join(top, 'work');
   privateDir(root);
   writeFileSync(join(root, 'runner.json'), '{"key":"rk_live_secret"}', { mode: 0o600 });
-  const sandbox = { uid: 10002, gid: 10010, exec: 'setpriv' };
+  const sandbox = IMAGE ?? { uid: 10002, gid: 10010, exec: 'setpriv' };
   const umask = process.umask(0o007);
-  process.env.RUNNER_F3_MARKER = 'sk-ant-f3-marker-0123456789abcdef';
+  // A stand-in runner process with a secret in its environment (what /proc/<pid>/environ shows is the environment
+  // a process started with, so it has to be a process of its own).
+  const { spawn: run } = await import('node:child_process');
+  const holder = run('sleep', ['60'], { env: { PATH: process.env.PATH, RUNNER_F3_MARKER: 'sk-ant-f3-marker-0123456789abcdef' }, stdio: 'ignore' });
   try {
     const s = new Session({ session: 'ses_f3', role: 'web-dev', team: 't', repo: { url: bare }, worktree: 'web/f3', areas: ['web/'] }, { root, work, sandbox, emit: async () => {}, adapter: { turn: async () => ({}) } });
     s.pump = () => {};
@@ -300,11 +305,20 @@ test('F3: a session runs as another user and cannot read the runner\'s environme
     const who = await asAgent('id -u');
     assert.equal(who.out.trim(), '10002');
     assert.match((await asAgent('grep CapEff /proc/self/status')).out, /CapEff:\s+0+\n/, 'no capabilities');
-    const env = await asAgent(`cat /proc/${process.pid}/environ; cat /proc/1/environ`);
-    assert.ok(!env.out.includes('sk-ant-f3-marker'), 'the runner\'s environment is out of reach');
+    assert.match(read(`/proc/${holder.pid}/environ`, 'utf8'), /sk-ant-f3-marker/, 'the stand-in holds the marker');
+    const env = await asAgent(`cat /proc/${holder.pid}/environ; cat /proc/1/environ; cat /proc/${process.pid}/environ`);
+    assert.equal(env.code === 0, false, 'reading another user\'s environ fails');
+    assert.ok(!env.out.includes('sk-ant-'), 'the runner\'s environment is out of reach');
     const data = await asAgent(`cat ${join(root, 'runner.json')}; ls ${root}`);
     assert.notEqual(data.code, 0);
     assert.ok(!data.out.includes('rk_live_secret'));
+    if (IMAGE) {
+      const own = process.env.AGENT_TEAM_RUNNER_DATA;
+      assert.ok(own, 'the image sets AGENT_TEAM_RUNNER_DATA');
+      assert.notEqual((await asAgent(`ls ${own}`)).code, 0, 'the runner\'s own folder in the image is closed to the agent');
+    }
+    // The capability-carrying setpriv is the runner's alone.
+    if (IMAGE) assert.match((await asAgent(`${IMAGE.exec} --reuid=0 id`)).out, /Permission denied/);
     // It can work in its copy and commit with git; the runner then checks and pushes what it made.
     const wrote = await asAgent('mkdir -p web && echo hi > web/a.txt && git add web/a.txt && git commit -qm "from the agent" && git log --oneline -1');
     assert.equal(wrote.code, 0, wrote.out);
@@ -317,7 +331,7 @@ test('F3: a session runs as another user and cannot read the runner\'s environme
     assert.equal(read(join(root, 'runner.json'), 'utf8').includes('rk_live'), true);
   } finally {
     process.umask(umask);
-    delete process.env.RUNNER_F3_MARKER;
+    holder.kill();
   }
 });
 
@@ -404,4 +418,19 @@ test('F3: when the leader exits (on TERM, or at a normal end), the rest of its g
     await new Promise((r) => setTimeout(r, 200));
     assert.ok(gone(bg), `${name}: the background command is gone`);
   }
+});
+
+test('F3: the runner refuses to start with a model key and no sandbox, unless told it is development', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const data = mkdtempSync(join(tmpdir(), 'runner-gate-'));
+  const env = { PATH: process.env.PATH, HOME: data, AGENT_TEAM_RUNNER_DATA: data, AGENT_TEAM_SERVER: 'http://127.0.0.1:9', AGENT_TEAM_RUNNER_KEY: 'rnr_x.y', ANTHROPIC_API_KEY: 'sk-ant-test-not-a-real-key-0123456789' };
+  const bin = new URL('../bin.mjs', import.meta.url).pathname;
+  const r = spawnSync(process.execPath, [bin, 'start'], { env, encoding: 'utf8', timeout: 10000 });
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /refusing to start: ANTHROPIC_API_KEY is set but there is no sandbox/);
+  // With the development override it gets past the gate (and then fails to reach the made-up server, which is fine).
+  const dev = spawnSync(process.execPath, [bin, 'start'], { env: { ...env, AGENT_TEAM_RUNNER_UNSANDBOXED: '1' }, encoding: 'utf8', timeout: 1500 });
+  assert.doesNotMatch(dev.stderr, /refusing to start/);
 });

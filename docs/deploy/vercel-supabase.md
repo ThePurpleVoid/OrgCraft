@@ -100,7 +100,7 @@ Prices are as of November 2026; check each provider's page.
 | [`deploy/server/step-up-hash.mjs`](../../deploy/server/step-up-hash.mjs) | Hashes the owner's step-up secret (scrypt) without echoing it |
 | [`deploy/supabase/bootstrap.sql`](../../deploy/supabase/bootstrap.sql) | The one-time login and schema setup |
 | [`deploy/fly/server.toml`](../../deploy/fly/server.toml), [`runner.toml`](../../deploy/fly/runner.toml) | Fly configs (the runner's is a draft until apps/runner lands) |
-| [`deploy/runner/Dockerfile`](../../deploy/runner/Dockerfile) | The runner image (draft) |
+| [`apps/runner/Dockerfile`](../../apps/runner/Dockerfile) | The runner image: the runner as one user, sessions as another |
 | [`deploy/vercel/build.mjs`](../../deploy/vercel/build.mjs) | Writes the static site and its rewrites |
 | [`deploy/smoke.mjs`](../../deploy/smoke.mjs) | The read-only post-deploy check |
 | [`deploy/env/`](../../deploy/env/) | Every secret and variable, by name only |
