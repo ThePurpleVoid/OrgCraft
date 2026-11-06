@@ -573,3 +573,4 @@
 .ats .n-health.error { color: var(--error); }
 .ats .n-channel .hint { margin-left: 4px; }
 @media (max-width: 640px) { .ats .n-steps > summary.button, .ats #slack-connect, .ats #channel-new { min-height: 44px; } }
+.ats .result button.link.tap { min-height: 44px; padding: 0 4px; }

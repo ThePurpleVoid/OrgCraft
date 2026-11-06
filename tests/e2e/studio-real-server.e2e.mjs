@@ -142,12 +142,15 @@ test('against the real control plane: chat, cards, an approval with step-up, a s
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'real-server-desktop.png') });
   // Resume is refused while today's cap is spent, and says so.
   await page.locator('#run-pause', { hasText: 'Resume' }).click();
-  await page.locator('.result.error', { hasText: 'raise it (the budget card) or wait for tomorrow' }).waitFor();
+  // The real server's budget-exhausted type reaches the page through the Studio's relay, as a sentence (#162).
+  await page.locator('.result.error', { hasText: "Today's budget is spent, so the run can't resume yet. Raise the cap for today to resume it now" }).waitFor();
+  assert.equal(await page.getByText("today's budget is spent;").count(), 0, 'not the server\'s own wording');
   await budget.getByRole('button', { name: 'Add half again' }).click();
   await budget.getByLabel('Step-up secret').fill(SECRET);
   await budget.getByRole('button', { name: 'Confirm' }).click();
   await budget.locator('.answer', { hasText: 'Add half again' }).waitFor();
   await page.locator('#run-state', { hasText: 'Running' }).waitFor();
+  await page.getByText("Today's budget is spent, so the run can't resume").waitFor({ state: 'detached' }); // the refusal goes once the run is going
 
   assert.deepEqual(errors, []);
   await page.close();

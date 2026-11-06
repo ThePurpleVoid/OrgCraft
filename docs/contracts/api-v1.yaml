@@ -340,7 +340,7 @@ paths:
         - { name: action, in: path, required: true, schema: { enum: [pause, resume, stop] } }
         - { $ref: "#/components/parameters/stepUp" }
       description: Pause and stop never need step-up. Resuming a run paused with reason budget does
-      responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required)" } }
+      responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required)" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
   /teams/{team}/chat:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
