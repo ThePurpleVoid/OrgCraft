@@ -94,7 +94,7 @@ A meeting runs as a written round ([team-tools.md](team-tools.md), `meeting_repl
 
 | `type` | `data` |
 | --- | --- |
-| `team.published` | `version` (commit SHA), `pr`, `changes` (paths), `by`; optional `publishedAt` (when it merged, else the event's time), `roles` (the slugs the team runs), `off` (slugs switched off, removed or made dormant), `plan` (the change step's choices, `{ [role]: { choice, to? } }`). The rollout view (`GET /teams/{team}/rollout`) reads the latest one |
+| `team.published` | `version` (commit SHA), `pr`, `changes` (paths), `by`; optional `publishedAt` (when it merged, else the event's time), `roles` (the slugs the team runs), `off` (slugs switched off, removed or made dormant), `plan` (the change step's choices, `{ [role]: { choice, to? } }`). The rollout view (`GET /teams/{team}/rollout`) reads the latest one. One per commit: the id is `published-<version>` (40 lowercase hex), whoever posts it, so the repository's CI (`report.mjs published` through the report route, `actor` `system`/`repository`, `data.via` `repository`) and the Studio collapse into one event |
 | `team.transition` | `from`, `to`, `items` (per in-flight item: role, choice, state). See ADR 0004 |
 | `connector.connected`, `connector.health`, `connector.revoked` | `connector`, `resource`, `status`, `detail` |
 | `notification.sent`, `notification.failed` | `channel`, `to` (member), `event` (the id it was about), `attempt` |
