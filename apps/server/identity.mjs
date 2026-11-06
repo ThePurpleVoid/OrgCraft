@@ -133,6 +133,15 @@ export function githubUpstream({ clientId, clientSecret, url = 'https://github.c
       for (const [k, v] of Object.entries({ client_id: clientId, redirect_uri: redirectUri, state, code_challenge: challenge, code_challenge_method: 'S256', allow_signup: 'false' })) u.searchParams.set(k, v);
       return u.href;
     },
+    /** A GitHub login or numeric id → { subject, login }, or null when GitHub has no such user. Public data only. */
+    async lookup(who) {
+      const path = /^[0-9]+$/.test(who) ? `user/${who}` : `users/${encodeURIComponent(who)}`;
+      const r = await fetch(`${api}/${path}`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'agent-team-server' }, signal: AbortSignal.timeout(10_000) });
+      if (r.status === 404) return null;
+      const u = await r.json().catch(() => ({}));
+      if (!r.ok || !Number.isSafeInteger(u.id) || u.id <= 0 || typeof u.login !== 'string') throw new Problem(502, 'GitHub did not answer the user lookup; try again');
+      return { subject: String(u.id), login: u.login.slice(0, 100) };
+    },
     /** Trades the code for a token, reads who the person is, and drops the token. */
     async identify({ code, verifier, redirectUri }) {
       const signal = AbortSignal.timeout(10_000);
@@ -496,5 +505,5 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
   /** What the deploy smoke check reads (GET /v1/internal/caller): the caller as the limits see it, and the edge. */
   const caller = (req) => ({ ip: clientIp(req), edge: viaEdge(req, proxy) });
 
-  return { get provider() { return provider; }, caller, handle, sessionOf, workspaces, csrfOk, endSessions, sweep, origin, admit };
+  return { get provider() { return provider; }, caller, handle, sessionOf, workspaces, csrfOk, endSessions, sweep, origin, admit, lookup: (who) => upstream.lookup(who) };
 }

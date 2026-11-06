@@ -117,12 +117,13 @@ test('step-up: a fresh sign-in alone is not step-up, the typed secret is refused
   const { b, key } = await withPasskey(gh, browser);
   // A brand-new sign-in, with a passkey: still no su_ without an assertion.
   assert.equal((await b.call('POST', '/runners/codes', {})).status, 401);
-  // The secret: refused for the person and for the admin token alike, whatever it is.
-  for (const headers of [{}, { authorization: `Bearer ${ADMIN}`, origin: undefined }]) {
-    const res = await b.call('POST', '/auth/step-up', { secret: STEP_UP_SECRET }, headers);
-    assert.equal(res.status, 400);
-    assert.equal(res.body.type, 'step-up-method');
-  }
+  // The secret: refused for the person, whatever it is. The admin token is retired once someone owns the deployment.
+  const typed = await b.call('POST', '/auth/step-up', { secret: STEP_UP_SECRET });
+  assert.equal(typed.status, 400);
+  assert.equal(typed.body.type, 'step-up-method');
+  const admin = await b.call('POST', '/auth/step-up', { secret: STEP_UP_SECRET }, { authorization: `Bearer ${ADMIN}`, origin: undefined });
+  assert.equal(admin.status, 401);
+  assert.equal(admin.body.type, 'admin-token-retired');
   // No user verification; another origin; a replayed challenge.
   assert.equal((await stepUp(b, key, { uv: false })).status, 401);
   assert.equal((await stepUp(b, key, { from: 'https://evil.example' })).status, 401);
@@ -180,3 +181,26 @@ test('the deploy smoke check: GET /v1/internal/caller names the caller and wheth
     assert.deepEqual(await res.json(), { ip: '192.0.2.7', edge: false });
   }, { cronSecret: CRON });
 });
+
+test('a retry with the same Idempotency-Key replays a passkey write instead of failing on a used challenge', () => issuer(async ({ db, gh, browser }) => {
+  gh.as = owner;
+  const b = browser();
+  await b.signIn();
+  const key = authenticator({ origin: ORIGIN, rpId: RP });
+  const body = { name: 'laptop', credential: key.create((await b.call('GET', '/me/passkeys/options')).body) };
+  const first = await b.call('POST', '/me/passkeys', body, { 'idempotency-key': 'add-1' });
+  assert.equal(first.status, 201);
+  const again = await b.call('POST', '/me/passkeys', body, { 'idempotency-key': 'add-1' });
+  assert.equal(again.status, 201, JSON.stringify(again.body));
+  assert.equal(again.body.id, first.body.id);
+  assert.equal((await b.call('GET', '/me')).body.passkeys, 1);
+
+  // Step-up: the su_ token is shown once, so the replay says so, and it is not a failed try.
+  const assertion = { webauthn: key.get((await b.call('GET', '/auth/step-up/challenge')).body) };
+  assert.equal((await b.call('POST', '/auth/step-up', assertion, { 'idempotency-key': 'su-1' })).status, 201);
+  const replay = await b.call('POST', '/auth/step-up', assertion, { 'idempotency-key': 'su-1' });
+  assert.equal(replay.status, 409);
+  assert.match(replay.body.error, /token was shown once/);
+  assert.equal((await db.system("select count(*)::int as n from identity_audit where action = 'step-up.failed'"))[0].n, 0);
+  assert.equal((await db.system("select count(*)::int as n from idempotency_keys where response ? 'token'"))[0].n, 0, 'the token is never kept');
+}));

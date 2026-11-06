@@ -20,6 +20,8 @@ import { attachRunners } from './runners.mjs';
 import { createM3 } from './m3.mjs';
 import { createBus } from './bus.mjs';
 import { createPasskeys } from './passkeys.mjs';
+import { createMembers } from './members.mjs';
+import { atLeast, minRole } from './roles.mjs';
 
 /** The bus hears every stored event (deliveries) and run and approval changes (stops, results). */
 function wireBus(m3, bus) {
@@ -123,6 +125,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
   const passkeys = identity ? createPasskeys({ db, m3, origin: identity.origin, now }) : null;
+  const members = identity ? createMembers({ db, lookup: identity.lookup, endSessions: (p) => identity.endSessions(p), requireStepUp: passkeys.requireStepUp, now }) : null;
   let tickMisses = [];
   const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl });
   if (!givenBus) wireBus(m3, bus);
@@ -149,6 +152,11 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (m && /^st_/.test(m[1])) throw new Problem(403, 'a session token cannot act for a person');
     if (m) {
       if (!adminToken || !same(m[1], adminToken)) throw new Problem(401, 'sign in: send Authorization: Bearer <token>', { type: 'unauthenticated' });
+      // Retired once a person owns the deployment: from then on people sign in, and the host's way back in is
+      // `agent-team-server admin reset-owner <github-id>`, never this token over the network.
+      if (identity && (await db.system("select 1 from members where tenant = $1 and role = 'owner' and removed_at is null limit 1", [tenant])).length) {
+        throw new Problem(401, 'the admin token is retired on this deployment: sign in with GitHub', { type: 'admin-token-retired' });
+      }
       return { tenant, principal: 'admin', via: 'admin', role: 'owner' };
     }
     const s = identity ? await identity.sessionOf(req) : null;
@@ -328,26 +336,39 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
 
     const who = await person(req);
     if (a === 'me' && !team && m === 'GET') return send(res, 200, await meView(who));
-    // Passkeys and step-up for a signed-in person (spec section 3). Their own, so any member may manage them.
     if (passkeys && ((a === 'me' && team === 'passkeys') || (a === 'auth' && team === 'step-up'))) {
-      const step = req.headers['x-step-up'] ?? null;
-      if (a === 'auth' && b === 'challenge' && !c && m === 'GET') return send(res, 200, await passkeys.challenge(mustBePerson(who)));
-      if (a === 'auth' && !b && m === 'POST') {
-        const body = await readJson(req, 16 * 1024);
-        // The typed secret is local mode's only (spec section 3): a hosted deployment steps up with a passkey.
-        if (!body?.webauthn) throw new Problem(400, 'step up with your passkey: GET /v1/auth/step-up/challenge, then POST { webauthn }', { type: 'step-up-method' });
-        return send(res, 201, await passkeys.stepUp(mustBePerson(who), body.webauthn));
-      }
-      if (a === 'me' && !b && m === 'GET') return send(res, 200, await passkeys.list(mustBePerson(who)));
-      if (a === 'me' && b === 'options' && !c && m === 'GET') return send(res, 200, await passkeys.registrationOptions(mustBePerson(who)));
-      if (a === 'me' && !b && m === 'POST') return send(res, 201, await passkeys.register(mustBePerson(who), await readJson(req, 64 * 1024), step));
-      if (a === 'me' && b && !c && m === 'DELETE') return send(res, 200, await passkeys.remove(mustBePerson(who), b, step));
-      throw new Problem(404, 'not found');
+      // A retry after a lost answer replays it (the challenge is single use, so running it again would fail).
+      // Idempotency is kept per workspace, so a person in none of them has none.
+      return who.tenant ? idempotent(req, res, who.tenant, who.principal, url.pathname, () => passkeyRoute(req, res, who, parts)) : passkeyRoute(req, res, who, parts);
     }
     // A member elsewhere only: nothing here shows which teams exist (spec section 4).
     if (!who.tenant) throw new Problem(404, 'not found');
-    if (who.via === 'cookie' && WRITES.has(m) && who.role !== 'owner') throw new Problem(403, 'only an owner can change this workspace yet', { type: 'forbidden' });
+    // Roles on every route (roles.mjs): a route without a listed role is refused, so none ships unguarded.
+    if (who.via === 'cookie') {
+      const min = minRole(m, url.pathname.slice(3));
+      if (!min) throw new Problem(404, 'not found');
+      if (!atLeast(who.role, min)) throw new Problem(403, `this needs the ${min} role or above; you are ${who.role}`, { type: 'forbidden' });
+    }
     return idempotent(req, res, who.tenant, who.principal, url.pathname, () => personRoute(req, res, who, url, parts));
+  }
+
+  /** Passkeys and step-up for a signed-in person (spec section 3). Their own, so any member may manage them. */
+  async function passkeyRoute(req, res, who, parts) {
+    const m = req.method;
+    const [, a, , b, c] = parts;
+    const step = req.headers['x-step-up'] ?? null;
+    if (a === 'auth' && b === 'challenge' && !c && m === 'GET') return send(res, 200, await passkeys.challenge(mustBePerson(who)));
+    if (a === 'auth' && !b && m === 'POST') {
+      const body = await readJson(req, 16 * 1024);
+      // The typed secret is local mode's only (spec section 3): a hosted deployment steps up with a passkey.
+      if (!body?.webauthn) throw new Problem(400, 'step up with your passkey: GET /v1/auth/step-up/challenge, then POST { webauthn }', { type: 'step-up-method' });
+      return send(res, 201, await passkeys.stepUp(mustBePerson(who), body.webauthn), {}, { secrets: ['token'] });
+    }
+    if (a === 'me' && !b && m === 'GET') return send(res, 200, await passkeys.list(mustBePerson(who)));
+    if (a === 'me' && b === 'options' && !c && m === 'GET') return send(res, 200, await passkeys.registrationOptions(mustBePerson(who)));
+    if (a === 'me' && !b && m === 'POST') return send(res, 201, await passkeys.register(mustBePerson(who), await readJson(req, 64 * 1024), step));
+    if (a === 'me' && b && !c && m === 'DELETE') return send(res, 200, await passkeys.remove(mustBePerson(who), b, step));
+    throw new Problem(404, 'not found');
   }
 
   const mustBePerson = (who) => {
@@ -452,6 +473,16 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'sinks' && !c && m === 'GET') return send(res, 200, { sinks: await store.listSinks(db, t, team) });
       if (b === 'sinks' && !c && m === 'POST') { const s = await store.addSink(db, t, team, (await readJson(req, 16 * 1024)) ?? {}); sinks?.wake(); return send(res, 201, s); }
       if (b === 'sinks' && c && m === 'DELETE') { await store.removeSink(db, t, team, c); return send(res, 200, { ok: true }); }
+    }
+    if (members && a === 'members' && !b) {
+      if (!team && m === 'GET') return send(res, 200, await members.list(who));
+      if (team && m === 'PATCH') return send(res, 200, await members.update(who, team, await readJson(req, 4 * 1024), stepUp));
+      if (team && m === 'DELETE') return send(res, 200, await members.remove(who, team, stepUp));
+    }
+    if (members && a === 'invitations' && !b) {
+      if (!team && m === 'GET') return send(res, 200, await members.invitations(who));
+      if (!team && m === 'POST') return send(res, 201, await members.invite(who, await readJson(req, 4 * 1024), stepUp));
+      if (team && m === 'DELETE') return send(res, 200, await members.withdraw(who, team));
     }
     if (a === 'secrets' && !team && m === 'GET') return send(res, 200, { secrets: await store.listSecrets(db, t) });
     if (a === 'secrets' && team && !b && m === 'PUT') {
