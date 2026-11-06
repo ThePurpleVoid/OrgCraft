@@ -52,7 +52,7 @@ test('splits migrations without breaking dollar-quoted bodies', () => {
 });
 
 test('takes the kit\'s reports byte for byte with a report token, and serves the board', async () => {
-  await plane(async ({ call, woke }) => {
+  await plane(async ({ call, base, woke }) => {
     assert.equal((await call('POST', '/teams', { id: 'shop', name: 'Shop' })).status, 201);
     assert.equal((await call('POST', '/teams', { id: 'shop' })).status, 409);
     assert.equal((await call('GET', '/teams', undefined, {})).status, 401);
@@ -72,12 +72,22 @@ test('takes the kit\'s reports byte for byte with a report token, and serves the
 
     const log = (await call('GET', '/teams/shop/events')).body;
     assert.equal(log.events.length, 2);
-    assert.equal(log.events[0].event.type, 'report.status');
-    assert.equal(log.events[1].event.type, 'message.handoff');
-    assert.equal(log.events[0].event.source, '/tenants/acme/teams/shop');
+    assert.equal(log.events[0].type, 'report.status');
+    assert.equal(log.events[1].type, 'message.handoff');
+    assert.equal(log.events[0].source, '/tenants/acme/teams/shop');
     assert.equal((await call('GET', '/teams/shop/events?type=message.')).body.events.length, 1);
+    assert.deepEqual((await call('GET', '/teams/shop/events?after=r1')).body.events.map((e) => e.id), ['r2'], 'after takes an event id');
+    assert.equal((await call('GET', '/teams/shop/events?after=nope')).status, 400);
+    const page1 = (await call('GET', '/teams/shop/events?limit=1')).body;
+    assert.ok(page1.next, 'a full page hands out a cursor');
+    assert.deepEqual((await call('GET', `/teams/shop/events?limit=1&cursor=${page1.next}`)).body.events.map((e) => e.id), ['r2']);
 
-    const board = (await call('GET', '/teams/shop/board')).body;
+    const res = await fetch(`${base}/teams/shop/board`, { headers: { authorization: `Bearer ${ADMIN}` } });
+    const board = await res.json();
+    assert.equal(board.asOf, 'r2', 'asOf names the last event the board includes');
+    const etag = res.headers.get('etag');
+    assert.ok(etag);
+    assert.equal((await fetch(`${base}/teams/shop/board`, { headers: { authorization: `Bearer ${ADMIN}`, 'if-none-match': etag } })).status, 304);
     assert.equal(board.current.length, 1);
     assert.equal(board.current[0].status, 'waiting');
     assert.equal(board.current[0].waiting_on, 'backend-tester');
@@ -104,24 +114,30 @@ test('limits each role to 30 reports a minute', async () => {
   });
 });
 
-test('the kit\'s own team-status.sh reports to it unchanged', async () => {
+test('the kit\'s own team-status.sh and report.mjs report to it unchanged, and mirror to a second board', async () => {
   await plane(async ({ call }) => {
     await call('POST', '/teams', { id: 'kit' });
+    await call('POST', '/teams', { id: 'kit-mirror' });
     const { token, url } = (await call('POST', '/teams/kit/report-tokens')).body;
+    const mirror = (await call('POST', '/teams/kit-mirror/report-tokens')).body;
     const home = mkdtempSync(join(tmpdir(), 'at-home-'));
     const root = mkdtempSync(join(tmpdir(), 'at-root-'));
-    const env = { ...process.env, AGENT_TEAM_HOME: home, AGENT_TEAM_ROOT: root, TEAM_REPORT_URL: url, TEAM_REPORT_TOKEN: token };
+    const env = { ...process.env, AGENT_TEAM_HOME: home, AGENT_TEAM_ROOT: root, TEAM_REPORT_URL: url, TEAM_REPORT_TOKEN: token, TEAM_REPORT_MIRROR_URL: mirror.url, TEAM_REPORT_MIRROR_TOKEN: mirror.token };
     // Spawned, not run synchronously: the server answering it lives on this thread.
     const go = (...a) => new Promise((res, rej) => {
-      const p = spawn('bash', [join(KIT, 'scripts/team-status.sh'), ...a], { env });
+      const p = a[0] === 'node' ? spawn(process.execPath, [join(KIT, 'tools/report.mjs'), ...a.slice(1)], { env }) : spawn('bash', [join(KIT, 'scripts/team-status.sh'), ...a], { env });
       let err = '';
       p.stderr.on('data', (d) => (err += d));
       p.on('close', (code) => (code === 0 && !err ? res() : rej(new Error(err || `exit ${code}`))));
     });
     await go('qa-web', 'bug', '-', '--to', 'web-dev', '--severity', '2', '--evidence', 'a.png,b.txt', '--detail', 'Save does nothing');
     await go('code-reviewer#57', 'status', 'done');
-    const events = (await call('GET', '/teams/kit/events')).body.events.map((e) => e.event);
-    assert.deepEqual(events.map((e) => e.type), ['message.bug', 'report.status']);
+    await go('node', 'web-dev', 'status', 'working', '--task', 'Invoices page');
+    const events = (await call('GET', '/teams/kit/events')).body.events;
+    assert.deepEqual(events.map((e) => e.type), ['message.bug', 'report.status', 'report.status']);
+    assert.equal(events[2].data.task, 'Invoices page');
+    const mirrored = (await call('GET', '/teams/kit-mirror/events')).body.events;
+    assert.deepEqual(mirrored.map((e) => e.id), events.map((e) => e.id), 'the mirror gets the same reports with the same ids');
     assert.deepEqual(events[0].data.evidence, ['a.png', 'b.txt']);
     assert.equal(events[0].actor.via, 'script');
     assert.equal(events[1].actor.instance, '57');
@@ -171,9 +187,9 @@ test('streams events live and resumes from Last-Event-ID', async () => {
             let i;
             while ((i = buf.indexOf('\n\n')) >= 0) {
               const block = buf.slice(0, i); buf = buf.slice(i + 2);
-              const id = /^id: (\d+)$/m.exec(block)?.[1];
+              const id = /^id: (.+)$/m.exec(block)?.[1];
               const data = /^data: (.*)$/m.exec(block)?.[1];
-              if (id && data) got.push({ seq: Number(id), event: JSON.parse(data) });
+              if (id && data) got.push({ id, event: JSON.parse(data) });
             }
           }
           return got;
@@ -190,7 +206,8 @@ test('streams events live and resumes from Last-Event-ID', async () => {
     s.close();
 
     await report('c');
-    const again = await read({ 'last-event-id': String(got[1].seq) });
+    assert.deepEqual(got.map((g) => g.id), ['a', 'b'], 'SSE ids are event ids');
+    const again = await read({ 'last-event-id': got[1].id });
     assert.deepEqual((await again.until(1)).map((g) => g.event.id), ['c'], 'resumes after the last id it saw');
     again.close();
   });
@@ -245,4 +262,36 @@ test('the vault binds each secret to its tenant and name', () => {
   assert.throws(() => unseal(key, 'rival', 'A', sealed));
   assert.throws(() => unseal(key, 'acme', 'B', sealed));
   assert.throws(() => masterKey('short'));
+});
+
+test('the Studio shows a team\'s live board from the control plane, without the token reaching the page', async () => {
+  const { createStudio } = await import('../../studio/server.mjs');
+  await plane(async ({ call, base }) => {
+    await call('POST', '/teams', { id: 'studio-team' });
+    const { token } = (await call('POST', '/teams/studio-team/report-tokens')).body;
+    const env = { ...process.env, AGENT_TEAM_SERVER: base.replace(/\/v1$/, ''), AGENT_TEAM_SERVER_TOKEN: ADMIN, AGENT_TEAM_SERVER_TEAM: 'studio-team' };
+    const studio = createStudio({ root: KIT, env });
+    await new Promise((r) => studio.listen(0, '127.0.0.1', r));
+    const sbase = `http://127.0.0.1:${studio.address().port}`;
+    try {
+      const ctl = new AbortController();
+      const res = await fetch(`${sbase}/v1/team/board/stream`, { signal: ctl.signal });
+      const reader = res.body.getReader();
+      const changed = (async () => {
+        const dec = new TextDecoder();
+        let buf = '';
+        while (!buf.includes('event: changed')) { const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value); }
+        return true;
+      })();
+      await new Promise((r) => setTimeout(r, 300));
+      await call('POST', '/teams/studio-team/reports', { role: 'chief-of-staff', kind: 'status', status: 'working', task: 'Plan the week' }, { 'x-team-token': token });
+      assert.ok(await changed);
+      ctl.abort();
+      const text = await (await fetch(`${sbase}/v1/team/board`)).text();
+      assert.ok(!text.includes(ADMIN), 'the token stays on the server');
+      const body = JSON.parse(text);
+      assert.equal(body.source, 'server');
+      assert.equal(body.board.current[0].task, 'Plan the week');
+    } finally { studio.closeAllConnections(); studio.close(); }
+  });
 });

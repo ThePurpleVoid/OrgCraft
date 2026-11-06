@@ -73,14 +73,15 @@ export function createControlPlane({ db, key, tenant, adminToken, publicUrl = ''
 
   async function stream(req, res, t, team, url) {
     await store.getTeam(db, t, team);
-    let last = Number(req.headers['last-event-id'] ?? url.searchParams.get('after') ?? 0) || 0;
+    // Resume after an event id (Last-Event-ID on reconnect, or ?after=); ids, not positions, so clients never parse.
+    let last = await store.seqOf(db, t, team, req.headers['last-event-id'] ?? url.searchParams.get('after') ?? '');
     const type = url.searchParams.get('type') ?? '';
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
     res.write('retry: 3000\n\n');
     const write = ({ seq, event }) => {
       if (seq <= last) return;
       last = seq;
-      if (!type || event.type.startsWith(type)) res.write(`id: ${seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      if (!type || event.type.startsWith(type)) res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     };
     // Listen first and hold what arrives, then catch up from the log, so nothing falls in between.
     let held = [];
@@ -126,7 +127,9 @@ export function createControlPlane({ db, key, tenant, adminToken, publicUrl = ''
       if (!b && m === 'GET') return send(res, 200, await store.getTeam(db, t, team));
       if (b === 'events' && !c && m === 'GET') {
         const q = Object.fromEntries(url.searchParams);
-        return send(res, 200, await store.listEvents(db, t, team, { ...q, after: q.cursor ?? 0 }));
+        const after = q.cursor ? Number(Buffer.from(q.cursor, 'base64url').toString()) || 0 : await store.seqOf(db, t, team, q.after ?? '');
+        const page = await store.listEvents(db, t, team, { ...q, after });
+        return send(res, 200, { events: page.events.map((e) => e.event), next: page.next && Buffer.from(page.next).toString('base64url') });
       }
       if (b === 'events' && !c && m === 'POST') {
         const body = await readJson(req, 2 * 1024 * 1024);
@@ -134,11 +137,17 @@ export function createControlPlane({ db, key, tenant, adminToken, publicUrl = ''
         if (!events || events.length > 500) throw new Problem(400, 'send { events: [...] }, at most 500');
         const stored = await store.append(db, t, team, events);
         appended(team, stored);
-        return send(res, 200, { stored: stored.map(({ id, seq }) => ({ id, seq })), duplicates: events.length - stored.length });
+        return send(res, 200, { stored: stored.map(({ id }) => id), duplicates: events.length - stored.length });
       }
       if (b === 'events' && c === 'stream' && m === 'GET') return stream(req, res, t, team, url);
       if (b === 'board' && m === 'GET') {
-        return send(res, 200, await store.board(db, t, team, { days: url.searchParams.get('days'), role: url.searchParams.get('role') ?? '', now: now() }));
+        const days = url.searchParams.get('days') ?? '', role = url.searchParams.get('role') ?? '';
+        // The ETag changes with the log and the query; ages and staleness also move with the clock, so it is weak
+        // and lasts a minute at most.
+        const tag = `W/"${(await store.head(db, t, team)).seq}-${Math.floor(now().getTime() / 60_000)}-${Buffer.from(`${days}|${role}`).toString('base64url')}"`;
+        if (req.headers['if-none-match'] === tag) { res.writeHead(304, { etag: tag }); return res.end(); }
+        const { seq, ...body } = await store.board(db, t, team, { days, role, now: now() });
+        return send(res, 200, body, { etag: tag });
       }
       if (b === 'report-tokens' && !c && m === 'POST') {
         const tok = await store.mintReportToken(db, t, team);

@@ -12,7 +12,8 @@
 //       .agent-team/team.json sets "hooks": true. It never prints anything and always exits 0.
 //
 // Where reports go: ~/.agent-team/<project>/events.jsonl, and TEAM_REPORT_URL when set (environment,
-// .agent-team/config.sh or ~/.agent-team/<project>/team.env), with TEAM_REPORT_TOKEN as x-team-token.
+// .agent-team/config.sh or ~/.agent-team/<project>/team.env), with TEAM_REPORT_TOKEN as x-team-token, and
+// TEAM_REPORT_MIRROR_URL (with TEAM_REPORT_MIRROR_TOKEN) when set.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -66,6 +67,8 @@ export function context(env = process.env, cwd = process.cwd()) {
     log: join(home, 'events.jsonl'),
     url: extra.TEAM_REPORT_URL || env.TEAM_REPORT_URL || config.TEAM_REPORT_URL || '',
     token: extra.TEAM_REPORT_TOKEN || env.TEAM_REPORT_TOKEN || '',
+    mirrorUrl: extra.TEAM_REPORT_MIRROR_URL || env.TEAM_REPORT_MIRROR_URL || config.TEAM_REPORT_MIRROR_URL || '',
+    mirrorToken: extra.TEAM_REPORT_MIRROR_TOKEN || env.TEAM_REPORT_MIRROR_TOKEN || '',
   };
 }
 
@@ -87,20 +90,22 @@ export async function send(event, ctx, { timeoutMs = 15_000 } = {}) {
     mkdirSync(ctx.home, { recursive: true });
     appendFileSync(ctx.log, JSON.stringify(event) + '\n');
   } catch (e) { problems.push(`could not write ${ctx.log}: ${e.message}`); }
-  if (ctx.url) {
+  // The mirror gets the same report with the same id (TEAM_REPORT_MIRROR_URL), for a second board.
+  for (const [url, token, label] of [[ctx.url, ctx.token, 'hosted board'], [ctx.mirrorUrl, ctx.mirrorToken, 'mirror board']]) {
+    if (!url) continue;
     try {
-      const res = await fetch(ctx.url, {
+      const res = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...(ctx.token ? { 'x-team-token': ctx.token } : {}) },
+        headers: { 'content-type': 'application/json', ...(token ? { 'x-team-token': token } : {}) },
         body: JSON.stringify(event),
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (res.status !== 200) {
         const body = await res.text().catch(() => '');
         let error = body; try { error = JSON.parse(body).error ?? body; } catch { /* not JSON */ }
-        problems.push(`hosted board refused (HTTP ${res.status}): ${String(error).slice(0, 200)}`);
+        problems.push(`${label} refused (HTTP ${res.status}): ${String(error).slice(0, 200)}`);
       }
-    } catch (e) { problems.push(`hosted board not reached (network): ${String(e.message).slice(0, 200)}`); }
+    } catch (e) { problems.push(`${label} not reached (network): ${String(e.message).slice(0, 200)}`); }
   }
   return problems;
 }

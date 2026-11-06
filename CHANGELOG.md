@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
 
 - **Contracts for the online product** ([docs/contracts/](docs/contracts/README.md), milestone M1 of the MVP). They are written before the code that implements them:
   - the event envelope, version 1, CloudEvents-compatible, with a catalogue of report, message, run, session, chat, approval, team and connector events
@@ -11,6 +11,9 @@
 - **Mobile is a first-class client** ([ADR 0006](docs/adr/0006-mobile-apps-native-per-platform.md)): native iPhone and Android apps, each in its own repository, later (phase 4). The new [clients contract](docs/contracts/clients.md) says what every client can rely on now: a discovery document, OIDC with PKCE, an inbox across teams, structured cards with versions, step-up for approvals, one deep-link URL per thing, devices and contentless push, catching up by event id. `api-v1.yaml` gains these endpoints. The PRD (6.10, demo step 18), architecture (section 14), deployment (phones) and delivery plan are updated, with two mobile mockups.
 - `packages/events`: the envelope and an exact two-way mapping with the kit's board reports, tested on every report kind.
 - **The control plane** ([apps/server](apps/server/README.md), milestone M2). An event log in Postgres with row-level security per tenant, PGlite for local mode and tests, so `node apps/server/bin.mjs` needs nothing else installed. A team already on the kit connects by changing `TEAM_REPORT_URL` and `TEAM_REPORT_TOKEN`: the kit's own `team-status.sh` is tested against it unchanged. It also has the board, the event log with its live stream (it resumes from `Last-Event-ID`), report tokens that can be revoked, and sinks that forward reports in the kit's shape to a board the team already runs, with their tokens sealed in a vault. The API contract gains sinks, secrets, token revoke and health.
+- **The live board on the Studio's canvas.** A Live button shows what every role is doing now: a dot coloured by status, the task, who it is waiting on, and threads that have gone quiet. It updates as reports arrive. The Studio reads the local event log, or the control plane when `AGENT_TEAM_SERVER`, `AGENT_TEAM_SERVER_TOKEN` and `AGENT_TEAM_SERVER_TEAM` are set, and keeps the token on its own server.
+- **Report mirrors.** `TEAM_REPORT_MIRROR_URL` and `TEAM_REPORT_MIRROR_TOKEN` send every report (from `team-status.sh`, `report.mjs` and the hooks) to a second board too, with the same id. A team can feed the control plane next to the board it already runs.
+- Control plane: `after=<event id>` on the log, SSE ids that are event ids, an opaque `cursor`, and `asOf` plus an ETag on the board, matching docs/contracts/clients.md. Its default port is now 4849, so it can run next to the Studio.
 
 ## 0.7.1
 

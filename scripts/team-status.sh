@@ -16,7 +16,8 @@
 # Every report is appended to ~/.agent-team/<project>/events.jsonl, which team-board.sh and the dashboard
 # (dashboard.mjs) read. When TEAM_REPORT_URL is set (environment, .agent-team/config.sh or ~/.agent-team/<project>/team.env)
 # the report is also posted there, with TEAM_REPORT_TOKEN as x-team-token when set: a dashboard on another machine
-# (http://<host>:4747/api/report) or a hosted board (see board/). Fills branch and commit from git. Never fails the caller: a bad call,
+# (http://<host>:4747/api/report) or a hosted board (see board/). TEAM_REPORT_MIRROR_URL and TEAM_REPORT_MIRROR_TOKEN
+# send the same report to a second board too. Fills branch and commit from git. Never fails the caller: a bad call,
 # a missing tool or a refused report prints one line and exits 0. Without jq it runs report.mjs, which needs only Node.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -102,18 +103,22 @@ payload=$(jq -nc --arg id "$id" --arg at "$at" --arg role "$role" --arg instance
 mkdir -p "$AT_HOME" 2>/dev/null && printf '%s\n' "$payload" >>"$AT_HOME/events.jsonl" 2>/dev/null \
   || echo "team-status: could not write $AT_HOME/events.jsonl" >&2
 
-if [ -n "${TEAM_REPORT_URL:-}" ]; then
-  auth=(); [ -n "${TEAM_REPORT_TOKEN:-}" ] && auth=(-H "x-team-token: $TEAM_REPORT_TOKEN")
-  response=$(curl -sS --max-time 15 -w '\n%{http_code}' -X POST "$TEAM_REPORT_URL" \
+# post <url> <token> <label>: one POST, one line on stderr when it is refused or not reached.
+post() {
+  local auth=() response code body
+  [ -n "$2" ] && auth=(-H "x-team-token: $2")
+  response=$(curl -sS --max-time 15 -w '\n%{http_code}' -X POST "$1" \
     -H "Content-Type: application/json" ${auth[@]+"${auth[@]}"} --data "$payload" 2>&1) || {
-    echo "team-status: hosted board not reached (network): ${response:0:200}" >&2; response=""; }
-  if [ -n "$response" ]; then
-    code="${response##*$'\n'}"
-    body="${response%$'\n'*}"
-    if [ "$code" != "200" ]; then
-      echo "team-status: hosted board refused (HTTP $code): $(jq -r '.error // .' <<<"$body" 2>/dev/null | head -c 200)" >&2
-    fi
+    echo "team-status: $3 not reached (network): ${response:0:200}" >&2; return; }
+  code="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  if [ "$code" != "200" ]; then
+    echo "team-status: $3 refused (HTTP $code): $(jq -r '.error // .' <<<"$body" 2>/dev/null | head -c 200)" >&2
   fi
-fi
+}
+# The mirror gets the same report with the same id, so a team can feed a second board (such as the Studio's
+# control plane) next to the one it already runs.
+[ -n "${TEAM_REPORT_URL:-}" ] && post "$TEAM_REPORT_URL" "${TEAM_REPORT_TOKEN:-}" "hosted board"
+[ -n "${TEAM_REPORT_MIRROR_URL:-}" ] && post "$TEAM_REPORT_MIRROR_URL" "${TEAM_REPORT_MIRROR_TOKEN:-}" "mirror board"
 echo "team-status: $agent $kind${status:+ $status}${task:+ · $task}"
 exit 0

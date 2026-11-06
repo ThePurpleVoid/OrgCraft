@@ -133,6 +133,7 @@ node scripts/agent-team/dashboard.mjs export --out <dir> [--board <url>] [--dir 
 | `DASHBOARD_PORT`, `DASHBOARD_HOST` | dashboard | Defaults for `--port` and `--host` |
 | `TEAM_BOARD_URL`, `TEAM_READ_TOKEN` | dashboard | Read a hosted board instead of the local log |
 | `TEAM_REPORT_URL`, `TEAM_REPORT_TOKEN` | threads | Also post every report there |
+| `TEAM_REPORT_MIRROR_URL`, `TEAM_REPORT_MIRROR_TOKEN` | threads | And to a second board (such as the Studio's control plane), with the same id |
 | `TEAM_DASHBOARD_ORIGINS` | Edge Function | Origins allowed to read the hosted board from a browser |
 
 The server's API: `GET /api/roster` (the team from the briefs), `GET /api/board?role=&days=` (same shape as the hosted board), `GET /api/stream` (server-sent events), `POST /api/report` (one report, as `team-status.sh` sends it).

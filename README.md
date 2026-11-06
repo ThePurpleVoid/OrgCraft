@@ -35,7 +35,7 @@ Requirements: git and Node 18+, plus bash and `jq` for the merge gate and locks 
 
 ```sh
 cd ~/code/my-app
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.7.1 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.8.0 init --preset engineering --project "My App" --owner "Sam" --timezone "Pacific"
 ```
 
 Then:
@@ -43,7 +43,7 @@ Then:
 1. Edit `docs/team/ownership.md` so the paths match your layout.
 2. Edit the gates and hardware pools in `.agent-team/config.sh`.
 3. Paste `docs/team/project-instructions.md` into your Claude project's instructions (or into `CLAUDE.md`).
-4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI. `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.7.1 doctor` smoke-tests the whole setup.
+4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI. `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.8.0 doctor` smoke-tests the whole setup.
 5. Open the chief of staff: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."*
 6. Ask for something. Watch it live with `node scripts/agent-team/dashboard.mjs` (a web dashboard at http://localhost:4747) or `scripts/agent-team/team-board.sh` in the terminal.
 
@@ -128,7 +128,7 @@ tests/                          tests for the CLI, scripts and tools, smoke scen
 ## Build the team visually: Agent Team Studio
 
 ```sh
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.7.1 studio --open   # http://localhost:4848
+npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.8.0 studio --open   # http://localhost:4848
 ```
 
 Switch roles on and off from the library, drag a card onto another to change who it reports to, and set each role's model tier, status and duties in the inspector. **Flow** shows who hands work to whom. In **Systems**, add your database, hosting or any MCP server and drag it onto the roles that may use it. **Owned areas** and **Checks** are suggested from your repository's folders and build files. The kit's rules run on every change. **Publish** shows every file that would change, then commits the team and its generated files on a new branch for you to push and review.

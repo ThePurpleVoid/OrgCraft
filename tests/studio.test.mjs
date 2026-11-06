@@ -140,3 +140,38 @@ test('graph gives the hand-offs, and suggestions read folders and build files', 
     execFileSync(process.execPath, [cli, 'check', '--dir', root], { stdio: 'ignore' });
   });
 });
+
+test('the live board comes from the local event log, and the stream says when it changes', async () => {
+  const root = repo();
+  const home = mkdtempSync(join(tmpdir(), 'studio-home-'));
+  const env = { ...process.env, AGENT_TEAM_HOME: home, AGENT_TEAM_ROOT: root };
+  delete env.AGENT_TEAM_SERVER;
+  const server = createStudio({ root, env });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const report = (...a) => execFileSync('bash', [join(root, 'scripts/agent-team/team-status.sh'), ...a], { env, stdio: 'ignore' });
+  try {
+    const empty = await (await fetch(`${base}/v1/team/board`)).json();
+    assert.equal(empty.source, 'log');
+    assert.deepEqual(empty.board.current, []);
+
+    const ctl = new AbortController();
+    const res = await fetch(`${base}/v1/team/board/stream`, { signal: ctl.signal });
+    assert.equal(res.headers.get('content-type'), 'text/event-stream');
+    const reader = res.body.getReader();
+    const changed = (async () => {
+      const dec = new TextDecoder();
+      let buf = '';
+      while (!buf.includes('event: changed')) { const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value); }
+      return buf.includes('event: changed');
+    })();
+    await new Promise((r) => setTimeout(r, 200));
+    report('web-dev', 'status', 'working', '--task', 'Invoices page');
+    assert.ok(await changed, 'a report on this machine reaches the page');
+    ctl.abort();
+
+    const { board } = await (await fetch(`${base}/v1/team/board`)).json();
+    assert.equal(board.current[0].role, 'web-dev');
+    assert.equal(board.current[0].task, 'Invoices page');
+  } finally { server.closeAllConnections(); server.close(); }
+});

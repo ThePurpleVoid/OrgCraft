@@ -8,7 +8,7 @@ streams, sinks and the secret vault. It implements [`/v1/`](../../docs/contracts
 
 ```bash
 cd apps/server && npm install
-node bin.mjs                       # http://127.0.0.1:4848/v1, data in ~/.agent-team/server
+node bin.mjs                       # http://127.0.0.1:4849/v1, data in ~/.agent-team/server
 ```
 
 Local mode keeps everything in one folder: the database (PGlite, which is Postgres compiled to WebAssembly, so
@@ -19,9 +19,9 @@ bearer token for every call until GitHub sign-in lands.
 
 ```bash
 T=$(cat ~/.agent-team/server/admin.token)
-curl -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"id":"my-team"}' localhost:4848/v1/teams
-curl -X POST -H "authorization: Bearer $T" localhost:4848/v1/teams/my-team/report-tokens
-# → { "id": "rt_…", "token": "rt_….…", "url": "http://localhost:4848/v1/teams/my-team/reports" }
+curl -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"id":"my-team"}' localhost:4849/v1/teams
+curl -X POST -H "authorization: Bearer $T" localhost:4849/v1/teams/my-team/report-tokens
+# → { "id": "rt_…", "token": "rt_….…", "url": "http://localhost:4849/v1/teams/my-team/reports" }
 ```
 
 Put `url` and `token` in the team's `~/.agent-team/<project>/team.env` as `TEAM_REPORT_URL` and
@@ -33,10 +33,10 @@ revoked with `DELETE /v1/teams/my-team/report-tokens/{id}`.
 runs (such as `board/supabase`), with its token kept in the vault:
 
 ```bash
-curl -X PUT -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"value":"<their token>"}' localhost:4848/v1/secrets/OWN_BOARD_TOKEN
+curl -X PUT -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"value":"<their token>"}' localhost:4849/v1/secrets/OWN_BOARD_TOKEN
 curl -H "authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"url":"https://<ref>.supabase.co/functions/v1/team-report","header":"x-team-token","secret":"OWN_BOARD_TOKEN"}' \
-  localhost:4848/v1/teams/my-team/sinks
+  localhost:4849/v1/teams/my-team/sinks
 ```
 
 Sinks deliver in order, at least once, and back off from 5 seconds to an hour while the other end is down.

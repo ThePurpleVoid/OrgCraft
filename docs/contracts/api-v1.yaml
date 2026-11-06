@@ -15,7 +15,7 @@ info:
       in `x-team-token`. It can append reports for that one team and read nothing.
 servers:
   - url: https://{host}/v1
-    variables: { host: { default: localhost:4848 } }
+    variables: { host: { default: localhost:4849 } }
 security:
   - person: []
 tags:

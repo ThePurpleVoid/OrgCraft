@@ -13,7 +13,7 @@ at_init() {
   AT_ROOT="${AGENT_TEAM_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
   local config="${AGENT_TEAM_CONFIG:-$AT_ROOT/.agent-team/config.sh}"
   # Settings already in the environment win over the config file.
-  local env_project="${AGENT_TEAM_PROJECT:-}" env_pools="${AGENT_TEAM_POOLS:-}" env_url="${TEAM_REPORT_URL:-}"
+  local env_project="${AGENT_TEAM_PROJECT:-}" env_pools="${AGENT_TEAM_POOLS:-}" env_url="${TEAM_REPORT_URL:-}" env_mirror="${TEAM_REPORT_MIRROR_URL:-}"
   if [ -f "$config" ]; then
     # shellcheck disable=SC1090
     . "$config"
@@ -28,6 +28,7 @@ at_init() {
   [ -n "$env_project" ] && AGENT_TEAM_PROJECT="$env_project"
   [ -n "$env_pools" ] && AGENT_TEAM_POOLS="$env_pools"
   [ -n "$env_url" ] && TEAM_REPORT_URL="$env_url"
+  [ -n "$env_mirror" ] && TEAM_REPORT_MIRROR_URL="$env_mirror"
   if [ -z "${AGENT_TEAM_PROJECT:-}" ]; then
     local common
     common="$(git -C "$AT_ROOT" rev-parse --git-common-dir 2>/dev/null || true)"

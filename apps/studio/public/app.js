@@ -24,6 +24,7 @@ let selectedSystem = null;
 let flow = { key: '', edges: [], unresolved: [] }; // hand-offs, from the server, for the spec they were made from
 let sugg = null; // owned area and check suggestions from the repository
 let scale = 1;
+let live = null; // { on, source, where, board, error, es } when the live board is shown
 
 // ------------------------------------------------------------------------------------------------ model
 
@@ -194,14 +195,31 @@ function systemsLine(slug) {
   return b.length ? b.map((x) => `${x.resource} ${x.permission}`).join(' · ') : 'no systems';
 }
 
+/** The newest live status of a role (any instance), and how many of its threads are active. */
+function liveOf(slug) {
+  const rows = (live?.board?.current ?? []).filter((c) => c.role === slug);
+  if (!rows.length) return null;
+  const active = rows.filter((c) => c.status !== 'done' && c.status !== 'idle');
+  return { ...rows[0], threads: active.length };
+}
+
+function liveLine(l) {
+  if (!l) return 'no reports yet';
+  const what = l.waiting_on ? `${l.status} on ${l.waiting_on}` : l.status;
+  return `${what}${l.stale ? ' (quiet)' : ''}${l.task ? ` · ${l.task}` : ''}`;
+}
+
 function nodeSvg(r, p, extra = '') {
-  const tier = mode === 'systems' ? systemsLine(r.slug) : r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}` : '';
+  const l = live?.on && mode !== 'systems' ? liveOf(r.slug) : undefined;
+  if (live?.on && mode !== 'systems') extra += l ? ` live s-${l.status}${l.stale ? ' stale' : ''}` : ' live none';
+  const tier = l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}` : '';
   const flag = view.issues.some((i) => i.level === 'error' && i.where === `roles/${r.slug}`) ? ' ⚠' : r.changed ? ' •' : '';
   return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${extra}" data-slug="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}">
     <rect class="card" width="${W}" height="${H}"></rect>
     <rect class="stripe" width="4" height="${H - 16}" x="8" y="8" fill="${groupColor(r.group)}"></rect>
     <text class="title" x="20" y="23">${esc(r.title.length > 21 ? r.title.slice(0, 20) + '…' : r.title)}${flag}</text>
     <text class="meta" x="20" y="41">${esc(tier.length > 28 ? tier.slice(0, 27) + '…' : tier)}</text>
+    ${l ? `<circle class="dot" cx="${W - 14}" cy="16" r="5"></circle>${l.threads > 1 ? `<text class="threads" x="${W - 24}" y="20" text-anchor="end">${l.threads}</text>` : ''}<title>${esc(`${r.title}: ${liveLine(l)}${l.pr ? ` · PR #${l.pr}` : ''}${l.issue ? ` · issue #${l.issue}` : ''}`)}</title>` : ''}
   </g>`;
 }
 
@@ -236,10 +254,41 @@ function renderCanvas() {
     <g class="node owner" data-slug="owner" transform="translate(${owner.x},${owner.y})"><rect class="card" width="${W}" height="${H}"></rect>
       <text class="title" x="20" y="23">${esc(spec.values?.OWNER || 'The owner')}</text><text class="meta" x="20" y="41">owner</text></g>
     ${nodes}</svg>`;
+  if (live?.on) $('#summary').textContent += ` · ${liveSummary()}`;
   if (mode === 'flow') {
     const mine = selected ? flow.edges.filter((x) => x.from === selected || x.to === selected) : flow.edges;
     $('#summary').textContent += selected ? ` · ${view.bySlug.get(selected)?.title}: ${mine.filter((x) => x.from === selected).length} out, ${mine.filter((x) => x.to === selected).length} in` : ` · ${flow.edges.length} hand-offs`;
   }
+}
+
+function liveSummary() {
+  if (live.error) return `live board unavailable: ${live.error}`;
+  if (!live.board) return 'loading the live board…';
+  const n = {};
+  for (const c of live.board.current) if (view.bySlug.has(c.role)) n[c.status] = (n[c.status] ?? 0) + 1;
+  const parts = ['working', 'waiting', 'blocked', 'review'].filter((k) => n[k]).map((k) => `${n[k]} ${k}`);
+  return `live: ${parts.join(', ') || 'nobody working'} (${live.source === 'server' ? 'control plane' : 'this machine'})`;
+}
+
+async function loadLive() {
+  try {
+    const r = await fetch('/v1/team/board');
+    const body = await r.json();
+    Object.assign(live, { source: body.source, where: body.where, board: body.board ?? null, error: r.ok ? null : body.error });
+  } catch (e) { live.error = e.message; }
+  if (live.on) renderCanvas();
+}
+
+function toggleLive() {
+  if (live?.on) { live.es?.close(); live = null; }
+  else {
+    live = { on: true, board: null, error: null };
+    live.es = new EventSource('/v1/team/board/stream');
+    live.es.addEventListener('changed', loadLive);
+    loadLive();
+  }
+  $('#live').setAttribute('aria-pressed', String(!!live?.on));
+  renderCanvas();
 }
 
 /** A hand-off arrow between two cards, curving out to the side so it does not run along the reporting lines. */
@@ -537,6 +586,7 @@ async function start() {
   $('#undo').onclick = () => step(undo, redo);
   $('#redo').onclick = () => step(redo, undo);
   $('#publish').onclick = openPublish;
+  $('#live').onclick = toggleLive;
   $('#confirm').onclick = confirmPublish;
   $('#issues').addEventListener('click', (e) => {
     const w = e.target.closest('li')?.dataset.where ?? '';

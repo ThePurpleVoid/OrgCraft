@@ -86,7 +86,24 @@ export async function appendReport(db, tenant, team, body, now = new Date()) {
   return { id: row.id, row, stored };
 }
 
-/** The log, oldest first, after a cursor (seq), filtered by a type prefix, an actor id and a time. */
+/** The seq of a stored event, for `after=<event id>` and Last-Event-ID. Throws 400 when the id is not in the log. */
+export async function seqOf(db, tenant, team, eventId) {
+  if (!eventId) return 0;
+  const [row] = await db.tenant(tenant, ({ q }) => q('select seq from events where team = $1 and id = $2', [team, String(eventId)]));
+  if (!row) throw new Problem(400, `no event ${eventId} in this team's log`);
+  return Number(row.seq);
+}
+
+/** The newest stored event: { id, seq } (both null for an empty log). For asOf and ETag on projections. */
+export async function head(db, tenant, team) {
+  const [row] = await db.tenant(tenant, ({ q }) => q('select id, seq from events where team = $1 order by seq desc limit 1', [team]));
+  return row ? { id: row.id, seq: Number(row.seq) } : { id: null, seq: 0 };
+}
+
+/**
+ * The log, oldest first, filtered by a type prefix, an actor id and a time. `after` is a seq here; the API takes an
+ * event id (after=) or the opaque `next` cursor it handed out, which clients must not parse.
+ */
 export async function listEvents(db, tenant, team, { type = '', actor = '', since = '', after = 0, limit = 200 } = {}) {
   const n = Math.min(Math.max(Number(limit) || 200, 1), 1000);
   const rows = await db.tenant(tenant, ({ q }) => q(
@@ -101,11 +118,12 @@ export async function listEvents(db, tenant, team, { type = '', actor = '', sinc
 /** The board (the same shape as tools/board.mjs summarize and the hosted board), projected from the log. */
 export async function board(db, tenant, team, { days = 7, role = '', now = new Date() } = {}) {
   await getTeam(db, tenant, team);
+  const last = await head(db, tenant, team);
   const rows = await db.tenant(tenant, ({ q }) => q(
     `select envelope from events where team = $1 and (starts_with(type, 'report.') or starts_with(type, 'message.'))
        and time >= $2::timestamptz order by time, seq limit 50000`,
     [team, new Date(now.getTime() - 30 * 86_400_000).toISOString()]));
-  return summarize(rows.map((r) => toKitRow(r.envelope)).filter(Boolean), { now, days: Number(days) || 7, role });
+  return { ...summarize(rows.map((r) => toKitRow(r.envelope)).filter(Boolean), { now, days: Number(days) || 7, role }), asOf: last.id, seq: last.seq };
 }
 
 export async function putSecret(db, key, tenant, name, value) {

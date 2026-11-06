@@ -18,6 +18,7 @@ import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
 import { ownershipFromMarkdown, suggestAreas, suggestChecks } from './suggest.mjs';
 import { loadKit, readLayer, writeLayer } from '../../packages/team-model/node.mjs';
+import { liveSource } from './live.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(HERE, 'public');
@@ -115,12 +116,27 @@ export function suggestions(root, spec) {
 
 const send = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 
-export function createStudio({ root }) {
+export function createStudio({ root, env = process.env }) {
+  const live = liveSource(root, env);
   return createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
       // The Studio's API, versioned like the public API it will become (ADR 0005): additive changes only within /v1/.
       if (req.method === 'GET' && url.pathname === '/v1/team') return send(res, 200, state(root));
+      // The live board, and a stream that says when it changed (the page then fetches the board again).
+      if (req.method === 'GET' && url.pathname === '/v1/team/board') {
+        try { return send(res, 200, { source: live.kind, where: live.where, board: await live.board() }); } catch (e) { return send(res, 502, { source: live.kind, where: live.where, error: e.message }); }
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/team/board/stream') {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+        res.write('retry: 3000\n\n');
+        let timer = null;
+        // Bursts of reports (a hand-off is two) become one refresh.
+        const stop = live.changes(() => { clearTimeout(timer); timer = setTimeout(() => res.write('event: changed\ndata: {}\n\n'), 300); });
+        const beat = setInterval(() => res.write(': keep-alive\n\n'), 20_000);
+        req.on('close', () => { stop(); clearTimeout(timer); clearInterval(beat); });
+        return;
+      }
       if (req.method === 'POST' && url.pathname.startsWith('/v1/')) {
         // Only this page may change the repository: same origin, JSON body (a cross-site form cannot send either).
         const origin = req.headers.origin;

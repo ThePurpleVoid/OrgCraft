@@ -2,7 +2,7 @@
 // agent-team-server: the control plane. Local mode keeps everything in one folder (PGlite); a deployment sets
 // DATABASE_URL and passes the keys in the environment.
 //
-//   agent-team-server [--port 4848] [--host 127.0.0.1] [--data ~/.agent-team/server]
+//   agent-team-server [--port 4849] [--host 127.0.0.1] [--data ~/.agent-team/server]
 //
 // Environment:
 //   DATABASE_URL            postgres://… (omit for local mode, which stores the database in --data)
@@ -22,7 +22,7 @@ import { startSinks } from './sinks.mjs';
 import { createControlPlane } from './server.mjs';
 
 const { values: o } = parseArgs({ options: {
-  port: { type: 'string', default: process.env.PORT ?? '4848' },
+  port: { type: 'string', default: process.env.PORT ?? '4849' },
   host: { type: 'string', default: process.env.HOST ?? '127.0.0.1' },
   data: { type: 'string', default: process.env.AGENT_TEAM_DATA ?? join(homedir(), '.agent-team', 'server') },
   help: { type: 'boolean', short: 'h' },
