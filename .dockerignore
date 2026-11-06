@@ -1,0 +1,7 @@
+**/node_modules
+.git
+**/.vercel
+**/*.env
+!**/*.env.example
+docs/images
+docs/product/mockups

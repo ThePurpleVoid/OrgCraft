@@ -1,0 +1,136 @@
+# Deploys this repository's own hosted instance after CI passes on main: Postgres on Supabase, the control plane
+# container on Fly.io (migrations run first, as its release command), the static Studio on Vercel in front.
+# Off until the owner sets the repository variable AGENT_TEAM_DEPLOY to "on". Setup: docs/deploy/vercel-supabase.md.
+# Secrets come from the "production" environment and are never printed; the step that hands them to Fly reads them
+# from the environment and pipes them over stdin.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      allow_destructive:
+        description: "Run migrations flagged as destructive (only with the owner's OK)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      vars.AGENT_TEAM_DEPLOY == 'on' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      FLY_APP: ${{ vars.FLY_APP }}
+      FLY_ORG: ${{ vars.FLY_ORG || 'personal' }}
+      FLY_REGION: ${{ vars.FLY_REGION || 'iad' }}
+      VERCEL_PROJECT: ${{ vars.VERCEL_PROJECT }}
+      VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
+      TENANT: ${{ vars.AGENT_TEAM_TENANT || 'main' }}
+      PUBLIC_URL: ${{ vars.AGENT_TEAM_PUBLIC_URL || format('https://{0}.vercel.app', vars.VERCEL_PROJECT) }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Check that every secret and variable is set (names only)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AGENT_TEAM_MASTER_KEY: ${{ secrets.AGENT_TEAM_MASTER_KEY }}
+          AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
+        run: |
+          missing=""
+          for n in FLY_API_TOKEN VERCEL_TOKEN DATABASE_URL AGENT_TEAM_MASTER_KEY AGENT_TEAM_ADMIN_TOKEN FLY_APP VERCEL_PROJECT; do
+            [ -n "${!n}" ] || missing="$missing $n"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Not set in the production environment:$missing (see docs/deploy/vercel-supabase.md)"
+            exit 1
+          fi
+          case "$DATABASE_URL" in *":6543/"*) echo "::error::DATABASE_URL is the transaction pooler (6543); use the session pooler (5432)"; exit 1;; esac
+          case "$DATABASE_URL" in *"sslmode=verify-full"*) ;; *) echo "::error::DATABASE_URL must use sslmode=verify-full (see docs/deploy/vercel-supabase.md)"; exit 1;; esac
+
+      # Pinned by commit, and installed before any token is in scope: no token is visible to install scripts.
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+        with:
+          version: 0.5.5
+      - name: Install the Vercel CLI
+        run: npm install --global --ignore-scripts vercel@65.12.0
+
+      - name: Create the Fly app if it does not exist yet
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl status --app "$FLY_APP" >/dev/null 2>&1 || flyctl apps create "$FLY_APP" --org "$FLY_ORG"
+
+      - name: Stage the control plane's secrets on Fly
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AGENT_TEAM_MASTER_KEY: ${{ secrets.AGENT_TEAM_MASTER_KEY }}
+          AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
+          AGENT_TEAM_STEP_UP_SECRET_HASH: ${{ secrets.AGENT_TEAM_STEP_UP_SECRET_HASH }}
+        run: |
+          {
+            printf 'DATABASE_URL=%s\nAGENT_TEAM_MASTER_KEY=%s\nAGENT_TEAM_ADMIN_TOKEN=%s\n' \
+              "$DATABASE_URL" "$AGENT_TEAM_MASTER_KEY" "$AGENT_TEAM_ADMIN_TOKEN"
+            # Optional until the M3 exit: without it, approvals that need step-up are refused, nothing else changes.
+            [ -n "$AGENT_TEAM_STEP_UP_SECRET_HASH" ] && printf 'AGENT_TEAM_STEP_UP_SECRET_HASH=%s\n' "$AGENT_TEAM_STEP_UP_SECRET_HASH"
+            true
+          } | flyctl secrets import --stage --app "$FLY_APP" >/dev/null
+
+      - name: Run migrations the owner approved as destructive (only when allow_destructive is ticked)
+        if: inputs.allow_destructive
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ALLOW_DESTRUCTIVE: "1"
+        run: |
+          npm ci --ignore-scripts --prefix apps/server
+          node deploy/server/migrate.mjs
+
+      - name: Deploy the control plane (its release command migrates first and refuses anything destructive)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy . --app "$FLY_APP" --config deploy/fly/server.toml --dockerfile deploy/server/Dockerfile \
+            --remote-only --ha=false --primary-region "$FLY_REGION" --wait-timeout 5m \
+            --env AGENT_TEAM_PUBLIC_URL="$PUBLIC_URL" --env AGENT_TEAM_TENANT="$TENANT" --env DATABASE_POOL=5
+
+      - name: Deploy the site on Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          site="$RUNNER_TEMP/site"
+          node deploy/vercel/build.mjs --api "https://$FLY_APP.fly.dev" --out "$site"
+          cd "$site"
+          scope=(); [ -n "$VERCEL_SCOPE" ] && scope=(--scope "$VERCEL_SCOPE")
+          vercel project add "$VERCEL_PROJECT" "${scope[@]}" --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
+          vercel link --yes --project "$VERCEL_PROJECT" "${scope[@]}" --token "$VERCEL_TOKEN"
+          vercel pull --yes --environment=production "${scope[@]}" --token "$VERCEL_TOKEN"
+          vercel build --prod "${scope[@]}" --token "$VERCEL_TOKEN"
+          vercel deploy --prebuilt --prod "${scope[@]}" --token "$VERCEL_TOKEN"
+
+      - name: Smoke test (read-only), including streams through the Vercel rewrite
+        env:
+          AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
+        run: node deploy/smoke.mjs --site "$PUBLIC_URL" --api "https://$FLY_APP.fly.dev"
