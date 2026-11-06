@@ -108,9 +108,10 @@ test('the runner opens the pull request after the first checkpoint, and merges i
     },
   });
   const results = [];
+  let rounds = 0;
   const adapter = stubAdapter({
     'web-dev': async (t) => {
-      writeFileSync(join(t.cwd, 'form.txt'), `form ${t.turn}\n`);
+      writeFileSync(join(t.cwd, 'form.txt'), `form ${++rounds}\n`); // each round changes something
       const own = await t.use('Bash', { command: `gh pr merge 1 --squash --match-head-commit ${'a'.repeat(40)}` });
       assert.match(own.refused ?? '', /runner merges this branch's pull request/, 'the session never merges itself');
       const r = await t.call('request_approval', { action: 'accept', call: 'merge the login form', why: 'qa-web signed off' });
@@ -127,8 +128,9 @@ test('the runner opens the pull request after the first checkpoint, and merges i
     const opened = cp.events.find((e) => e.type === 'proposal.opened');
     assert.ok(opened, 'proposal.opened after the first push');
     assert.deepEqual([opened.data.connector, opened.data.ref, opened.data.branch], ['local', 1, 'web/5-form']);
-    const head = sh(bare, 'rev-parse', 'web/5-form');
-    assert.equal(opened.data.headSha, head);
+    const head = opened.data.headSha;
+    assert.match(head, /^[0-9a-f]{40}$/);
+    assert.throws(() => sh(bare, 'rev-parse', '--verify', '--quiet', 'refs/heads/web/5-form'), 'the merged branch is deleted, as delete-branch-on-merge');
     // The approval names the pull request and the pushed head; the session never named either.
     const asked = cp.approvals.at(-1).input;
     assert.deepEqual([asked.pr, asked.headSha], [1, head]);

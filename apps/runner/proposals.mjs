@@ -10,13 +10,14 @@
 //
 // Both answer the same calls:
 //   open({ repo, branch, base, title, body })  -> { connector, ref, url, headSha, existed }
-//   accept({ repo, ref, branch, base, headSha, approval }) -> { result } (the merge commit)
+//   accept({ repo, ref, branch, base, headSha, approval }) -> { result } (the merge commit); the branch is deleted
 //   head({ repo, ref }) -> the proposal's head on the remote now
 // and an accept that cannot land throws a ProposalError with `reason` head-moved, checks or conflict.
 import { createSign } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { git } from './worktree.mjs';
 import { repoSlug } from './policy.mjs';
 
@@ -84,13 +85,18 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
       if (r.status !== 200 || !FULL_SHA.test(r.body.head?.sha ?? '')) throw new Error(`could not read the head of pull request ${ref} (${r.status})`);
       return r.body.head.sha;
     },
-    async accept({ repo, ref, headSha }) {
+    async accept({ repo, ref, branch, headSha }) {
       need(headSha);
       const slug = slugOf(repo);
       const token = await tokenFor(slug);
       // GitHub refuses with 409 when the head is no longer `sha`, and 405 when the pull request cannot be merged.
       const r = await call(`/repos/${slug}/pulls/${Number(ref)}/merge`, { token, method: 'PUT', body: JSON.stringify({ sha: headSha, merge_method: method }) });
-      if (r.status === 200 && r.body.merged) return { result: r.body.sha };
+      if (r.status === 200 && r.body.merged) {
+        // The branch goes, so the session's next push starts a new pull request from the new base. Best effort: a
+        // repository that deletes merged branches itself answers 422.
+        if (branch) await call(`/repos/${slug}/git/refs/heads/${branch.split('/').map(encodeURIComponent).join('/')}`, { token, method: 'DELETE' }).catch(() => {});
+        return { result: r.body.sha };
+      }
       const why = r.body.message ?? `status ${r.status}`;
       if (r.status === 409) throw new ProposalError('head-moved', why);
       if (r.status === 405 && /conflict/i.test(why)) throw new ProposalError('conflict', why);
@@ -104,38 +110,42 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
  * so a harness or a test can read the head and the merge result. `checks` can refuse an accept, the way a required
  * status check would (the harness's hook for a red check).
  */
-export function localProposals({ checks = async () => true } = {}) {
-  const file = (repo) => join(repo, 'agent-team-proposals.json');
+export function localProposals({ checks = async () => true, before = async () => {} } = {}) {
+  // repo.url as the Studio sends it for a repository on disk (file:///…), or a plain path.
+  const dir = (repo) => (String(repo).startsWith('file://') ? fileURLToPath(repo) : String(repo));
+  const file = (repo) => join(dir(repo), 'agent-team-proposals.json');
   const load = (repo) => (existsSync(file(repo)) ? JSON.parse(readFileSync(file(repo), 'utf8')) : { next: 1, proposals: {} });
   const store = (repo, s) => { writeFileSync(`${file(repo)}.tmp`, JSON.stringify(s, null, 2)); renameSync(`${file(repo)}.tmp`, file(repo)); };
   return {
     connector: 'local',
     async open({ repo, branch, base, title }) {
       const s = load(repo);
-      const headSha = await git(repo, 'rev-parse', '--verify', `refs/heads/${branch}^{commit}`);
+      const headSha = await git(dir(repo), 'rev-parse', '--verify', `refs/heads/${branch}^{commit}`);
       const open = Object.values(s.proposals).find((p) => p.branch === branch && p.state === 'open');
-      if (open) { open.headSha = headSha; store(repo, s); return { connector: 'local', ref: open.ref, url: `file://${repo}#${open.ref}`, headSha, existed: true }; }
+      if (open) { open.headSha = headSha; store(repo, s); return { connector: 'local', ref: open.ref, url: `file://${dir(repo)}#${open.ref}`, headSha, existed: true }; }
       const ref = s.next++;
       s.proposals[ref] = { ref, branch, base, title, headSha, state: 'open' };
       store(repo, s);
-      return { connector: 'local', ref, url: `file://${repo}#${ref}`, headSha, existed: false };
+      return { connector: 'local', ref, url: `file://${dir(repo)}#${ref}`, headSha, existed: false };
     },
     async head({ repo, ref }) {
       const p = load(repo).proposals[ref];
       if (!p) throw new Error(`no proposal ${ref}`);
-      return git(repo, 'rev-parse', '--verify', `refs/heads/${p.branch}^{commit}`);
+      return git(dir(repo), 'rev-parse', '--verify', `refs/heads/${p.branch}^{commit}`);
     },
     async accept({ repo, ref, headSha, approval }) {
       need(headSha);
+      // The dry run's hook: hold the merge here, after the approval, so a test can move the head first (step 9b).
+      await before(load(repo).proposals[ref]);
       const s = load(repo);
       const p = s.proposals[ref];
       if (!p || p.state !== 'open') throw new ProposalError('checks', `proposal ${ref} is not open`);
-      const head = await git(repo, 'rev-parse', '--verify', `refs/heads/${p.branch}^{commit}`);
+      const head = await git(dir(repo), 'rev-parse', '--verify', `refs/heads/${p.branch}^{commit}`);
       if (head !== headSha) throw new ProposalError('head-moved', `the head of ${p.branch} is ${head}, not the approved ${headSha}`);
       if (!(await checks(p))) throw new ProposalError('checks', 'a required check has not passed');
       const tmp = mkdtempSync(join(tmpdir(), 'merge-'));
       try {
-        await git(tmp, 'clone', '--quiet', '--no-hardlinks', '--', repo, 'w');
+        await git(tmp, 'clone', '--quiet', '--no-hardlinks', '--', dir(repo), 'w');
         const w = join(tmp, 'w');
         await git(w, 'checkout', '--quiet', p.base);
         try {
@@ -147,6 +157,8 @@ export function localProposals({ checks = async () => true } = {}) {
         const result = await git(w, 'rev-parse', 'HEAD');
         // A plain push: if the base moved under the merge, it is not a fast-forward and is refused.
         await git(w, 'push', '--quiet', 'origin', `HEAD:refs/heads/${p.base}`);
+        // As GitHub's delete-branch-on-merge: the next push from the session starts a new pull request.
+        await git(dir(repo), 'update-ref', '-d', `refs/heads/${p.branch}`, headSha);
         Object.assign(p, { state: 'merged', result, mergedHead: headSha, approval: approval ?? null });
         store(repo, s);
         return { result };
