@@ -263,6 +263,7 @@ test('budget: warns once at 80%, and at 100% pauses the run and sends one card; 
     const cards = (await call('GET', '/me/inbox')).body.cards;
     assert.equal(cards.length, 1, 'one card, however many usage events crossed the line');
     assert.equal(cards[0].kind, 'budget');
+    assert.match(cards[0].body, /spent \$\d+\.\d\d of \$\d+\.\d\d /, 'money, not minor units (QA, M3 exit pass A)');
     assert.equal(cards[0].id, got[1].data.cardId);
     const summary = (await call('GET', '/me/summary')).body.teams[0];
     assert.deepEqual([summary.run, summary.cost.today, summary.cost.capPerDay, summary.inbox], ['paused', 1070, 1000, 1]);
