@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
@@ -233,8 +233,13 @@ export function run(argv) {
   const server = createStudio({ root });
   return new Promise((done) => {
     server.listen(port, host, () => {
-      const where = `http://${host === '0.0.0.0' ? 'localhost' : host}:${server.address().port}/?t=${server.launchToken}`;
-      console.log(`Agent Team Studio for ${root}\n  ${where}\nCtrl-C stops it.`);
+      const p = server.address().port, t = `/?t=${server.launchToken}`;
+      const where = `http://${host === '0.0.0.0' || host === '::' ? 'localhost' : host}:${p}${t}`;
+      // On every interface, also print this machine's network addresses: that is the link to type on a phone.
+      const lan = host === '0.0.0.0' || host === '::'
+        ? Object.values(networkInterfaces()).flat().filter((i) => i && !i.internal && i.family === 'IPv4').map((i) => `http://${i.address}:${p}${t}`)
+        : [];
+      console.log(`Agent Team Studio for ${root}\n  ${where}${lan.map((u) => `\n  ${u}   (from a phone or another machine on this network)`).join('')}\nOpen a link to sign in to this Studio. Ctrl-C stops it.`);
       if (argv.includes('--open')) { try { execFileSync(process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open', [where], { stdio: 'ignore' }); } catch { /* no browser */ } }
     });
     server.on('close', () => done(0));
