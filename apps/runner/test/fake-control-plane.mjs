@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 
-const MAY_EMIT = (t) => /^session\./.test(t) || ['usage.recorded', 'report.heartbeat', 'chat.message'].includes(t) || /^proposal\.(opened|updated|accepted|failed)$/.test(t);
+const MAY_EMIT = (t) => /^session\./.test(t) || ['usage.recorded', 'report.heartbeat', 'chat.message'].includes(t) || /^proposal\.(opened|updated|accepted|failed|previewed)$/.test(t);
 const TOOL_EVENT = { report: 'report.status', handoff: 'message.handoff', bug: 'message.bug', signoff: 'message.signoff', blocked: 'message.blocked' };
 
 export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decide = () => ({ decision: 'approved', by: 'owner' }), sessionDefaults = () => ({}), tokenTtlMs = 15 * 60_000 } = {}) {
@@ -51,6 +51,7 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
     if (tool === 'ask_owner') return reply(200, { card: id('card') });
     // Meetings: the real sequencing is apps/server's; here a reply or a close is recorded and answered.
     if (tool === 'meeting_reply' || tool === 'meeting_close') return reply(200, { event: id('ev') });
+    if (tool === 'ready_to_try') return reply(200, { card: id('card'), event: id('evt'), preview: null });
     if (tool === 'meeting_start') return reply(200, { meeting: id('mtg'), attendees: input.attendees, cap: 100, currency: 'USD' });
     // The event is minted here, with the actor from the token, never from the body.
     const event = {
