@@ -36,7 +36,8 @@ async function planeAt(now, fn) {
   const db = await fresh();
   await store.ensureTenant(db, 'acme');
   let woke = 0;
-  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, sinks: { wake: () => woke++ }, ...(now ? { now } : {}) });
+  const { verifier } = await import('./helpers.mjs');
+  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, sinks: { wake: () => woke++ }, stepUpVerifier: verifier, ...(now ? { now } : {}) });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}/v1`;
   const call = async (method, path, body, headers = { authorization: `Bearer ${ADMIN}` }) => {
@@ -235,7 +236,10 @@ test('a kit-report sink hands reports to a team\'s own board, with its token fro
   try {
     await plane(async ({ db, call }) => {
       await call('POST', '/teams', { id: 'mirror' });
-      assert.equal((await call('PUT', '/secrets/OWN_BOARD_TOKEN', { value: 'their-token' })).status, 200);
+      assert.equal((await call('PUT', '/secrets/OWN_BOARD_TOKEN', { value: 'their-token' })).status, 401, 'writing a secret needs step-up (issue #28 D4)');
+      const { STEP_UP_SECRET } = await import('./helpers.mjs');
+      const su = (await call('POST', '/auth/step-up', { secret: STEP_UP_SECRET })).body.token;
+      assert.equal((await call('PUT', '/secrets/OWN_BOARD_TOKEN', { value: 'their-token' }, { authorization: `Bearer ${ADMIN}`, 'x-step-up': su })).status, 200);
       assert.deepEqual((await call('GET', '/secrets')).body.secrets.map((s) => s.name), ['OWN_BOARD_TOKEN'], 'names only, never values');
       assert.equal((await call('POST', '/teams/mirror/sinks', { url: 'http://example.com/x' })).status, 400, 'plain http only to this machine');
       const sink = (await call('POST', '/teams/mirror/sinks', { url: target, header: 'x-team-token', secret: 'OWN_BOARD_TOKEN' })).body;

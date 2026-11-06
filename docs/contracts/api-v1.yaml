@@ -278,6 +278,7 @@ paths:
       summary: One role's page (current task, branch, PR, recent reports, evidence, meetings), with asOf
       responses: { "200": { description: Role page } }
   /cards/{card}:
+    get: { tags: [approvals], summary: "One card as it is now (the deep link /t/{team}/cards/{id} opens it)", parameters: [ { name: card, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: The card, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } } }
     post:
       tags: [approvals]
       summary: Answer a decision or ongoing-work card. Send the version you saw; a stale version gets 409 with the current card
@@ -376,13 +377,30 @@ components:
       properties:
         mode: { enum: [runner, subagents, agent-teams], default: runner }
         caps: { type: object, properties: { costPerRun: { type: integer }, costPerDay: { type: integer }, currency: { type: string }, sessions: { type: integer } } }
+        team:
+          type: object
+          description: "The team version the run is frozen on. Sent by a person (the Studio fills it from the spec it compiles), never by a runner or session. Exactly one role reports to owner: the front door. Required until the server reads published versions itself"
+          required: [roles]
+          properties:
+            version: { type: string, description: The team version (commit SHA); it becomes the run's teamVersion }
+            roles:
+              type: array
+              items:
+                type: object
+                required: [slug, reportsTo]
+                properties:
+                  slug: { type: string }
+                  reportsTo: { type: string, description: A role slug, or owner }
+                  areas: { type: array, items: { type: string }, description: Owned paths, sent to the runner in session.start }
+                  pool: { type: integer, description: "Most instances, so to: role#instance can be checked" }
+                  model: { type: string }
     Card:
       type: object
       description: Anything a person answers, the same on every client and channel (clients.md section 6)
       required: [id, kind, title, options, version, url]
       properties:
         id: { type: string }
-        kind: { type: string, description: "approval, decision, ongoing-work, meeting-invite, channel-failed; clients render unknown kinds generically" }
+        kind: { type: string, description: "approval, decision, budget, ongoing-work, meeting-invite, channel-failed; clients render unknown kinds generically" }
         team: { type: string }
         subject: { type: string }
         title: { type: string }
