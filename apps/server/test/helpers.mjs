@@ -76,3 +76,45 @@ export const envelope = (tenant, team, id, type, data = {}, extra = {}) => ({
   specversion: '1.0', id, type, version: 1, source: `/tenants/${tenant}/teams/${team}`, tenant, team,
   time: new Date().toISOString(), actor: { kind: 'runner', id: 'rnr_test' }, data, ...extra,
 });
+
+/** Registers a runner through the API (code minted with step-up) and returns { id, key }. */
+export async function registerRunner(call, name = 'r1') {
+  const token = (await call('POST', '/auth/step-up', { secret: STEP_UP_SECRET })).body.token;
+  const { code } = (await call('POST', '/runners/codes', undefined, { authorization: `Bearer ${ADMIN}`, 'x-step-up': token })).body;
+  return (await call('POST', '/runners', { code, name })).body;
+}
+
+/**
+ * A fake runner on the WebSocket: says hello, answers pings, acks what the control plane sends (`reply` picks the ack
+ * body per frame, or null to stay silent), and can wait for a frame.
+ */
+export async function fakeRunner(base, key, { runner, maxSessions = 4, reply = () => ({}) } = {}) {
+  const { default: WebSocket } = await import('ws');
+  const ws = new WebSocket(base.replace(/^http/, 'ws') + '/runners/connect', { headers: { authorization: `Bearer ${key}` } });
+  const frames = [];
+  const waiters = [];
+  let n = 0;
+  const raw = (f) => ws.send(JSON.stringify(f));
+  ws.on('message', (d) => {
+    const f = JSON.parse(String(d));
+    frames.push(f);
+    if (f.op === 'ping') raw({ op: 'pong', id: `p${n++}`, ref: f.id, body: { t: f.body.t } });
+    else if (!['ack', 'nack', 'welcome'].includes(f.op)) {
+      const body = reply(f);
+      if (body !== null) raw({ op: 'ack', id: `a${n++}`, ref: f.id, body });
+    }
+    for (const w of [...waiters]) if (w.match(f)) { waiters.splice(waiters.indexOf(w), 1); w.resolve(f); }
+  });
+  await new Promise((r, j) => { ws.on('open', r); ws.on('error', j); });
+  const next = (match, ms = 5000) => new Promise((resolve, reject) => {
+    const hit = frames.find(match);
+    if (hit) return resolve(hit);
+    const t = setTimeout(() => reject(new Error(`no such frame in time; got ${frames.map((f) => f.op).join(', ')}`)), ms);
+    waiters.push({ match, resolve: (f) => { clearTimeout(t); resolve(f); } });
+  });
+  /** Sends a request and resolves with the ack or nack that refs it. */
+  const request = async (op, body) => { const id = `q${n++}`; raw({ op, id, body }); return next((f) => f.ref === id && (f.op === 'ack' || f.op === 'nack')); };
+  raw({ op: 'hello', id: 'hello', body: { runner, version: 'test', capabilities: { runtimes: ['agent-sdk'], maxSessions } } });
+  const welcome = await next((f) => f.op === 'welcome');
+  return { ws, frames, next, request, welcome, close: () => ws.close() };
+}
