@@ -11,12 +11,11 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStudioHandler } from '../studio/handler.mjs';
-import { appJwt } from '../studio/github-app-token.mjs';
+import { githubApp, InstallationError } from '../../packages/github-app/index.mjs';
 import { blobCache } from '../studio/github.mjs';
 import { atLeast } from './roles.mjs';
 
 const PERMISSIONS = { contents: 'write', pull_requests: 'write', metadata: 'read' };
-const LOOKUP_MS = 5 * 60_000;
 const STUDIO_ROLE = { read: 'viewer', publish: 'editor', 'publish-code': 'admin' };
 // Delegated publish (studio-embed.md section 6): per host, across all its users (security D4, C5). One instance keeps
 // these in memory; a deployment with several instances multiplies them by its instance count.
@@ -43,8 +42,6 @@ export function createHostedStudio(opts = null) {
   const root = opts?.tmpRoot ?? join(tmpdir(), 'agent-team-hosted-studio');
   const handlers = new Map();
   const caches = new Map();
-  const lookups = new Map();
-  const tokens = new Map();
   const windows = new Map();
   const limits = { ...HOST_LIMITS, ...(opts?.hostLimits ?? {}) };
   /** A sliding window per host and kind; true when this call fits. */
@@ -57,45 +54,25 @@ export function createHostedStudio(opts = null) {
     return true;
   };
 
-  async function gh(method, path, bearer, body) {
-    const res = await fetchImpl(`${api}${path}`, {
-      method,
-      headers: { authorization: `Bearer ${bearer}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'agent-team-studio', ...(body ? { 'content-type': 'application/json' } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-    }).catch(() => null);
-    return res;
-  }
+  // The installation lookup, the S9 check and the scoped, cached token: the kit's one GitHub App (packages/github-app),
+  // the same rules as the runner's merger app.
+  const app = enabled ? githubApp({ appId: opts.appId, privateKey: opts.privateKey, api, fetch: fetchImpl, userAgent: 'agent-team-studio' }) : null;
 
-  /** The installation GitHub says holds `slug`: fresh for a write, at most five minutes old for a read. */
-  async function installationOf(slug, { fresh }) {
-    const hit = lookups.get(slug);
-    if (!fresh && hit && Date.now() - hit.at < LOOKUP_MS) return hit.id;
-    const res = await gh('GET', `/repos/${slug}/installation`, appJwt(opts.appId, opts.privateKey));
-    if (!res?.ok) throw new StudioRefusal(res?.status === 404 ? 409 : 502, res?.status === 404 ? `the GitHub App is not installed on ${slug}` : 'GitHub did not say which installation holds the repository');
-    const id = String((await res.json()).id);
-    lookups.set(slug, { id, at: Date.now() });
-    return id;
-  }
-
-  /** A token for one repository of this tenant, or a refusal that names why (S9). */
+  /**
+   * A token for one repository of this tenant, or a refusal that names why (S9): the installation is looked up fresh
+   * for a write and at most five minutes old for a read, and one not bound to the tenant is refused and audited.
+   */
   async function tokenFor(tenant, slug, { write, actor = null, team = null }) {
-    const id = await installationOf(slug, { fresh: write });
-    const bound = (await opts.boundInstallations(tenant)).map(String);
-    if (!bound.includes(id)) {
-      await audit({ tenant, team, actorId: actor, action: 'publish', target: slug, decision: 'refused', rule: 'installation', detail: { installation: id } });
-      throw new StudioRefusal(403, `the GitHub App installation that holds ${slug} is not connected to this workspace`, 'installation');
+    const bound = (await opts.boundInstallations(tenant)).map(Number);
+    try {
+      return await app.tokenFor(slug, bound, { permissions: PERMISSIONS, fresh: write });
+    } catch (e) {
+      if (e instanceof InstallationError) {
+        await audit({ tenant, team, actorId: actor, action: 'publish', target: slug, decision: 'refused', rule: 'installation', detail: { reason: e.message } });
+        throw new StudioRefusal(403, `the GitHub App installation that holds ${slug} is not connected to this workspace`, 'installation');
+      }
+      throw new StudioRefusal(502, `GitHub did not give the app a token for ${slug}`);
     }
-    // Not keyed by tenant: safe because an installation is bound to one tenant only (unique installation_id in the
-    // installations table), and the bound check above runs before every cache hit.
-    const key = `${slug}\u0000${id}\u0000${JSON.stringify(PERMISSIONS)}`;
-    const hit = tokens.get(key);
-    if (hit && hit.expires - Date.now() > 5 * 60_000) return hit.value;
-    const res = await gh('POST', `/app/installations/${encodeURIComponent(id)}/access_tokens`, appJwt(opts.appId, opts.privateKey), { repositories: [slug.split('/')[1]], permissions: PERMISSIONS });
-    if (!res?.ok) throw new StudioRefusal(502, `GitHub did not give the app a token for ${slug} (${res ? res.status : 'not reached'})`);
-    const b = await res.json();
-    const value = { token: b.token, permissions: b.permissions ?? {}, repositories: (b.repositories ?? []).map((r) => r.full_name) };
-    tokens.set(key, { value, expires: Date.parse(b.expires_at) || Date.now() + 50 * 60_000 });
-    return value;
   }
 
   /** One handler per tenant, team and repository, each with that tenant's cache and temp folder (S3). */
