@@ -44,7 +44,7 @@ export function emailsHtml(st) {
     </div>`;
   };
   const pending = (s) => `<form class="n-address n-verify" data-id="${esc(s.id)}">
-      <p>We sent a code to <strong>${esc(s.email)}</strong>. It works for 15 minutes.</p>
+      <p>We sent a code to <strong>${esc(s.email)}</strong>. It expires in 15 minutes.</p>
       <p class="row"><label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required size="8"></label>
       <button type="submit" class="primary">Verify</button></p>
       <p class="row"><button type="button" class="link" data-resend="${esc(s.id)}">Send a new code</button> <button type="button" class="link" data-remove="${esc(s.id)}">Use another address</button></p>
@@ -54,11 +54,16 @@ export function emailsHtml(st) {
     ? `<form id="email-add" class="n-address"><p class="row"><label>Your email address <input type="email" name="email" required autocomplete="email" maxlength="254"></label>
         <button type="submit" class="primary">Send a code</button></p>${note('add')}</form>`
     : `<p><button type="button" id="email-another">Add another address</button></p>${note('add')}`;
+  // No email provider connected yet (CPO, #130): no code form at all, only who can set it up.
+  const notReady = st.ready === false
+    ? `<p class="notice" role="status">Emails aren't set up for this team yet. ${st.owner ? 'An owner connects an email provider in Systems.' : 'Ask an owner to connect one.'}</p>
+       <p class="row"><label>Your email address <input type="email" disabled></label> <button type="button" class="primary" disabled>Send a code</button></p>`
+    : null;
   return `<section class="n-section" aria-labelledby="emails-title">
     <h2 id="emails-title">Emails</h2>
     <p>Get an email when something needs you. Nothing is sent until you verify your address and choose what you want.</p>
-    ${st.emails.map((s) => (s.verified ? verified(s) : pending(s))).join('')}
-    ${add}
+    ${notReady ?? `${st.emails.map((s) => (s.verified ? verified(s) : pending(s))).join('')}
+    ${add}`}
   </section>`;
 }
 
@@ -67,18 +72,20 @@ const errorOf = (r) => r.data?.error ?? r.data?.title ?? `HTTP ${r.status}`;
 function start() {
   const root = document.getElementById('notifications');
   const team = teamFromPath(location.pathname);
-  const st = { me: null, kinds: [], emails: [], adding: false, cleared: new Set(), notes: new Map() };
+  const st = { me: null, teamName: team, ready: true, owner: false, kinds: [], emails: [], adding: false, cleared: new Set(), notes: new Map() };
   const base = () => `/v1/teams/${encodeURIComponent(team)}/emails`;
 
   function render() {
     root.innerHTML = `${noticesBanner(st.me)}
-      <p class="muted">For ${esc(team)}. Only you see these settings.</p>
+      <p class="muted">For ${esc(st.teamName)}. Only you see these settings.</p>
       ${emailsHtml(st)}`;
   }
   async function load() {
     const r = await call('GET', base());
     if (!r.ok) throw new Error(r.status === 404 ? `There is no team called ${team} here, or you are not on it.` : errorOf(r));
     st.kinds = r.data.kinds ?? [];
+    st.teamName = r.data.teamName || team;
+    st.ready = r.data.ready !== false;
     st.emails = r.data.emails ?? [];
     render();
   }
@@ -118,7 +125,7 @@ function start() {
     if (b.id === 'email-another') { st.adding = true; say('add', 'ok', ''); render(); return root.querySelector('#email-add input')?.focus(); }
     if (b.dataset.remove) {
       const s = st.emails.find((x) => x.id === b.dataset.remove);
-      if (s?.verified && !confirm(`Stop all emails to ${s.email} from ${team}?`)) return;
+      if (s?.verified && !confirm(`Stop all emails to ${s.email} from ${st.teamName}?`)) return;
       const r = await call('DELETE', `${base()}/${encodeURIComponent(b.dataset.remove)}`);
       if (!r.ok && r.status !== 404) { say(b.dataset.remove, 'error', errorOf(r)); return render(); }
       say('add', 'ok', '');
@@ -161,6 +168,7 @@ function start() {
     if (!team) { root.innerHTML = '<p class="result error" role="alert">This page needs a team: open it from a team email or from the Studio.</p>'; return; }
     st.me = await ensureSignedIn();
     if (!st.me) return;
+    st.owner = (st.me.workspaces ?? []).some((w) => w.role === 'owner' || w.role === 'admin');
     await load();
   })().catch((e) => { root.innerHTML = `<p class="result error" role="alert">${esc(e.message)}</p>`; });
 }

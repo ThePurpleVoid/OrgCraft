@@ -57,12 +57,13 @@ test('verify an address, save the suggested kinds, switch one more on, and remov
   await page.getByRole('link', { name: 'Continue with GitHub' }).click();
   await page.getByRole('heading', { name: 'Emails' }).waitFor();
   assert.equal(new URL(page.url()).pathname, '/teams/sample-app/notifications');
+  await page.getByText('For Sample app. Only you see these settings.').waitFor();
   await page.getByText('Get an email when something needs you. Nothing is sent until you verify your address and choose what you want.').waitFor();
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'emails-empty-light.png') });
 
   await page.getByLabel('Your email address').fill('Dana@Example.com');
   await page.getByRole('button', { name: 'Send a code' }).click();
-  await page.getByText('We sent a code to dana@example.com. It works for 15 minutes.').waitFor();
+  await page.getByText('We sent a code to dana@example.com. It expires in 15 minutes.').waitFor();
   const { code } = iss.codes.at(-1);
   assert.equal(iss.codes.at(-1).email, 'dana@example.com');
 
@@ -109,23 +110,29 @@ test('verify an address, save the suggested kinds, switch one more on, and remov
   await ctx.close();
 });
 
-test('when the team cannot send yet, the page says why; at 360px nothing scrolls sideways', { skip }, async () => {
+test('when the team cannot send yet, the page says who sets it up and offers no code; at 360px nothing scrolls sideways', { skip }, async () => {
   iss.mail.sink = false;
   const ctx = await browser.newContext({ viewport: { width: 360, height: 780 }, isMobile: true, hasTouch: true, deviceScaleFactor: SHOTS ? 3 : 1 });
   const page = await ctx.newPage();
   await page.goto(`${iss.origin}/teams/sample-app/notifications`);
   await page.getByRole('link', { name: 'Continue with GitHub' }).click();
   await page.getByRole('heading', { name: 'Emails' }).waitFor();
-  await page.getByRole('button', { name: 'Use another address' }).click();
-  await page.getByLabel('Your email address').fill('pat@example.com');
-  await page.getByRole('button', { name: 'Send a code' }).click();
-  await page.getByText('The code could not be sent: this team has no email sink yet.').waitFor();
+  // octo is an owner of the workspace.
+  await page.getByText("Emails aren't set up for this team yet. An owner connects an email provider in Systems.").waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Send a code' }).isDisabled(), true);
+  assert.equal(await page.getByText('We sent a code').count(), 0, 'no code form while nothing can be sent');
   const w = await page.evaluate(() => document.documentElement.scrollWidth);
   assert.ok(w <= 360, `no sideways scroll (${w}px)`);
-  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'emails-no-sink-phone-light.png') });
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'emails-not-set-up-phone-light.png') });
   // A team the person is not on.
   await page.goto(`${iss.origin}/teams/other-team/notifications`);
   await page.getByText('There is no team called other-team here, or you are not on it.').waitFor();
   iss.mail.sink = true;
   await ctx.close();
+});
+
+test('a member who is not an owner is told to ask one', () => {
+  const html = emailsHtml({ ready: false, owner: false, kinds: [], emails: [], notes: new Map() });
+  assert.match(html, /Emails aren't set up for this team yet\. Ask an owner to connect one\./);
+  assert.doesNotMatch(html, /id="email-add"/);
 });

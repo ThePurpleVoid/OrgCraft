@@ -116,6 +116,7 @@ test('nothing is sent before verification and opt-in; the code expires in 15 min
   await plane(async ({ db, call, su }) => {
     await setup(call, provider);
     // No key in the vault: the code cannot go out, and nothing calls the provider.
+    assert.deepEqual((({ teamName, ready }) => ({ teamName, ready }))((await call('GET', '/teams/shop/emails')).body), { teamName: 'Shop', ready: false }, 'the page can say emails are not set up');
     const early = await call('POST', '/teams/shop/emails', { email: 'Owner@Shop.example' });
     assert.equal(early.status, 201);
     assert.deepEqual([early.body.sent, early.body.reason], [false, 'no provider key stored as EMAIL_PROVIDER_KEY']);
@@ -155,6 +156,7 @@ test('nothing is sent before verification and opt-in; the code expires in 15 min
     await drain(db, key, drainOpts(provider));
     assert.equal(provider.sent.length, 2);
     const list = (await call('GET', '/teams/shop/emails')).body;
+    assert.equal(list.ready, true);
     assert.deepEqual(list.emails.map((e) => [e.email, e.verified, e.kinds]), [['owner@shop.example', true, []]]);
     assert.deepEqual(list.kinds.filter((k) => k.suggested).map((k) => k.id), ['approval', 'budget100']);
     assert.equal((await call('PATCH', `/teams/shop/emails/${add.body.id}`, { kinds: ['nope'] })).status, 400);

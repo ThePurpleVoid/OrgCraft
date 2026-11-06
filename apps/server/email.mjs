@@ -220,12 +220,19 @@ async function emailSink(q, team) {
 export function createEmail({ db, key, publicUrl = '', providers = PROVIDERS, readSecret, now = () => new Date(), fetch: send = fetch }) {
   const base = () => publicUrl;
 
-  async function sendVerification(tenant, team, sub, code) {
+  /** The team's sink, provider and key, or why it cannot send yet. */
+  async function sender(tenant, team) {
     const sink = await db.tenant(tenant, ({ q }) => emailSink(q, team));
-    if (!sink) return { sent: false, reason: 'this team has no email sink yet' };
+    if (!sink) return { reason: 'this team has no email sink yet' };
     const provider = providers[sink.provider];
     const apiKey = provider ? await readSecret(db, key, tenant, sink.secret) : null;
-    if (!provider || !apiKey) return { sent: false, reason: `no provider key stored as ${sink.secret}` };
+    if (!provider || !apiKey) return { reason: `no provider key stored as ${sink.secret}` };
+    return { sink, provider, apiKey };
+  }
+
+  async function sendVerification(tenant, team, sub, code) {
+    const { sink, provider, apiKey, reason } = await sender(tenant, team);
+    if (reason) return { sent: false, reason };
     const m = verifyEmail(code);
     try {
       await provider.send({ apiKey, from: sink.sender, to: sub.email, subject: m.subject, text: m.text, html: m.html, headers: {} }, { fetch: send });
@@ -236,10 +243,11 @@ export function createEmail({ db, key, publicUrl = '', providers = PROVIDERS, re
   return {
     kinds: () => Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label, breakthrough: k.breakthrough, suggested: SUGGESTED.includes(id) })),
 
+    /** The person's addresses, the kinds, the team's name, and `ready`: whether the team can send a code at all. */
     async list(tenant, team, principal) {
-      await getTeam(db, tenant, team);
+      const t = await getTeam(db, tenant, team);
       const rows = await db.tenant(tenant, ({ q }) => q(`select ${SUB_COLS} from email_subscriptions where team = $1 and principal = $2 order by created_at`, [team, principal]));
-      return { kinds: this.kinds(), emails: rows.map(view) };
+      return { teamName: t.name ?? team, ready: !(await sender(tenant, team)).reason, kinds: this.kinds(), emails: rows.map(view) };
     },
 
     /** Adds an address (or sends a fresh code for one not yet verified). Nothing is emailed to it but the code. */

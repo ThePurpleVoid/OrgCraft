@@ -129,7 +129,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
         const kinds = () => Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label, breakthrough: k.breakthrough, suggested: SUGGESTED.includes(id) }));
         const view = (e) => ({ id: e.id, email: e.email, verified: e.verified, kinds: e.kinds, createdAt: e.createdAt });
         const own = emails.filter((e) => e.team === team && e.person === who.id);
-        if (!sid && req.method === 'GET') return send(200, { kinds: kinds(), emails: own.map(view) });
+        if (!sid && req.method === 'GET') return send(200, { teamName: team === 'sample-app' ? 'Sample app' : team, ready: mail.sink, kinds: kinds(), emails: own.map(view) });
         if (!sid && req.method === 'POST') {
           const address = String((await read()).email ?? '').trim().toLowerCase();
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) return problem(400, 'bad-request', 'send { email } with one email address');
