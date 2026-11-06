@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **M3 seams** ([docs/product/m3-design.md](docs/product/m3-design.md)): the tables for runs, sessions, the message bus, cards, approvals, chat, budgets and audit; how a message wakes a role; the runner and server ops M3 builds and who may send what; chat cards built from `card.updated` events; the daily budget at 80% and 100%; and the hosting split for a Vercel and Supabase deployment. Contracts, all additive: a new [team tools](docs/contracts/team-tools.md) contract (`tools/1`), new event types (`card.updated`, `budget.warned`, `budget.exhausted`, `session.queued`), `session.renew`, `session.token` and `nack` in `runner/1`, and the tool, step-up, budget and runner-code endpoints in `/v1/`.
+
 ## 0.8.0
 
 - **Contracts for the online product** ([docs/contracts/](docs/contracts/README.md), milestone M1 of the MVP). They are written before the code that implements them:

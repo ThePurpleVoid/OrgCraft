@@ -161,17 +161,21 @@ paths:
       responses: { "200": { description: Done } }
   /teams/{team}/chat:
     parameters: [ { $ref: "#/components/parameters/team" } ]
-    get: { tags: [chat], summary: The chat with the chief of staff (chat.*, decision.* and approval.* events), responses: { "200": { description: Messages } } }
+    get:
+      tags: [chat]
+      summary: The chat with the chief of staff (chat.*, decision.*, approval.*, card.updated, run.* and budget.* events), with the current cards, the run and today's cost (docs/product/m3-design.md section 5)
+      parameters: [ { name: before, in: query, schema: { type: string }, description: An event id; pages backwards from it }, { $ref: "#/components/parameters/limit" } ]
+      responses: { "200": { description: Messages, content: { application/json: { schema: { $ref: "#/components/schemas/ChatPage" } } } } }
     post:
       tags: [chat]
       summary: Say something to the chief of staff. Stored verbatim
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [text], properties: { text: { type: string, maxLength: 20000 }, replyTo: { type: string } } } } } }
-      responses: { "201": { description: The chat.message event } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [text], properties: { text: { type: string, maxLength: 20000 }, replyTo: { type: string }, clientId: { type: string, maxLength: 80, description: "Made by the client (a ULID). A repeat returns the first message with 200" } } } } } }
+      responses: { "200": { description: The chat.message event already stored for this clientId }, "201": { description: The chat.message event } }
   /approvals/{approval}:
     post:
       tags: [approvals]
       summary: Approve or deny. Checks the person's role in the workspace and a recent sign-in (step-up, clients.md section 3)
-      parameters: [ { name: approval, in: path, required: true, schema: { type: string } } ]
+      parameters: [ { name: approval, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [decision], properties: { decision: { enum: [approved, denied] }, note: { type: string }, version: { type: integer, description: "The card version seen. Optional in /v1/ for older clients; a stale one gets 409" } } } } } }
       responses: { "200": { description: The approval.decided event }, "401": { description: "Step-up required (problem type step-up-required)" }, "403": { $ref: "#/components/responses/Problem" }, "409": { description: The approval changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
   /connectors:
@@ -189,6 +193,39 @@ paths:
       security: []
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name], properties: { code: { type: string }, name: { type: string }, capabilities: { type: object } } } } } }
       responses: { "201": { description: Runner id and key } }
+  /runners/codes:
+    post:
+      tags: [runners]
+      summary: A one-time registration code for a new runner (one use, 15 minutes)
+      responses: { "201": { description: The code, content: { application/json: { schema: { type: object, properties: { code: { type: string }, expires: { type: string, format: date-time } } } } } } }
+  /sessions/{session}/tools/{tool}:
+    post:
+      tags: [runs]
+      summary: A team tool call from a running session (team-tools.md). The actor comes from the session token, never the body
+      security: [ { session: [] } ]
+      parameters:
+        - { name: session, in: path, required: true, schema: { type: string } }
+        - { name: tool, in: path, required: true, schema: { enum: [report, handoff, bug, signoff, blocked, ask_owner, request_approval] } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, description: The tool's input, as in team-tools.md } } } }
+      responses:
+        "200": { description: "The result: event, card or approval ids", content: { application/json: { schema: { $ref: "#/components/schemas/ToolResult" } } } }
+        "401": { description: The session token is missing, expired or for another session }
+        "403": { description: "This role may not call this tool (ask_owner outside the front door)" }
+        "422": { description: The input was refused, content: { application/json: { schema: { type: object, properties: { problems: { type: array, items: { type: string } } } } } } }
+  /auth/step-up:
+    post:
+      tags: [me]
+      summary: "A step-up token for approvals (5 minutes). Until OIDC lands: send the admin token again in the body. M4 adds auth_time and device-key step-up; this endpoint stays"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [secret], properties: { secret: { type: string, writeOnly: true } } } } } }
+      responses: { "201": { description: The step-up token, content: { application/json: { schema: { type: object, properties: { token: { type: string }, expires: { type: string, format: date-time } } } } } }, "401": { $ref: "#/components/responses/Problem" } }
+  /teams/{team}/budget:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { tags: [runs], summary: "The team's caps and today's spend", responses: { "200": { description: Budget, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } } } }
+    put:
+      tags: [runs]
+      summary: Set the caps. A run needs a daily cap before it starts
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }
+      responses: { "200": { description: Budget, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } } }
   /me/inbox:
     get:
       tags: [me]
@@ -228,7 +265,7 @@ paths:
     post:
       tags: [approvals]
       summary: Answer a decision or ongoing-work card. Send the version you saw; a stale version gets 409 with the current card
-      parameters: [ { name: card, in: path, required: true, schema: { type: string } } ]
+      parameters: [ { name: card, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [option, version], properties: { option: { type: string }, version: { type: integer }, note: { type: string } } } } } }
       responses: { "200": { description: The answer event }, "409": { description: The card changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
 components:
@@ -241,6 +278,7 @@ components:
     team: { name: team, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }
     cursor: { name: cursor, in: query, schema: { type: string } }
     limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+    stepUp: { name: x-step-up, in: header, schema: { type: string }, description: "A step-up token from POST /auth/step-up, needed for approvals and options with stepUp: true" }
   responses:
     Problem: { description: An error (RFC 9457), content: { application/problem+json: { schema: { type: object, properties: { type: { type: string }, title: { type: string }, status: { type: integer }, detail: { type: string } } } } } }
     Team: { description: A team, content: { application/json: { schema: { $ref: "#/components/schemas/Team" } } } }
@@ -356,6 +394,26 @@ components:
               roles: { type: object, properties: { working: { type: integer }, waiting: { type: integer }, blocked: { type: integer }, idle: { type: integer } } }
               cost: { type: object, properties: { today: { type: integer }, capPerDay: { type: [integer, "null"] }, currency: { type: string } } }
               inbox: { type: integer }
+    ChatPage:
+      type: object
+      properties:
+        asOf: { type: string, description: The last event id included; open the stream from it }
+        items: { type: array, items: { $ref: "schema/event.v1.json" }, description: Oldest first }
+        cards: { type: object, additionalProperties: { $ref: "#/components/schemas/Card" }, description: The current card for every card the items mention }
+        run: { type: [object, "null"], properties: { id: { type: string }, state: { type: string }, version: { type: integer } } }
+        cost: { type: object, properties: { today: { type: integer }, capPerDay: { type: [integer, "null"] }, currency: { type: string }, state: { type: string, description: "ok, warned, exhausted" } } }
+        next: { type: string }
+    Budget:
+      type: object
+      properties:
+        perDay: { type: [integer, "null"], description: Minor units }
+        perRun: { type: [integer, "null"] }
+        sessions: { type: integer, default: 3, description: Live sessions at once }
+        currency: { type: string }
+        today: { type: object, readOnly: true, properties: { day: { type: string, format: date }, spent: { type: integer }, raised: { type: integer }, state: { type: string } } }
+    ToolResult:
+      type: object
+      properties: { event: { type: string }, card: { type: string }, approval: { type: string } }
     Device:
       type: object
       properties:

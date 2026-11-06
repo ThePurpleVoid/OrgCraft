@@ -22,7 +22,34 @@ A **runner** is the data plane: a process that holds checkouts, sandboxes and re
 | → runner | `approval.result` | `approval`, `decision`, `by` | Continue or refuse the paused call |
 | runner → | `secret.get` | `session`, `name` | Ask for one secret value. Only answered for bound resources of that session's role, and every release is audited |
 | → runner | `secret.value` | `name`, `value`, `ttl` | Held in memory and never written to disk or logs |
+| runner → | `session.renew` | `session` | Renew a session token before it expires. Answered with `session.token` |
+| → runner | `session.token` | `session`, `token`, `tokenExpires` | The renewed token, for the runner's team tool server only |
+| both | `nack` | `ref`, `problem` | A frame was refused (for example an event type this credential may not send). Not retried as is |
 | both | `ping` / `pong` | `t` | Heartbeat. After three missed beats the control plane marks the runner's sessions `unknown`, and they are resumed when the runner reconnects |
+
+### Additive fields (since M3)
+
+- `welcome`: `sessions`, the sessions this runner should resume after a reconnect.
+- `session.start`: `resume` (boolean), `checkpoint` (`commit`, `memory`) for a resume, `token` and `tokenExpires` (the session token), `caps.remainingToday` and `caps.remainingRun` (minor units), and `delivery` (the bus delivery it answers).
+- `session.message`: `delivery`.
+- `session.stop`: `reason` (owner, budget, error).
+- The `ack` of `session.checkpoint` carries `commit` (the pushed head) and `memory` (the role's memory file, at most 64 KiB), which the control plane stores so the session can resume on any runner.
+- The `ack` of `approval.wait` carries `approval` and `card` ids.
+
+### What each credential may send
+
+The control plane answers anything else with `nack` and audits it.
+
+| Credential | May send |
+| --- | --- |
+| Runner key (the WebSocket) | the ops above, and `events` whose types are `session.*`, `usage.recorded`, `report.heartbeat`, or `chat.message` from the front-door role of a session this runner runs |
+| Session token (HTTP) | `POST /v1/sessions/{its session}/tools/{tool}` only ([team-tools.md](team-tools.md)) |
+
+Messages between roles, decisions, approvals, cards and run changes are always minted by the control plane, never sent by a runner.
+
+### The M3 subset
+
+M3 builds `hello`, `welcome`, `session.start` (with resume), `session.message`, `session.stop`, `session.checkpoint`, `events`, `approval.wait`, `approval.result`, `session.renew`, `session.token`, `ping`, `pong`, `ack` and `nack`, over the WebSocket. `secret.get` and `secret.value`, and the long-poll transport, come later ([M3 design](../product/m3-design.md) section 4).
 
 ## Guarantees
 
