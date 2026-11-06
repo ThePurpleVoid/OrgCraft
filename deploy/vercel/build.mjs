@@ -18,7 +18,7 @@ import { parseArgs } from 'node:util';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** Agreed by the security reviewer and web-dev: no inline or third-party scripts, inline styles allowed. */
-export const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
+export const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
 
 /** The vercel.json for a site that fronts the control plane at `api` (an https origin, no path). */
 export function siteConfig(api) {

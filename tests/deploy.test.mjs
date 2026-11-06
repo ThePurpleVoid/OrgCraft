@@ -62,5 +62,5 @@ test('the step-up hash is scrypt with its parameters and salt, and never contain
 test('the site sends the agreed CSP', () => {
   const h = siteConfig('https://api.example.org').headers[0].headers.find((x) => x.key === 'content-security-policy');
   assert.equal(h.value, CSP);
-  assert.equal(CSP, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
+  assert.equal(CSP, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'");
 });
