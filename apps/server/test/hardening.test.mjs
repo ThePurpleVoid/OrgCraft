@@ -157,3 +157,21 @@ test('step-up-required keeps its problem+json type under an Idempotency-Key', as
     assert.match(r.headers.get('content-type'), /application\/problem\+json/);
   });
 });
+
+test('a usage report dated in the future is counted when it was received: it cannot spend or exhaust a day that has not come', async () => {
+  await withStepUp(async ({ call, db }) => {
+    await running(call, { perDay: 100 });
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+    const future = { ...usage('shop', 'f1', 100), time: tomorrow };
+    assert.equal((await call('POST', '/teams/shop/events', { events: [future] })).status, 200);
+    const [stored] = (await call('GET', '/teams/shop/events?type=usage.recorded')).body.events;
+    assert.ok(Math.abs(Date.parse(stored.time) - Date.now()) < 60_000, `stored at the time it was received, not ${stored.time}`);
+    const days = await db.system("select to_char(day, 'YYYY-MM-DD') as day, spent from budget_days where team = 'shop'");
+    assert.deepEqual(days.map((d) => [d.day, Number(d.spent)]), [[stored.time.slice(0, 10), 100]], 'spent on the day it arrived, nothing on tomorrow');
+    // A few minutes of clock skew is kept as sent.
+    const skewed = new Date(Date.now() + 2 * 60_000).toISOString();
+    await call('POST', '/teams/shop/events', { events: [{ ...usage('shop', 'f2', 1), time: skewed }] });
+    const f2 = (await call('GET', '/teams/shop/events?type=usage.recorded')).body.events.find((e) => e.id === 'f2');
+    assert.equal(f2.time, skewed);
+  });
+});

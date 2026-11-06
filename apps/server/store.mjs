@@ -92,7 +92,14 @@ export async function append(db, tenant, team, events, { project = null } = {}) 
  * explains it commit together (the outbox rule, m3-design section 0). `project(q, stored)` runs for each event
  * newly stored and may return more events to append in the same transaction.
  */
-export async function appendIn(q, tenant, team, events, { project = null } = {}) {
+/** How far ahead of the server's clock an event's time may be before it is set to the time it was received. */
+export const CLOCK_SKEW_MS = 5 * 60_000;
+
+/**
+ * `now` (a Date): when the events were received. An event dated more than CLOCK_SKEW_MS after that is stored at `now`,
+ * so a future-dated usage.recorded cannot spend, warn or exhaust a day that has not come yet (security on #149).
+ */
+export async function appendIn(q, tenant, team, events, { project = null, now = null } = {}) {
   // One appender per tenant at a time, so seq is commit order: a stream reading "seq > last" never skips an event
   // that took a lower seq but committed later.
   await q('select pg_advisory_xact_lock(4849, hashtext($1))', [tenant]);
@@ -102,15 +109,16 @@ export async function appendIn(q, tenant, team, events, { project = null } = {})
     if (problems.length) throw new Problem(400, `event ${e?.id ?? '?'}: ${problems.join('; ')}`);
     if (e.tenant !== tenant || (e.team && e.team !== team) || !e.source.startsWith(`/tenants/${tenant}`)) throw new Problem(400, `event ${e.id} is for another tenant or team`);
     const env = { ...e, team };
+    if (now && Date.parse(e.time) > now.getTime() + CLOCK_SKEW_MS) env.time = now.toISOString();
     const [row] = await q(
       `insert into events(tenant, team, id, type, version, time, actor_kind, actor_id, envelope)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict (team, id) do nothing returning seq`,
-      [tenant, team, e.id, e.type, e.version, e.time, e.actor.kind, e.actor.id, JSON.stringify(env)]);
+      [tenant, team, e.id, e.type, e.version, env.time, e.actor.kind, e.actor.id, JSON.stringify(env)]);
     if (!row) continue;
     const stored = { id: e.id, seq: Number(row.seq), event: env };
     out.push(stored);
     const more = project ? await project(q, stored) : null;
-    if (more?.length) out.push(...(await appendIn(q, tenant, team, more, { project })));
+    if (more?.length) out.push(...(await appendIn(q, tenant, team, more, { project, now })));
   }
   return out;
 }
