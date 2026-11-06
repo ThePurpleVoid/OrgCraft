@@ -108,6 +108,18 @@ jobs:
             echo "the agent user read the deploy key"; exit 1
           fi
 
+      - uses: actions/setup-node@v4
+        if: hashFiles('apps/runner/Dockerfile') != ''
+        with:
+          node-version: 22
+      - name: The M3 dry run with the runner image (scripted fake model, local control plane, stand-in remote; no key)
+        if: hashFiles('apps/runner/Dockerfile') != ''
+        env: { M3_DRY_RUN_RUNNER: docker, M3_DRY_RUN_IMAGE: 'agent-team-runner:ci', M3_DRY_RUN_DEBUG: '1' }
+        run: |
+          npm ci --prefix apps/server && npm ci --prefix apps/runner
+          node --test tests/e2e/m3-dry-run.e2e.mjs | tee m3-dry-run.tap
+          grep -q '^# fail 0$' m3-dry-run.tap && grep -q '^# skipped 0$' m3-dry-run.tap
+
   deploy-path:
     # The hosted deploy path on a Postgres shaped like Supabase (anon and authenticated roles with default grants on
     # public, a CREATEROLE owner that is not a superuser), behind pgbouncer in transaction mode. A cluster of its own:
@@ -170,8 +182,8 @@ jobs:
         run: |
           npm install --no-save --no-package-lock playwright@1.56.1
           npx playwright install --with-deps chromium
-      - name: The control plane's dependencies (the browser test also runs against the real apps/server)
-        run: npm ci --prefix apps/server
+      - name: The control plane's and the runner's dependencies (the browser test runs against the real apps/server; the M3 dry run also starts the runner)
+        run: npm ci --prefix apps/server && npm ci --prefix apps/runner
       - name: Studio in a browser (chat round trip, stale card, 360px, start a run, the real control plane)
         env: { SCREENSHOTS: screenshots }
         run: node --test tests/e2e/*.e2e.mjs

@@ -8,7 +8,7 @@ import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
 import { safeRead, safeWrite, sharedDir } from './sandbox.mjs';
-import { checkpoint as saveWork, onBranch, outOfArea, prepare, release } from './worktree.mjs';
+import { checkpoint as saveWork, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
 export const DEFAULT_TIERS = { deep: 'claude-opus-5-5', standard: 'claude-opus-5-5', routine: 'claude-sonnet-5-5', light: 'claude-haiku-5-5' };
@@ -329,7 +329,8 @@ export class Session {
   async save(reason) {
     const r = await saveWork({ cwd: this.copy.cwd, branch: this.copy.branch, base: this.copy.base, role: this.role, reason, areas: this.body.areas ?? [], secrets: this.secretValues() })
       .catch((e) => ({ pushed: false, error: e.message }));
-    if (r.pushed && this.proposes()) await this.propose(r.commit).catch((e) => { r.proposalError = e.message; this.deps.log?.(`proposal for ${this.copy.branch}: ${e.message}`); });
+    // A branch that changes nothing against its base has nothing to propose (a role that only talked).
+    if (r.pushed && this.proposes() && (r.changes || this.proposal)) await this.propose(r.commit).catch((e) => { r.proposalError = e.message; this.deps.log?.(`proposal for ${this.copy.branch}: ${e.message}`); });
     return r;
   }
 
@@ -359,7 +360,8 @@ export class Session {
   async acceptFlow(input) {
     const saved = await this.save('before accept');
     if (!saved.pushed || !this.proposal) {
-      return { text: `Not asked: the branch could not be pushed and proposed (${saved.error ?? saved.proposalError ?? 'no proposal'}). Fix that first, then ask again.`, isError: true };
+      const why = saved.error ?? saved.proposalError ?? (saved.pushed && !saved.changes ? 'the branch changes nothing against its base' : 'no proposal');
+      return { text: `Not asked: the branch could not be pushed and proposed (${why}). Fix that first, then ask again.`, isError: true };
     }
     let headSha = saved.commit;
     // A head that moves after the approval (someone pushed to the pull request) is not merged: the runner asks
@@ -383,7 +385,12 @@ export class Session {
       try {
         const m = await this.deps.proposals.accept({ repo: this.body.repo.url, ref: this.proposal.ref, branch: this.copy.branch, base: this.copy.base, headSha: approved, approval });
         await this.emit('proposal.accepted', { ...base, result: m.result });
-        return { text: JSON.stringify({ approval, decision: 'approved', merged: m.result, pr: this.proposal.ref, headSha: approved }) + ' Approved and merged by the runner.' };
+        // The base has it now (squashed): later work starts from there, on a fresh pull request.
+        // Only when the remote branch is gone: otherwise the next push onto it would be refused (not a fast-forward).
+        this.proposal = null;
+        if (m.deleted) await restart(this.copy.cwd, approved).catch((e) => this.deps.log?.(`restart ${this.copy.branch} on ${this.copy.base}: ${e.message}`));
+        else this.deps.log?.(`${this.copy.branch} was merged but not deleted on the remote; the session stays on it`);
+        return { text: JSON.stringify({ approval, decision: 'approved', merged: m.result, pr: base.ref, headSha: approved }) + ' Approved and merged by the runner.' };
       } catch (e) {
         const reason = ['head-moved', 'checks', 'conflict'].includes(e.reason) ? e.reason : 'checks';
         await this.emit('proposal.failed', { ...base, reason, detail: String(e.message).slice(0, 500) });
