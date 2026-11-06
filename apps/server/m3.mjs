@@ -159,6 +159,12 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
                    on conflict (team) do update set currency = excluded.currency, per_day = excluded.per_day, per_run = excluded.per_run,
                    sessions = excluded.sessions, meeting_cap = excluded.meeting_cap, updated_by = excluded.updated_by, updated_at = now()`,
         [tenant, team, next.currency, next.perDay, next.perRun, next.sessions, next.meetingCap, by]);
+      // A stepped-up raise of the daily cap is newer than today's spent mark (and any Resume tomorrow): when the new cap
+      // is above today's spend, today is open again, so a resume goes through (QA #162). The warning stays if 80% is passed.
+      if (next.perDay !== null && raises(old.perDay, next.perDay, false)) {
+        await ctx.q(`update budget_days set exhausted_at = null, warned_at = case when spent >= ceil(($3::bigint + raised) * 0.8) then warned_at else null end
+                     where team = $1 and day = $2::date and exhausted_at is not null and spent < $3::bigint + raised`, [team, utcDay(ctx.now), next.perDay]);
+      }
       await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'budget', target: team, decision: 'allowed', detail: { from: old, to: next, stepUp: raising, ...(clamped ? { meetingCapClamped: true } : {}) } });
       await ctx.emit(team, 'budget.updated', { ...next, by }, { actor: personActor(by), subject: 'budget' });
       return { ...next, today: await today(ctx.q, team, ctx.now) };

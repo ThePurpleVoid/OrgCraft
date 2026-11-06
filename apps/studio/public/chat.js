@@ -342,11 +342,13 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     // A live refresh redraws the log while the person may be typing a step-up secret into a card: keep what they typed
     // and where the cursor was, or the redraw silently empties the field (and the next Confirm submits nothing).
     const typing = [...log.querySelectorAll('form[data-stepup] input')].map((i) => ({ card: i.closest('form').dataset.stepup, value: i.value, focused: document.activeElement === i }));
+    // A run that is going again (a budget card's Add half again, another tab) has nothing left to refuse.
+    if (st.runError === SPENT && (st.run?.state ?? st.summary?.run) === 'running') { st.runError = null; st.raiseNote = null; }
     log.innerHTML = html + [st.error, st.runError].filter(Boolean).map((m) => {
       if (m !== SPENT) return `<p class="result error" role="alert">${esc(m)}</p>`;
       // Worded as it is drawn: whether today's budget card is still open decides which cap the button raises.
       const forToday = !!openBudgetCard();
-      return `<p class="result error" role="alert">${esc(spentText(forToday))} <button type="button" class="link" id="run-raise">${forToday ? 'Raise the cap for today' : 'Raise the daily cap'}</button></p>`;
+      return `<p class="result error" role="alert">${esc(spentText(forToday))} <button type="button" class="link tap" id="run-raise">${forToday ? 'Raise the cap for today' : 'Raise the daily cap'}</button></p>${st.raiseNote ? `<p class="result error">${esc(st.raiseNote)}</p>` : ''}`;
     }).join('');
     for (const t of typing) {
       const input = log.querySelector(`form[data-stepup="${CSS.escape(t.card)}"] input`);
@@ -519,18 +521,24 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     const c = st.cost ?? st.summary?.cost;
     const cur = currency(), d = minorDigits(cur);
     const now = st.budget?.perDay ?? c?.capPerDay ?? null;
-    const asked = await askText(`New daily cap in ${cur}.${typeof c?.today === 'number' ? ` Today's spend so far is ${fmtMoney(c.today, cur)}, so the cap must be more than that.` : ''}`, now != null ? (now / 10 ** d).toFixed(d) : '');
+    // An Add half again earlier today stays on top of the new cap (budget_days.raised): say so before it surprises.
+    const extra = Number(st.budget?.today?.raised ?? 0);
+    const asked = await askText(`New daily cap in ${cur}.${typeof c?.today === 'number' ? ` Today's spend so far is ${fmtMoney(c.today, cur)}, so the cap must be more than that.` : ''}${extra > 0 ? ` Today's extra ${fmtMoney(extra, cur)} from Add half again stays on top of it, for today only.` : ''}`, now != null ? (now / 10 ** d).toFixed(d) : '');
     if (asked === null) return;
     const perDay = toMinor(asked);
-    if (perDay === null || (typeof c?.today === 'number' && perDay <= c.today)) { st.runError = typeof c?.today === 'number' ? `The new cap must be more than today's spend of ${fmtMoney(c.today, cur)}. Nothing changed.` : 'That is not an amount. Nothing changed.'; return render(); }
+    // These keep the spent sentence and its button: the note goes under them (QA #162).
+    const note = (text) => { st.raiseNote = text; render(); };
+    if (perDay === null) return note('That is not an amount. Nothing changed.');
+    if (typeof c?.today === 'number' && perDay + extra <= c.today) return note(`The new cap must be more than today's spend of ${fmtMoney(c.today, cur)}. Nothing changed.`);
     st.busy = true; renderRun();
     let b = await api('/v1/team/budget', { perDay, key: newId() });
     if (needsStepUp(b)) {
-      if (!(await stepUp(`Raising the daily cap to ${fmtMoney(perDay, cur)} lets the team spend more today.`))) { st.busy = false; st.runError = 'The cap was not changed, so the run is still paused.'; return render(); }
+      if (!(await stepUp(`Raising the daily cap to ${fmtMoney(perDay, cur)} lets the team spend more today.`))) { st.busy = false; renderRun(); return note('The cap was not changed, so the run is still paused.'); }
       b = await api('/v1/team/budget', { perDay, key: newId() });
     }
     st.busy = false;
-    if (!b.ok) { st.runError = b.data.error ?? `HTTP ${b.status}`; return render(); }
+    if (!b.ok) { renderRun(); return note(b.data.error ?? `HTTP ${b.status}`); }
+    st.raiseNote = null;
     st.budget = b.data;
     return control('resume');
   }
@@ -544,6 +552,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     st.busy = false;
     // Kept apart from load errors, which the next load clears: a refused resume (today's cap is spent) must stay visible.
     st.runError = r.ok || needsStepUp(r) ? null : refusal(r);
+    st.raiseNote = null;
     await load();
   }
 

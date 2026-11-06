@@ -258,9 +258,17 @@ test('a resume refused because today\'s budget is spent says so in words, and Ra
     await page.getByRole('button', { name: 'Raise the cap for today' }).click();
     await page.locator('[data-card-id="crd_budget"].focused').waitFor();
     assert.equal(await page.locator('dialog.ask-dialog').count(), 0);
-    // Once that card is answered (Resume tomorrow), the action asks for the new cap itself.
-    plane.bump('crd_budget', { state: 'answered', answer: { option: 'tomorrow' } });
+    // The card's Add half again resumes the run: the spent sentence goes (QA #162 sev 3).
+    plane.runs[0].state = 'running';
+    plane.cost.state = 'ok';
+    plane.bump('crd_budget', { state: 'answered', answer: { option: 'raise' } });
+    await page.locator('#run-state', { hasText: 'Running' }).waitFor();
     await page.locator('[data-card-id="crd_budget"].answered').waitFor();
+    assert.equal(await page.getByText("Today's budget is spent, so").count(), 0, 'nothing is refused any more');
+    // Spent again, and the card is answered: the action asks for the new cap itself.
+    plane.exhaust();
+    await page.locator('#run-state', { hasText: 'Paused' }).waitFor();
+    await page.getByRole('button', { name: 'Resume' }).click();
     await spentLine('the daily cap').waitFor();
     // An amount at or under today's spend changes nothing.
     await page.getByRole('button', { name: 'Raise the daily cap' }).click();
@@ -270,9 +278,15 @@ test('a resume refused because today\'s budget is spent says so in words, and Ra
     await ask.getByRole('button', { name: 'OK' }).click();
     await page.getByText("The new cap must be more than today's spend of $50.00. Nothing changed.").waitFor();
     assert.equal(plane.budget.perDay, 5000);
-    // A higher one goes through step-up, then the run resumes.
-    await page.getByRole('button', { name: 'Resume' }).click();
+    // The sentence and its button stay (QA #162), and something that is not an amount says so.
     await spentLine('the daily cap').waitFor();
+    await page.getByRole('button', { name: 'Raise the daily cap' }).click();
+    await ask.locator('input').fill('abc');
+    await ask.getByRole('button', { name: 'OK' }).click();
+    await page.getByText('That is not an amount. Nothing changed.').waitFor();
+    const tap = await page.getByRole('button', { name: 'Raise the daily cap' }).boundingBox();
+    assert.ok(tap.height >= 44, `a 44px tap target at 360px, got ${tap.height}`);
+    // A higher one goes through step-up, then the run resumes.
     await page.getByRole('button', { name: 'Raise the daily cap' }).click();
     await ask.locator('input').fill('80');
     await ask.getByRole('button', { name: 'OK' }).click();
