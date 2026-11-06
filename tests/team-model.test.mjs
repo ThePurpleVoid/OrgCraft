@@ -92,15 +92,46 @@ test('editing a kit role writes an extension that sync applies', () => {
   assert.match(resolved.md, /rollback note/);
 });
 
-test('switching a project role off removes it, and switching off a replaced kit role excludes it', () => {
+test('a project role switched off keeps its file, is listed in exclude, and comes back unchanged', () => {
   const root = repoFrom(join(KIT, 'examples/native-mobile/.agent-team'));
-  const spec = importLayer(readLayer(root), kit);
+  const original = readLayer(root);
+  const brief = original['roles/qa-ios.md'];
+  const spec = importLayer(original, kit);
   setEnabled(spec, 'qa-ios', false);
-  const layer = compileLayer(spec, kit);
-  assert.equal('roles/qa-ios.md' in layer, false);
-  writeLayer(root, layer);
-  assert.equal(existsSync(join(root, '.agent-team/roles/qa-ios.md')), false);
+  const off = compileLayer(spec, kit);
+  assert.equal(off['roles/qa-ios.md'], brief, 'the file stays');
+  assert.ok(JSON.parse(off['team.json']).exclude.includes('qa-ios'), 'exclude lists it');
+  writeLayer(root, off);
+  assert.equal(existsSync(join(root, '.agent-team/roles/qa-ios.md')), true);
   assert.equal(existsSync(join(root, '.agent-team/config.sh')), true, 'files outside the model are left alone');
+  assert.equal(build(root).roles.some((r) => r.slug === 'qa-ios'), false, 'sync does not install it');
+  // import → compile of the switched-off layer changes nothing.
+  const again = importLayer(readLayer(root), kit);
+  assert.equal(again.roles['qa-ios'].enabled, false);
+  assert.deepEqual(compileLayer(again, kit), off);
+  // Switching it back on restores the layer as it was.
+  setEnabled(again, 'qa-ios', true);
+  const on = compileLayer(again, kit);
+  assert.equal(on['roles/qa-ios.md'], brief);
+  assert.deepEqual(JSON.parse(on['team.json']), JSON.parse(original['team.json']));
+});
+
+test('a custom agent (not in the kit) switched off survives a publish and switching back on gives the same brief', () => {
+  const root = repoFrom(join(KIT, 'examples/native-mobile/.agent-team'));
+  const md = '# Pricing analyst\n\n**Reports to:** cto\n\n## Mission\nKeep prices honest.\n';
+  writeFileSync(join(root, '.agent-team/roles/pricing-analyst.md'), md);
+  const spec = importLayer(readLayer(root), kit);
+  assert.equal(spec.roles['pricing-analyst'].source, 'project');
+  setEnabled(spec, 'pricing-analyst', false);
+  writeLayer(root, compileLayer(spec, kit));
+  assert.equal(readFileSync(join(root, '.agent-team/roles/pricing-analyst.md'), 'utf8'), md);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, '.agent-team/team.json'), 'utf8')).exclude, ['mobile-dev', 'qa-mobile', 'pricing-analyst']);
+  assert.equal(build(root).roles.some((r) => r.slug === 'pricing-analyst'), false);
+  const back = importLayer(readLayer(root), kit);
+  setEnabled(back, 'pricing-analyst', true);
+  writeLayer(root, compileLayer(back, kit));
+  assert.equal(build(root).roles.find((r) => r.slug === 'pricing-analyst').source, 'project');
+  assert.deepEqual(JSON.parse(readFileSync(join(root, '.agent-team/team.json'), 'utf8')).exclude, ['mobile-dev', 'qa-mobile']);
 });
 
 test('extensions survive parse and format', () => {

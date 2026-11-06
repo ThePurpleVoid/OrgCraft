@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,7 @@ import { fromHook, makeEvent, parseArgs, shellVars } from '../tools/report.mjs';
 const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(KIT, 'bin/agent-team.mjs');
 // Never post to a real board from a test.
-const ENV = { ...process.env, TEAM_REPORT_URL: '', TEAM_REPORT_TOKEN: '', AGENT_TEAM_ROLE: '', AGENT_TEAM_INSTANCE: '', AGENT_TEAM_SESSION: '' };
+const ENV = { ...process.env, TEAM_REPORT_URL: '', TEAM_REPORT_TOKEN: '', TEAM_REPORT_MIRROR_URL: '', TEAM_REPORT_MIRROR_TOKEN: '', AGENT_TEAM_HOME: '', AGENT_TEAM_ROLE: '', AGENT_TEAM_INSTANCE: '', AGENT_TEAM_SESSION: '' };
 const NOW = new Date('2026-01-01T12:00:00Z');
 const ago = (min) => ({ at: new Date(NOW - min * 60_000).toISOString() });
 
@@ -179,4 +179,65 @@ test('smoke: agent teams export teammate types, the flag and the lead prompts; d
   const drift = spawnSync('node', [CLI, 'doctor'], { cwd: p.dir, env: p.env, encoding: 'utf8' });
   assert.equal(drift.status, 1);
   assert.match(drift.stdout, /FAIL out of date: \.claude\/settings\.json/);
+});
+
+// ------------------------------------------------------------------------------------------------ threads (issue #29)
+
+/** A project whose threads share one board folder: AGENT_TEAM_HOME only in team.env, the role only in local.env. */
+function threadProject({ homeIn = 'team.env' } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-team-thread-'));
+  const home = join(dir, '.home'); // this thread's $HOME
+  const shared = join(dir, 'shared-board'); // the folder every thread mounts
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+  const env = { ...ENV, HOME: home, AGENT_TEAM_KIT_DIR: KIT };
+  delete env.AGENT_TEAM_HOME;
+  delete env.AGENT_TEAM_ROLE;
+  execFileSync('node', [CLI, 'init', '--preset', 'minimal', '--project', 'Threads'], { cwd: dir, env });
+  if (homeIn === 'team.env') {
+    mkdirSync(join(home, '.agent-team/threads'), { recursive: true });
+    writeFileSync(join(home, '.agent-team/threads/team.env'), `AGENT_TEAM_HOME=${shared}\n`);
+  } else {
+    const f = join(dir, '.agent-team/config.sh');
+    writeFileSync(f, `${readFileSync(f, 'utf8')}\nAGENT_TEAM_HOME="${shared}"\n`);
+  }
+  writeFileSync(join(dir, '.agent-team/local.env'), 'AGENT_TEAM_ROLE=backend-dev\n');
+  return { dir, env, log: join(shared, 'threads/events.jsonl') };
+}
+
+for (const homeIn of ['team.env', 'config.sh']) {
+  test(`threads: AGENT_TEAM_HOME from ${homeIn} and the role from local.env reach the shared board`, () => {
+    const p = threadProject({ homeIn });
+    const sh = spawnSync('bash', ['scripts/agent-team/team-status.sh', 'status', 'working', '--task', 'Invoices API'], { cwd: p.dir, env: p.env, encoding: 'utf8' });
+    assert.equal(sh.status, 0, sh.stderr);
+    assert.match(sh.stdout, /team-status: backend-dev status working · Invoices API/);
+    const js = spawnSync('node', ['scripts/agent-team/report.mjs', 'heartbeat'], { cwd: p.dir, env: p.env, encoding: 'utf8' });
+    assert.equal(js.status, 0, js.stderr);
+    const hk = spawnSync('node', ['scripts/agent-team/report.mjs', 'hook'], {
+      cwd: p.dir, env: { ...p.env, CLAUDE_PROJECT_DIR: p.dir }, input: JSON.stringify({ hook_event_name: 'Stop', session_id: 't', cwd: p.dir }), encoding: 'utf8' });
+    assert.equal(hk.status, 0, hk.stderr);
+    const rows = readLog(p.log);
+    assert.deepEqual(rows.map((r) => [r.role, r.kind, r.source]), [
+      ['backend-dev', 'status', 'team-status.sh'], ['backend-dev', 'heartbeat', 'team-status.sh'], ['backend-dev', 'status', 'hook']]);
+    assert.equal(rows[2].status, 'idle');
+    assert.ok(!existsSync(join(p.env.HOME, '.agent-team/threads/events.jsonl')), 'nothing lands in the private default folder');
+    assert.match(readFileSync(join(p.dir, '.gitignore'), 'utf8'), /^\.agent-team\/local\.env$/m, 'local.env is never committed');
+    const doctor = spawnSync('node', [CLI, 'doctor'], { cwd: p.dir, env: p.env, encoding: 'utf8' });
+    assert.match(doctor.stdout, /this checkout reports as backend-dev/);
+    assert.match(doctor.stdout, new RegExp(`reports go to ${p.log.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  });
+}
+
+test('threads: the environment still wins, and a missing role is said, not guessed', () => {
+  const p = threadProject();
+  const other = join(p.dir, 'elsewhere');
+  const r = spawnSync('bash', ['scripts/agent-team/team-status.sh', 'status', 'working'], {
+    cwd: p.dir, env: { ...p.env, AGENT_TEAM_HOME: other, AGENT_TEAM_ROLE: 'web-dev' }, encoding: 'utf8' });
+  assert.match(r.stdout, /web-dev status working/);
+  assert.equal(readLog(join(other, 'threads/events.jsonl'))[0].role, 'web-dev');
+  rmSync(join(p.dir, '.agent-team/local.env'));
+  for (const cmd of [['bash', 'scripts/agent-team/team-status.sh'], ['node', 'scripts/agent-team/report.mjs']]) {
+    const none = spawnSync(cmd[0], [cmd[1], 'status', 'working'], { cwd: p.dir, env: p.env, encoding: 'utf8' });
+    assert.equal(none.status, 0);
+    assert.match(none.stderr, /not reported \(no role/);
+  }
 });

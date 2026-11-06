@@ -50,7 +50,7 @@ Each role keeps `roles/<slug>.md` in project memory with five sections: Identity
 
 ## Meetings and the digest
 
-The chief of staff runs a daily digest and weekly, monthly and quarterly reviews, all two-way in the main project chat. The digest is by feature, with five status words (Idea, Building, Testing, Ready to try, Live), a screenshot or link for everything that is ready, at most three decisions (each with a recommendation), blockers and a usage line.
+The chief of staff runs a daily digest and weekly, monthly and quarterly reviews, all two-way in the owner's channel (the main project chat, or the coordinator's chat when the chief of staff runs as a thread). The digest is by feature, with five status words (Idea, Building, Testing, Ready to try, Live), a screenshot or link for everything that is ready, at most three decisions (each with a recommendation), blockers and a usage line.
 
 ## Model tiers
 

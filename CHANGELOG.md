@@ -4,6 +4,21 @@
 
 - **M3 seams** ([docs/product/m3-design.md](docs/product/m3-design.md)): the tables for runs, sessions, the message bus, cards, approvals, chat, budgets and audit; how a message wakes a role; the runner and server ops M3 builds and who may send what; chat cards built from `card.updated` events; the daily budget at 80% and 100%; and the hosting split for a Vercel and Supabase deployment. Contracts, all additive: a new [team tools](docs/contracts/team-tools.md) contract (`tools/1`), new event types (`card.updated`, `budget.warned`, `budget.exhausted`, `session.queued`), `session.renew`, `session.token` and `nack` in `runner/1`, and the tool, step-up, budget and runner-code endpoints in `/v1/`.
 
+## 0.9.1
+
+- **A custom agent switched off keeps its definition.** Switching off a project role (`.agent-team/roles/<slug>.md`, including one that replaces a kit role) in the Studio, or through `compileLayer` in `packages/team-model`, used to delete its file on publish. Now the file stays and the role is listed in `team.json` `exclude`; switching it back on gives the identical brief. Import and compile round-trip a switched-off role unchanged.
+- **What existing teams see on sync:** `exclude` now also applies to the project's own roles. Before, a role with a file in `.agent-team/roles/` was installed even when `exclude` listed it; now it is not. A team that lists none of its own roles in `exclude` sees no change.
+
+## 0.9.0
+
+Running a team from project threads, where every thread has its own machine (issue #29). Existing teams see these changes on their next sync:
+
+- **One board for threads on separate machines.** `AGENT_TEAM_HOME` can now be set in `.agent-team/config.sh`, `~/.agent-team/<project>/team.env` or `.agent-team/local.env` as well as the environment, so every thread can point at a folder they all share. `team-status.sh`, `report.mjs`, the hooks, `team-board.sh` and the dashboard all follow it. A state folder set this way can hold its own `team.env`, for a shared board's URL and token. The environment still wins.
+- **Each checkout knows its role.** `.agent-team/local.env` (`AGENT_TEAM_ROLE=<role>`) names the role a checkout plays. The hooks report the thread's own session as that role without anything in the environment, and `team-status.sh status working --task "..."` and `report.mjs` work without the role argument. Sync adds `.agent-team/local.env` to `.gitignore` (one line, once). `doctor` prints the role a checkout reports as, and fails when `local.env` is committed or names a role that is not on the team.
+- **Briefs, protocols and project instructions:** "the main project chat" is now "the owner's channel". The protocols define it and describe **the chief of staff as a thread**: when the host has its own coordinator, the owner keeps talking to the coordinator, the coordinator relays to the chief of staff's thread verbatim, and the chief of staff dispatches through the coordinator. Nothing else changes. Role threads may leave the role out of `team-status.sh` when `local.env` names it.
+- **Running the team:** sections on one board for threads on separate machines, the role of a checkout, the chief of staff as a thread, and routines scheduled from a thread (a scheduled task whose prompt names the role and the job) rather than only cron.
+- `templates/config.sh` documents `AGENT_TEAM_HOME`.
+
 ## 0.8.0
 
 - **Contracts for the online product** ([docs/contracts/](docs/contracts/README.md), milestone M1 of the MVP). They are written before the code that implements them:
