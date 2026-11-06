@@ -20,6 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
   && groupadd --gid 10010 agentwork \
   && useradd --create-home --uid 10001 --user-group --groups agentwork runner \
   && useradd --no-create-home --uid 10002 --gid 10010 --shell /usr/sbin/nologin --home-dir /nonexistent agent \
+  && for i in 0 1 2 3 4 5 6 7; do id=$((10100 + i)); groupadd --gid "$id" "agent$i" \
+       && useradd --no-create-home --uid "$id" --gid "$id" --shell /usr/sbin/nologin --home-dir /nonexistent "agent$i" \
+       && usermod --append --groups "agent$i" runner; done \
   && mkdir -p /data /usr/local/libexec/agent-team \
   && cp /usr/bin/setpriv /usr/local/libexec/agent-team/setpriv \
   && chown root:runner /usr/local/libexec/agent-team/setpriv && chmod 0750 /usr/local/libexec/agent-team/setpriv \
@@ -32,7 +35,7 @@ COPY apps/runner/package.json apps/runner/package-lock.json apps/runner/
 RUN npm ci --omit=dev --prefix apps/runner
 COPY apps/runner/ apps/runner/
 ENV AGENT_TEAM_RUNNER_DATA=/data/runner AGENT_TEAM_RUNNER_WORK=/data/work NODE_ENV=production \
-    AGENT_TEAM_SANDBOX_UID=10002 AGENT_TEAM_SANDBOX_GID=10010 AGENT_TEAM_SANDBOX_EXEC=/usr/local/libexec/agent-team/setpriv
+    AGENT_TEAM_SANDBOX_UIDS=10100-10107 AGENT_TEAM_SANDBOX_GID=10010 AGENT_TEAM_SANDBOX_EXEC=/usr/local/libexec/agent-team/setpriv
 VOLUME /data
 ENTRYPOINT ["/bin/sh", "/app/apps/runner/entrypoint.sh"]
 CMD ["node", "apps/runner/bin.mjs", "start"]

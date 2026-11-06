@@ -7,6 +7,7 @@ import { connect, ulid } from './link.mjs';
 import { Session } from './session.mjs';
 import { toolServer } from './toolserver.mjs';
 import { startModelProxy } from './modelproxy.mjs';
+import { sandboxPool } from './sandbox.mjs';
 
 export const PROTOCOL = 'runner/1';
 const RUNNER_VERSION = '0.1.0';
@@ -22,6 +23,9 @@ const RENEW_BEFORE_MS = 2 * 60_000;
 export function startRunner({ server, key, root, work = root, sandbox = null, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
   // The model key stays in this process; sessions reach the model through the loopback proxy (modelproxy.mjs).
   const proxy = modelProxy === undefined ? startModelProxy({ log }) : modelProxy;
+  // The agent users (#28): one per live session from a pool, or one shared user for a runner of a single customer.
+  const pool = sandboxPool(sandbox);
+  let customer = null; // with one shared agent user: the only team this runner serves
   const sessions = new Map();
   const approvals = new Map(); // approval id -> { resolve, session, approval } or { early }
   let welcomed = false;
@@ -100,13 +104,22 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     if (!body?.session || !body.role || !body.team) return log('session.start needs session, role and team');
     const running = sessions.get(body.session);
     if (running && running.state !== 'ended') { if (body.wake) running.deliver(body.wake); return; } // a resend, or a wake for a live session
-    if ([...sessions.values()].filter((s) => s.state !== 'ended').length >= maxSessions) {
-      emit({ id: body.session, role: body.role, body, frontDoor: false }, 'session.ended', { role: body.role, reason: 'capacity', detail: `this runner already runs ${maxSessions} sessions` });
+    if ([...sessions.values()].filter((s) => s.state !== 'ended').length >= Math.min(maxSessions, pool?.size ?? Infinity)) {
+      emit({ id: body.session, role: body.role, body, frontDoor: false }, 'session.ended', { role: body.role, reason: 'capacity', detail: `this runner already runs ${Math.min(maxSessions, pool?.size ?? Infinity)} sessions` });
       return;
+    }
+    // One shared agent user means one customer: sessions of every team on it could read each other (review of #28, E).
+    if (pool?.shared) {
+      const who = `${tenant ?? ''}/${body.team}`;
+      if (customer && customer !== who) {
+        emit({ id: body.session, role: body.role, body, frontDoor: false }, 'session.ended', { role: body.role, reason: 'capacity', detail: 'this runner has one agent user and already serves another team; give it a pool of agent users (AGENT_TEAM_SANDBOX_UIDS) to serve more than one' });
+        return;
+      }
+      customer = who;
     }
     let s;
     const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
-    s = new Session(body, { adapter, root, work, sandbox, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval });
+    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval });
     s.tools = tools;
     setToken(s, body.token, body.tokenExpires);
     sessions.set(body.session, s);
