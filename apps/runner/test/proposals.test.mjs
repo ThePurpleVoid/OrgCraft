@@ -173,3 +173,49 @@ test('the runner opens the pull request after the first checkpoint, and merges i
     await cp.close();
   }
 });
+
+// A head the runner did not push must pass the same checks as a checkpoint before any card names it.
+for (const [name, file, text, rule] of [
+  ['a path outside the role\'s areas', 'other.txt', 'not yours\n', 'ownership'],
+  ['a secret in a commit', 'form.txt', `key = AKIA${'Q'.repeat(16)}\n`, 'secret-scan'],
+]) {
+  test(`a head moved after approval with ${name} gets no new card, and the run hears why (${rule})`, async () => {
+    const { bare, root } = origin();
+    let moveHead = true;
+    const cp = await fakeControlPlane({
+      decide: (req) => {
+        if (moveHead) { moveHead = false; branch(bare, root, 'web/6-form', file, text); }
+        return { decision: 'approved', by: 'owner', headSha: req.headSha };
+      },
+    });
+    const results = [];
+    const adapter = stubAdapter({
+      'web-dev': async (t) => {
+        writeFileSync(join(t.cwd, 'form.txt'), 'form\n');
+        results.push(await t.call('request_approval', { action: 'accept', call: 'merge the form', why: 'qa-web signed off' }));
+        return {};
+      },
+    });
+    const runner = startRunner({ server: cp.url, key: cp.key, root, adapter, proposals: localProposals() });
+    try {
+      await runner.ready;
+      const mainBefore = sh(bare, 'rev-parse', 'main');
+      cp.start({ role: 'web-dev', run: 'run_6', repo: { url: bare }, worktree: 'web/6-form', areas: ['form.txt'] });
+      await cp.until(() => results.length === 1 && cp.events.filter((e) => e.type === 'proposal.failed').length === 2);
+      assert.equal(cp.approvals.length, 1, 'no second card for a head that failed the checks');
+      const [moved, refused] = cp.events.filter((e) => e.type === 'proposal.failed');
+      assert.equal(moved.data.reason, 'head-moved');
+      assert.equal(refused.data.reason, 'checks');
+      assert.match(refused.data.detail, new RegExp(rule === 'ownership' ? 'outside this role' : 'hold a secret'));
+      assert.equal(refused.data.headSha, sh(bare, 'rev-parse', 'web/6-form'), 'the failure names the head that was checked');
+      assert.ok(results[0].isError);
+      assert.match(results[0].text, new RegExp(`"rule":"${rule}"`));
+      assert.equal(sh(bare, 'rev-parse', 'main'), mainBefore, 'nothing merged');
+      for (const e of cp.events) assert.deepEqual(checkEvent(e), [], JSON.stringify(e));
+      noFailedTurns(cp);
+    } finally {
+      await runner.close();
+      await cp.close();
+    }
+  });
+}
