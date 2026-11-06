@@ -56,6 +56,8 @@ test('a custom agent the kit now ships a role for: an error with Rename mine and
   await ed.locator('#e-checks li.error', { hasText: 'adds a role called analytics-lead' }).waitFor();
   if (SHOTS) { mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: join(SHOTS, 'agent-editor-kit-clash.png') }); }
 
+  assert.equal(await box.getByLabel('A new slug for your agent').inputValue(), 'numbers-person', 'offered from its name');
+  await ed.locator('.badge', { hasText: 'name clash' }).waitFor();
   // Rename mine: the slug is checked like a new one; a free one moves the agent, and the kit's role is back (off).
   await box.getByLabel('A new slug for your agent').fill('cto');
   await box.getByRole('button', { name: 'Rename mine' }).click();
