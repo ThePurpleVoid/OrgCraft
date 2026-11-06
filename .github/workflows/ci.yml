@@ -20,6 +20,8 @@ jobs:
         run: shellcheck -S warning scripts/*.sh templates/*.sh tests/*.sh examples/*/.agent-team/config.sh .agent-team/config.sh
       - name: Briefs (the kit's role library)
         run: node tools/roster.mjs --check team/roles
+      - name: Studio asset manifest is current
+        run: node tools/studio-assets.mjs check
       - name: Node tests
         run: node --test tests/*.test.mjs
       - name: Script and installer tests
