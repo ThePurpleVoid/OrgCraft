@@ -213,23 +213,24 @@ export function choiceLabel(id, item) {
 }
 
 /** The role a hand-off goes to by default (criterion 10): the area's new owner, else the role's manager, if on. */
-export function defaultTarget(item, spec, on) {
+export function defaultTarget(item, spec, on, managerOf = null) {
   const ok = (slug) => slug && slug !== item.role && on.some((r) => r.slug === slug);
   if (item.kind === 'path-moved') {
     const path = item.id.split(':').slice(2).join(':');
     const to = (spec.ownership?.rows ?? []).find((r) => r.path === path)?.writer;
     if (ok(to)) return to;
   }
+  // A kit role has no brief in the spec: the caller's managerOf reads the resolved one (QA on #103).
   const brief = spec.roles[item.role]?.brief ?? '';
-  const mgr = (fieldRe('Reports to').exec(brief)?.[1] ?? spec.roles[item.role]?.extension?.fields?.find((f) => f.name === 'Reports to')?.value ?? '').split(/\s/)[0]?.toLowerCase();
+  const mgr = managerOf?.(item.role) || (fieldRe('Reports to').exec(brief)?.[1] ?? spec.roles[item.role]?.extension?.fields?.find((f) => f.name === 'Reports to')?.value ?? '').split(/\s/)[0]?.toLowerCase();
   if (ok(mgr)) return mgr;
   return on.find((r) => r.slug !== item.role)?.slug ?? '';
 }
 
 /** Each item that asks for a choice gets its recommendation, and a hand-off target where one can be needed. */
-export function recommendations(items, spec, on) {
+export function recommendations(items, spec, on, managerOf = null) {
   const out = new Map();
-  for (const i of items) if (i.severity !== 'safe') out.set(i.id, { choice: i.recommended, target: i.choices.includes('handoff') || i.choices.includes('move-and-handover') ? defaultTarget(i, spec, on) : '' });
+  for (const i of items) if (i.severity !== 'safe') out.set(i.id, { choice: i.recommended, target: i.choices.includes('handoff') || i.choices.includes('move-and-handover') ? defaultTarget(i, spec, on, managerOf) : '' });
   return out;
 }
 

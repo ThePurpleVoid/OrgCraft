@@ -750,6 +750,7 @@ async function api(path, body) {
 /** The roles on in the draft, for hand-off targets (criterion 10: never one that is off). */
 const onRoles = () => view.team.map((r) => ({ slug: r.slug, title: r.title }));
 const roleTitle = (slug) => view.bySlug.get(slug)?.title ?? slug;
+const managerOfRole = (slug) => view.bySlug.get(slug)?.reportsTo ?? '';
 
 /** The impact step and the commit message it adds (criteria 8 and 9). */
 /** The role that takes the owner's requests: the one that reports to the owner, when there is exactly one. */
@@ -761,7 +762,7 @@ function dispatcher() {
 function renderImpact() {
   const items = view.safety.on ? view.safety.items : [];
   for (const id of [...picks.keys()]) if (!items.some((i) => i.id === id)) picks.delete(id);
-  const rec = recommendations(items, spec, onRoles());
+  const rec = recommendations(items, spec, onRoles(), managerOfRole);
   for (const [id, p] of rec) if (!picks.has(id)) picks.set(id, p);
   $('#impact').innerHTML = impactHtml({ items, picks, on: onRoles(), titleOf: roleTitle, board, newest: view.safety.newest, spec, roles: view.team.map((x) => ({ slug: x.slug, md: x.md })), dispatcher: dispatcher() });
   const plan = planText(items, picks, roleTitle, dispatcher());
@@ -781,7 +782,7 @@ function wireImpact() {
   });
   box.addEventListener('click', (e) => {
     if (e.target.id !== 'impact-recommend') return;
-    picks = recommendations(view.safety.items, spec, onRoles());
+    picks = recommendations(view.safety.items, spec, onRoles(), managerOfRole);
     renderImpact();
     previewPublish();
   });

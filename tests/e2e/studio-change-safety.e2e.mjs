@@ -200,7 +200,7 @@ test('the impact step: choices with the recommendation, a hand-off target, and t
   assert.equal(await box.locator('label.choice:has(input[value="handoff"]) + label.target').count(), 1, 'the target sits under its choice');
   const options = await target.locator('option').evaluateAll((os) => os.map((o) => o.value));
   assert.ok(!options.includes('web-dev') && options.length > 0);
-  assert.ok(options.includes(await target.inputValue()));
+  assert.equal(await target.inputValue(), 'cto', 'a kit role hands off to its manager by default');
   await target.selectOption('qa-web');
   const plan = page.locator('#plan pre');
   await plan.getByText(/^- Web dev \(web-dev\): Dark mode, branch web\/142-dark-mode, PR #142\. Switched off: hand the work off now, to qa-web\.$/m).waitFor();
