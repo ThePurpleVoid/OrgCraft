@@ -140,3 +140,36 @@ test('the shared rules line names the packs in plain words (neutral protocols cr
   assert.equal(rulesLine(['engineering']), 'Shared rules: the core and engineering (pull requests, the merge gate, deploys)');
   assert.equal(rulesLine(['legal']), 'Shared rules: the core and legal');
 });
+
+test('a first publish commits an untracked .gitignore with the team\'s lines (review of #119, note 1)', async () => {
+  const root = emptyRepo('shop');
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(join(root, '.gitignore'), 'node_modules/\n');
+  await serve(root, async (call) => {
+    const { body: { spec } } = await call('/v1/team/from-template', { id: 'customer-support-team', project: 'Shop' });
+    const res = await call('/v1/team/publish', { spec, message: 'Start the team' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.ok(res.body.files.includes('.gitignore'));
+    assert.match(git(root, 'show', 'HEAD:.gitignore'), /^node_modules\/\n/);
+    assert.equal(git(root, 'status', '--porcelain'), '');
+  });
+});
+
+test('uncommitted edits to the repository\'s own AGENTS.md block a publish only when the team writes AGENTS.md (review of #119, note 2)', async () => {
+  const root = emptyRepo('shop');
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(join(root, 'AGENTS.md'), '# Shop\n');
+  git(root, 'add', '-A');
+  git(root, 'commit', '-qm', 'agents');
+  await serve(root, async (call) => {
+    const { body: { spec } } = await call('/v1/team/from-template', { id: 'customer-support-team', project: 'Shop' });
+    writeFileSync(join(root, 'AGENTS.md'), '# Shop\n\nWork in progress.\n');
+    const off = await call('/v1/team/publish', { spec, message: 'Start the team' });
+    assert.equal(off.status, 200, JSON.stringify(off.body));
+    assert.ok(!off.body.files.includes('AGENTS.md'), 'the owner\'s edit is not committed');
+    assert.equal(git(root, 'status', '--porcelain'), 'M AGENTS.md');
+    const on = await call('/v1/team/publish', { spec: { ...spec, options: { ...spec.options, targets: ['claude-code', 'agents-md'] } }, message: 'AGENTS.md too' });
+    assert.equal(on.status, 409);
+    assert.match(on.body.error, /AGENTS\.md/);
+  });
+});

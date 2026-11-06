@@ -14,7 +14,7 @@ import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build, DEFAULT_KIT_SPEC, initExtras, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
-import { compileLayer, importLayer, resolveSpec, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
+import { compileLayer, importLayer, resolveSpec, teamTargets, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
 import { hostGuard } from '../../tools/hosts.mjs';
@@ -38,9 +38,20 @@ const tryGit = (root, ...args) => { try { return git(root, ...args); } catch { r
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 
-export function gitState(root) {
+/** Whether the team on disk writes AGENTS.md (team.json "targets"). */
+function writesAgentsMd(root) {
+  try { return teamTargets(JSON.parse(readFileSync(join(root, '.agent-team/team.json'), 'utf8'))).includes('agents-md'); } catch { return false; }
+}
+
+/** The paths a publish writes. AGENTS.md is the repository's own file until the team writes it (on disk or in `spec`). */
+function publishedPaths(root, spec) {
+  const agentsMd = writesAgentsMd(root) || (spec && teamTargets(spec.options).includes('agents-md'));
+  return agentsMd ? PUBLISHED : PUBLISHED.filter((p) => p !== 'AGENTS.md');
+}
+
+export function gitState(root, spec) {
   const branch = tryGit(root, 'branch', '--show-current');
-  const dirty = tryGit(root, 'status', '--porcelain', '--', ...PUBLISHED).split('\n').filter(Boolean);
+  const dirty = tryGit(root, 'status', '--porcelain', '--', ...publishedPaths(root, spec)).split('\n').filter(Boolean);
   // The live version: the last commit that changed the team (change safety names versions by commit, D16).
   const [sha, at] = tryGit(root, 'log', '-1', '--format=%H%n%cI', '--', '.agent-team').split('\n');
   return { repo: !!tryGit(root, 'rev-parse', '--git-dir'), branch, dirty, head: sha ? { sha, at: at ?? null } : null };
@@ -156,7 +167,8 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
   const kit = loadKit(KIT);
   const errors = validate(spec, kit).filter((i) => i.level === 'error');
   if (errors.length) throw new HttpError(422, `fix ${errors.length} error${errors.length > 1 ? 's' : ''} first: ${errors[0].where}: ${errors[0].message}`);
-  const g = gitState(root);
+  const g = gitState(root, spec);
+  const paths = publishedPaths(root, spec);
   if (!g.repo) throw new HttpError(409, `${root} is not a git repository`);
   if (g.dirty.length) throw new HttpError(409, `the team's files have uncommitted changes (${g.dirty.slice(0, 3).join(', ')}); commit or stash them first`);
   if (branch && !/^[A-Za-z0-9._/-]+$/.test(branch)) throw new HttpError(400, 'a branch name may use letters, digits, ".", "_", "/" and "-"');
@@ -171,7 +183,9 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
   const before = fresh ? snapshot(root) : null;
   // sync may add lines to .gitignore (a first team, or AGENTS.md's memory folder): commit them, unless the owner
   // already had their own uncommitted changes there.
-  const ignoreClean = !tryGit(root, 'status', '--porcelain', '--', '.gitignore');
+  // An untracked .gitignore counts as clean on a first publish, so the first team commit has the local.env line.
+  const ignoreStatus = tryGit(root, 'status', '--porcelain', '--', '.gitignore');
+  const ignoreClean = !ignoreStatus || (fresh && ignoreStatus.startsWith('??'));
   const text = message?.trim() || 'Update the agent team (Agent Team Studio)';
   let written, staged;
   try {
@@ -181,7 +195,7 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
     if (fresh) extras(root, layer);
     const code = sync(root, { quiet: true });
     if (code !== 0) throw new HttpError(500, 'sync reported roster errors; nothing was committed');
-    git(root, 'add', '-A', '--', ...PUBLISHED.filter((p) => existsSync(join(root, p))), ...(ignoreClean && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
+    git(root, 'add', '-A', '--', ...paths.filter((p) => existsSync(join(root, p))), ...(ignoreClean && existsSync(join(root, '.gitignore')) ? ['.gitignore'] : []));
     staged = tryGit(root, 'diff', '--cached', '--name-only').split('\n').filter(Boolean);
     if (staged.length) git(root, 'commit', '-q', '-m', text);
   } catch (e) {
