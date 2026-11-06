@@ -21,3 +21,4 @@ These are the interfaces that other things depend on: the Studio, the runner, th
 4. **No vendor in a contract.** No model, cloud, SDK or database name appears in a field, a type or an enum. Vendors are values (`"provider": "anthropic"`), never shapes.
 5. **Compatibility with what already runs.** Every team on the kit today reports with `team-status.sh`, `report.mjs` and the hooks. The API accepts those reports byte for byte (`POST /v1/teams/{team}/reports`). A team never has to change its scripts to be seen by the product.
 6. **Changes go through review.** Any PR that touches this folder needs the architect's review and a line in the CHANGELOG.
+7. **Security tightening before 1.0.** Until the first 1.0 release, an existing operation may be made stricter for security (for example requiring step-up) without a new version, when no client outside this repository calls it yet. Each one is recorded as an exception in the CHANGELOG.

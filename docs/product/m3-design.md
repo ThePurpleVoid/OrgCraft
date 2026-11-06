@@ -244,6 +244,8 @@ Nothing in the product changes shape for this target. Compose and plain Postgres
 
 ## 9. Contract changes in this PR (all additive)
 
+Later, in section 12: step-up became required on four existing writes (`PUT /secrets/{name}`, `PUT /teams/{team}/budget` when raising, `POST /runs/{run}/resume` after a budget pause, `POST /runners/codes`). That is a tightening, not an additive change: a recorded exception before 1.0, made before any client calls them (contracts README, rule 7).
+
 - [team-tools.md](../contracts/team-tools.md), **new**: `tools/1`, the seven tools, their fields and checks, and the events each emits.
 - [events.md](../contracts/events.md): new types `card.updated`, `budget.warned`, `budget.exhausted`, `session.queued`; new optional fields `chat.message.clientId`, `cardId` and `session` on `decision.requested`, `decision.answered` and `approval.requested`, `approval.decided.session`, `budget.exhausted.cardId`, and the structured message fields from team-tools.md.
 - [runner-protocol.md](../contracts/runner-protocol.md): the M3 subset, `session.renew` and `session.token`, `nack`, the additive body fields above, and the event allowlist per credential.
@@ -276,11 +278,11 @@ All three builders can start now. Until the real piece exists, each one uses the
 - **Memory travels in checkpoints** and is stored on the control plane, so a session can resume on another runner.
 - **No secret release over the protocol in M3.** The runner's model key is in the runner's own environment.
 - **The front door is the role that reports to the owner,** not a hard-coded slug, so any industry's team works.
-- **Merges are done by the runner, not the agent** (section 12, D2). This supersedes "merging is approval-gated by policy": the policy still raises the approval, but the security line is the credential split and branch protection.
+- **Merges and pushes are done by the runner, not the agent, and sessions run sandboxed** (section 12, D2 and D9). This supersedes "merging is approval-gated by policy": the policy still raises the approval, but the security line is the credential split and branch protection.
 
 ## 12. Security requirements for part 2
 
-From the security reviewer's review of this design on issue #28 (D1 to D8). They are binding on backend-dev's part 2 and the ai-engineer's runner. The baseline still holds: RLS on `app.tenant` for all nine tables, and no secret values in events, cards or audit.
+From the security reviewer's review of this design on issue #28 (D1 to D8), and of runner PR #42 (D9, decided by the CTO). They are binding on backend-dev's part 2 and the ai-engineer's runner. The baseline still holds: RLS on `app.tenant` for all nine tables, and no secret values in events, cards or audit.
 
 | | Requirement | Owner | Proof |
 | --- | --- | --- | --- |
@@ -302,7 +304,7 @@ The goal: runner sessions cannot push to or merge into `main`, the runner itself
 2. **A GitHub App for opening and merging pull requests** ("merger": Contents read and write, Pull requests read and write, Metadata read; private, installed on this repository only). Its private key lives only in the runner process's own settings. M4's GitHub App replaces both items 1 and 2.
    A fine-grained personal access token will not do for either: a token of your own account carries your admin bypass, so the rulesets would not apply to it.
 3. **Ruleset on `main`** (Settings, Rules, Rulesets, New branch ruleset, the default branch): *Restrict updates*, *Restrict deletions*, *Block force pushes*, *Require a pull request before merging* (0 approvals), *Require status checks to pass* (`test`, `server`). Bypass list: *Repository admin* (you, and the role threads that act as you, so today's flow is unchanged) and the **merger** app. Not the deploy key.
-4. **Ruleset on every other branch except `team/**`**: *Restrict creations*, *Restrict updates*, *Restrict deletions*, with the same bypass list. The deploy key can then push only to `team/**`; the runner names session branches `team/<role>/<issue or task>` and pushes only the session's own ref.
+4. **Ruleset on every other branch except `team/**` and `claude/**`**: *Restrict creations*, *Restrict updates*, *Restrict deletions*, with the same bypass list. The deploy key can then push only to `team/**` and `claude/**`; the runner names session branches `team/<role>/<issue or task>` and pushes only the session's own ref. `claude/**` is excluded because today's role threads push their `claude/project-thread-*` branches, possibly as the Claude GitHub App rather than as you, and this ruleset must not stop them. Merges by those threads go through the GitHub API as you, so the admin bypass on `main` covers them.
 5. **Run the runner in Docker**, not as yourself on the Mac (D9). The image and command come with the runner (ai-engineer, infra).
 
 What it costs: about 15 minutes and no new accounts. What it leaves open until M4: a thread acting as you can still merge without an approval card, exactly as today. That is by your standing instruction (full autonomy), and it does not apply to runner sessions. Scoping a push to one branch, rather than to `team/**`, is enforced by the runner, not by GitHub, until the M4 App.
