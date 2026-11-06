@@ -7,7 +7,7 @@
 - **Sign-in and passkey pages for a hosted Studio** (milestone M4, docs/specs/m4-sign-in.md section 8, order 1). These are static pages that only a hosted deployment uses, so the local Studio does not change.
   - `sign-in.html` is the issuer's sign-in page. It has Continue with GitHub, and it says "Ask an owner to invite you" for an account that is not a member or invitee, and when a sign-in expired, was refused, or the person signed out.
   - `account.html` shows who you are and your workspaces. It asks for a first passkey straight after sign-in, and lists your passkeys. Removing a passkey asks for step-up.
-  - `auth.js` holds the return-path check (exactly one leading `/`; no `//`, `/\`, encoded slashes, schemes or control characters), the WebAuthn calls, and the passkey step-up dialog. The dialog trades one assertion for a single-use `su_` token, which the page keeps in memory for the one call that asked for it.
+  - `auth.js` holds the return-path check (exactly one leading `/`; no `//`, `/\`, dot segments, encoded slashes, schemes or control characters, and the normalised result is checked again), the WebAuthn calls, and the passkey step-up dialog. The dialog trades one assertion for a single-use `su_` token, which the page keeps in memory for the one call that asked for it.
   - The page and issuer seams are in `/mnt/project-files/plans/m4-sign-in-pages-seams.md` until the issuer lands.
   - A browser test runs it against a stub issuer and a stub GitHub, with Chromium's virtual passkey, at desktop and 360px.
 - A live update no longer empties a step-up secret while it is being typed in the chat (#57).
