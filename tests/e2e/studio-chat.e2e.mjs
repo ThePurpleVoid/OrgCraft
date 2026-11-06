@@ -205,8 +205,15 @@ test('start a run: the published team, a daily cap first, step-up to set it, and
       await page.getByText('A run started').waitFor();
       await page.getByRole('button', { name: 'Pause' }).waitFor();
       // Stop it, so the phone pass finds no run going until the one "started elsewhere".
-      page.once('dialog', (d) => d.accept());
-      await page.getByRole('button', { name: 'Stop' }).click();
+      // The Studio's own dialog, not the browser's confirm() (embed spec 4): Keep it running first, then stop.
+      await page.getByRole('button', { name: 'Stop', exact: true }).click();
+      const ask = page.locator('dialog.ask-dialog');
+      await ask.getByText('Stop the run? Every role session stops after its current step.').waitFor();
+      await ask.getByRole('button', { name: 'Keep it running' }).click();
+      await ask.waitFor({ state: 'detached' });
+      await page.getByRole('button', { name: 'Pause' }).waitFor();
+      await page.getByRole('button', { name: 'Stop', exact: true }).click();
+      await ask.getByRole('button', { name: 'Stop the run' }).click();
       await page.getByRole('button', { name: 'Start a run' }).waitFor();
       assert.deepEqual(errors, []);
       await ctx.close();
