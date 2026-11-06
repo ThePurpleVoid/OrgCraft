@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **M3 seams** ([docs/product/m3-design.md](docs/product/m3-design.md)): the tables for runs, sessions, the message bus, cards, approvals, chat, budgets and audit; how a message wakes a role; the runner and server ops M3 builds and who may send what; chat cards built from `card.updated` events; the daily budget at 80% and 100%; and the hosting split for a Vercel and Supabase deployment. Contracts, all additive: a new [team tools](docs/contracts/team-tools.md) contract (`tools/1`), new event types (`card.updated`, `budget.warned`, `budget.exhausted`, `session.queued`), `session.renew`, `session.token` and `nack` in `runner/1`, and the tool, step-up, budget and runner-code endpoints in `/v1/`.
+
 ## 0.9.1
 
 - **A custom agent switched off keeps its definition.** Switching off a project role (`.agent-team/roles/<slug>.md`, including one that replaces a kit role) in the Studio, or through `compileLayer` in `packages/team-model`, used to delete its file on publish. Now the file stays and the role is listed in `team.json` `exclude`; switching it back on gives the identical brief. Import and compile round-trip a switched-off role unchanged.
