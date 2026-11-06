@@ -63,6 +63,31 @@ jobs:
         if: hashFiles('apps/runner/package.json') != ''
         run: npm ci --prefix apps/runner && npm test --prefix apps/runner
 
+  runner-image:
+    # The runner's container, built as shipped, with the sandbox tests run inside it as the runner user (the
+    # real-key gate, security review F3). No secrets: the "key" in the environment is a marker the tests look for.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the runner image
+        if: hashFiles('apps/runner/Dockerfile') != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/runner/Dockerfile
+          tags: agent-team-runner:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Sandbox tests inside the image
+        if: hashFiles('apps/runner/Dockerfile') != ''
+        run: |
+          docker run --rm -e RUNNER_F3_MARKER=sk-ant-ci-marker-not-a-key-0123456789 \
+            agent-team-runner:ci node --test apps/runner/test/security.test.mjs | tee runner-image.tap
+          # Every test must have run in the image: a skip here means the sandbox was not exercised.
+          grep -q '^# fail 0$' runner-image.tap && grep -q '^# skipped 0$' runner-image.tap
+
   deploy-path:
     # The hosted deploy path on a Postgres shaped like Supabase (anon and authenticated roles with default grants on
     # public, a CREATEROLE owner that is not a superuser), behind pgbouncer in transaction mode. A cluster of its own:

@@ -18,7 +18,19 @@ ANTHROPIC_API_KEY=… node bin.mjs start
 
 **Run it in the container** (`Dockerfile`). That is the supported deployment: the runner runs as `runner` and every
 session as `agent`. Outside it (no `AGENT_TEAM_SANDBOX_UID`), sessions share the runner's OS user and could read its
-environment, so that is for development only, and the runner says so when it starts.
+environment, so that is for development only: with `ANTHROPIC_API_KEY` set and no sandbox the runner refuses to
+start (`AGENT_TEAM_RUNNER_UNSANDBOXED=1` overrides that for development). On a Mac, run it through Docker:
+
+```sh
+docker build -f apps/runner/Dockerfile -t agent-team-runner .        # from the repository root
+docker run -d --name agent-team-runner --restart unless-stopped \
+  -e AGENT_TEAM_SERVER=https://<control plane> -e AGENT_TEAM_RUNNER_KEY -e ANTHROPIC_API_KEY \
+  -v agent-team-runner:/data agent-team-runner
+```
+
+`-e NAME` with no value passes the variable from your shell, so the keys never appear on the command line. The
+volume holds the runner's folder (`/data/runner`, closed to sessions) and the sessions' (`/data/work`). CI builds this
+image and runs the sandbox tests inside it (`runner-image`).
 
 ## What a session can reach
 
