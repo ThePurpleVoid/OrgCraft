@@ -4,13 +4,55 @@ Your repository never edits the kit's files. It describes its differences in `.a
 
 After any change below, run `scripts/agent-team/sync.sh`, then commit `.agent-team/` together with what it regenerated.
 
+## Start from a team template
+
+A team template is a ready-made team for one kind of work: which roles are on, its own custom agents, the areas each role owns, a meeting and the systems it usually needs. The kit ships three:
+
+| Template | Group | Who is on it |
+| --- | --- | --- |
+| `startup-product-team` | Build a product | The engineering preset: chief of staff, CTO and CPO lanes, builders, QA and reviewers |
+| `customer-support-team` | Run a business function | Chief of staff, support lead, customer success lead, problem-report triager, and the custom agents support responder and knowledge base writer |
+| `content-studio` | Run a business function | Chief of staff, editor, writer (the content lead role), fact checker, brand designer, marketing lead and analytics lead |
+
+```sh
+agent-team templates                                            # one line per template
+agent-team init --template content-studio --project "Field Notes" --owner "Sam" --timezone "Europe/London"
+agent-team validate --template ./my-template                    # check a template folder of your own
+```
+
+`init --template` writes the same `.agent-team/` the Studio writes from the same template and answers, then syncs. `team.json` records where the team came from as `"from": "<template>@<kit version>"`; from then on it is an ordinary team, and nothing re-applies the template. No template adds demo tasks or data.
+
+A template folder is `team/templates/<id>/template.json` plus an optional `roles/` folder of custom agents in the [role pack](#share-an-agent-role-packs) format:
+
+```json
+{
+  "schema": "agent-team/team-template@1",
+  "id": "content-studio", "title": "Content studio", "summary": "One sentence for the gallery card.",
+  "group": "business-function",
+  "preset": "minimal",
+  "roles": ["chief-of-staff", "content-lead"],
+  "dormant": [],
+  "values": { "DIGEST_TIME": "08:00" },
+  "extensions": { "content-lead": "**Reports to:** editor\n\n## Identity (replace)\n..." },
+  "areas": [ { "path": "content/drafts/", "writer": "content-lead", "notes": "" } ],
+  "checks": { "targets": {} },
+  "meetings": [ ],
+  "systems": [ { "type": "website", "name": "Publishing site", "for": ["editor"] } ],
+  "layout": { }
+}
+```
+
+- `group` is `product`, `business-function` or `open-source`. `preset` is the starting role list, and `roles`, when given, is exactly the kit roles that are on. `dormant` lists roles that are on the team but wait for the owner to start them.
+- `extensions` are [`<role>.extend.md`](#change-a-kit-role-roleextendmd) texts. `areas`, `checks` and `meetings` become `ownership.json`, `gates.json` and `meetings.json`. `systems` are suggestions only: a type, a name and the roles they are for, never details or secrets. The Studio offers them on the canvas.
+- `validate --template` checks the format, that every role it names exists, the custom agents (as a role pack import does, and every one needs `Hands to` and, if it signs off, sign-off evidence) and the secret scan. It then validates the team the template makes. Kit templates must give zero errors and zero warnings.
+
 ## Choose the roles
 
 In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.11.1",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.12.1",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],

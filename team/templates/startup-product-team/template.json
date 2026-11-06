@@ -1,0 +1,28 @@
+{
+  "schema": "agent-team/team-template@1",
+  "id": "startup-product-team",
+  "title": "Startup product team",
+  "summary": "A product and engineering organisation: chief of staff, CTO and CPO lanes, builders, QA and reviewers.",
+  "group": "product",
+  "preset": "engineering",
+  "systems": [
+    { "type": "github", "name": "Code repository", "for": ["release-manager", "code-reviewer"] },
+    { "type": "postgres", "name": "Main database", "for": ["backend-dev"] }
+  ],
+  "meetings": [
+    {
+      "id": "weekly-planning",
+      "title": "Weekly planning",
+      "when": { "days": ["mon"], "at": "09:00" },
+      "attendees": { "roles": ["cto", "cpo", "head-of-quality"], "lanes": [], "rule": null },
+      "facilitator": "chief-of-staff",
+      "format": "round",
+      "rounds": 1,
+      "agenda": "1. What shipped last week, and what did not\n2. This week's priorities for each lane\n3. Risks and blocked work\n4. Decisions the owner needs to make",
+      "ifBusy": "next-pause",
+      "owner": { "minutes": true, "speaks": false },
+      "capUsd": 1,
+      "skipIfQuiet": false
+    }
+  ]
+}
