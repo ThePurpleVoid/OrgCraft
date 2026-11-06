@@ -50,7 +50,8 @@ test('the step-up hash is scrypt with its parameters and salt, and never contain
   const [kind, N, r, p, salt, key] = h.split('$');
   assert.equal(kind, 'scrypt');
   assert.ok(!h.includes('correct horse'));
-  const again = scryptSync('correct horse battery staple', Buffer.from(salt, 'base64url'), 32, { N: Number(N), r: Number(r), p: Number(p) });
+  const again = scryptSync('correct horse battery staple', Buffer.from(salt, 'base64url'), 32, { N: Number(N), r: Number(r), p: Number(p), maxmem: 64 * 1024 * 1024 });
+  assert.equal(N, '32768');
   assert.equal(again.toString('base64url'), key);
   assert.notEqual(hashStepUp('correct horse battery staple'), h, 'a fresh salt each time');
   assert.throws(() => hashStepUp('short'), /12 characters/);

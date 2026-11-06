@@ -10,12 +10,12 @@ import { randomBytes, scryptSync } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
-export const PARAMS = { N: 16384, r: 8, p: 1, keylen: 32 };
+export const PARAMS = { N: 32768, r: 8, p: 1, keylen: 32, maxmem: 64 * 1024 * 1024 };
 
 export function hashStepUp(secret, salt = randomBytes(16)) {
   if (String(secret).length < 12) throw new Error('use at least 12 characters');
-  const { N, r, p, keylen } = PARAMS;
-  const key = scryptSync(String(secret), salt, keylen, { N, r, p });
+  const { N, r, p, keylen, maxmem } = PARAMS;
+  const key = scryptSync(String(secret), salt, keylen, { N, r, p, maxmem });
   return ['scrypt', N, r, p, salt.toString('base64url'), key.toString('base64url')].join('$');
 }
 
