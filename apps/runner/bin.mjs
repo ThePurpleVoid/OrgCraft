@@ -12,6 +12,8 @@
 //   AGENT_TEAM_SERVER        the control plane's URL (instead of --server)
 //   ANTHROPIC_API_KEY        the model key. It stays in this process: sessions reach the model through a loopback
 //                            proxy with a token of their own
+//   AGENT_TEAM_PREVIEW_CREATORS, AGENT_TEAM_PREVIEW_HOSTS  comma lists: whose deployment statuses give the Ready to
+//                    try link (default vercel[bot],netlify[bot]; github-actions[bot] never) and, if set, which domains
 //   AGENT_TEAM_MERGER_APP_ID  the merger GitHub App; its key is AGENT_TEAM_MERGER_APP_KEY (the PEM), or the file
 //                    --data/merger-app.pem (or AGENT_TEAM_MERGER_APP_KEY_FILE).
 //                    With both, the runner opens each session's pull request and merges it after approval.
@@ -113,7 +115,10 @@ const hold = async () => { while (control && existsSync(join(control, 'hold-merg
 if (process.env.AGENT_TEAM_PROPOSALS === 'local') proposals = localProposals({ before: hold });
 else if (process.env.AGENT_TEAM_MERGER_APP_ID && (process.env.AGENT_TEAM_MERGER_APP_KEY || existsSync(appKey))) {
   // A hosted runner gets the key as a secret in its environment (sessions cannot read that, F3); on a Mac, a file.
-  proposals = githubProposals({ appId: process.env.AGENT_TEAM_MERGER_APP_ID, privateKey: process.env.AGENT_TEAM_MERGER_APP_KEY || readFileSync(appKey, 'utf8') });
+  // Preview links (G-12) only from these hosts' apps (default vercel[bot], netlify[bot]) and, if set, these domains.
+  const list = (v) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined);
+  proposals = githubProposals({ appId: process.env.AGENT_TEAM_MERGER_APP_ID, privateKey: process.env.AGENT_TEAM_MERGER_APP_KEY || readFileSync(appKey, 'utf8'),
+    previewCreators: list(process.env.AGENT_TEAM_PREVIEW_CREATORS), previewHosts: list(process.env.AGENT_TEAM_PREVIEW_HOSTS) });
 }
 else if (process.env.AGENT_TEAM_MERGER_APP_ID) fail(`AGENT_TEAM_MERGER_APP_ID is set but there is no key at ${appKey}`);
 console.error(`[runner] pull requests: ${proposals ? `opened and merged by the runner (${proposals.connector})` : 'not opened by the runner (no merger app configured)'}`);
@@ -126,8 +131,10 @@ if (process.env.AGENT_TEAM_RUNNER_ADAPTER === 'dryrun') {
   console.error(`[runner] model: the dry run's scripted fake (control folder ${control})`);
 } else adapter = agentSdkAdapter({ effort: o.effort });
 
+// The dry run looks for a merge's preview every second for ten minutes, so the harness need not wait (G-12).
+const previewDelays = process.env.AGENT_TEAM_RUNNER_ADAPTER === 'dryrun' ? Array(600).fill(1000) : undefined;
 const runner = startRunner({
-  server, key, root: data, work, sandbox, proposals, id: saved.id ?? o.name, maxSessions: Number(o['max-sessions']) || 8,
+  server, key, root: data, work, sandbox, proposals, previewDelays, id: saved.id ?? o.name, maxSessions: Number(o['max-sessions']) || 8,
   adapter,
   log: (m) => console.error(`[runner] ${m}`),
 });

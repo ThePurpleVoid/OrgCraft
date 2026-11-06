@@ -24,6 +24,7 @@ const SAMPLES = {
   budget100: ev('budget.exhausted', { scope: 'day', day: '2026-11-06', spent: 500, cap: 500, currency: 'USD', cardId: 'card_2' }),
   blocked: ev('message.blocked', { to: 'chief-of-staff', task: 'Footer', detail: 'Which legal entity name goes in the footer: "Acme Inc." or "Acme Labs"?', recommendation: 'Acme Inc., as on the invoices' }, 'qa-web'),
   minutes: ev('meeting.minutes', { meeting: 'Weekly planning', meetingId: 'mtg_1', date: '2026-11-06', decisions: [{ text: 'Ship the footer on Friday' }, { text: 'Hold the pricing page' }], actions: [1, 2, 3], needsYou: 1 }),
+  ready: ev('ready.posted', { pr: 7, title: 'Dark mode', commit: 'abcdef1', preview: 'https://shop-git-dark.example.app', cardId: 'card_r1' }),
 };
 
 async function setup(call) {
@@ -70,6 +71,8 @@ test('every kind renders: subject under 70 starting with [team], at most four li
   assert.deepEqual(compose(SAMPLES.budget80, { teamName: 'Shop' }).lines, ['Your team has used $4.00 of its $5.00 daily budget.', 'Work carries on. At 100% only release-blocking fixes and checks keep running.']);
   assert.deepEqual(compose(SAMPLES.budget100, { teamName: 'Shop' }).lines[1], 'New work is paused until 00:00 UTC. Raise the cap in the Studio to resume sooner.');
   assert.deepEqual(compose(SAMPLES.minutes, { teamName: 'Shop' }).lines, ['2 decisions and 3 action items.', '"Ship the footer on Friday"', '1 item needs you.']);
+  assert.deepEqual(compose(SAMPLES.ready, { teamName: 'Shop' }).lines, ['"Dark mode" is merged and ready to try.', 'Pull request #7.', 'The preview is up: open it from the Studio.']);
+  assert.equal(compose(SAMPLES.ready, { teamName: 'Shop' }).link.path, '/teams/shop/inbox?card=card_r1');
   assert.equal(compose(ev('report.status', { status: 'working' })), null, 'no email for other events');
 });
 
@@ -167,16 +170,16 @@ test('nothing is sent before verification and opt-in; the code expires in 15 min
     await call('POST', '/teams/shop/events', { events: Object.values(SAMPLES).map((e) => ({ ...e, id: `${e.id}_b` })) });
     await drain(db, key, drainOpts(provider));
     const got = provider.sent.slice(before);
-    assert.deepEqual(got.map((m) => m.subject.split(' ')[1]), ['Approval', '80%', 'Daily', 'QA', 'Minutes:']);
+    assert.deepEqual(got.map((m) => m.subject.split(' ')[1]), ['Approval', '80%', 'Daily', 'QA', 'Minutes:', 'Ready']);
     for (const m of got) {
       assert.equal(m.from, 'Shop team <team@shop.example>');
       assert.ok(m.html.includes('<a '), 'an HTML part');
       assert.ok(m.text.length, 'a plain-text part');
     }
     await drain(db, key, drainOpts(provider));
-    assert.equal(provider.sent.length, before + 5, 'nothing twice');
+    assert.equal(provider.sent.length, before + 6, 'nothing twice');
     const deliveries = await db.tenant('acme', ({ q }) => q("select status, count(*)::int as n from email_deliveries group by status order by status"));
-    assert.deepEqual(deliveries, [{ status: 'sent', n: 5 }]);
+    assert.deepEqual(deliveries, [{ status: 'sent', n: 6 }]);
 
     // A provider outage: the event is retried later and sent once it recovers.
     provider.fail = true;
@@ -187,7 +190,7 @@ test('nothing is sent before verification and opt-in; the code expires in 15 min
     provider.fail = false;
     await db.tenant('acme', ({ q }) => q('update email_sinks set next_at = now()'));
     await drain(db, key, drainOpts(provider));
-    assert.equal(provider.sent.length, before + 6);
+    assert.equal(provider.sent.length, before + 7);
   }, { ...opts(provider), now: () => clock });
 });
 

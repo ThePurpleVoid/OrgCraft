@@ -68,6 +68,11 @@ export const TOOLS = {
     shape: { title: need(200), agenda: text().optional(), attendees: z.array(z.string().regex(slug, 'must be a role slug')).min(1, 'needs at least one attendee').max(20, 'holds at most 20 roles'), cap: z.object({ amount: posInt, currency: z.string().regex(/^[A-Z]{3}$/, 'is an ISO 4217 code, like USD') }).optional() },
     check: (a, ctx) => (!ctx.frontDoor ? `Only the front door starts a meeting: send a BLOCKED to ${ctx.frontDoorRole ?? 'the front door'} asking for one` : (ctx.roster?.length && a.attendees.find((x) => !ctx.roster.includes(x))) ? `${a.attendees.find((x) => !ctx.roster.includes(x))} is not a role on this team (roles: ${ctx.roster.join(', ')})` : null),
   },
+  ready_to_try: {
+    description: 'Front door only: tell the owner a change is ready to try, after its pull request was approved and merged. Name the pull request; the server adds the merge commit and the preview link from the host\'s deployment (you never give a link). If the preview is not up yet, the card goes out without one and gains it when it comes.',
+    shape: { pr: posInt, title: need(120), summary: text(2000).optional(), issue: posInt.optional(), task: text(200).optional() },
+    check: (a, ctx) => (!ctx.frontDoor ? `Only the front door tells the owner a change is ready: send a HANDOFF to ${ctx.frontDoorRole ?? 'the front door'} naming the pull request` : null),
+  },
   meeting_reply: {
     description: 'Your turn in a meeting: answer the agenda in a few sentences. It goes verbatim into the minutes, and later attendees read it. Only on your own turn, once.',
     shape: { meeting: z.string().regex(meetingId, 'is the meeting id from your turn, such as mtg_01…'), text: need(8000) },
