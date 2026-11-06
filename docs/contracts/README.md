@@ -9,6 +9,7 @@ These are the interfaces that other things depend on: the Studio, the runner, th
 | Runner protocol | [runner-protocol.md](runner-protocol.md) | `runner/1` | Runners (data plane) and the control plane |
 | Connector manifest | [connectors.md](connectors.md), [schema/connector.v1.json](schema/connector.v1.json) | `connector/1` | Every connector, the vault, bindings |
 | Work contract | [work.md](work.md) | `work/1` | The repository connector first, then any workspace store |
+| Clients | [clients.md](clients.md) | `/v1/` | The Studio on desktop and phone, the iPhone and Android apps, the CLI |
 | Team | [TeamSpec](../../packages/team-model/schema/team-spec.v1.json) and `.agent-team/` | `team-spec@1` | Already shipped in kit 0.5 |
 
 ## Rules for changing them

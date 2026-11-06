@@ -44,9 +44,12 @@ packages/team-model/       schema, import, validate, compile; used by the CLI, t
 apps/studio/               the editor and control room (React)
 apps/server/               control plane: API, identity, tenancy, publish, connectors, scheduler, notifier, event log
 apps/runner/               data plane: run modes, sessions, team tool server, sandboxes, checkpoints
+apps/push-relay/           forwards contentless pushes to APNs and FCM for every deployment (section 14.3; phase 4)
 evals/                     task sets, harness, scoring
 deploy/                    Dockerfiles, Compose, Helm
 ```
+
+The phone apps live in their own repositories, `agent-team-ios` and `agent-team-android` (working names, created in phase 4), and depend only on `docs/contracts/` from this one ([ADR 0006](../adr/0006-mobile-apps-native-per-platform.md), section 14).
 
 ## 3. The team model
 
@@ -351,4 +354,60 @@ The core rule ([ADR 0004](../adr/0004-team-versions-and-transitions.md)): **ever
 | Data | Postgres and an S3-compatible store; export of a whole tenant (team files, events, evidence) as an archive | Lock-in; compliance requests |
 | Operations | OpenTelemetry; kill switches per run, workspace and globally; runbooks | Running a service for years, not a demo |
 | Industry | Neutral core concepts (workspace store, areas, checks, propose and accept, evidence, policy); engineering is the repository connector's implementation and the first role pack; vocabulary comes from the pack | Being stuck as a developer tool when any team (marketing, legal, support, finance) could use it |
+| Clients | Every client (web, phone, CLI) uses only `/v1/`, ignores what it does not know, and is tested against shared fixtures; one deep-link URL per thing; push carries no content ([clients contract](../contracts/clients.md)) | App versions in the stores that live for years; a second API for mobile |
 | Security | Least privilege per role and per person; secrets only to bound sessions; everything from outside marked untrusted; audit from the event log | Injected instructions, leaked keys, silent actions |
+
+## 14. Mobile clients
+
+Added 2026-11-06 for [PRD](prd.md) section 6.10. The decision is [ADR 0006](../adr/0006-mobile-apps-native-per-platform.md): native iPhone (SwiftUI) and Android (Jetpack Compose) apps, each in its own repository, using only the public API. The guarantees every client gets are the [clients contract](../contracts/clients.md). This section says what the control plane must do so that the apps add screens later, not server changes.
+
+### 14.1 Where the apps sit
+
+```
+ iPhone app ─┐                       ┌─ push relay (ours) ── APNs / FCM ── phones
+ Android app ┼── HTTPS /v1, SSE ──▶ control plane ── notifier ┘
+ phone web  ─┘   OIDC + PKCE          (any deployment: hosted, self-hosted, laptop)
+```
+
+The apps are clients of the control plane like the Studio. They never talk to runners, connectors or GitHub. The push relay is the only service we run for every deployment; it sees device tokens and event ids, never team content (ADR 0006 §5).
+
+### 14.2 What the MVP must build in now
+
+These are in phase 3 because they shape the API, the event model or identity. Adding them after the MVP would break or duplicate what the MVP ships.
+
+| # | Requirement | Where | Why now |
+| --- | --- | --- | --- |
+| R1 | Bearer tokens accepted on every endpoint, not only the session cookie; OIDC issuer in the control plane supports public clients with PKCE and rotating refresh tokens | identity | A cookie-only API would need a second auth path later |
+| R2 | `/.well-known/agent-team` discovery document | server | Apps and the CLI connect to any deployment from one URL |
+| R3 | Projections, not raw events, for what people look at: `me/inbox`, `me/summary`, the board, a role page. Each with `asOf` (last event id) and `ETag` | server, projections | Clients stay thin; the web and the apps cannot disagree about state |
+| R4 | `GET /events?after=<event id>` and `Last-Event-ID` on every stream, including `me/stream` across teams | event log | Exact catch-up after a phone was asleep |
+| R5 | Cards as structured data (kind, options with styles, recommendation, version, expires, links, url) for approvals, decisions and ongoing-work choices; Markdown subset bodies, no HTML | chat, approvals, transitions | The Studio, email, Slack and the apps render one shape |
+| R6 | Answers carry the card `version`; stale answers get `409` with the current card | approvals, decisions | Nobody approves something that changed under them |
+| R7 | Step-up on approvals: `auth_time` within 5 minutes, or a step-up token signed by a registered device key | identity, approvals | A long-lived phone session must not approve on its own |
+| R8 | One HTTPS URL per thing (`/t/{team}/approvals/{id}` and the rest of the clients contract §8), used in every email and notification from the first one sent | Studio routes, notifier | Links in mail sent today must open the app when it exists |
+| R9 | Device registration (`/v1/me/devices`) and a `push` channel type in the notifier, even if only the web uses it at first | notifier | Push is just another channel; the rules model must already allow per-device targets |
+| R10 | `Idempotency-Key` on every write and client-made ids on chat messages | API | Phones retry on bad connections |
+| R11 | Pack vocabulary on the team resource; times in UTC; money in minor units; no preformatted strings | API | Apps localise and use the pack's words |
+| R12 | Evidence as signed URLs with `thumb` and `screen` variants | object storage | Mobile data and memory |
+| R13 | The Studio's control-room screens responsive down to 360 px wide; the editor read-only on small screens | apps/studio | The interim mobile client (PRD MB11) |
+
+R1 to R8 and R10 to R13 are in the MVP's exit. R9's push delivery itself ships with the apps in phase 4; the data model ships in phase 3.
+
+### 14.3 Push delivery
+
+- The notifier treats push like email: a rule says which events go to which of the person's devices; dedup, batching, quiet hours and breakthrough apply unchanged.
+- For each delivery it sends the relay `{ deviceToken, provider, payload: { deployment, event, kind, badge }, priority }`. `priority: high` (and time-sensitive on iPhone) only for breakthrough kinds: approvals, budget stops, failed runs.
+- The relay is a stateless service (in `apps/push-relay`, open source), authenticated per deployment with a key minted when the deployment registers. It forwards to APNs and FCM, reports invalid tokens back so the device record is cleaned up, and keeps no payloads. Self-hosted customers who publish their own builds of the apps run their own relay with their own keys.
+- Delivery results are `notification.sent` and `notification.failed` events, as for every channel.
+
+### 14.4 Offline and sync
+
+The apps keep a small cache: the last home, inbox, board, chat pages and the role pages the person opened, each with its `asOf`. On open they show the cache marked with its age, then catch up with `events?after=` and replace projections whose `ETag` changed. Only chat messages are queued while offline (clients contract §7). There is no client-side merge logic: the server is always right, and the event log makes "what changed since" exact.
+
+### 14.5 Security on the phone
+
+- Tokens in the Keychain or Android Keystore, never in plain storage. A device key pair is created at sign-in; the private key stays in the Secure Enclave or StrongBox and is unlocked by biometrics for step-up.
+- The app shows nothing from a deployment until it has signed in to it; a push alone reveals no team content.
+- Screens with secrets do not exist on mobile (connectors are connected on the web), so a phone never holds a secret value.
+- An admin can remove any member's device; removing a member revokes all their devices.
+- Certificate pinning is not used (self-hosted deployments use their own certificates); the apps rely on the platforms' TLS validation.

@@ -7,8 +7,8 @@ Owner: CTO. Status: draft 2, 2026-11-06 (online first, [ADR 0005](../adr/0005-on
 | 0 | Plan and our own team | none (this repository runs its own team) | none | none |
 | 1 | Team model and lossless round trip | 7, 8 from the CLI | G1, G2 (with the kit thread) | 0.4 |
 | 2 | Local editor, publish, live board, custom agents | 1 to 8, 13, 14 | G1 on the canvas | 0.4.x |
-| 3 | Online foundation (control and data plane, Postgres, events, workflows, tenancy, OIDC), runner and chat, safe changes, meetings, email | 1 to 12: **the full demo on an online deployment**, plus 15 to 17 | G2 run modes, G4 evals harness | 0.7 |
-| 4 | Systems and parallel roles, discussion meetings, Slack, cloud modules | 5 and 6 with real connectors, parallel work in 10 | G3 Node scripts and Windows | 0.8 |
+| 3 | Online foundation (control and data plane, Postgres, events, workflows, tenancy, OIDC), runner and chat, safe changes, meetings, email, mobile-ready API and mobile web control room | 1 to 12: **the full demo on an online deployment**, plus 15 to 17 | G2 run modes, G4 evals harness | 0.7 |
+| 4 | Systems and parallel roles, discussion meetings, Slack, cloud modules, iPhone and Android apps v1 with push | 5 and 6 with real connectors, parallel work in 10, 18 | G3 Node scripts and Windows | 0.8 |
 | 5 | Enterprise and scale: SAML, private data plane, regions, tenant export | the demo with runners in a customer VPC | G3 adapters for other agents (first one) | 0.9 |
 | 6 | Our hosted service, launched (owner's go on billing and terms) | the demo with no install | none | 1.0 |
 
@@ -69,8 +69,10 @@ Roles: architect (contracts), backend dev (control plane, lead for the foundatio
 - **Meetings** (PRD 6.7 M1 to M7, written round only; architecture 12.2; mockup 04): scheduler, recurring and ad hoc meetings (from the Meetings view and from the chat), busy-attendee handling, `meeting_reply` and `meeting_close`, minutes and action items in the chat, caps and skip-if-quiet.
 - **Notifications** (PRD 6.8 O1 to O7 with email and webhook; architecture 12.3; mockup 05): the notifier, rules, quiet hours, delivery log, test sends, signed decision links. Slack waits for phase 4.
 - **Try it on a task** for custom agents (PRD A8).
+- **Ready for mobile** (PRD 6.10, architecture 14.2, [clients contract](../contracts/clients.md)): bearer tokens and PKCE public clients, the discovery document, `me/inbox` and `me/summary` projections with `asOf` and `ETag`, `events?after=`, structured cards with versions and `409` on stale answers, step-up on approvals, one deep-link URL per thing in every email, device registration and the `push` channel type in the notifier's model, idempotent writes. Owned by the architect (contract review) and backend dev; security reviewer reviews step-up and tokens.
+- **Mobile web control room** (PRD MB11): home, inbox, board as a list, role page, chat, cards, minutes and run controls usable at 360 px; the editor read-only on small screens. Owned by web dev; QA web walks it on a real phone.
 - Evals harness v1 on one sample repository: single agent vs subagents vs Studio runner, same model and budget.
-- **Exit:** the full demo (steps 1 to 12) live on a fresh sample repository, on a fresh online deployment in a cloud account (Compose or the one-click template) by someone who did not build it, following only the docs, three times in a row; the same build run locally; steps 15 to 17 walked once with no work lost (every stopped session's branch and memory checked); first evals report published in the repository, whatever it shows.
+- **Exit:** the full demo (steps 1 to 12) live on a fresh sample repository, with step 11's approval answered once from a phone browser, on a fresh online deployment in a cloud account (Compose or the one-click template) by someone who did not build it, following only the docs, three times in a row; the same build run locally; steps 15 to 17 walked once with no work lost (every stopped session's branch and memory checked); first evals report published in the repository, whatever it shows.
 
 ## Phase 4: systems and parallel roles
 
@@ -82,7 +84,8 @@ Roles: backend dev (connectors, vault), AI engineer (parallel sessions, worktree
 - Kit 0.5: Node equivalents of `team-status`, `team-board`, `merge-gate`, `with-lock`, `janitor`; Windows CI.
 - Discussion-format meetings and event-triggered meetings; Slack as a notification channel with buttons on decision cards; "freeze the team" (PRD X8).
 - Evals on three sample repositories.
-- **Exit:** demo steps 5 and 6 with real connectors; two builders working in parallel during step 10; the kit's tests green on Windows.
+- **iPhone and Android apps v1** (PRD MB1 to MB10, MB12, MB13; [ADR 0006](../adr/0006-mobile-apps-native-per-platform.md)): the two repositories created, each with its own team lane, gates and release role; clients generated from the pinned `api-v1.yaml`; conformance fixtures in `docs/contracts/fixtures/` run by both; home, inbox, cards with biometric step-up, board list, role page, chat, meetings (read and speak by text), run controls, notification settings, deep links, the offline cache. `apps/push-relay` and push delivery in the notifier. Roles: iOS dev, Android dev, QA iOS, QA Android, design director (mobile screens from mockups 09 and 10), security reviewer (tokens, device keys, relay), release manager (store releases).
+- **Exit:** demo steps 5 and 6 with real connectors; two builders working in parallel during step 10; the kit's tests green on Windows; demo step 18 on a real iPhone and a real Android phone against a self-hosted deployment, through the relay, with no team content in the push payloads (checked from the relay's logs).
 
 ## Phase 5: enterprise and scale
 
@@ -91,7 +94,8 @@ Roles: infra (lead), backend dev (identity, tenancy), AI engineer (runner protoc
 - Private data plane: `agent-team runner join` for runners in a customer's VPC, outbound only; a laptop joining as a runner for its devices.
 - SAML and other OIDC providers; per-tenant encryption keys; regions; tenant export and deletion; audit export.
 - A second workflow engine adapter (Temporal-class) and a second model or agent runtime adapter, proving the interfaces hold.
-- Microsoft Teams, Discord and push channels.
+- Microsoft Teams and Discord channels.
+- Mobile, part 2: widgets and Live Activities (a running meeting, a rollout, today's cost), voice in meetings, App Intents and Android shortcuts ("what is my team doing?"), iPad layout tuned for the board, enterprise device management (managed configuration, require a managed device for approvals).
 - The first business pack on the neutral core (from the kit's marketing, sales and support roles), with Drive and a CRM or helpdesk connector, and a Studio-managed team repository for customers who never use Git.
 - First adapter for another coding agent (an `AGENTS.md`-style export of the briefs and protocols), with governance kept by CI and, where the agent supports it, the runner.
 - **Exit:** the demo with the control plane in one account and runners in another (a stand-in customer VPC), with no source code or secret value crossing to the control plane, checked from the event log and network logs.

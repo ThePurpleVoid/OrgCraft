@@ -26,6 +26,7 @@ tags:
   - { name: approvals }
   - { name: connectors }
   - { name: runners, description: Registration. The runner protocol itself is runner-protocol.md }
+  - { name: me, description: "The signed-in person across teams: inbox, summary, devices (clients.md)" }
 paths:
   /teams:
     get: { tags: [teams], summary: Teams in the workspaces I can see, responses: { "200": { $ref: "#/components/responses/TeamList" } } }
@@ -169,10 +170,10 @@ paths:
   /approvals/{approval}:
     post:
       tags: [approvals]
-      summary: Approve or deny. Checks the person's role in the workspace
+      summary: Approve or deny. Checks the person's role in the workspace and a recent sign-in (step-up, clients.md section 3)
       parameters: [ { name: approval, in: path, required: true, schema: { type: string } } ]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [decision], properties: { decision: { enum: [approved, denied] }, note: { type: string } } } } } }
-      responses: { "200": { description: The approval.decided event }, "403": { $ref: "#/components/responses/Problem" } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [decision], properties: { decision: { enum: [approved, denied] }, note: { type: string }, version: { type: integer, description: "The card version seen. Optional in /v1/ for older clients; a stale one gets 409" } } } } } }
+      responses: { "200": { description: The approval.decided event }, "401": { description: "Step-up required (problem type step-up-required)" }, "403": { $ref: "#/components/responses/Problem" }, "409": { description: The approval changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
   /connectors:
     get: { tags: [connectors], summary: Connector manifests this deployment offers (connectors.md), responses: { "200": { description: Manifests } } }
   /teams/{team}/resources:
@@ -188,6 +189,48 @@ paths:
       security: []
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name], properties: { code: { type: string }, name: { type: string }, capabilities: { type: object } } } } } }
       responses: { "201": { description: Runner id and key } }
+  /me/inbox:
+    get:
+      tags: [me]
+      summary: Everything waiting for me across teams, as cards, most urgent first (clients.md section 5)
+      parameters: [ { $ref: "#/components/parameters/cursor" }, { $ref: "#/components/parameters/limit" } ]
+      responses: { "200": { description: Cards, content: { application/json: { schema: { type: object, properties: { asOf: { type: string }, cards: { type: array, items: { $ref: "#/components/schemas/Card" } }, next: { type: string } } } } } } }
+  /me/summary:
+    get:
+      tags: [me]
+      summary: Each of my teams at a glance (live version, run state, roles by status, cost today, inbox count)
+      responses: { "200": { description: Summary, content: { application/json: { schema: { $ref: "#/components/schemas/Summary" } } } } }
+  /me/stream:
+    get:
+      tags: [me]
+      summary: Live events for every team I can see, and my cards, as server-sent events; resumes from Last-Event-ID
+      responses: { "200": { description: text/event-stream of envelopes, content: { text/event-stream: {} } } }
+  /me/devices:
+    get: { tags: [me], summary: My registered devices, responses: { "200": { description: Devices, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { $ref: "#/components/schemas/Device" } } } } } } } } }
+    post:
+      tags: [me]
+      summary: Register this client install (platform, app version, push token, step-up public key)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
+      responses: { "201": { description: The device, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } } }
+  /me/devices/{device}:
+    delete:
+      tags: [me]
+      summary: Remove a device and revoke its tokens
+      parameters: [ { name: device, in: path, required: true, schema: { type: string } } ]
+      responses: { "204": { description: Removed } }
+  /teams/{team}/roles/{role}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: role, in: path, required: true, schema: { type: string } } ]
+    get:
+      tags: [events]
+      summary: One role's page (current task, branch, PR, recent reports, evidence, meetings), with asOf
+      responses: { "200": { description: Role page } }
+  /cards/{card}:
+    post:
+      tags: [approvals]
+      summary: Answer a decision or ongoing-work card. Send the version you saw; a stale version gets 409 with the current card
+      parameters: [ { name: card, in: path, required: true, schema: { type: string } } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [option, version], properties: { option: { type: string }, version: { type: integer }, note: { type: string } } } } } }
+      responses: { "200": { description: The answer event }, "409": { description: The card changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
 components:
   securitySchemes:
     person: { type: http, scheme: bearer, description: OIDC sign-in; a cookie in the browser }
@@ -279,3 +322,47 @@ components:
       properties:
         mode: { enum: [runner, subagents, agent-teams], default: runner }
         caps: { type: object, properties: { costPerRun: { type: integer }, costPerDay: { type: integer }, currency: { type: string }, sessions: { type: integer } } }
+    Card:
+      type: object
+      description: Anything a person answers, the same on every client and channel (clients.md section 6)
+      required: [id, kind, title, options, version, url]
+      properties:
+        id: { type: string }
+        kind: { type: string, description: "approval, decision, ongoing-work, meeting-invite, channel-failed; clients render unknown kinds generically" }
+        team: { type: string }
+        subject: { type: string }
+        title: { type: string }
+        body: { type: string, description: Markdown subset, no HTML }
+        recommendation: { type: object, properties: { option: { type: string }, why: { type: string } } }
+        options: { type: array, items: { type: object, properties: { id: { type: string }, label: { type: string }, style: { type: string }, stepUp: { type: boolean } } } }
+        risk: { type: string }
+        expires: { type: string, format: date-time }
+        version: { type: integer }
+        links: { type: array, items: { type: object, properties: { rel: { type: string }, url: { type: string } } } }
+        url: { type: string, description: The deep link (clients.md section 8) }
+    Summary:
+      type: object
+      properties:
+        asOf: { type: string }
+        teams:
+          type: array
+          items:
+            type: object
+            properties:
+              team: { type: string }
+              name: { type: string }
+              version: { type: string }
+              run: { type: [string, "null"], description: "running, paused, stopped, or null" }
+              roles: { type: object, properties: { working: { type: integer }, waiting: { type: integer }, blocked: { type: integer }, idle: { type: integer } } }
+              cost: { type: object, properties: { today: { type: integer }, capPerDay: { type: [integer, "null"] }, currency: { type: string } } }
+              inbox: { type: integer }
+    Device:
+      type: object
+      properties:
+        id: { type: string, readOnly: true }
+        platform: { enum: [ios, android, web, desktop] }
+        appVersion: { type: string }
+        name: { type: string }
+        push: { type: object, properties: { provider: { type: string, description: "apns, fcm, webpush" }, token: { type: string, writeOnly: true } } }
+        stepUpKey: { type: string, description: Public key (JWK) for step-up signatures; the private key never leaves the device }
+        lastSeen: { type: string, format: date-time, readOnly: true }

@@ -13,4 +13,14 @@ Static, high-fidelity mockups for [PRD](../prd.md) sections 6.6 to 6.9 and [arch
 | [07 Your change touches work in progress](07-ongoing-work-dialog.png) ([html](07-ongoing-work-dialog.html)) | The impact step in Publish: per-item choices with a recommendation, linked items, safe changes, where the change lands on each role's timeline | X2 to X6, X8 |
 | [08 Rolling out a version](08-applying-change.png) ([html](08-applying-change.html)) | After merge: each role moving to the new version, what each still waits on, and the event log | X7 |
 
-To re-render the screenshots: open each HTML file in a browser at 1440 × 900, or use Playwright (`page.screenshot`, full page for 07).
+
+## Phone apps
+
+[PRD](../prd.md) section 6.10, [ADR 0006](../../adr/0006-mobile-apps-native-per-platform.md) and [architecture](../architecture.md) section 14. Same tokens, in native-looking frames (`phone.css`).
+
+| Screen | What it shows | PRD |
+| --- | --- | --- |
+| [09 Phone: inbox and approvals](09-mobile-inbox-approvals.png) ([html](09-mobile-inbox-approvals.html)) | iPhone: a push with no team content, the inbox across teams and Studios, approving with Face ID | MB1 to MB3, MB8 |
+| [10 Phone: board, role and chat](10-mobile-board-chat.png) ([html](10-mobile-board-chat.html)) | Android: the board as a list with run controls, a role's page with sign-off evidence, the chat offline | MB4, MB5, MB7, MB10 |
+
+To re-render the screenshots: open each HTML file in a browser at 1440 × 900, or use Playwright (`page.screenshot`, full page for 07; 1280 wide, full page, for 09 and 10).

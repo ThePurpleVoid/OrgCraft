@@ -1,0 +1,102 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Phone: board and chat</title><link rel="stylesheet" href="mock.css"><link rel="stylesheet" href="phone.css">
+<style>
+.android .screen { background: #f7f8fc; }
+.appbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px 6px; }
+.appbar .title { font-size: 20px; font-weight: 500; flex: 1; }
+.appbar .ib { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--muted); }
+.filters { display: flex; gap: 8px; padding: 4px 16px 10px; overflow: hidden; }
+.filters span { border: 1px solid var(--line); border-radius: 8px; padding: 5px 11px; font-size: 13px; white-space: nowrap; background: var(--panel); }
+.filters span.on { background: #d8e0ff; border-color: #d8e0ff; font-weight: 500; }
+.runbar { margin: 0 16px 10px; background: var(--panel); border-radius: 16px; padding: 10px 14px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.runbar .meter { flex: 1; height: 6px; background: var(--off); border-radius: 3px; overflow: hidden; }
+.runbar .meter i { display: block; height: 100%; width: 37%; background: var(--accent); }
+.lane { font-size: 13px; font-weight: 500; color: var(--muted); margin: 10px 18px 4px; display: flex; align-items: center; gap: 6px; }
+.rcard { margin: 0 14px 6px; background: var(--panel); border-radius: 16px; padding: 10px 14px; display: flex; gap: 10px; align-items: flex-start; }
+.rcard .who { font-weight: 500; font-size: 14.5px; }
+.rcard .task { font-size: 13px; color: var(--muted); }
+.rcard .when { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.rcard .sdot { margin-top: 6px; }
+.ev { margin: 0 14px; }
+.shotrow { display: flex; gap: 8px; margin: 8px 0; }
+.thumb { flex: 1; height: 120px; border-radius: 12px; border: 1px solid var(--line); overflow: hidden; display: flex; flex-direction: column; }
+.thumb .top { height: 16px; background: var(--off); }
+.thumb.dark { background: #1f2430; } .thumb.dark .top { background: #2a3040; }
+.thumb .ln { height: 7px; margin: 7px 10px 0; border-radius: 3px; background: #dfe3ea; }
+.thumb.dark .ln { background: #3a4152; }
+.thumb .tg { width: 30px; height: 15px; border-radius: 8px; background: var(--accent); margin: 10px 10px 0 auto; }
+.tl { font-size: 13px; }
+.tl div { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.tl time { color: var(--muted); width: 38px; flex: none; }
+.msg { max-width: 82%; border-radius: 18px; padding: 9px 13px; font-size: 14px; margin: 6px 0; }
+.msg.me { margin-left: auto; background: var(--accent); color: #fff; border-bottom-right-radius: 6px; }
+.msg.cos { background: var(--panel); border-bottom-left-radius: 6px; }
+.msg .from { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.msg.card { max-width: 92%; border: 1px solid var(--line); }
+.msg.card .btns { display: flex; gap: 8px; margin-top: 8px; }
+.msg.card .btns .btn { flex: 1; padding: 8px; font-size: 14px; }
+.compose { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 14px 16px; background: #eef1f8; }
+.compose .in { flex: 1; background: var(--panel); border-radius: 24px; padding: 11px 16px; font-size: 14px; color: var(--muted); }
+.compose .mic { width: 44px; height: 44px; border-radius: 50%; background: var(--accent); }
+.queued { font-size: 12px; color: var(--muted); text-align: right; margin-top: -2px; }
+.offline { margin: 0 14px 6px; background: var(--warn-bg); color: var(--warn); border-radius: 12px; padding: 7px 12px; font-size: 12.5px; }
+</style></head><body>
+<header class="sheet-title"><h1>On the phone: the board, a role, and the chief of staff</h1><p>Android app (PRD 6.10, MB4, MB5, MB7, MB10). The board is a list, not the canvas: who is working, who is waiting on whom, and the evidence. Data is invented for a sample app.</p></header>
+<div class="phones">
+
+<figure class="shot"><div class="phone android"><div class="screen"><div class="island"></div>
+<div class="sbar"><span>3:20</span><span class="sig">▼ ▮ 82%</span></div>
+<div class="appbar"><span class="title">My App</span><span class="ib"></span><span class="ib"></span></div>
+<div class="filters"><span class="on">All 14</span><span>Working 5</span><span>Waiting 2</span><span>Blocked 1</span></div>
+<div class="runbar"><span class="pill live">Running</span><div class="meter"><i></i></div><span>$18.40 / $50</span><span style="color:var(--accent);font-weight:500">Pause</span></div>
+<div class="lane"><span class="dot" style="background:var(--g-engineering)"></span>Engineering</div>
+<div class="rcard"><span class="sdot" style="background:var(--work)"></span><div><div class="who">Web dev</div><div class="task">Dark mode toggle · PR #141</div></div><span class="when">1m</span></div>
+<div class="rcard"><span class="sdot" style="background:var(--error)"></span><div><div class="who">Backend dev</div><div class="task">Blocked: waiting for your approval</div></div><span class="when">8m</span></div>
+<div class="rcard"><span class="sdot" style="background:var(--work)"></span><div><div class="who">Android dev</div><div class="task">Settings screen theme row</div></div><span class="when">3m</span></div>
+<div class="lane"><span class="dot" style="background:var(--g-quality)"></span>Quality</div>
+<div class="rcard"><span class="sdot" style="background:var(--wait)"></span><div><div class="who">QA web</div><div class="task">Waiting on web dev's hand-off</div></div><span class="when">14m</span></div>
+<div class="rcard"><span class="sdot" style="background:var(--idle)"></span><div><div class="who">QA Android</div><div class="task">Idle</div></div><span class="when">2h</span></div>
+<div class="lane"><span class="dot" style="background:var(--g-executive)"></span>Executive</div>
+<div class="rcard"><span class="sdot" style="background:var(--work)"></span><div><div class="who">Chief of staff</div><div class="task">Routing dark mode, issue #88</div></div><span class="when">now</span></div>
+<div style="flex:1"></div>
+<div class="tabbar"><div><span class="ic"></span>Inbox</div><div class="on"><span class="ic"></span>Teams</div><div><span class="ic"></span>Chat</div><div><span class="ic"></span>Meetings</div></div>
+</div></div>
+<figcaption><b>The board as a list</b>Roles grouped by lane, filtered by status, with the run's cost against today's cap. Pause and stop are always one tap and never need a biometric check.</figcaption></figure>
+
+<figure class="shot"><div class="phone android"><div class="screen"><div class="island"></div>
+<div class="sbar"><span>3:21</span><span class="sig">▼ ▮ 82%</span></div>
+<div class="appbar"><span style="font-size:20px">←</span><span class="title">QA web</span><span class="ib"></span></div>
+<div class="ev">
+<div class="group" style="border-radius:16px"><div class="cell"><div class="line"><span class="t">SIGNOFF: dark mode toggle</span><span class="c work">Ready to try</span></div><div class="d">PR #141 · checked in light and dark, choice kept after reload</div>
+<div class="shotrow"><div class="thumb"><div class="top"></div><div class="ln"></div><div class="ln" style="width:60%"></div><div class="tg"></div></div><div class="thumb dark"><div class="top"></div><div class="ln"></div><div class="ln" style="width:60%"></div><div class="tg"></div></div></div>
+<div class="chips"><span class="c acc">Preview link</span><span class="c acc">Test log</span><span class="c">2 screenshots</span></div></div></div>
+<div class="group-h"><span>Today</span></div>
+<div class="tl">
+<div><time>3:19</time><span>Sent SIGNOFF to the release manager</span></div>
+<div><time>3:02</time><span>Started checking PR #141 on the preview</span></div>
+<div><time>2:58</time><span>Hand-off from web dev: dark mode toggle</span></div>
+<div><time>9:00</time><span>Standup: nothing blocking</span></div>
+</div>
+<div class="group-h"><span>Meetings</span></div>
+<div class="group" style="border-radius:16px"><div class="cell"><div class="t" style="font-size:14px">Release readiness · 4:00 pm</div><div class="d">With the CTO, release manager and QA Android</div></div></div>
+</div>
+<div style="flex:1"></div>
+<div class="tabbar"><div><span class="ic"></span>Inbox</div><div class="on"><span class="ic"></span>Teams</div><div><span class="ic"></span>Chat</div><div><span class="ic"></span>Meetings</div></div>
+</div></div>
+<figcaption><b>A role's page, with its evidence</b>The latest sign-off with screenshots that load as thumbnails first, links to the preview and logs, today's timeline, and the meetings it is in.</figcaption></figure>
+
+<figure class="shot"><div class="phone android"><div class="screen"><div class="island"></div>
+<div class="sbar"><span>3:24</span><span class="sig">▼ ▮ 81%</span></div>
+<div class="appbar"><span style="font-size:20px">←</span><span class="title">Chief of staff</span><span class="ib"></span></div>
+<div class="offline">No connection. Showing what you had at 3:23; your message sends when you're back online.</div>
+<div class="body">
+<div class="msg me">Add a dark mode toggle to the settings page, and make sure it remembers my choice.</div>
+<div class="msg cos"><div class="from">Chief of staff</div>Opened issue #88 and sent it to the CTO's lane. Web dev and Android dev are building it; QA checks both themes before anything ships.</div>
+<div class="msg cos card"><div class="from">Decision · recommended: follow system</div><b>What should the default be?</b><br>Follow the phone's setting, or always start in light.<div class="btns"><div class="btn primary">Follow system</div><div class="btn">Light</div></div></div>
+<div class="msg me">Follow system. Is web ready to try?</div>
+<div class="queued">Waiting to send</div>
+</div>
+<div class="compose"><div class="in">Message the chief of staff</div><div class="mic"></div></div>
+</div></div>
+<figcaption><b>Chat with the chief of staff</b>The same history as the Studio, with cards inline. Offline, the last state stays readable and messages wait to send; decisions and approvals are never queued.</figcaption></figure>
+
+</div></body></html>

@@ -62,7 +62,17 @@ npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.x studio      # http://localhos
 - **Environments for the Studio's own development:** local (each builder's worktree, bundled Postgres), a preview deployment per PR (control plane plus one runner), and a staging deployment in a real cloud account that the QA role walks before every release. Releases ship to staging, then to our hosted service, then as images for self-hosted customers.
 - **Compatibility:** each Studio release states the kit versions it can import and publish. Publishing with a newer kit is an explicit "upgrade the kit" diff, never silent.
 
-## 5. Operations
+## 5. Phones
+
+The iPhone and Android apps ([ADR 0006](../adr/0006-mobile-apps-native-per-platform.md)) work with every shape above, with nothing to deploy for them except what the Studio already serves.
+
+- **Connecting:** the person types the Studio's address or scans the QR code on the Studio's "Connect your phone" page. The app reads `/.well-known/agent-team` ([clients contract](../contracts/clients.md) §2) and signs in through the deployment's OIDC in the system browser. For self-hosted deployments, `studio doctor` checks that the discovery document, the OIDC public clients and the two app-link files (`apple-app-site-association`, `assetlinks.json`) are served over HTTPS.
+- **Reachability:** the phone must reach the control plane's public URL. A deployment only on a private network is reached through the company's VPN on the phone; the Studio does not need inbound access to phones for anything.
+- **Push:** every deployment sends pushes through our push relay (`push.agent-team.dev`) with contentless payloads, after registering once from the setup page (`studio push register`). A company that builds and signs its own copy of the apps runs `apps/push-relay` itself with its own APNs key and FCM credentials and sets `push.relay` in its config. Local mode can register too, so a laptop's team can reach the owner's phone.
+- **Enterprise (phase 5):** managed app configuration (the deployment URL and allowed sign-in providers pushed by the company's device management), and a setting to require device management for approvals.
+- **Releases:** the apps ship from their own repositories on their own cadence (TestFlight and the App Store, the Play internal track and production). Each release states the API contract version it was generated from. Raising the discovery document's minimum app version is a security-only step, written in the release notes.
+
+## 6. Operations
 
 - **Observability:** structured logs, OpenTelemetry traces across server → runner → session, metrics on queue depth, session count, cost per run and approval wait time.
 - **On-call (self-hosted and hosted):** runbooks in `docs/runbooks/` for a stuck run, a runaway cost, a leaked secret (rotate, revoke the GitHub App token, purge the audit entry), and a failed publish.

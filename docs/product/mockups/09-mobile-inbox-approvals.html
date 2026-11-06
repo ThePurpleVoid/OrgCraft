@@ -1,0 +1,85 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Phone: inbox and approvals</title><link rel="stylesheet" href="mock.css"><link rel="stylesheet" href="phone.css">
+<style>
+.lock { background: linear-gradient(180deg, #34406a 0%, #1f2742 100%); color: #fff; }
+.lock .sbar { color: #fff; }
+.clock { text-align: center; margin-top: 26px; }
+.clock .day { font-size: 16px; opacity: .85; }
+.clock .time { font-size: 82px; font-weight: 300; line-height: 1; letter-spacing: -.02em; }
+.notif { margin: 30px 12px 0; background: rgba(255,255,255,.82); color: var(--ink); border-radius: 18px; padding: 11px 13px; backdrop-filter: blur(12px); }
+.notif .app { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.notif .app .logo { width: 20px; height: 20px; border-radius: 5px; background: var(--accent); }
+.notif .app .tsn { margin-left: auto; font-size: 11.5px; }
+.notif .h { font-weight: 600; font-size: 14.5px; margin-top: 5px; }
+.notif .m { font-size: 13.5px; }
+.notif.second { margin-top: 8px; opacity: .9; }
+.actions { margin: 8px 12px 0; display: grid; gap: 1px; border-radius: 14px; overflow: hidden; }
+.actions div { background: rgba(255,255,255,.72); color: var(--ink); padding: 11px 14px; font-size: 14.5px; }
+.lockfoot { margin-top: auto; text-align: center; font-size: 12px; opacity: .75; padding: 0 30px 30px; line-height: 1.5; }
+.teamrow { display: flex; gap: 10px; align-items: center; }
+.teamrow .bar3 { display: flex; height: 6px; border-radius: 3px; overflow: hidden; width: 100%; margin-top: 7px; background: var(--off); }
+.faceid { position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%); width: 150px; height: 150px; border-radius: 30px; background: rgba(240,242,246,.96); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.18); font-size: 13.5px; }
+.faceid .glyph { width: 58px; height: 58px; border: 3px solid var(--ok); border-radius: 16px; position: relative; }
+.faceid .glyph::after { content: ""; position: absolute; left: 14px; top: 20px; width: 24px; height: 12px; border-left: 3px solid var(--ok); border-bottom: 3px solid var(--ok); transform: rotate(-45deg); }
+.diff { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--off); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+.diff .add { color: var(--ok); }
+.dim { position: absolute; inset: 0; background: rgba(20,24,33,.18); }
+.kv { display: grid; grid-template-columns: 92px 1fr; gap: 4px 8px; font-size: 13px; margin-top: 6px; }
+.kv span:nth-child(odd) { color: var(--muted); }
+</style></head><body>
+<header class="sheet-title"><h1>On the phone: what needs me, and answering it</h1><p>iPhone app (PRD 6.10, MB1 to MB3, MB8). The push holds no team content, the inbox gathers every team's cards, and an approval always asks for Face ID. Data is invented for a sample app.</p></header>
+<div class="phones">
+
+<figure class="shot"><div class="phone"><div class="screen lock"><div class="island"></div>
+<div class="sbar"><span></span><span class="sig">●●●● 5G ▮</span></div>
+<div class="clock"><div class="day">Friday 6 November</div><div class="time">3:12</div></div>
+<div class="notif"><div class="app"><span class="logo"></span>AGENT TEAM<span class="tsn">Time sensitive · now</span></div>
+<div class="h">Approval needed</div><div class="m">Unlock to see what the team is asking.</div></div>
+<div class="actions"><div>Open and review</div></div>
+<div class="notif second"><div class="app"><span class="logo"></span>AGENT TEAM<span class="tsn">12 min ago</span></div>
+<div class="h">2 decisions waiting</div><div class="m">Unlock to see them.</div></div>
+<div class="lockfoot">Previews are off for this app, so nothing about the team shows until the phone is unlocked.</div>
+</div></div>
+<figcaption><b>A notification, with nothing in it</b>Approvals break through quiet hours as time-sensitive. The push carries only an event id; the app fetches the details from the person's own Studio after unlock.</figcaption></figure>
+
+<figure class="shot"><div class="phone"><div class="screen"><div class="island"></div>
+<div class="sbar"><span>3:12</span><span class="sig">●●●● 5G ▮</span></div>
+<div class="nav"><div class="navrow"><span>Studios</span><span>Edit</span></div><div class="large">Inbox</div><div class="sub">3 waiting for you, across 2 teams</div></div>
+<div class="body">
+<div class="group-h"><span>My App · acme.studio</span><span>live v14</span></div>
+<div class="group">
+<div class="cell"><div class="line" style="align-items:stretch"><span class="urg" style="background:var(--error)"></span><div style="flex:1"><div class="line"><span class="t">Add a column to profiles</span><span class="d">2m</span></div><div class="d">Backend dev wants to run migration 0042.</div><div class="chips"><span class="c block">Approval</span><span class="c acc">Recommended: approve</span></div></div></div></div>
+<div class="cell"><div class="line" style="align-items:stretch"><span class="urg" style="background:var(--wait)"></span><div style="flex:1"><div class="line"><span class="t">Dark mode default</span><span class="d">12m</span></div><div class="d">Follow the system setting, or start in light?</div><div class="chips"><span class="c wait">Decision</span><span class="c acc">Recommended: follow system</span></div></div></div></div>
+</div>
+<div class="group-h"><span>Field notes · hosted</span><span>live v3</span></div>
+<div class="group">
+<div class="cell"><div class="line" style="align-items:stretch"><span class="urg" style="background:var(--wait)"></span><div style="flex:1"><div class="line"><span class="t">Payments engineer is mid-task</span><span class="d">40m</span></div><div class="d">Your published change switches it off. What happens to its work?</div><div class="chips"><span class="c wait">Ongoing work</span><span class="c acc">Recommended: let it finish</span></div></div></div></div>
+</div>
+<div class="group-h"><span>Teams</span></div>
+<div class="group">
+<div class="cell"><div class="line"><span class="t">My App</span><span class="d">$18.40 of $50 today</span></div><div class="chips"><span class="c work">5 working</span><span class="c wait">2 waiting</span><span class="c block">1 blocked</span></div></div>
+<div class="cell"><div class="line"><span class="t">Field notes</span><span class="d">$2.10 of $10 today</span></div><div class="chips"><span class="c work">2 working</span><span class="c">6 idle</span></div></div>
+</div>
+</div>
+<div class="tabbar"><div class="on"><span class="ic"></span>Inbox<span class="count">3</span></div><div><span class="ic"></span>Teams</div><div><span class="ic"></span>Chat</div><div><span class="ic"></span>Meetings</div><div><span class="ic"></span>You</div></div>
+</div></div>
+<figcaption><b>Inbox across teams and Studios</b>Approvals, decisions and ongoing-work choices from every connected Studio, most urgent first, each with the team's recommendation. Team health sits underneath.</figcaption></figure>
+
+<figure class="shot"><div class="phone"><div class="screen"><div class="island"></div>
+<div class="sbar"><span>3:13</span><span class="sig">●●●● 5G ▮</span></div>
+<div class="nav"><div class="navrow"><span>‹ Inbox</span><span></span></div><div class="large" style="font-size:23px">Add a column to profiles</div><div class="sub">My App · asked by Backend dev via the chief of staff</div></div>
+<div class="body">
+<div class="group"><div class="cell">
+<div class="d" style="color:var(--ink);font-size:14px">The dark mode setting needs somewhere to live. Migration 0042 adds one nullable column.</div>
+<div class="diff"><span class="add">+ alter table profiles</span><br><span class="add">+   add column theme text null;</span></div>
+<div class="kv"><span>Risk</span><span>Low: additive and reversible</span><span>Rollback</span><span>drop column, noted in the PR</span><span>Checks</span><span>migration tests passed</span><span>Expires</span><span>in 6 hours</span></div>
+<div class="rec"><b>Recommended: approve.</b> Nothing has run yet; the deploy waits for you.</div>
+<div class="chips"><span class="c acc">PR #142</span><span class="c acc">Gate log</span></div>
+</div></div>
+<div style="display:grid;gap:8px;margin-top:4px"><div class="btn primary">Approve</div><div class="btn danger">Deny</div></div>
+</div>
+<div class="dim"></div>
+<div class="faceid"><div class="glyph"></div>Face ID</div>
+</div></div>
+<figcaption><b>Approve, with Face ID</b>Every approval needs a fresh biometric check, so a phone left unlocked cannot approve. If the card changed since it was opened, the app shows the new version instead.</figcaption></figure>
+
+</div></body></html>

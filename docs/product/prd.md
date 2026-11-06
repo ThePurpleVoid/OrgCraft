@@ -12,6 +12,8 @@ Owner: product manager. Status: draft 1, 2026-11-05. Working name: **Agent Team 
 
 > Also keep in mind this is not just for engineering companies. For now our roles will be centered around my own use cases and personal products, but eventually any industry should be able to use this tool. (2026-11-06; [ADR 0005](../adr/0005-online-first-built-to-last.md) §8)
 
+> So right now when you say the Studio do you mean the website? What if I'm on mobile and need to check up on my systems? We will need to eventually have an Android and iPhone app to go along with this in their own repos. (2026-11-06; section 6.10, [ADR 0006](../adr/0006-mobile-apps-native-per-platform.md))
+
 > There should be a way to define custom agents and add new ones that are not predefined. There should be a way for the owner to schedule meetings with select team members, sort of like daily standup, ad hoc meetings. There should be a way to connect emails/communication systems with the owner so if they want to receive emails for certain triggers or team members they can. When making changes to the team structure/details/or any team member actively working on something or in its lane, we need to be sure that the new changes don't break any ongoing work. If something is ongoing there should be explicit UI asking the user how they want to handle the ongoing work. (2026-11-06; sections 6.6 to 6.9)
 
 ## 1. Vision
@@ -49,6 +51,7 @@ Positioning, from the comparison work: **the operating manual and control room f
 - When I want the team to sync up, I want to call a meeting (a daily standup or an ad hoc one about a problem) with the roles I choose, and get minutes and action items, not a transcript.
 - When something needs me, I want to hear about it where I already am (email, Slack), for the triggers and roles I care about, and nothing else.
 - When I change the team while it is working, I want to know exactly which work my change touches and decide what happens to it, so no task, branch or hand-off is lost.
+- When I'm away from my desk, I want to see from my phone whether my teams are all right, and answer what is waiting for me in seconds, so the team never sits idle waiting for me to get back to a laptop.
 - When I evaluate the product, I want evidence that a governed team does better than one agent, so I can justify the cost.
 
 ## 4. The customer demo (the end-to-end acceptance test)
@@ -71,7 +74,7 @@ This is the script for the demo the owner wants to give. Every story in the back
 | 12. Done | The chief of staff posts: "Dark mode is Ready to try", with the preview link | The PR merged with approval, SIGNOFF and a green gate; the digest line; the usage and cost line | Merge gate, separation of duties and evidence: the kit's governance, visible |
 | 13. Change the team | Back on the canvas, switches on **Performance tester** and publishes again | A one-file diff (`team.json`) and a second PR | Publishing is cheap and reviewable |
 
-Stretch steps for the team operations features (sections 6.6 to 6.9), shown after step 12 or in a second demo:
+Stretch steps for the team operations features and mobile (sections 6.6 to 6.10), shown after step 12 or in a second demo:
 
 | Step | The presenter does | The customer sees |
 | --- | --- | --- |
@@ -79,6 +82,9 @@ Stretch steps for the team operations features (sections 6.6 to 6.9), shown afte
 | 15. Meetings | Opens **Meetings**, sets a daily standup for the CTO lane, then in the chat asks for "backend dev and payments engineer on the checkout errors, now" | The schedule with a cost estimate; an ad hoc meeting starts, a busy role joins after its current step, minutes and action items land in the chat |
 | 16. Notifications | Adds an email address, verifies it, turns on "approval needed" and "ready to try from web dev", sends a test | The test email, then a real one when the next approval comes up |
 | 17. Change while running | Switches off a role that is mid-task, and moves a path a working role has a branch on. Clicks **Publish** | The "your change touches work in progress" step with per-item choices and a recommendation; after merge, the rollout view as each role moves to the new version |
+| 18. From the phone | Locks the laptop. The next approval arrives on the presenter's phone as a notification; they open it, check the diff summary, approve with Face ID, then ask the chief of staff a question by voice | The approval on the lock screen with no team details until unlocked, the card, the biometric prompt, the board updating in the Studio on the projector as the work resumes |
+
+Step 18 needs the native apps (phase 4). Until then the same step runs in the phone's browser, with the notification by email.
 
 Stretch steps for a technical audience: export the same team to Claude Code's built-in agent teams and run it in a terminal; open the same team in another runtime (see 6.3); show the evals page comparing this team with a single agent on the same task set.
 
@@ -192,6 +198,36 @@ A published team version is a commit. The runner knows which version every live 
 - X9. Without the runner (threads mode, or the CLI only) the Studio has no live sessions. It uses board reports and open PRs to warn, says that the data can be stale, and the new briefs take effect when each thread next resumes.
 - X10. The same rules apply when the change does not come from the Studio: a commit that edits `.agent-team/` directly (by the owner or by a role like kit core dev) is detected on merge, and the runner raises the same impact card in the chat before it applies.
 
+### 6.10 Mobile apps
+
+The Studio is a web app. People also need to look after their teams from a phone: see what is happening, answer what is waiting for them, talk to the chief of staff, and follow meetings. Building the team stays on a large screen. The decision on how the apps are built is [ADR 0006](../adr/0006-mobile-apps-native-per-platform.md); what the server guarantees every client is the [clients contract](../contracts/clients.md). Mockups: [09](mockups/09-mobile-inbox-approvals.png), [10](mockups/10-mobile-board-chat.png).
+
+**What the apps are for**
+
+- MB1. **Home: all my teams at a glance.** Every team the person can see, across every deployment they have connected (the hosted service, their company's own Studio): live version, run state, how many roles are working, waiting and blocked, today's cost against the cap, and how many things wait for them.
+- MB2. **Inbox: what needs me.** Approvals, decisions, ongoing-work choices from a team change (6.9), and channel failures, across all teams, most urgent first. Each is a card with the recommendation, the options and the links (PR, preview, evidence).
+- MB3. **Answer from the phone.** Decide a card in one tap. Approve with a biometric check (Face ID, Touch ID, fingerprint), never with a tap alone. Choose what happens to ongoing work (let it finish, hand off, pause) for a published change, using the same choices as the Publish step.
+- MB4. **Board as a list.** Roles grouped by lane with their status, current task, PR and how long since they last reported; filters for working, waiting and blocked. A role's page shows its recent reports, hand-offs, evidence (screenshots load as thumbnails first), and the meetings it is in.
+- MB5. **Chat with the chief of staff,** with the same verbatim history as the Studio, decision and approval cards inline, dictation through the phone's keyboard, and photos or files attached as evidence links.
+- MB6. **Meetings:** today's schedule, minutes and action items, start an ad hoc meeting by asking in the chat, and join a running meeting to read along and speak (text first; voice in phase 5).
+- MB7. **Run controls:** pause, resume and stop a run or one role, see the cost line and budget, and the workspace kill switch for admins. Stopping never needs a step-up; it is always safe.
+- MB8. **Notifications on the phone** are a channel like email and Slack (6.8): the person's own rules, quiet hours, breakthrough for approvals and budget stops, a test send. The lock screen shows no team content unless the person allows previews.
+- MB9. **Every link opens in the right place.** A link in an email, Slack or a notification opens the app if it is installed and the mobile web Studio if not, on the same thing.
+- MB10. **Works on a bad connection.** The last state of home, inbox, board and chat is readable offline, marked with when it was last updated. Chat messages queue and send when back online. Approvals and decisions are never queued: they need a live, current card.
+
+**What the apps are not for**
+
+- Editing the team on a canvas, editing briefs, connecting systems or entering secrets, and publishing. On a phone these open read-only with a note to use a larger screen. Choosing what happens to ongoing work for a change that is already published is the exception (MB3), because it is a decision, not an edit.
+
+**The mobile web, first and always**
+
+- MB11. The Studio's control-room screens (home, inbox, board list, role page, chat, cards, meeting minutes, run controls) are responsive and usable in a phone browser, from the MVP. This is the interim before the apps, and the fallback for anyone who never installs them.
+
+**Platforms and repositories**
+
+- MB12. Two native apps, iPhone (Swift, SwiftUI; iPad gets the same app with a two-column layout) and Android (Kotlin, Jetpack Compose), each in its own repository, open source (MIT). They use only the public API, so they work with every deployment: hosted, self-hosted and a laptop on the same network.
+- MB13. Sign-in with the deployment's own sign-in (OIDC in the system browser), several deployments in one app, sign out and "remove this device" from the Studio. Enterprise device management (managed app configuration, the deployment URL pushed by the company) in phase 5.
+
 ## 7. MVP scope and later
 
 **MVP = the demo, steps 1 to 12, on an online deployment (the customer's cloud through the Compose stack or a one-click template), on GitHub, with Claude Code.** The same build runs locally for trying it and for development.
@@ -211,6 +247,7 @@ A published team version is a commit. The runner knows which version every live 
 | Notifications: email and webhook, rules, quiet hours, delivery log | Slack, Teams, Discord, push, SMS; reply-to-decide in Slack |
 | Change safety: live status on the canvas, impact step in Publish, rollout view | Freeze mode, policy ("never apply now to a role with an open migration") |
 | Node equivalents of the core scripts (Windows) | |
+| Mobile web control room (MB11); the API, push channel and deep links ready for the apps (clients contract) | Native iPhone and Android apps (MB1 to MB13), push through the relay (phase 4); widgets, Live Activities, voice in meetings, enterprise device management (phase 5) |
 
 **Non-goals:** a general workflow engine (Zapier, n8n), a new LLM SDK, hosting customers' production apps, or replacing GitHub as the place where code is reviewed.
 
@@ -221,6 +258,7 @@ A published team version is a commit. The runner knows which version every live 
 - Round trip: 100% of the kit's examples and every known real `.agent-team/` layer import and republish with zero diff.
 - Board freshness: every running role session appears on the board within 10 seconds of starting, with no role-written report needed.
 - Evals: the full team beats a single agent on tests-passed and regressions for the sample task set at a cost the cost line shows plainly. If it does not, we say so in the README.
+- From the phone: an approval that arrives while the owner is away is answered in under 60 seconds from the notification, and nothing about the team appears on a locked screen unless the owner turned previews on.
 - Adoption (after launch): repositories with a `.agent-team/` folder, weekly active Studio installs, and the kit repository itself run by its own team.
 
 ## 9. Risks
@@ -236,6 +274,8 @@ A published team version is a commit. The runner knows which version every live 
 | Notifications become spam, or a phishing vector | Few defaults (approvals, decisions, ongoing work), batching and quiet hours; agents cannot send them; approvals never by reply |
 | A team change corrupts in-flight work | Sessions pinned to a version, the impact step, the runner's invariants (6.9 X6), and "let it finish" as the default |
 | Custom agents weaken governance (two writers, no evidence) | The same checks as kit roles, path conflicts must be resolved, sign-off evidence required |
+| A phone makes approving too easy, or a lost phone approves things | Biometric step-up for every approval, cards that refuse stale answers, contentless pushes, remove a device from the Studio, short-lived tokens |
+| Old app versions in the stores break when the server changes | Apps use only `/v1/`, ignore what they do not know, and are tested against conformance fixtures; the discovery document's minimum version is raised only for security |
 | The demo looks good but the team underdelivers on real work | Evals (G4), and this repository built by its own team in the open |
 
 ## 10. Open questions
