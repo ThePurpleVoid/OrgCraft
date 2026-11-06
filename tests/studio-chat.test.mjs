@@ -7,7 +7,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KIT } from '../bin/agent-team.mjs';
-import { createStudio } from '../apps/studio/server.mjs';
+import { createStudio, hostAllowed } from '../apps/studio/server.mjs';
 import { fakeControlPlane } from './fixtures/fake-control-plane.mjs';
 
 function repo() {
@@ -25,7 +25,7 @@ async function serve(env, fn) {
     const res = await fetch(base + path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify(body) });
     return { status: res.status, body: await res.json() };
   };
-  try { await fn(call); } finally { server.closeAllConnections?.(); server.close(); }
+  try { await fn(call, base); } finally { server.closeAllConnections?.(); server.close(); }
 }
 
 const until = async (fn) => { for (let i = 0; i < 100; i++) { const v = await fn(); if (v) return v; await new Promise((r) => setTimeout(r, 20)); } throw new Error('timed out'); };
@@ -110,4 +110,22 @@ test('run state, today\'s cost against the cap, pause, resume and stop', async (
       assert.equal((await call('/v1/team/run/pause', { key: 'p2' })).status, 409);
     });
   } finally { cp.close(); }
+});
+
+test('answers only requests addressed to localhost (DNS rebinding)', async () => {
+  const cp = await fakeControlPlane();
+  try {
+    await serve(cp.env, async (call, base) => {
+      const { request } = await import('node:http');
+      const get = (host) => new Promise((ok, no) => { const r = request(`${base}/v1/team/chat`, { headers: { host } }, (res) => { res.resume(); ok(res.statusCode); }); r.on('error', no); r.end(); });
+      const port = new URL(base).port;
+      assert.equal(await get(`127.0.0.1:${port}`), 200);
+      assert.equal(await get(`localhost:${port}`), 200);
+      assert.equal(await get(`evil.example:${port}`), 421);
+    });
+  } finally { cp.close(); }
+  const lo = { address: '127.0.0.1', port: 4848 };
+  assert.equal(hostAllowed('rebound.example', lo, {}), false);
+  assert.equal(hostAllowed('studio.lan:4848', lo, { STUDIO_ALLOWED_HOSTS: 'studio.lan' }), true);
+  assert.equal(hostAllowed('anything', { address: '0.0.0.0' }, {}), true);
 });

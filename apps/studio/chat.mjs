@@ -51,7 +51,8 @@ export function chatSource(env = process.env) {
     /** Answers a card with the version the person saw. Approvals go to /approvals/{id}, every other card to /cards/{id}. */
     answer: ({ card, kind, subject, option, version, key }) => {
       const headers = { ...(key ? { 'idempotency-key': key } : {}), ...stepUpHeader() };
-      const approval = kind === 'approval' && /^approval\/(.+)$/.exec(subject ?? '')?.[1];
+      // An approval card's answer goes to its approval: the id from its subject, else the card id.
+      const approval = kind === 'approval' && (/^approval\/(.+)$/.exec(subject ?? '')?.[1] ?? card);
       if (approval) return call('POST', `/approvals/${encodeURIComponent(approval)}`, { decision: option === 'deny' ? 'denied' : option === 'approve' ? 'approved' : option, version }, headers);
       return call('POST', `/cards/${encodeURIComponent(card)}`, { option, version }, headers);
     },

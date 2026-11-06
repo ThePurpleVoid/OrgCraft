@@ -128,9 +128,13 @@ export function createStudio({ root, env = process.env }) {
       return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
     }
   };
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
+      // DNS rebinding: a page on another site can point its own name at 127.0.0.1 and call this server as same-origin.
+      // On a loopback address, answer only requests addressed to a loopback name. The Studio holds the control plane's
+      // token, so this matters on GET as well as POST.
+      if (!hostAllowed(req.headers.host, server.address(), env)) throw new HttpError(421, 'this Studio answers only on localhost; set STUDIO_ALLOWED_HOSTS to add a name');
       // The Studio's API, versioned like the public API it will become (ADR 0005): additive changes only within /v1/.
       if (req.method === 'GET' && url.pathname === '/v1/team') return send(res, 200, state(root));
       // The live board, and a stream that says when it changed (the page then fetches the board again).
@@ -198,6 +202,19 @@ export function createStudio({ root, env = process.env }) {
       return send(res, status, { error: e.message });
     }
   });
+  return server;
+}
+
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+/** Whether a Host header may reach this server: loopback names when it listens on loopback, plus STUDIO_ALLOWED_HOSTS. */
+export function hostAllowed(host, address, env = process.env) {
+  const name = String(host ?? '').toLowerCase().replace(/:\d+$/, '');
+  const extra = String(env.STUDIO_ALLOWED_HOSTS ?? '').toLowerCase().split(',').map((h) => h.trim()).filter(Boolean);
+  if (extra.includes(name)) return true;
+  const bound = typeof address === 'object' && address ? address.address : '';
+  // Bound to all interfaces (--host 0.0.0.0) the person chose to serve other names; the Origin check still guards writes.
+  if (bound === '0.0.0.0' || bound === '::') return true;
+  return LOOPBACK.has(name) || (!!name && name === bound);
 }
 
 export function run(argv) {

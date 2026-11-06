@@ -34,6 +34,8 @@ before(async () => {
 });
 after(async () => { await browser?.close(); studio?.closeAllConnections?.(); studio?.close(); cp?.close(); });
 
+// Skipped on a machine without Playwright, but never in CI: there a missing browser is a failure.
+if (!chromium && process.env.CI) throw new Error('CI is set but the playwright package is not installed');
 const skip = !chromium && 'the playwright package is not installed';
 
 test('a chat round trip, a stale card refreshed, and pause', { skip }, async () => {
