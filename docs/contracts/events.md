@@ -66,6 +66,7 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | `proposal.opened`, `proposal.updated`, `proposal.accepted`, `proposal.failed` | `connector` (for example `github`), `ref` (for a repository, the pull request number), `url`, `branch`, `headSha`, `approval` (on accepted and failed), `result` (the merge commit, on accepted), `reason` (on failed: head-moved, checks, conflict). Emitted by the runner, which proposes and accepts for its sessions (work contract `propose` and `accept`) |
 | `usage.recorded` | `inputTokens`, `outputTokens`, `cost` (in the currency's minor unit), `currency` |
 | `budget.warned`, `budget.exhausted` | `scope` (day, run), `day` (UTC date), `spent`, `cap` (minor units), `currency`, `cardId` (string: the budget card's id, on exhausted) |
+| `budget.updated` | `currency`, `perDay`, `perRun` (minor units, or null), `sessions`, `by` (member): the team's caps after a change |
 
 ### Owner, chat and approvals
 
