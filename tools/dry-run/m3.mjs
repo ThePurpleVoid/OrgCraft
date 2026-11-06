@@ -181,7 +181,7 @@ export function hooks(dir) {
      * The stand-in host deploys a merge commit (G-12): a successful deployment with a preview link, as Vercel or
      * Netlify would write to GitHub's deployment statuses. The runner reads it; the model never sees the file.
      */
-    deploy: ({ ref, url = `https://preview-${ref ?? 'latest'}.dry-run.example`, environment = 'Preview' } = {}) => {
+    deploy: ({ ref, url = `https://preview-${ref ?? 'latest'}.dry-run.example/`, environment = 'Preview' } = {}) => {
       const merged = Object.values(proposals()).filter((p) => p.state === 'merged' && (ref === undefined || p.ref === Number(ref)));
       const p = merged.at(-1);
       if (!p) throw new Error('no merged pull request to deploy');
