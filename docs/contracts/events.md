@@ -30,7 +30,7 @@ The envelope is compatible with [CloudEvents 1.0](https://cloudevents.io), so an
 | `version` | yes | Version of `data` for this `type`. Readers upcast older versions on read. |
 | `source` | yes | `/tenants/{tenant}/teams/{team}`, or `/tenants/{tenant}` for workspace events. |
 | `tenant`, `team` | yes, `team` when it applies | Copied out of `source` for indexing. Every stored event has `tenant`. |
-| `time` | yes | When it happened, in ISO 8601 UTC. Reports may carry their own time. Otherwise it is the time we received them. |
+| `time` | yes | When it happened, in ISO 8601 UTC. The control plane stores a `time` more than five minutes ahead of its own clock as the time it received the event. Reports may carry their own time. Otherwise it is the time we received them. |
 | `actor` | yes | Who did it. `kind` is one of `role`, `person`, `runner` or `system`. `id` is a role slug, member id, runner id or service name. `instance` tells pool roles apart. `session` is the agent session. `via` says how the event arrived: `hook`, `script` (team-status.sh, report.mjs), `tool` (the team tool server), `studio` or `api`. |
 | `subject` | no | What it is about: `role/<slug>`, `run/<id>`, `approval/<id>`, `pr/<n>`, `meeting/<id>`. |
 | `run`, `teamVersion` | no | The run, and the published team version (commit SHA) the actor was running. Change safety and the rollout view use them (ADR 0004). A kit report (0.16 and later) fills it from the checkout: the last commit that changed `.agent-team`. |

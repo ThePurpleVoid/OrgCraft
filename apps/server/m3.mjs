@@ -85,7 +85,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
         q, tenant, now: now(), after, stored,
         async emit(team, type, data, opts = {}) {
           const e = mint(tenant, team, type, data, { time: ctx.now, ...opts });
-          stored.push(...(await appendIn(q, tenant, team, [e], { project: (qq, s) => project(ctx, s) })));
+          stored.push(...(await appendIn(q, tenant, team, [e], { project: (qq, s) => project(ctx, s), now: ctx.now })));
           return e;
         },
         audit: (row) => q(`insert into audit(tenant, team, actor_kind, actor_id, session, action, target, decision, rule, event, detail)
@@ -759,7 +759,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   async function appendEvents(tenant, team, events) {
     await getTeam(db, tenant, team);
     return tx(tenant, async (ctx) => {
-      const s = await appendIn(ctx.q, tenant, team, events, { project: (qq, x) => project(ctx, x) });
+      const s = await appendIn(ctx.q, tenant, team, events, { project: (qq, x) => project(ctx, x), now: ctx.now });
       ctx.stored.push(...s);
       return s;
     });
@@ -778,7 +778,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   /** Appends envelopes inside a transaction of this module, with the projections; for the bus. */
   async function appendInTx(ctx, team, events) {
-    const s = await appendIn(ctx.q, ctx.tenant, team, events, { project: (qq, x) => project(ctx, x) });
+    const s = await appendIn(ctx.q, ctx.tenant, team, events, { project: (qq, x) => project(ctx, x), now: ctx.now });
     ctx.stored.push(...s);
     return s;
   }

@@ -16,6 +16,12 @@ import { seal, unseal } from './vault.mjs';
 import { Problem } from './store.mjs';
 
 export const TICKET_SECONDS = 60;
+/**
+ * The consent page's text version. 2 added "can open pull requests that change your team" (delegated publish,
+ * security C2): a link agreed to an older text keeps reading, but publishing through the host and any new grant
+ * wait until the person allows the host again.
+ */
+export const CONSENT_VERSION = 2;
 const MAX_URIS = 5;
 const sha = (s) => createHash('sha256').update(String(s)).digest('hex');
 const rid = (p, n) => `${p}${randomBytes(n).toString('base64url')}`;
@@ -93,11 +99,17 @@ export function createHosts({ db, key, tenant, publicUrl, now = () => new Date()
       const [r] = await db.system('select id, name, origins from host_clients where id = $1 and tenant = $2 and revoked_at is null', [id, tenant]);
       return r ?? null;
     },
+    /** Whether the person allowed the host on the current consent text (an older one shows the page again). */
     async linked(host, person) {
-      return !!(await db.system('select 1 from host_links where host = $1 and person = $2 and revoked_at is null', [host, person])).length;
+      return !!(await db.system('select 1 from host_links where host = $1 and person = $2 and revoked_at is null and consent_version >= $3', [host, person, CONSENT_VERSION])).length;
     },
     async link(host, person) {
-      await db.system('insert into host_links(host, person) values ($1, $2) on conflict (host, person) do update set linked_at = now(), revoked_at = null', [host, person]);
+      await db.system('insert into host_links(host, person, consent_version) values ($1, $2, $3) on conflict (host, person) do update set linked_at = now(), revoked_at = null, consent_version = excluded.consent_version', [host, person, CONSENT_VERSION]);
+    },
+    /** The host's name for a PR line and the audit, if it is live. */
+    async nameOf(id) {
+      const [r] = await db.system('select name from host_clients where id = $1 and revoked_at is null', [id]);
+      return r?.name ?? null;
     },
     /** GET /v1/me/hosts: the sites this person allowed. */
     async myLinks(person) {
