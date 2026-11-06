@@ -2,10 +2,13 @@
 // the role's conversation, gives it the team tool server in process, and puts every tool call through the
 // supervisor's policy in a PreToolUse hook, so ownership and approvals are enforced by the runner, not the prompt.
 // The SDK is loaded on first use, so the runner and its tests start without it.
+import { estimate } from '../../../packages/model-prices/index.mjs';
+import { loadPrices } from '../../../packages/model-prices/node.mjs';
 let sdk = null;
 const load = async () => (sdk ??= await import('@anthropic-ai/claude-agent-sdk'));
 
 /** One approval can take hours: the hook waits as long as a person does. */
+const PRICES = loadPrices();
 const HOOK_TIMEOUT_S = 7 * 24 * 3600;
 
 /** The team tools as Agent SDK tool definitions; each call goes to the session's checked `callTool`. */
@@ -76,7 +79,9 @@ export function agentSdkAdapter({ effort, settingSources = [], executable, sdk: 
           if (m.type === 'assistant' && !m.parent_tool_use_id) for (const c of m.message?.content ?? []) if (c.type === 'text' && c.text) await o.onText?.(c.text);
           if (m.type === 'result') {
             resume = m.session_id ?? resume;
-            usage = { inputTokens: (m.usage?.input_tokens ?? 0) + (m.usage?.cache_read_input_tokens ?? 0) + (m.usage?.cache_creation_input_tokens ?? 0), outputTokens: m.usage?.output_tokens ?? 0, costUsd: m.total_cost_usd ?? 0 };
+            // The SDK's reported cost is what was spent; only when it reports none, the list price from the shared table.
+            const fallback = () => estimate({ model: o.model, inputTokens: m.usage?.input_tokens ?? 0, outputTokens: m.usage?.output_tokens ?? 0, cacheReadTokens: m.usage?.cache_read_input_tokens ?? 0, cacheWriteTokens: m.usage?.cache_creation_input_tokens ?? 0 }, PRICES).usd ?? 0;
+            usage = { inputTokens: (m.usage?.input_tokens ?? 0) + (m.usage?.cache_read_input_tokens ?? 0) + (m.usage?.cache_creation_input_tokens ?? 0), outputTokens: m.usage?.output_tokens ?? 0, costUsd: typeof m.total_cost_usd === 'number' ? m.total_cost_usd : fallback() };
             if (m.subtype === 'success') result = m.result ?? '';
             else { stop = m.subtype === 'error_max_budget_usd' ? 'budget' : 'error'; error = m.subtype; }
           }

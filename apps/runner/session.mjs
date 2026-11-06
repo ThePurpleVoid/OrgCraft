@@ -2,6 +2,8 @@
 // It owns the session's working copy, its queue of messages, its budget and its liveness. The runner key's events
 // (session.*, usage.recorded, report.heartbeat, and the front door's chat.message) go out through `emit`; role
 // messages go through the team tool server, so the control plane mints them (docs/product/m3-design.md).
+import { tierModel } from '../../packages/model-prices/index.mjs';
+import { loadPrices } from '../../packages/model-prices/node.mjs';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { decide, DEFAULT_RULES } from './policy.mjs';
@@ -11,7 +13,9 @@ import { safeRead, safeWrite, sharedDir } from './sandbox.mjs';
 import { checkHead, checkpoint as saveWork, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
-export const DEFAULT_TIERS = { deep: 'claude-opus-5-5', standard: 'claude-opus-5-5', routine: 'claude-sonnet-5-5', light: 'claude-haiku-5-5' };
+// Which model each tier runs on comes from the kit's one price table (packages/model-prices), not a copy here.
+export const PRICES = loadPrices();
+export const DEFAULT_TIERS = { ...PRICES.tiers };
 /**
  * The only parts of the runner's environment a session inherits (security review R1). Not HOME: each session
  * gets its own empty one. Not the model key: the session gets the loopback proxy's address and a token of its
@@ -91,9 +95,8 @@ export class Session {
   }
 
   get model() {
-    const tiers = { ...DEFAULT_TIERS, ...this.deps.tiers };
     const tier = (/\*\*Model:\*\*\s*([a-z]+)/i.exec(this.body.prompt?.brief ?? '') ?? [])[1]?.toLowerCase();
-    return this.body.model ?? tiers[this.body.tier ?? tier] ?? tiers.standard;
+    return this.body.model ?? tierModel(this.body.tier ?? tier, PRICES, this.deps.tiers);
   }
 
   /** What this session may still spend, in minor units: the smaller of today's and the run's remaining budget. */

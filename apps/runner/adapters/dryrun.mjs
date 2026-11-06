@@ -7,6 +7,7 @@
 //                     QA role waits for it after its HANDOFF (step 6), then the file is used up
 //   spend.json        { "usd": 6 } the next turn reports that cost, then the file is used up (step 11)
 //
+// The front door also asks the owner one decision (step 7) and says what they chose when the answer comes.
 // Every step is written to the control folder's log.jsonl with the run and session ids.
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -37,8 +38,20 @@ export function dryrunAdapter({ control, qaRole = 'qa-web', frontDoor = 'chief-o
         const b = builder();
         const task = asked.split('\n')[0].slice(0, 200) || 'the owner\'s request';
         t.say(`On it. I'm handing this to ${b.role}: ${task}`);
+        // Step 7: one decision for the owner (a card they answer, from the phone too); the work goes on meanwhile.
+        const d = await t.call('ask_owner', { question: `Where should "${task.slice(0, 120)}" go?`, options: [
+          { id: 'home', label: 'On the home page', consequence: 'The change goes on the page everyone sees first.' },
+          { id: 'new-page', label: 'On a page of its own', consequence: 'The change gets its own page, linked from the menu.' },
+        ], recommended: 'home', why: 'Most visitors only see the home page.' });
+        log(t, 'chief-of-staff:asked', { ok: !d.isError, detail: d.isError ? d.text : undefined });
         const r = await t.call('handoff', { to: b.role, task, changed: 'nothing yet: a request from the owner, quoted below', verify: `the change in ${b.file} says what was asked`, doneWhen: 'merged after the owner approves it' });
         log(t, 'chief-of-staff:handoff', { to: b.role, ok: !r.isError, detail: r.isError ? r.text : undefined });
+        return { usage: usage() };
+      }
+      const answered = /The owner answered your question[^:]*: "([^"]*)"/.exec(t.prompt);
+      if (answered) {
+        t.say(`Noted: ${answered[1] === 'new-page' ? 'on a page of its own' : 'on the home page'}. I've passed it on.`);
+        log(t, 'chief-of-staff:answered', { answer: answered[1] });
         return { usage: usage() };
       }
       const [k, from] = kind(t.prompt);
