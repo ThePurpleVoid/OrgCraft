@@ -38,8 +38,9 @@ export function sandboxSpawn(sandbox, { grace = 5000 } = {}) {
       // When the leader exits, whatever it left in its group (a background command that ignored TERM, or one still
       // running at a normal end) is killed too.
       child.on('exit', () => { closed = true; clearTimeout(timer); groupKill('SIGKILL'); });
+      // The shell's own kill: the slim image has no /bin/kill.
       const groupKill = (sig) => {
-        const k = spawn(sandbox.exec ?? 'setpriv', [`--reuid=${sandbox.uid}`, `--regid=${sandbox.gid}`, '--clear-groups', '--inh-caps=-all', '--no-new-privs', '--', 'kill', `-${String(sig).replace(/^SIG/, '')}`, '--', `-${child.pid}`], { stdio: 'ignore' });
+        const k = spawn(sandbox.exec ?? 'setpriv', [`--reuid=${sandbox.uid}`, `--regid=${sandbox.gid}`, '--clear-groups', '--inh-caps=-all', '--no-new-privs', '--', '/bin/sh', '-c', 'kill -s "$1" -- "-$2"', 'kill', String(sig).replace(/^SIG/, ''), String(child.pid)], { stdio: 'ignore' });
         k.on('error', () => {});
       };
       child.kill = (sig = 'SIGTERM') => {

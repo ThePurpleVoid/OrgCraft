@@ -351,8 +351,8 @@ test('F3: stopping a sandboxed session signals its whole process group through s
   assert.equal(child.kill('SIGTERM'), true);
   await exited;
   const calls = read(log, 'utf8').trim().split('\n');
-  assert.ok(calls.some((c) => c.endsWith(`-- kill -TERM -- -${child.pid}`)), calls.join('\n'));
-  assert.ok(calls.some((c) => c.endsWith(`-- kill -KILL -- -${child.pid}`)), 'SIGKILL after the grace period');
+  assert.ok(calls.some((c) => c.endsWith(`kill TERM ${child.pid}`)), calls.join('\n'));
+  assert.ok(calls.some((c) => c.endsWith(`kill KILL ${child.pid}`)), 'SIGKILL after the grace period');
   assert.ok(calls.every((c) => c.startsWith('--reuid=10002 --regid=10010')), 'as the agent');
   await new Promise((r) => setTimeout(r, 100));
   // Gone, or a zombie waiting for init to reap it: either way it no longer runs.
