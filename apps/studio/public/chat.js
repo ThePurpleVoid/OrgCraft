@@ -109,6 +109,7 @@ export function createChat({ root, onOpen } = {}) {
     run: null, cost: null, summary: null, busy: false, loaded: false, es: null, team: null,
     runError: null, budget: null, plan: null, shaOpen: new Set(), // approval cards whose full sha is shown // GET /v1/team/budget and /v1/team/run/plan, read when the start dialog opens
     older: [], local: new Set(), // pages fetched with 'Show earlier'; events this page posted
+    forbidden: new Set(), // cards the control plane said this person's role may not answer (403)
 
   };
 
@@ -121,6 +122,7 @@ export function createChat({ root, onOpen } = {}) {
         <button id="run-start" type="button" class="primary" hidden>Start a run…</button>
         <button id="run-pause" type="button"></button>
         <button id="run-stop" type="button" class="danger">Stop</button>
+        <button id="runner-add" type="button" hidden>Add a runner…</button>
       </div>
     </div>
     <dialog id="start-dialog" class="start-dialog">
@@ -135,6 +137,21 @@ export function createChat({ root, onOpen } = {}) {
         <div class="dialog-actions">
           <button value="cancel" type="submit" formnovalidate>Cancel</button>
           <button id="start-go" type="button" class="primary" disabled>Start</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="runner-dialog" class="start-dialog" aria-labelledby="runner-title">
+      <form method="dialog" class="dialog" id="runner-form">
+        <h2 id="runner-title">Add a runner</h2>
+        <p class="muted">A runner is the machine that runs this team's agents. Get a one-time code here, then register that machine with it. Getting a code asks you to confirm it is you.</p>
+        <div id="runner-list" class="runner-list"></div>
+        <label for="runner-name">Name for the machine</label>
+        <input id="runner-name" maxlength="100" autocomplete="off" placeholder="e.g. Office Mac mini">
+        <div id="runner-code" class="runner-code" hidden></div>
+        <p id="runner-result" class="result error" role="status"></p>
+        <div class="dialog-actions">
+          <button value="close" type="submit" formnovalidate>Close</button>
+          <button id="runner-go" type="button" class="primary">Get a code</button>
         </div>
       </form>
     </dialog>
@@ -198,7 +215,8 @@ export function createChat({ root, onOpen } = {}) {
     const rec = card.recommendation?.option;
     const recLabel = rec && (card.options ?? []).find((o) => o.id === rec)?.label;
     const known = ['approval', 'decision', 'budget'].includes(card.kind);
-    const buttons = answered ? '' : (card.options ?? []).map((o) => {
+    // A card this person's role may not answer (a budget card below admin, #95) shows why instead of its buttons.
+    const buttons = answered || st.forbidden.has(card.id) ? '' : (card.options ?? []).map((o) => {
       const style = ['primary', 'danger'].includes(o.style) ? o.style : rec === o.id ? 'primary' : '';
       return `<button type="button" class="${style}" data-card="${esc(card.id)}" data-option="${esc(o.id)}">${esc(o.label ?? o.id)}</button>`;
     }).join('');
@@ -321,6 +339,7 @@ export function createChat({ root, onOpen } = {}) {
     // With no run going, the one control is Start (the control plane allows one run per team).
     $('#run-start', root).hidden = going || st.connected !== true;
     $('#run-start', root).disabled = st.busy;
+    $('#runner-add', root).hidden = st.connected !== true;
   }
 
   async function load() {
@@ -397,6 +416,9 @@ export function createChat({ root, onOpen } = {}) {
       // Until sign-in lands (M4), the proof is the deployment's step-up secret typed in; the Studio server keeps only the
       // short-lived step-up token the control plane gives back.
       st.notes.set(cardId, { kind: 'stepup', option, text: 'Confirm it is you: type the step-up secret to answer. The control plane checks it; neither this page nor the Studio keeps it.' });
+    } else if (r.status === 403) {
+      st.forbidden.add(cardId);
+      st.notes.set(cardId, { kind: 'error', text: card.kind === 'budget' ? 'Only an admin of this workspace can answer a budget card, since it changes what the team may spend. Ask an admin.' : `Your role cannot answer this card. ${r.data.error ?? ''}`.trim() });
     } else if (!r.ok) {
       st.notes.set(cardId, { kind: 'error', text: r.data.error ?? `HTTP ${r.status}` });
     } else {
@@ -504,6 +526,50 @@ export function createChat({ root, onOpen } = {}) {
     await load();
     await loadRun();
   }
+  // Runners (runner-protocol.md, register): a one-time code, minted after step-up and shown once. The page keeps it
+  // only while the dialog is open; closing it clears the code, and the Studio server never stored it.
+  const shq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
+  async function openRunners() {
+    const dlg = $('#runner-dialog', root);
+    $('#runner-code', root).hidden = true;
+    $('#runner-code', root).innerHTML = '';
+    $('#runner-result', root).textContent = '';
+    $('#runner-go', root).textContent = 'Get a code';
+    $('#runner-list', root).innerHTML = '';
+    dlg.showModal();
+    const r = await api('/v1/team/runners');
+    const list = (r.ok ? r.data.runners ?? [] : []).filter((x) => !x.revoked_at);
+    $('#runner-list', root).innerHTML = list.length
+      ? `<p class="muted">Registered: ${list.map((x) => `<strong>${esc(x.name || x.id)}</strong>${x.last_seen ? ` <span class="muted">(last seen ${esc(fmtWhen(x.last_seen))})</span>` : ' <span class="muted">(not connected yet)</span>'}`).join(', ')}</p>`
+      : '<p class="muted">No runner is registered yet.</p>';
+  }
+  async function mintRunnerCode() {
+    const name = $('#runner-name', root).value.trim();
+    const go = $('#runner-go', root);
+    go.disabled = true;
+    $('#runner-result', root).textContent = '';
+    let r = await api('/v1/team/runners/code', { name });
+    if (needsStepUp(r) && await stepUp('A runner code lets a machine join this team and run its agents.')) r = await api('/v1/team/runners/code', { name });
+    go.disabled = false;
+    if (!r.ok) { $('#runner-result', root).textContent = needsStepUp(r) ? 'No code: confirming it is you was cancelled.' : r.data.error ?? `HTTP ${r.status}`; return; }
+    const { code, expires, server } = r.data;
+    const cmd = `agent-team-runner register --server ${shq(server)} --code ${code}${name ? ` --name ${shq(name)}` : ''}`;
+    const box = $('#runner-code', root);
+    box.innerHTML = `<p>Your code, shown once:</p>
+      <output class="code" aria-label="Runner code">${esc(code)}</output>
+      <p class="hint">It works once, until ${esc(fmtWhen(expires))} (15 minutes). When you close this, it is gone; get a new one if you need it.</p>
+      <p>On the machine, run:</p>
+      <pre><code id="runner-cmd">${esc(cmd)}</code></pre>
+      <button type="button" id="runner-copy">Copy the command</button>`;
+    box.hidden = false;
+    go.textContent = 'Get a new code';
+    $('#runner-copy', root).onclick = async () => {
+      try { await navigator.clipboard.writeText(cmd); $('#runner-copy', root).textContent = 'Copied'; } catch { $('#runner-copy', root).textContent = 'Select the command and copy it'; }
+    };
+  }
+  $('#runner-add', root).onclick = openRunners;
+  $('#runner-go', root).onclick = mintRunnerCode;
+  $('#runner-dialog', root).addEventListener('close', () => { $('#runner-code', root).innerHTML = ''; $('#runner-code', root).hidden = true; });
   $('#run-start', root).onclick = openStart;
   $('#start-go', root).onclick = start;
   $('#start-cap', root).addEventListener('input', renderStart);

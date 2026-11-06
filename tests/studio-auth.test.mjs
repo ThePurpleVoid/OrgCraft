@@ -22,3 +22,20 @@ test('base64url round-trips every byte', () => {
   assert.deepEqual(b64urlToBytes(bytesToB64url(all)), all);
   assert.doesNotMatch(bytesToB64url(all), /[+/=]/);
 });
+
+test('security notices read as sentences, and only unseen ones show (S5)', async () => {
+  const { noticeText, unseenNotices, dismissNotices, noticesBanner } = await import('../apps/studio/public/auth.js');
+  const at = '2026-11-06T05:42:00.000Z';
+  assert.match(noticeText({ action: 'passkey.added', at, name: "Dana's MacBook" }), /^A passkey "Dana's MacBook" was added on /);
+  assert.match(noticeText({ action: 'member.role-changed', at, tenant: 'acme', role: 'approver' }), /^Your role in acme changed to approver on /);
+  assert.match(noticeText({ action: 'member.removed', at, tenant: 'acme' }), /^You were removed from acme on /);
+  assert.match(noticeText({ action: 'step-up.locked', at }), /locked/);
+  const mem = new Map(); const storage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
+  const me = { notices: [{ action: 'passkey.removed', at: '2026-11-06T06:00:00.000Z', name: '<b>x</b>' }, { action: 'passkey.added', at }] };
+  assert.equal(unseenNotices(me, storage).length, 2);
+  assert.doesNotMatch(noticesBanner(me, storage), /<b>x/, 'names are escaped');
+  dismissNotices(me, storage);
+  assert.equal(noticesBanner(me, storage), '');
+  me.notices.unshift({ action: 'sessions.ended', at: '2026-11-07T00:00:00.000Z' });
+  assert.equal(unseenNotices(me, storage).length, 1);
+});

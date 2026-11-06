@@ -2,7 +2,7 @@
 // A person needs at least one passkey before they can approve anything, so a person without one is asked to add one
 // straight after signing in. The first passkey needs only a fresh sign-in; adding another or removing one needs
 // step-up with an existing passkey.
-import { addPasskey, call, ensureSignedIn, esc, needsStepUp, signOut, stepUpDialog, withStepUp } from './auth.js';
+import { addPasskey, call, dismissNotices, ensureSignedIn, esc, needsStepUp, noticesBanner, signOut, stepUpDialog, withStepUp } from './auth.js';
 
 const root = document.getElementById('account');
 const dlg = document.getElementById('passkey-add');
@@ -16,6 +16,7 @@ function render() {
   const ws = (me.workspaces ?? []).map((w) => `<li>${esc(w.name ?? w.tenant)} <span class="pill">${esc(w.role)}</span></li>`).join('');
   const rows = keys.map((k) => `<li class="passkey row"><span><strong>${esc(k.name || 'Passkey')}</strong> <span class="muted">added ${esc(fmt(k.createdAt))}${k.lastUsed ? `, last used ${esc(fmt(k.lastUsed))}` : ''}</span></span><button type="button" class="danger" data-remove="${esc(k.id)}">Remove</button></li>`).join('');
   root.innerHTML = `
+    ${noticesBanner(me)}
     <p>Signed in as <strong>${esc(me.name || me.login)}</strong>${me.name && me.login ? ` <span class="muted">(${esc(me.login)} on GitHub)</span>` : ''}.</p>
     <h2>Workspaces</h2>
     ${ws ? `<ul class="plain">${ws}</ul>` : '<p class="muted">None yet.</p>'}
@@ -74,6 +75,7 @@ document.getElementById('passkey-add-cancel').onclick = () => { try { sessionSto
 root.addEventListener('click', async (e) => {
   const b = e.target.closest('button');
   if (!b) return;
+  if (b.id === 'notices-ok') { dismissNotices(me); return render(); }
   if (b.id === 'add') return openAdd();
   if (b.id === 'signout') return signOut();
   if (b.dataset.remove) {

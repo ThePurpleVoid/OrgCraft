@@ -202,6 +202,10 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (!chat.connected) return send(res, 200, { connected: false });
         return relay(res, async () => ({ connected: true, ...(await chat.budget()) }));
       }
+      if (req.method === 'GET' && url.pathname === '/v1/team/runners') {
+        if (!chat.connected) return send(res, 200, { connected: false, runners: [] });
+        return relay(res, async () => ({ connected: true, ...(await chat.runners()) }));
+      }
       if (req.method === 'GET' && url.pathname === '/v1/team/run/plan') {
         try {
           const { team } = runRequest(root, { dirty: gitState(root).dirty });
@@ -251,6 +255,8 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           for (const k of ['perDay', 'perRun']) if (input[k] !== undefined && input[k] !== null && !(Number.isInteger(input[k]) && input[k] >= 0)) throw new HttpError(400, `${k} is a whole number of cents, or null`);
           return relay(res, () => chat.setBudget(input, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
         }
+        // A runner code: minted after step-up, passed to the page once, kept nowhere here.
+        if (url.pathname === '/v1/team/runners/code') return relay(res, () => chat.runnerCode(input.name));
         if (url.pathname === '/v1/team/step-up') {
           if (typeof input.secret !== 'string' || !input.secret) throw new HttpError(400, 'send the secret');
           return relay(res, () => chat.stepUp(input.secret));
