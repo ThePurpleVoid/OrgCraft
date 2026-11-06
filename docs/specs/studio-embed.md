@@ -123,6 +123,11 @@ studio.destroy();
 - When it is mounted there is no launch token, no `sign-in.html` and no `account.html`: the host's page is the sign-in.
 - The styles are scoped (`.ats`), with CSS variables, like the dashboard. There are no inline scripts and no `eval`, so it runs under a strict CSP with `script-src 'self'`. The host either serves the files from `/assets/` through the handler or copies them from the package.
 - Local mode keeps today's page and launch token. It calls `mount` with `features` filled in from what its server reports.
+- **One Studio per page.** Element ids may stay global, but every lookup is scoped to the mount root. The page's state lives on the root as data attributes, not on `document.body`: today's `data-page`, `data-mode`, `small`, `previewing` and `no-team`. The stylesheet selects `.ats[data-page=…]`.
+- **Routing.** With `urlState: true` (local mode's default), the page is in `location.hash`, as today. With `urlState: false` (the default when `embedded`), the page is kept in memory, and every change calls `onNavigate(view)`. The Studio never touches `location` or `history`, so the host's router stays in charge.
+- **Module paths.** The bundle imports `./team-model.mjs` and fetches `./model-prices.json` relative to its own URL (`import.meta.url`). The host serves all three from one directory: the handler's `/assets/<kit version>/`, or a copy of the package's `apps/studio/public/`. No import map is needed.
+- **CSP.** Use `script-src 'self'` and `style-src 'self'`, with no `'unsafe-inline'` for either. That means no `style=""` attributes in generated HTML (they become classes or CSSOM writes) and no `innerHTML` on `document.body`: the fatal-error view renders inside the root.
+- **Dialogs** use `<dialog>.showModal()`. It renders in the browser's top layer, so the host's `z-index` cannot hide it, and it brings its own focus trap. `confirm()` is replaced by the same dialog component, because some hosts block native dialogs in embedded views.
 
 ## 5. Security
 
@@ -196,7 +201,7 @@ Further proofs:
    - `RepoBackend` with `local` and `github`;
    - `createStudioHandler`, the Node adapter, and `githubAppToken`;
    - the fake GitHub API and the shared suite.
-2. **web-dev:** `AgentTeamStudio.mount` and the `api` base; the `features` switches; the scoped styles and the strict-CSP check.
+2. **web-dev:** `AgentTeamStudio.mount` and the `api` base, with about 42 fetch and EventSource calls moved behind it. Also the `features` switches; root-scoped state, lookups and styles (the stylesheet's body selectors); in-memory routing; inline styles moved to classes; and `<dialog>` in place of `confirm()`. Finally, a strict-CSP test page in CI.
 3. **security-reviewer:** E1 to E10 on this spec, then on the handler PR.
 4. **kit-core-dev, in the first host's own repository:**
    - the host's function, which mounts the handler behind that host's admin check;
