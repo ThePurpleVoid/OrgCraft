@@ -117,7 +117,7 @@ jobs:
         if: hashFiles('apps/runner/Dockerfile') != ''
         run: |
           docker run --rm -e RUNNER_F3_MARKER=sk-ant-ci-marker-not-a-key-0123456789 \
-            agent-team-runner:ci node --test apps/runner/test/security.test.mjs | tee runner-image.tap
+            agent-team-runner:ci node --test --test-concurrency=1 apps/runner/test/security.test.mjs apps/runner/test/pool.test.mjs | tee runner-image.tap
           # Every test must have run in the image: a skip here means the sandbox was not exercised.
           grep -q '^# fail 0$' runner-image.tap && grep -q '^# skipped 0$' runner-image.tap
       - name: Keys from the M3-on-a-Mac mount land in the runner's closed folder

@@ -18,7 +18,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { owns } from './policy.mjs';
 import { findSecrets } from './secrets.mjs';
-import { sharedDir } from './sandbox.mjs';
+import { grant, sharedDir } from './sandbox.mjs';
 
 const run = promisify(execFile);
 /** Pinned for every runner-side git call; they override anything the repository's config says. */
@@ -92,6 +92,15 @@ export function harden(cwd) {
  * Copies are keyed by the repository and the exact branch (or, read-only, the session), so two repositories with
  * one branch name, or branches that differ only in punctuation, never share a folder.
  */
+/**
+ * Where the working copy for this repository and branch (or, read-only, this session) lives under `work`.
+ * Before a runner serves more than one customer, this path and the repository cache must include the tenant and team.
+ */
+export function copyPath({ work, repo, worktree, session }) {
+  const branch = typeof worktree === 'string' ? worktree : worktree?.branch ?? null;
+  return join(work, 'worktrees', short(repo?.url ?? ''), branch ? `${safe(branch)}-${short(branch)}` : `read-${safe(session)}-${short(session)}`);
+}
+
 export async function prepare({ root, work = root, repo, worktree, session, sandbox = null }) {
   if (!repo?.url) throw new Error('session.start needs repo.url');
   const ref = repo.ref || 'main';
@@ -100,8 +109,8 @@ export async function prepare({ root, work = root, repo, worktree, session, sand
   if (branch && !BRANCH.test(branch)) throw new Error(`"${branch}" is not a branch name the runner will create`);
   if (!BRANCH.test(base)) throw new Error(`"${base}" is not a branch name`);
   const repoKey = short(repo.url);
-  const cache = join(root, 'repos', `${repoKey}.git`);
-  const cwd = join(work, 'worktrees', repoKey, branch ? `${safe(branch)}-${short(branch)}` : `read-${safe(session)}-${short(session)}`);
+  const cache = join(root, 'repos', `${repoKey}.git`); // keyed by tenant and team too before a runner serves more than one customer
+  const cwd = copyPath({ work, repo, worktree, session });
   const holder = holders.get(cwd);
   if (holder && holder !== session) throw new Error(`the working copy for ${branch ?? 'that checkout'} is in use by session ${holder}`);
   return locked(cache, async () => {
@@ -118,7 +127,8 @@ export async function prepare({ root, work = root, repo, worktree, session, sand
     meta.set(cwd, { url: repo.url, branch, base, cache, bases: [baseSha], sandbox });
     if (existsSync(cwd)) {
       // Resume: keep the copy and whatever the last session left in it, once it is checked to be the same
-      // repository and the same branch.
+      // repository and the same branch. A parked copy opens to this session's user only (#28).
+      if (sandbox) grant(cwd, sandbox);
       harden(cwd);
       const on = await git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD');
       if (branch ? on !== branch : on !== 'HEAD') throw new Error(`the working copy at ${cwd} holds ${on}, not ${branch ?? 'a detached checkout'}; not resuming into it`);
@@ -130,6 +140,7 @@ export async function prepare({ root, work = root, repo, worktree, session, sand
     // The clone itself (made by git below, with the runner's umask) is the leaf the agent works in.
     // A full copy, with no hard links or alternates into the cache: the session can change only its own files.
     await git(root, 'clone', '--quiet', '--no-hardlinks', '--no-checkout', cache, cwd);
+    if (sandbox) grant(cwd, sandbox);
     harden(cwd);
     await git(cwd, 'fetch', '--quiet', cache, '+refs/heads/*:refs/remotes/origin/*');
     const remote = branch ? await git(cwd, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`).catch(() => '') : '';
