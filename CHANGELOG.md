@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.14.0
+
+- **Studio Publish can open a pull request** (issue #30, "PR through gh"). `POST /v1/team/publish` with `"pr": true` first commits as before. It then pushes the branch to `origin`, never forced, and opens a pull request into the branch the publish started from. With `gh` installed and signed in, that is `gh pr create`, with the commit's first line as the title and the rest (the change-safety plan, "Work in progress") as the body. Without gh, the result has the branch, the compare link for a GitHub remote and the command to run. The result's `pr.state` is `opened`, `exists`, `pushed`, `not-pushed`, `no-remote` or `same-branch`. `GET /v1/team/pr-support` says whether there is a remote and whether gh is signed in. The server reads only `spec`, `branch`, `message` and `pr` from the page, never a token. `AGENT_TEAM_GH` points at another gh binary. The code is in `apps/studio/pr.mjs`.
+- **What existing teams see on sync:** only the version stamps.
+
 ## 0.13.0
 
 Neutral protocols (CPO story "Neutral protocols for business-function teams", criteria 1 to 4, D37 to D41).

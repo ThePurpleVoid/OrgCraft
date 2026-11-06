@@ -23,6 +23,7 @@ import { loadKit, readLayer, writeLayer } from '../../packages/team-model/node.m
 import { liveSource } from './live.mjs';
 import { chatSource } from './chat.mjs';
 import { runRequest, RunRefused } from './runs.mjs';
+import { openPullRequest, prSupport, pullRequestText } from './pr.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(HERE, 'public');
@@ -79,8 +80,12 @@ export function preview(root, spec) {
   }
 }
 
-/** Writes the layer, syncs, and commits on a branch. Refuses when the team's files have uncommitted changes. */
-export function publish(root, spec, { branch, message } = {}) {
+/**
+ * Writes the layer, syncs, and commits on a branch. Refuses when the team's files have uncommitted changes.
+ * With `pr: true` it then pushes the branch and opens a pull request into the branch it started from (pr.mjs);
+ * the result's `pr` says how far that got. The commit message's body (the change-safety plan) is the PR's body.
+ */
+export function publish(root, spec, { branch, message, pr = false } = {}, env = process.env) {
   const kit = loadKit(KIT);
   const errors = validate(spec, kit).filter((i) => i.level === 'error');
   if (errors.length) throw new HttpError(422, `fix ${errors.length} error${errors.length > 1 ? 's' : ''} first: ${errors[0].where}: ${errors[0].message}`);
@@ -88,6 +93,7 @@ export function publish(root, spec, { branch, message } = {}) {
   if (!g.repo) throw new HttpError(409, `${root} is not a git repository`);
   if (g.dirty.length) throw new HttpError(409, `the team's files have uncommitted changes (${g.dirty.slice(0, 3).join(', ')}); commit or stash them first`);
   if (branch && !/^[A-Za-z0-9._/-]+$/.test(branch)) throw new HttpError(400, 'a branch name may use letters, digits, ".", "_", "/" and "-"');
+  const from = g.branch;
   if (branch && branch !== g.branch) {
     if (tryGit(root, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`)) throw new HttpError(409, `branch ${branch} already exists`);
     git(root, 'checkout', '-q', '-b', branch);
@@ -98,8 +104,15 @@ export function publish(root, spec, { branch, message } = {}) {
   git(root, 'add', '-A', '--', ...PUBLISHED.filter((p) => existsSync(join(root, p))));
   const staged = tryGit(root, 'diff', '--cached', '--name-only').split('\n').filter(Boolean);
   if (!staged.length) return { branch: gitState(root).branch, commit: null, files: [], note: 'nothing changed' };
-  git(root, 'commit', '-q', '-m', message?.trim() || 'Update the agent team (Agent Team Studio)');
-  return { branch: gitState(root).branch, commit: git(root, 'rev-parse', '--short', 'HEAD'), files: staged, written };
+  const text = message?.trim() || 'Update the agent team (Agent Team Studio)';
+  git(root, 'commit', '-q', '-m', text);
+  const out = { branch: gitState(root).branch, commit: git(root, 'rev-parse', '--short', 'HEAD'), files: staged, written };
+  if (pr === true) {
+    // Into the branch the publish started from; on the branch itself, the remote's default branch.
+    const base = from && from !== out.branch ? from : prSupport(root, env).base;
+    out.pr = openPullRequest(root, { branch: out.branch, base, ...pullRequestText(text, out.commit) }, env);
+  }
+  return out;
 }
 
 /** Who hands work to whom, for the Flow view: the dashboard's graph of the team as the spec resolves it. */
@@ -164,6 +177,8 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       }
       // The Studio's API, versioned like the public API it will become (ADR 0005): additive changes only within /v1/.
       if (req.method === 'GET' && url.pathname === '/v1/team') return send(res, 200, state(root));
+      // What Publish can do with the branch here: push it, and open a pull request with gh when it is signed in.
+      if (req.method === 'GET' && url.pathname === '/v1/team/pr-support') return send(res, 200, prSupport(root, env));
       // The live board, and a stream that says when it changed (the page then fetches the board again).
       if (req.method === 'GET' && url.pathname === '/v1/team/board') {
         try { return send(res, 200, { source: live.kind, where: live.where, board: await live.board() }); } catch (e) { return send(res, 502, { source: live.kind, where: live.where, error: e.message }); }
@@ -210,7 +225,8 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         for await (const chunk of req) { body += chunk; if (body.length > 5_000_000) throw new HttpError(413, 'too large'); }
         const input = JSON.parse(body || '{}');
         if (url.pathname === '/v1/team/preview') return send(res, 200, preview(root, input.spec));
-        if (url.pathname === '/v1/team/publish') return send(res, 200, publish(root, input.spec, input));
+        // Only spec, branch, message and pr are read: credentials are the machine's own, never the page's.
+        if (url.pathname === '/v1/team/publish') return send(res, 200, publish(root, input.spec, { branch: input.branch, message: input.message, pr: input.pr === true }, env));
         if (url.pathname === '/v1/team/graph') return send(res, 200, graph(input.spec));
         if (url.pathname === '/v1/team/suggestions') return send(res, 200, suggestions(root, input.spec));
         if (url.pathname === '/v1/team/chat') {
