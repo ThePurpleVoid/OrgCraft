@@ -74,6 +74,8 @@ export function createMembers({ db, lookup, endSessions, requireStepUp, now = ()
       if (m.role === 'owner') mayGrant(who, 'owner');
       if (m.role === 'owner' && owners <= 1) throw new Problem(409, 'this is the last owner: make someone else an owner first', { type: 'last-owner' });
       await q('update members set removed_at = $2 where id = $1', [m.id, now()]);
+      // No team emails reach someone who left (security review): their addresses for this workspace go too.
+      await q('delete from email_subscriptions where principal = $1 and tenant = $2', [m.person, who.tenant]);
       await auditBoth(q, who, m.person, 'member.removed', m.id, { role: m.role });
       const [{ left }] = await q('select count(*)::int as left from members where person = $1 and removed_at is null', [m.person]);
       return { person: m.person, left: Number(left) };

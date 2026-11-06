@@ -42,6 +42,33 @@ curl -H "authorization: Bearer $T" -H 'content-type: application/json' \
 
 Sinks deliver in order, at least once, and back off from 5 seconds to an hour while the other end is down.
 
+**Email the people who opt in** (PRD 6.8). An `email` sink sends the team's notification events (approval needed,
+budget at 80% and at 100%, a role is blocked, meeting minutes) through an email provider. The provider's key lives in
+the vault, named by the sink. With no key stored, nothing is sent: deliveries are logged as skipped.
+
+```bash
+curl -X PUT -H "authorization: Bearer $T" -H "x-step-up: $SU" -H 'content-type: application/json' -d '{"value":"<provider API key>"}' localhost:4849/v1/secrets/EMAIL_PROVIDER_KEY
+curl -H "authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"format":"email","provider":"resend","sender":"My team <team@example.com>","secret":"EMAIL_PROVIDER_KEY"}' \
+  localhost:4849/v1/teams/my-team/sinks
+```
+
+Then each person adds their own address for the team (`POST /v1/teams/my-team/emails`). It gets a 6-digit code that
+expires in 15 minutes (`POST …/emails/{id}/verify`), and they switch on the kinds they want
+(`PATCH …/emails/{id}` with `{ "kinds": ["approval", "budget100"] }`). Nothing is emailed before that.
+
+- Every email has one link into the Studio. The link goes through `/v1/email/link`, expires (approvals after 24 hours,
+  everything else after 7 days) and lands where sign-in and step-up apply. No email takes an action by reply.
+- The footer's link turns off that one kind for that one team, with no sign-in: the page asks ("Stop … emails?"), and its button turns
+  it off (a mail scanner opening the link changes nothing). Mail clients get `List-Unsubscribe` and one-click
+  unsubscribe.
+- Only people who are still members get emails; removing a member, or signing them out everywhere, deletes their
+  addresses. Codes are capped at 10 a day per person, and wrong codes at 20 a day. The sink's secret name must
+  start with `EMAIL_`.
+- Set `AGENT_TEAM_PUBLIC_URL` (where the links point) and `AGENT_TEAM_STUDIO_URL` (where they land).
+- The copy is in `email.mjs`, and every delivery is logged in `email_deliveries`. Providers sit behind one interface,
+  `send(message) -> { id }`, and `resend` is the first.
+
 ## Read it
 
 | Call | What it gives |
