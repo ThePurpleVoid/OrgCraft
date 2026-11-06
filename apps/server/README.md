@@ -50,6 +50,41 @@ Sinks deliver in order, at least once, and back off from 5 seconds to an hour wh
 | `GET /v1/teams/{team}/events/stream` | Live server-sent events; reconnects resume from `Last-Event-ID` |
 | `POST /v1/teams/{team}/events` | Append envelopes (runners, integrations); ids make retries safe |
 
+## Your view across teams
+
+| Call | What it gives |
+|---|---|
+| `GET /v1/me/summary` | Each team at a glance: roles working, waiting, blocked and idle, today's cost in minor units. `asOf` and an `ETag` |
+| `GET /v1/me/stream` | Live events for every team of yours, as server-sent events; resumes from `Last-Event-ID` (an event id) |
+
+The run state, live version, daily cap and inbox count in the summary fill in as runs, budgets and cards land (M3).
+
+## Register a runner
+
+A runner (the process that runs agent sessions, `docs/contracts/runner-protocol.md`) is registered once with a
+one-time code. A person mints it; the runner redeems it for its key, which is shown once and kept only as a hash:
+
+```bash
+curl -X POST -H "authorization: Bearer $T" localhost:4849/v1/runners/codes      # → { "code": "K7QM-…", "expires": … }
+curl -H 'content-type: application/json' -d '{"code":"K7QM-…","name":"my laptop","capabilities":{"runtimes":["agent-sdk"]}}' localhost:4849/v1/runners
+# → { "id": "rnr_…", "key": "rnr_….…", … }
+```
+
+Codes last 15 minutes and work once. `GET /v1/runners` lists runners (never keys) and `DELETE /v1/runners/{id}`
+revokes one.
+
+## Retries are safe
+
+Every write takes an `Idempotency-Key` header. The first answer is kept for a day, and a retry with the same key gets
+it back with `Idempotent-Replayed: true`, so a request sent twice from a bad connection acts once. The same key on a
+different request is a `422`. Report intake needs none: the kit's report ids already make its retries safe.
+
+## Host it in another server
+
+`createHandler(opts)` from `server.mjs` is the API as a plain `(req, res)` handler, for serverless functions or a
+framework; `createControlPlane(opts)` wraps it in `node:http`. Open streams read the log every `pollMs` (2 seconds by
+default) as well as listening in process, so on many instances a stream still sees every append.
+
 ## Deploy it
 
 Set `DATABASE_URL` to a Postgres (16 or later) and pass the keys in the environment:
@@ -76,5 +111,7 @@ npm test                                                   # PGlite, in memory
 TEST_DATABASE_URL=postgres://… npm test   # a real Postgres; wipes its public schema
 ```
 
-Not yet: live streams reach only clients of the instance that stored the event (Postgres LISTEN/NOTIFY comes
-with a second instance), and people sign in with one admin token (GitHub sign-in is milestone M4).
+Not yet: events from other instances reach a stream within `pollMs` rather than at once (Postgres LISTEN/NOTIFY can
+come with always-on instances), and people sign in with one admin token (GitHub sign-in is milestone M4).
+
+Tests on a real Postgres run one file at a time, since each test wipes the schema.
