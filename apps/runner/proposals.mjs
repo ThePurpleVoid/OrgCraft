@@ -15,7 +15,7 @@
 //   head({ repo, ref }) -> the proposal's head on the remote now
 // and an accept that cannot land throws a ProposalError with `reason` head-moved, checks or conflict.
 import { createSign } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -121,7 +121,8 @@ export function localProposals({ checks = async () => true, before = async () =>
   const dir = (repo) => (String(repo).startsWith('file://') ? fileURLToPath(repo) : String(repo));
   const file = (repo) => join(dir(repo), 'agent-team-proposals.json');
   const load = (repo) => (existsSync(file(repo)) ? JSON.parse(readFileSync(file(repo), 'utf8')) : { next: 1, proposals: {} });
-  const store = (repo, s) => { writeFileSync(`${file(repo)}.tmp`, JSON.stringify(s, null, 2)); renameSync(`${file(repo)}.tmp`, file(repo)); };
+  // Readable by the harness, which may be another user than the runner (the runner's umask is 077): it holds no secret.
+  const store = (repo, s) => { writeFileSync(`${file(repo)}.tmp`, JSON.stringify(s, null, 2)); chmodSync(`${file(repo)}.tmp`, 0o644); renameSync(`${file(repo)}.tmp`, file(repo)); };
   return {
     connector: 'local',
     async open({ repo, branch, base, title }) {

@@ -8,7 +8,7 @@
 //   spend.json        { "usd": 6 } the next turn reports that cost, then the file is used up (step 11)
 //
 // Every step is written to the control folder's log.jsonl with the run and session ids.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { stubAdapter } from './stub.mjs';
 
@@ -20,7 +20,8 @@ export function dryrunAdapter({ control, qaRole = 'qa-web', frontDoor = 'chief-o
   const read = (name) => { try { return JSON.parse(readFileSync(join(control, name), 'utf8')); } catch { return null; } };
   const take = (name) => { const v = read(name); if (v) rmSync(join(control, name), { force: true }); return v; };
   const builder = () => read('builder.json') ?? { role: 'web-dev', file: 'app/request.md' };
-  const log = (t, step, more = {}) => appendFileSync(join(control, 'log.jsonl'), `${JSON.stringify({ at: new Date().toISOString(), run: t.env.AGENT_TEAM_RUN, session: t.env.AGENT_TEAM_SESSION, role: t.role, step, ...more })}\n`);
+  // The step log is read by the harness, which may run as another user (the runner's umask is 077).
+  const log = (t, step, more = {}) => { appendFileSync(join(control, 'log.jsonl'), `${JSON.stringify({ at: new Date().toISOString(), run: t.env.AGENT_TEAM_RUN, session: t.env.AGENT_TEAM_SESSION, role: t.role, step, ...more })}\n`); chmodSync(join(control, 'log.jsonl'), 0o644); };
   const usage = () => ({ inputTokens: 1000, outputTokens: 200, costUsd: take('spend.json')?.usd ?? TURN_USD });
   const kind = (prompt) => (/\b([A-Z]{4,}) from ([a-z0-9][\w#-]*)/.exec(prompt) ?? []).slice(1);
   const request = (prompt) => {
