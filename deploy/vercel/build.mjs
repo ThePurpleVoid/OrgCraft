@@ -28,6 +28,7 @@ export const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'uns
  */
 export const STUDIO_REWRITES = [
   { source: '/teams/:team/notifications', destination: '/notifications.html' },
+  { source: '/slack/callback', destination: '/slack-callback.html' },
   { source: '/teams/:path*', destination: '/link.html' },
   { source: '/t/:path*', destination: '/link.html' },
 ];

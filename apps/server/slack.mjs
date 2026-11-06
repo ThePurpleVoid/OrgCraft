@@ -13,7 +13,7 @@
 // - When Slack fails, a DM goes by email to the person's verified addresses instead (criterion 7), and the health
 //   line says Slack is failing.
 import { randomBytes } from 'node:crypto';
-import { KINDS, LINK_TTL, emailFallback, kindOfEvent, money, outside, readToken, roleTitle, stillIn, token } from './email.mjs';
+import { KINDS, LINK_TTL, SUGGESTED, emailFallback, kindOfEvent, money, outside, readToken, roleTitle, stillIn, token } from './email.mjs';
 import { Problem, getTeam, id as newId } from './store.mjs';
 
 /** Approval and BLOCKED name what the team is deciding, so a channel starts without them (D55). */
@@ -218,7 +218,8 @@ export function createSlack({ db, key, publicUrl = '', redirectUri = '', provide
       return {
         connected: !!sink, ready, canLink: !!(ready && sink.client_id && sink.client_secret),
         health: !sink ? null : sink.failing_since ? { status: 'failing', since: new Date(sink.failing_since).toISOString(), error: sink.last_error } : { status: ready ? 'working' : 'waiting for its token' },
-        kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label, channelDefault: CHANNEL_DEFAULT_KINDS.includes(id) })),
+        // suggested: ticked (not saved) the first time a person's DM switches show, as for email (D49).
+        kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label, suggested: SUGGESTED.includes(id), channelDefault: CHANNEL_DEFAULT_KINDS.includes(id) })),
         me: linkView(mine),
       };
     },
