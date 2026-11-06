@@ -145,7 +145,7 @@ export function compileLayer(spec, kit) {
 }
 
 /** The paths compileLayer owns: a writer deletes files under these that the new layer no longer has. */
-export const isLayerPath = (p) => p === 'team.json' || Object.values(RULE_FILES).includes(p) || ['ownership.json', 'gates.json', 'resources.json', 'studio.json'].includes(p) || (/^roles\/[^/]+\.md$/.test(p) && !/\/(_|README\.md$)/.test(p));
+export const isLayerPath = (p) => p === 'team.json' || Object.values(RULE_FILES).includes(p) || ['ownership.json', 'gates.json', 'resources.json', 'meetings.json', 'studio.json'].includes(p) || (/^roles\/[^/]+\.md$/.test(p) && !/\/(_|README\.md$)/.test(p));
 
 // ------------------------------------------------------------------------------------------------ editing helpers
 
@@ -263,7 +263,7 @@ export function resolveSpec(spec, kit) {
   }
   const installed = new Set(roles.map((r) => r.slug));
   for (const r of roles) r.md = fitToTeam(r.md, installed);
-  return { roles: applyBindings(roles, spec.resources), warnings };
+  return { roles: applyMeetings(applyBindings(roles, spec.resources), spec.meetings), warnings };
 }
 
 // ------------------------------------------------------------------------------------------------ data files (kit 0.5)
@@ -277,7 +277,7 @@ export function resolveSpec(spec, kit) {
 //                                                                             instructions and in each bound role's brief
 // Without them a layer behaves exactly as before.
 
-export const DATA_FILES = { ownership: 'ownership.json', gates: 'gates.json', resources: 'resources.json', canvas: 'studio.json' };
+export const DATA_FILES = { ownership: 'ownership.json', gates: 'gates.json', resources: 'resources.json', meetings: 'meetings.json', canvas: 'studio.json' };
 export const PERMISSIONS = ['read', 'write', 'deploy'];
 
 /** The title a brief gives itself, without a parenthesised note: "Chief of staff (project coordinator)" → "Chief of staff". */
@@ -368,7 +368,7 @@ const field = (md, name) => (new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm').e
  * Checks a TeamSpec the way sync and the roster check would, plus the data files, without touching disk.
  * Returns [{ level: 'error' | 'warning', where, message }], errors first.
  */
-export function validate(spec, kit) {
+export function validate(spec, kit, { dailyCapUsd = spec.options?.budgets?.dailyUsd } = {}) {
   const issues = [];
   const add = (level, where, message) => issues.push({ level, where, message });
   const { roles, warnings } = resolveSpec(spec, kit);
@@ -414,10 +414,11 @@ export function validate(spec, kit) {
     for (const s of steps) if (s.pool && spec.gates.pools && !(s.pool in spec.gates.pools)) add('warning', `gates/${target}`, `"${s.name}" uses pool "${s.pool}", which gates.json does not size`);
   }
   for (const i of checkCustomRoles(spec, kit, installed)) add(i.level, i.where, i.message);
+  for (const i of checkMeetings(spec.meetings, roles, { dailyCapUsd })) add(i.level, i.where, i.message);
   for (const [slug, r] of installed) if (!isCustom(spec.roles[slug])) for (const i of checkBriefData(slug, r.md)) add(i.level, i.where, i.message);
   // No secrets anywhere in the team's text.
   const texts = [['values', JSON.stringify(spec.values ?? {})], ['rules', JSON.stringify(spec.rules ?? {})], ['resources', JSON.stringify(spec.resources ?? {})],
-    ['gates', JSON.stringify(spec.gates ?? {})], ...Object.entries(spec.roles).map(([s, r]) => [`roles/${s}`, JSON.stringify([r.brief ?? '', r.extension ?? {}])])];
+    ['gates', JSON.stringify(spec.gates ?? {})], ['meetings', JSON.stringify(spec.meetings ?? {})], ...Object.entries(spec.roles).map(([s, r]) => [`roles/${s}`, JSON.stringify([r.brief ?? '', r.extension ?? {}])])];
   for (const [where, text] of texts) if (SECRET_PATTERNS.some((p) => p.test(text))) add('error', where, 'looks like it contains a secret value; name the secret instead and set it in the environment');
   return issues.sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
 }
@@ -907,4 +908,172 @@ export function impact(changes, inventory = { roles: {} }) {
   });
   const order = { blocking: 0, choice: 1, safe: 2 };
   return items.sort((a, b) => order[a.severity] - order[b.severity]);
+}
+
+// ------------------------------------------------------------------------------------------------ meetings (kit 0.11)
+//
+// .agent-team/meetings.json, carried as spec.meetings (architecture 12.2, CPO story "meeting definitions"):
+//   { "meetings": [ { "id", "title",
+//       "when": { "days": ["mon", ...], "at": "09:00" }  or  { "label": "design" }     (wall-clock in values.TIMEZONE)
+//       "attendees": { "roles": [...], "lanes": [<executive slug>, ...], "rule": null | "worked-since-last" },
+//       "facilitator": "chief-of-staff", "format": "round" | "discussion", "rounds": 1,
+//       "agenda": "...", "ifBusy": "next-pause" | "proxy" | "skip",
+//       "owner": { "minutes": true, "speaks": false }, "capUsd": 1.0, "skipIfQuiet": true } ] }
+// sync adds a "Meetings" section to the project instructions and "- meeting" to the Wakes on of every role a
+// meeting names (attendees and facilitator). The runner holds the meetings; until it is connected they are definitions.
+
+export const MEETING_FORMATS = ['round', 'discussion'];
+export const MEETING_IF_BUSY = ['next-pause', 'proxy', 'skip'];
+export const MEETING_RULES = ['worked-since-last'];
+const MEETING_ID = /^[a-z0-9][a-z0-9-]*$/;
+const isDormant = (md) => /dormant/i.test(field(md, 'Status'));
+
+/**
+ * The roles a meeting wakes, from the resolved team ([{ slug, md }]): named roles, every role in a named lane (the
+ * executive and everyone reporting up to it, dormant roles only when named), and the facilitator.
+ * { roles: [slug], missing: [slug], dynamic } — dynamic when the "worked since the last one" rule adds roles at run time.
+ */
+export function meetingAttendees(meeting, roles) {
+  const bySlug = new Map(roles.map((r) => [r.slug, r]));
+  const a = meeting.attendees ?? {};
+  const named = [...(a.roles ?? []), ...(meeting.facilitator ? [meeting.facilitator] : [])];
+  const out = new Set();
+  const missing = [];
+  for (const s of named) if (bySlug.has(s)) out.add(s); else missing.push(s);
+  for (const lane of a.lanes ?? []) {
+    if (!bySlug.has(lane)) { missing.push(lane); continue; }
+    out.add(lane);
+    for (const r of roles) {
+      if (isDormant(r.md)) continue;
+      const seen = new Set();
+      for (let m = managerOf(r.md); m && bySlug.has(m) && !seen.has(m); m = managerOf(bySlug.get(m).md)) {
+        if (m === lane) { out.add(r.slug); break; }
+        seen.add(m);
+      }
+    }
+  }
+  return { roles: [...out].sort(), missing: [...new Set(missing)], dynamic: MEETING_RULES.includes(a.rule) };
+}
+
+const DAY_NAMES = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
+/** "Mon to Fri 09:00", "Tue, Thu 14:00", "Daily 08:00", "when an item gets the label design". */
+export function meetingWhen(when) {
+  if (when?.label) return `when an item gets the label \`${when.label}\``;
+  const days = when?.days ?? [];
+  const order = days.map((d) => DAYS.indexOf(d)).sort((x, y) => x - y);
+  const run = order.length > 2 && order.every((d, i) => i === 0 || d === order[i - 1] + 1);
+  const label = order.length === 7 ? 'Daily' : run ? `${DAY_NAMES[DAYS[order[0]]]} to ${DAY_NAMES[DAYS[order.at(-1)]]}` : order.map((d) => DAY_NAMES[DAYS[d]]).join(', ');
+  return `${label} ${when?.at ?? ''}`.trim();
+}
+
+/** The "Meetings" section of the project instructions, or '' when the team has none. */
+export function renderMeetings(meetings, roles, { timezone = 'the team\'s time zone' } = {}) {
+  const list = meetings?.meetings ?? [];
+  if (!list.length) return '';
+  const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  const rows = list.map((m) => {
+    const who = meetingAttendees(m, roles);
+    const attendees = [...who.roles.filter((s) => s !== m.facilitator), ...(who.dynamic ? ['everyone who worked since the last one'] : [])].join(', ') || 'nobody yet';
+    return `| ${cell(m.title ?? m.id)} | ${cell(meetingWhen(m.when))} | ${cell(attendees)} | ${cell(m.facilitator ?? 'chief-of-staff')} |`;
+  });
+  return [
+    '## Meetings',
+    '',
+    `The team's meetings, defined in \`.agent-team/meetings.json\`. Times are in ${timezone}. The role in "Run by" opens each meeting, asks every attendee for their turn and writes the minutes; an attendee that is working answers at its next pause. Meetings are held by the team's runner; without one they are the schedule the chief of staff keeps.`,
+    '',
+    '| Meeting | When | Attendees | Run by |',
+    '| --- | --- | --- | --- |',
+    ...rows,
+  ].join('\n') + '\n';
+}
+
+/** Adds "- meeting" to the Wakes on of every role a meeting names, the way sync does. */
+export function applyMeetings(roles, meetings) {
+  const invited = new Set((meetings?.meetings ?? []).flatMap((m) => meetingAttendees(m, roles).roles));
+  return roles.map((r) => {
+    if (!invited.has(r.slug)) return r;
+    const w = wakesOn(r.md);
+    if (w.triggers.some((t) => t.type === 'meeting')) return r;
+    const current = briefSection(r.md, 'wakes on');
+    return { ...r, md: setBriefSection(r.md, 'Wakes on', `${current ? `${current}\n` : ''}- meeting`) };
+  });
+}
+
+/**
+ * Checks of meetings.json against the resolved team ([{ slug, md }]), in validate's shape. dailyCapUsd is the team's
+ * daily cap when one is set (the control plane's budget, or team.json "budgets.dailyUsd").
+ */
+export function checkMeetings(meetings, roles, { dailyCapUsd } = {}) {
+  const out = [];
+  if (meetings === undefined) return out;
+  const add = (level, id, message) => out.push({ level, where: id ? `meetings/${id}` : 'meetings', message });
+  if (!Array.isArray(meetings?.meetings)) return [{ level: 'error', where: 'meetings', message: 'meetings.json must be { "meetings": [...] }' }];
+  const bySlug = new Map(roles.map((r) => [r.slug, r]));
+  const ids = new Set();
+  const slots = new Map(); // "day at" → [{ id, roles }]
+  for (const m of meetings.meetings) {
+    const id = m.id;
+    if (!MEETING_ID.test(id ?? '')) add('error', null, `meeting id "${id ?? ''}" must be lower-case letters, digits and hyphens`);
+    else if (ids.has(id)) add('error', id, 'this id is used by two meetings');
+    ids.add(id);
+    if (!String(m.title ?? '').trim()) add('error', id, 'has no title');
+    if (!String(m.agenda ?? '').trim()) add('error', id, 'has no agenda');
+    const w = m.when ?? {};
+    if (w.label !== undefined) {
+      if (!String(w.label).trim()) add('error', id, 'the label that starts this meeting is empty');
+    } else {
+      const days = w.days ?? [];
+      if (!Array.isArray(days) || !days.length) add('error', id, 'needs days and a time, or a label that starts it');
+      else for (const d of days) if (!DAYS.includes(d)) add('error', id, `"${d}" is not a day (mon to sun)`);
+      const t = /^(\d{2}):(\d{2})$/.exec(w.at ?? '');
+      if (!t || Number(t[1]) > 23 || Number(t[2]) > 59) add('error', id, `"${w.at ?? ''}" is not a time of day (HH:MM)`);
+    }
+    const a = m.attendees ?? {};
+    for (const s of [...(a.roles ?? []), ...(a.lanes ?? []), ...(m.facilitator ? [m.facilitator] : [])]) {
+      if (!bySlug.has(s)) add('error', id, `${s} is not on the team`);
+    }
+    if (a.rule != null && !MEETING_RULES.includes(a.rule)) add('error', id, `attendee rule "${a.rule}" is not ${MEETING_RULES.join(' or ')}`);
+    if (m.format !== undefined && !MEETING_FORMATS.includes(m.format)) add('error', id, `format "${m.format}" is not round or discussion`);
+    if (m.format === 'discussion' && !(Number.isInteger(m.rounds) && m.rounds >= 2 && m.rounds <= 5)) add('error', id, 'a discussion has 2 to 5 rounds');
+    if (m.ifBusy !== undefined && !MEETING_IF_BUSY.includes(m.ifBusy)) add('error', id, `ifBusy "${m.ifBusy}" is not ${MEETING_IF_BUSY.join(', ')}`);
+    if (!(typeof m.capUsd === 'number' && m.capUsd > 0)) add('error', id, 'the cost cap must be above zero');
+    else if (typeof dailyCapUsd === 'number' && m.capUsd > dailyCapUsd) add('error', id, `the cost cap ($${m.capUsd}) is above the team's daily cap ($${dailyCapUsd})`);
+    const who = meetingAttendees(m, roles);
+    const others = who.roles.filter((s) => s !== m.facilitator);
+    if (others.length < 2 && !who.dynamic) add('warning', id, `has ${others.length === 1 ? 'one attendee' : 'no attendees'} besides the role that runs it`);
+    if (!w.label && Array.isArray(w.days)) for (const d of w.days) {
+      const k = `${d} ${w.at}`;
+      for (const o of slots.get(k) ?? []) {
+        const both = who.roles.filter((s) => o.roles.includes(s));
+        if (both.length) add('warning', id, `meets at the same time as ${o.id} (${d} ${w.at}), and both include ${both.join(', ')}`);
+      }
+      slots.set(k, [...(slots.get(k) ?? []), { id, roles: who.roles }]);
+    }
+  }
+  return out;
+}
+
+/**
+ * The cost estimate of one meeting (CPO D26): turns × each role's tier at list price.
+ * A round asks each attendee once; a discussion, `rounds` times; the role that runs it opens and closes.
+ * { perMeetingUsd, perMonthUsd (null for an event-triggered meeting), asOf, turns }. `turn` is the token size of one
+ * turn (from recent runs when there are some); each role's tier comes from its Model line.
+ */
+export function meetingEstimate(meeting, roles, prices, { turn = { inputTokens: 20000, outputTokens: 1500 }, overrides } = {}) {
+  const bySlug = new Map(roles.map((r) => [r.slug, r]));
+  const tier = (slug) => (/^[a-z]+/i.exec(field(bySlug.get(slug)?.md, 'Model'))?.[0] ?? 'standard').toLowerCase();
+  const turnUsd = (slug) => {
+    const t = { ...prices.tiers, ...overrides };
+    const p = prices.models?.[t[tier(slug)] ?? t.standard];
+    return p ? (turn.inputTokens * p.inputPerMTok + turn.outputTokens * p.outputPerMTok) / 1e6 : 0;
+  };
+  const who = meetingAttendees(meeting, roles);
+  const rounds = meeting.format === 'discussion' ? meeting.rounds ?? 3 : 1;
+  const others = who.roles.filter((s) => s !== meeting.facilitator);
+  let usd = others.reduce((sum, s) => sum + rounds * turnUsd(s), 0);
+  let turns = others.length * rounds;
+  if (meeting.facilitator && bySlug.has(meeting.facilitator)) { usd += 2 * turnUsd(meeting.facilitator); turns += 2; }
+  const perMeetingUsd = Math.round(usd * 100) / 100;
+  const days = meeting.when?.label ? 0 : (meeting.when?.days ?? []).length;
+  return { perMeetingUsd, perMonthUsd: days ? Math.round(usd * days * (52 / 12) * 100) / 100 : null, asOf: prices.asOf, turns };
 }

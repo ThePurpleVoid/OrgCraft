@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { areasOf, decide, matchArea } from '../policy.mjs';
+import { areasOf, decide, matchArea, repoSlug } from '../policy.mjs';
 
 const cwd = '/work/wt';
 
@@ -82,6 +82,9 @@ test('the owner-steps-in list becomes approvals', () => {
   assert.equal(merge({ pullNumber: 7, expectedHeadSha: H }).rule, 'match-head-commit', 'the tool names its repository');
   assert.equal(merge({ owner: 'acme', repo: 'shop', pullNumber: 7, expectedHeadSha: H }, null).rule, 'match-head-commit', 'a session with no known repository merges nothing');
   assert.equal(merge({ owner: 'Acme', repo: 'Shop', pullNumber: 7, expectedHeadSha: H }, 'git@github.com:Acme/Shop.git').rule, 'accept');
+  assert.equal(repoSlug('https://github.com/acme/..'), null);
+  assert.equal(repoSlug('https://github.com/../shop.git'), null);
+  assert.equal(repoSlug('https://github.com/acme/.'), null);
   assert.equal(merge({ owner: 'acme', repo: 'shop', pullNumber: 7, expectedHeadSha: 'deadbeef' }).rule, 'match-head-commit', 'a full sha');
   assert.equal(merge({ owner: 'acme', repo: 'shop', pullNumber: 7, sha: H }).rule, 'match-head-commit', 'only the known field');
   assert.equal(call('mcp__gmail__send_email'), 'outbound-message');

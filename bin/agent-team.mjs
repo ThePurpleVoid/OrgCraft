@@ -16,7 +16,7 @@
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.10.0 init --preset engineering --project "My App"
+//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.11.0 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -26,7 +26,7 @@ import { parseBrief } from '../tools/briefs.mjs';
 import { check as checkRoster, tree } from '../tools/roster.mjs';
 import { DEFAULT_MODELS, toSubagent } from '../tools/export-subagents.mjs';
 import { graphFrom } from '../tools/roster-graph.mjs';
-import { applyBindings, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
+import { applyBindings, applyMeetings, renderMeetings, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
 import { loadKit, readLayer, writeLayer } from '../packages/team-model/node.mjs';
 
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -139,8 +139,9 @@ export function build(root) {
   const ownershipData = data('ownership.json');
   const gatesData = data('gates.json');
   const resources = data('resources.json');
+  const meetings = data('meetings.json');
   const resolved = resolveRoles(root, project);
-  const roles = applyBindings(resolved.roles, resources);
+  const roles = applyMeetings(applyBindings(resolved.roles, resources), meetings);
   const { warnings } = resolved;
   values.ORG_TREE = '```\n' + tree(roles.map((r) => parseBrief(r.slug, fill(r.md, values)))) + '\n```';
   const out = new Map();
@@ -149,7 +150,8 @@ export function build(root) {
   md(`${DOCS}/README.md`, read(join(KIT, 'team/README.md')));
   md(`${DOCS}/protocols.md`, withExtension(read(join(KIT, 'team/protocols.md')), root, 'protocols.extend.md', `## ${values.PROJECT_NAME} rules`));
   const systems = resources ? renderSystems(resources) : '';
-  md(`${DOCS}/project-instructions.md`, withExtension(read(join(KIT, 'team/project-instructions.md')), root, 'instructions.extend.md', `## ${values.PROJECT_NAME} rules`) + (systems ? `\n${systems}` : ''));
+  const meetingsText = meetings ? renderMeetings(meetings, roles, { timezone: values.TIMEZONE }) : '';
+  md(`${DOCS}/project-instructions.md`, withExtension(read(join(KIT, 'team/project-instructions.md')), root, 'instructions.extend.md', `## ${values.PROJECT_NAME} rules`) + (systems ? `\n${systems}` : '') + (meetingsText ? `\n${meetingsText}` : ''));
   // With .agent-team/ownership.json, ownership.md is generated from it; without, it stays the repository's own file.
   if (ownershipData) md(`${DOCS}/ownership.md`, renderOwnership(ownershipData, roles));
   if (gatesData) { const g = renderGates(gatesData).split('\n'); g.splice(1, 0, shMarker()); out.set(`${SCRIPTS}/gates.sh`, g.join('\n')); }

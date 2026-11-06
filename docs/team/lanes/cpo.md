@@ -13,6 +13,7 @@ Owner of this file: cpo. Last updated 2026-11-06.
 | Custom agents (PRD 6.6, A1 to A7, issue #30) | Building: story confirmed below, handed to web-dev and kit-core-dev |
 | Change safety part 1 (PRD 6.9, mockup 06, issue #30) | Building: story confirmed below; library to kit-core-dev, screens to web-dev |
 | Meeting definitions editor (PRD 6.7 M8, mockup 03, issue #30) | Building: story confirmed below; sync side to kit-core-dev, editor to web-dev |
+| Team templates (PRD E6, demo step 2, issue #30) | Building: story confirmed below; kit side to kit-core-dev, picker to web-dev after meetings |
 
 ## Priorities, in order
 
@@ -28,6 +29,7 @@ Owner of this file: cpo. Last updated 2026-11-06.
 3. **Custom agents story confirmed** (2026-11-06, issue #30): the story below is what web-dev builds and qa-web walks. Where the mockups and the PRD differ, the story wins.
 4. **Change safety part 1 story confirmed** (2026-11-06, issue #30): board-only warnings and a recorded plan; nothing is stopped or restarted by the Studio until the runner's part 2 (phase 3).
 5. **Meeting definitions story confirmed** (2026-11-06, issue #30): the editor half only; meetings are defined and published in phase 2 and run from phase 3.
+6. **Team templates story confirmed** (2026-11-06, issue #30): a template is a whole starting team, applied once; a role pack adds agents to a team that exists. Two of the first templates are not engineering teams.
 
 ## Story: custom agents (issue #30, demo step 14)
 
@@ -42,14 +44,14 @@ The model helpers already exist in `packages/team-model/index.mjs` (`checkSlug`,
 ### Product decisions that fill gaps in the PRD and mockups
 
 - **D1. The slug is fixed at first publish.** Before the agent has been published once, name and slug can both change. After that, the name can change but the slug cannot: it is the file name and the board name, and renaming it would orphan history. Renaming means making a copy and switching the old one off.
-- **D2. Imported agents arrive switched off.** An import shows in **Your agents** with the tag "imported" and is not on the team until the owner switches it on. Switching on is refused while the agent has an error from the checks. A blank or copied agent arrives switched on, as in mockup 01.
+- **D2. Imported agents arrive switched off.** An import shows in **Your agents** with the tag "imported" and is not on the team until the owner switches it on. The "imported" tag lasts until the next publish or reload, then reads "custom": the layer does not record where a brief came from (amended 2026-11-06 on review of #69). Switching on is refused while the agent has an error from the checks. A blank or copied agent arrives switched on, as in mockup 01.
 - **D3. Switch off keeps, remove deletes.** Switching an agent off keeps its file and lists it in `exclude` (kit 0.9.1). **Remove agent** deletes the file at the next publish, after a confirm that names the file. Both are undoable until publish.
 - **D4. "Try it on a task" is hidden in this build.** A8 needs a registered runner. The button appears only when the Studio has a runner connected; there is no disabled teaser.
 - **D5. "Move the path to this agent" ships now, with a board check.** If the board shows the current owner working or with an open branch on that path, the choice says so in amber and needs a second click. When change safety part 1 lands, the same choice goes through the impact step in Publish (PRD 6.9) instead.
 - **D6. Industry-neutral words.** The editor section is "What it owns" (the mockup's "Work and paths"); rows are "areas", meaning a folder or a file, which matches the Studio's existing "Owned areas" view. No copy may assume code, Git or engineering: the blank template's sample text, hints and empty states must read correctly for a legal, marketing or support team. "Pull request" appears only in the optional `pr-paths` wake-on choice.
 - **D7. The kit version in copy is the pinned version**, read from the team, never a fixed string (mockup 01 shows "0.6.0").
 - **D8. Custom groups.** The group field suggests existing groups and accepts a new name. A new group gets a colour picked from the Studio's palette by a stable hash of its name, so it keeps the same colour across reloads and machines, and shows as its own library section.
-- **D9. Big screens only for editing.** The New agent sheet and the editor need a desktop-width window. On a phone, Your agents is a readable list with switch on and off; the editor shows "Open on a larger screen to edit". This follows the mobile plan (PR #25): canvas editing stays on big screens.
+- **D9. Big screens only for editing.** The New agent sheet and the editor need a desktop-width window. On a phone, Your agents is a read-only list (amended on review of #69: Publish is desktop-only, so a switch made on a phone would be lost); the editor shows "Open on a larger screen to edit". This follows the mobile plan (PR #25): canvas editing stays on big screens.
 - **D10. No sample agents ship.** The Studio starts with an empty Your agents section. Data in the mockups is invented and must not appear in the product (the kit's no-demo-data rule).
 - **D11. Import formats in this build:** a single `.md` role file, several files picked at once, or a folder (with or without `pack.json`). No zip, and no import from a URL. Every imported brief runs the full checks, including the secret scan, before it is listed. An import that contains a secret-shaped value is refused, not cleaned.
 
@@ -57,7 +59,7 @@ The model helpers already exist in `packages/team-model/index.mjs` (`checkSlug`,
 
 Each criterion names its PRD item. qa-web walks all of them in light and dark at 1440 × 900, and the phone ones at 390 wide.
 
-1. **Start sheet (A1, A5, mockup 01).** **New agent** in the library opens a sheet with three starts: Blank, Copy a kit role (searchable, shows each role's group), Import a file. Name fills the slug (`slugify`), the slug is checked as you type (`checkSlug`) with the message under it, group and reports-to are set here. **Continue to the brief** is disabled while the slug check fails. The footer shows the file publish will write.
+1. **Start sheet (A1, A5, mockup 01).** **New agent** in the library opens a sheet with three starts: Blank, Copy a role (any role on the team or in the kit; searchable, shows each role's group), Import a file. Name fills the slug (`slugify`), the slug is checked as you type (`checkSlug`) with the message under it, group and reports-to are set here. **Continue to the brief** is disabled while the slug check fails. The footer shows the file publish will write.
 2. **Copy matches what the team runs.** Copying a kit role that has an extension on this team produces the extended text, not the kit's plain text. The copy is a separate role: the kit role and its extension are unchanged.
 3. **Replace a kit role, on purpose only.** Typing a kit slug offers "Replace the kit's <role> on this team" as an explicit choice; without it the slug is refused. Choosing it shows the replace warning from the checks in the editor and on the card.
 4. **Guided editor (A2, mockup 02).** Left: the sections (Identity, Place in the team, What it owns, Tools and systems, Wakes on, Hands to, Rules, Sign-off evidence) each with done, optional or "N to fix". Middle: the fields. Right: **Brief preview**, the exact file publish writes (compile of that one role), updated on every keystroke, and the checks list. For a copy, the left column says what it was copied from and the preview marks lines that differ from the source.
@@ -73,7 +75,7 @@ Each criterion names its PRD item. qa-web walks all of them in light and dark at
 14. **Kit upgrades (A7).** When the pinned kit (or a kit the owner is upgrading to) has a role with the same slug as a custom agent that is not marked as replacing it, the Studio shows an error on that agent with two fixes: **Rename mine** (new slug, D1 copy rule) or **Use the kit's role** (removes the custom file at publish). `agent-team sync` reports the same clash as an error. A custom agent is never silently replaced.
 15. **Round trip.** Publish writes `.agent-team/roles/<slug>.md`, and re-opening the repository shows the same agent with the same text: zero diff (PRD E7). Undo and redo cover every editor action.
 16. **Industry-neutral walk.** Besides the demo's "Accessibility auditor" copied from QA web, qa-web makes one agent from Blank for a non-engineering team (for example a "Contract reviewer" owning `contracts/` and signing off with a document), and checks that no copy on the way assumes code or Git.
-17. **Phone (D9).** At 390 wide, Your agents lists and switches agents; the editor shows the larger-screen message; nothing overflows.
+17. **Phone (D9).** At 390 wide, Your agents lists agents read-only; the editor shows the larger-screen message; nothing overflows.
 
 ### Out of scope for this story
 
@@ -178,3 +180,59 @@ Phase 2 is the editor half (PRD M8, mockup 03): definitions in `.agent-team/meet
 - **web-dev**: criteria 1 to 10, after change safety part 1.
 - **qa-web**: criterion 13.
 - **CPO**: reviews against this story and signs off the copy, including the starter agendas.
+
+## Story: team templates (issue #30, demo step 2)
+
+The owner's words: "a visual drag-and-drop team builder ... add members, toggle on/off, edit roles/duties/reporting" (2026-11-05), and "not just for engineering companies ... the model, vocabulary and UI must let any industry use the tool eventually" (2026-11-06, as recorded in project memory).
+
+What follows is the CPO's reading, labelled as mine.
+
+**As** someone starting a team, **I want** to pick a ready-made team that fits my kind of work, see it on the canvas before I commit, and then shape it, **so** I start from a sensible organisation in a minute instead of building one role at a time.
+
+### Template or role pack
+
+| | Template | Role pack |
+|---|---|---|
+| What it makes | A whole new team | One or more agents added to a team that exists |
+| When | Once, when the team is created | Any time |
+| What it holds | A role list (a kit preset or its own), which roles start dormant, role extensions, custom agents, reporting lines, placeholder values (project, owner, time zone), suggested systems to connect, suggested owned areas and checks, starter meetings, and the canvas layout | `<slug>.md` files and `pack.json` (what the agents need) |
+| Afterwards | No link back. The team is ordinary `.agent-team/` files, and kit upgrades reach it through its roles like any team | The agents are ordinary custom agents |
+
+A template may carry custom agents inside it, in the role pack format, so a non-engineering template can bring roles the kit library does not have.
+
+### Product decisions
+
+- **D29. Templates that ship first.** Three must ship together, so the gallery is never engineering-only:
+  - **Startup product team** (demo step 2): the engineering preset, with chief of staff, CTO and CPO lanes, builders, QA and reviewers.
+  - **Customer support team**: chief of staff, support lead, customer success lead and bug triager from the kit, plus two custom agents, a support responder (drafts replies from the knowledge base; the owner or the support lead approves what goes out) and a knowledge base writer (owns the help articles and saved replies). Owned areas such as `support/replies/` and `support/articles/`. Starter meeting: a weekly top-issues review.
+  - **Content studio**: chief of staff, content lead, marketing lead, brand designer and analytics lead from the kit, with extensions that point them at published content rather than in-product content, plus two custom agents, an editor (owns the editorial calendar and signs off every piece) and a fact checker (reads only; sends corrections to the writer as BUG). Owned areas such as `content/drafts/`, `content/published/` and `content/calendar.md`. Starter meeting: a weekly editorial planning round.
+  
+  The same release, if they are cheap: **Small product team** (the minimal preset), **Whole company** (the company preset, business roles dormant), **Native mobile app** (from `examples/native-mobile`), **Open-source maintainers** (maintainer roles plus community lead and bug triager), and **Web app on Supabase and Vercel** (the startup team with those systems suggested and areas and checks pre-filled).
+- **D30. Neutral templates are honest about Git for now.** The support and content templates publish to a repository like every team today. Their areas are folders of documents, their checks are sign-offs rather than test runs, and no copy in them mentions code, branches or CI. A team repository the Studio manages for people who never use Git (ADR 0005) is a later phase; the picker does not promise it.
+- **D31. Preview before create.** Picking a template shows its canvas, the roles that start on and dormant, the systems it suggests and its starter meetings, before anything is written. **Use this template** asks only for the project name, owner name and time zone, then opens the editor with the team as an unpublished draft.
+- **D32. Never overwrite a team.** If the repository already has `.agent-team/`, the picker does not offer templates: it says the repository has a team and opens it. The picker also offers **Open an existing team** and **Start almost empty** (a chief of staff only).
+- **D33. Grouping without jargon.** The gallery groups templates as "Build a product", "Run a business function" and "Maintain open source", with a search box. Each card shows a one-line purpose, the number of roles on and dormant, and the systems it suggests.
+- **D34. No demo data.** Templates hold no invented tasks, issues, people or minutes. Placeholders are filled from the create form.
+- **D35. Where a team came from is recorded, not enforced.** `team.json` records the template id and kit version (for example `"from": "content-studio@0.11.0"`) for the evals and analytics pages only. Nothing changes when the template changes later.
+- **D36. Out of scope:** saving your own team as a template, sharing templates between workspaces, and a template marketplace. These belong with the platform-team persona later.
+
+### Acceptance criteria
+
+1. **Template format (kit).** A template is a folder with `template.json` (schema `agent-team/team-template@1`: id, title, summary, group, roles or preset, dormant roles, values, extensions, suggested systems by type, suggested areas and checks, meetings, layout) and an optional `roles/` folder of custom agents in the role pack format. `validate` checks a template like a team: every role resolves, one writer per area, reporting has no loops, no secrets.
+2. **CLI parity (kit).** `agent-team init --template <id>` creates the same files the Studio would, so a text-only user gets the same team.
+3. **The shipped templates (kit).** The three must-ship templates of D29 exist and pass `validate` with zero errors and no warnings. Each custom agent in them has an Identity, owned areas, Hands to and, where it signs off, Sign-off evidence.
+4. **Neutral copy (kit).** No text in the support or content templates (briefs, extensions, meeting agendas, suggested checks) assumes code, Git, CI or engineering roles. The CPO signs off this copy.
+5. **Picker (Studio).** "New team" opens the gallery (D33) with search; the three must-ship templates are visible without scrolling at 1440 × 900.
+6. **Preview (D31).** Selecting a card shows the canvas preview and the lists; nothing is written until **Use this template**.
+7. **Create form (D31).** Project name, owner name, time zone (defaulting to the browser's); the team opens as a draft with no check errors.
+8. **Existing team (D32).** On a repository that has `.agent-team/`, the picker opens that team and offers no templates.
+9. **Round trip.** Publishing a team made from a template, then re-opening it, shows zero diff; the published files match `agent-team init --template` for the same inputs.
+10. **Suggested systems.** Systems a template suggests show as "to connect" in the Systems view, with no secrets and no bindings until the owner connects them.
+11. **Walk.** qa-web creates one team from each must-ship template, publishes each, and re-opens each; screenshots of the gallery, a preview and each canvas, light and dark at 1440 × 900, and the gallery at 390 wide (read-only browsing is enough on a phone).
+
+### Build split (for the CTO to confirm)
+
+- **kit-core-dev**: criteria 1 to 4, then the optional templates of D29.
+- **web-dev**: criteria 5 to 10, after the meetings editor.
+- **qa-web**: criterion 11.
+- **CPO**: signs off the copy of every shipped template (criterion 4) and reviews the picker against this story.
