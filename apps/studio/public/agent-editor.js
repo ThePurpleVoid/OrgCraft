@@ -5,7 +5,7 @@
 // Every edit goes through the editor's change(): typing is folded into one undo step per field, and does not redraw
 // the form (so focus and the caret stay put); adding or removing a row redraws it.
 import {
-  briefSection, compileLayer, ownsPaths, pathConflicts, scheduleProblem, setBriefField, setBriefSection, setBriefTitle,
+  briefSection, checkSlug, slugify, compileLayer, renameRole, ownsPaths, pathConflicts, scheduleProblem, setBriefField, setBriefSection, setBriefTitle,
   setOwnsPaths, setSignoffEvidence, setWakesOn, signoffEvidence, splitBrief, wakesOn,
 } from './team-model.mjs';
 import { roleSystemsHtml, wireBindings } from './panels.js';
@@ -137,7 +137,7 @@ export function createAgentEditor(root, app) {
 
   function draw() {
     if (!slug) return;
-    if (!app.spec().roles[slug]) return close(); // undone out of existence
+    if (app.spec().roles[slug]?.brief === undefined) return close(); // undone out of existence, or the kit's role again
     const scroll = root.querySelector('.ed-form')?.scrollTop ?? 0;
     const md = brief();
     const role = app.spec().roles[slug];
@@ -146,6 +146,7 @@ export function createAgentEditor(root, app) {
     const origin = origins.get(slug);
     const groups = [...new Set([...roles.map((r) => r.group), field(md, 'Group').toLowerCase()].filter((g) => g && g !== 'other'))].sort();
     const manager = managerOf(md);
+    const kitClash = app.issues().some((i) => i.where === `roles/${slug}` && i.fix === 'kit-clash');
     const managers = team.filter((r) => r.slug !== slug);
     const tier = (/^[a-z]+/i.exec(field(md, 'Model'))?.[0] ?? '').toLowerCase();
     const dormant = /^dormant/i.test(field(md, 'Status'));
@@ -176,6 +177,13 @@ export function createAgentEditor(root, app) {
           ${role.enabled ? '' : '<p class="hint">Switched off: it is not on the team until you add it. Its checks must pass first.</p>'}
         </nav>
         <div class="ed-form">
+          ${kitClash ? `<div class="conflict" id="e-kit-clash" role="alert">
+            <p><strong>The kit now has a role called <code>${esc(slug)}</code>.</strong> Two roles cannot share a name: until you pick one way out, this agent cannot be published and sync stops.</p>
+            <div class="add-row"><input id="e-rename" value="${esc(renameTo(md))}" aria-label="A new slug for your agent" spellcheck="false" autocomplete="off"><button type="button" id="e-rename-go">Rename mine</button></div>
+            <p class="result error" id="e-rename-msg" role="alert"></p>
+            <div class="opts"><button type="button" id="e-use-kit">Use the kit's role</button></div>
+            <p class="hint">Use the kit's role removes your agent from the team (its file at publish, its systems and the areas it writes) and switches the kit's ${esc(slug)} on. Export yours first to keep a copy.</p>
+          </div>` : ''}
           <section id="sec-identity"><h2>Identity</h2>
             <label>Name <input id="e-title" value="${esc(titleOf(md, slug))}" maxlength="60" autocomplete="off"></label>
             <p class="hint">The slug <code>${esc(slug)}</code> names its file and its place on the board, so it stays as it is once published.</p>
@@ -259,7 +267,7 @@ export function createAgentEditor(root, app) {
             <textarea id="e-raw" rows="16" spellcheck="false">${esc(md)}</textarea></details>
         </div>
         <aside class="ed-prev" aria-label="Brief preview">
-          <div class="row" style="justify-content:space-between"><h2>Brief preview</h2><span class="badge">${role.source === 'project-replaces-kit' ? 'replaces a kit role' : 'custom role'}</span></div>
+          <div class="row" style="justify-content:space-between"><h2>Brief preview</h2><span class="badge">${kitClash ? 'name clash' : role.source === 'project-replaces-kit' ? 'replaces a kit role' : 'custom role'}</span></div>
           <p class="hint"><code>.agent-team/roles/${esc(slug)}.md</code>. Exactly the file publish writes.</p>
           <pre id="e-preview" class="brief"></pre>
           <h2>Checks</h2>
@@ -272,6 +280,9 @@ export function createAgentEditor(root, app) {
     if (f) f.scrollTop = scroll;
   }
 
+  /** A free slug from the agent's own name, for the rename box: "Numbers person" → numbers-person. */
+  const renameTo = (md) => { const base = slugify(titleOf(md, slug)) || `${slug}-own`; let s = base === slug ? `${slug}-own` : base; for (let n = 2; !checkSlug(app.spec(), app.kit, s).ok && n < 50; n++) s = `${base}-${n}`; return s; };
+
   /** The prose kept beside the areas: not the template's example, and not the "Nothing yet" an empty list writes. */
   const ownProse = (p) => (example('owns', p) || /^nothing yet\.?$/i.test(p.trim()) ? '' : p);
 
@@ -280,7 +291,7 @@ export function createAgentEditor(root, app) {
 
   /** The parts that follow every keystroke: the preview, the checks, the section states and the heading. */
   function live() {
-    if (!slug || !app.spec().roles[slug]) return;
+    if (!slug || app.spec().roles[slug]?.brief === undefined) return;
     const md = brief();
     const file = compileLayer(app.spec(), app.kit)[`roles/${slug}.md`] ?? md;
     const origin = origins.get(slug);
@@ -377,6 +388,31 @@ export function createAgentEditor(root, app) {
     typed('#e-rules-text', 'rules', (md, v) => setText(md, 'Rules', v));
     typed('#e-hands-text', 'hands', (md, v) => setText(md, 'Hands to', v));
     typed('#e-wakes-text', 'wakes-text', (md, v) => { const w = wakesOn(md); return setWakesOn(md, { triggers: w.triggers, text: v.split('\n').filter((l) => l.trim()).map((l) => `- ${l.trim()}`) }); });
+    // A7: the kit-upgrade clash, resolved here (criterion 14). Renaming keeps the editor on the agent, as its new slug.
+    const go = $('#e-rename-go');
+    if (go) {
+      const rename = () => {
+        const to = $('#e-rename').value.trim();
+        const c = checkSlug(app.spec(), app.kit, to);
+        if (!c.ok) { $('#e-rename-msg').textContent = c.message; return; }
+        const from = slug;
+        slug = to;
+        if (origins.has(from)) origins.set(to, origins.get(from));
+        app.change((sp) => { renameRole(sp, from, to, app.kit); });
+      };
+      go.onclick = rename;
+      $('#e-rename').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); rename(); } };
+      $('#e-use-kit').onclick = () => {
+        const s = slug;
+        // The agent goes with what it was given: its systems and the areas it wrote do not pass to the kit's role.
+        app.change((sp) => {
+          sp.roles[s] = { source: 'kit', enabled: true };
+          if (sp.resources?.bindings) sp.resources.bindings = sp.resources.bindings.filter((x) => x.role !== s);
+          if (sp.ownership?.rows) sp.ownership.rows = sp.ownership.rows.filter((r) => r.writer !== s);
+        });
+        app.close();
+      };
+    }
     const raw = $('#e-raw');
     raw.onchange = () => { app.change((s) => { s.roles[slug].brief = raw.value; }); };
 

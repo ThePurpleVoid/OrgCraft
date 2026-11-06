@@ -61,6 +61,12 @@ test('a clashing area is held until one of three choices, and moving an area in 
   await page.getByRole('button', { name: 'New agent' }).click();
   const dlg = page.locator('#agent-dialog');
   await dlg.locator('#a-name').fill('Contract reviewer');
+  // No group is picked for the owner: Continue waits for one.
+  assert.equal(await dlg.locator('#a-group').inputValue(), '');
+  await dlg.getByText('Choose a group, or make a new one.').waitFor();
+  assert.equal(await dlg.getByRole('button', { name: 'Continue to the brief' }).isDisabled(), true);
+  await dlg.locator('#a-group').selectOption('+');
+  await dlg.locator('#a-newgroup').fill('contract desk');
   await dlg.locator('#a-manager').selectOption('chief-of-staff');
   await dlg.getByRole('button', { name: 'Continue to the brief' }).click();
   const ed = page.locator('#agent-editor');
@@ -124,6 +130,16 @@ test('a clashing area is held until one of three choices, and moving an area in 
   await page.locator('#undo').click();
   await page.locator('#library .lib-role', { hasText: 'Contract reviewer' }).locator('.name').click();
   assert.doesNotMatch(await owns(page), /^- `contracts\/`$/m);
+
+  await page.getByRole('button', { name: 'Back to the team' }).click();
+  // Its new group has its own section in its colour, like a kit group, listing it as well as Your agents (criterion 13).
+  const sec = page.locator('#library .group-title[data-group="contract desk"]');
+  await sec.waitFor();
+  const dot = await sec.locator('.dot').getAttribute('style');
+  assert.equal(await page.locator('#library .lib-role', { hasText: 'Contract reviewer' }).locator('.dot').getAttribute('style'), dot, 'one colour wherever the group shows');
+  await page.locator('#library .lib-ref', { hasText: 'Contract reviewer' }).click();
+  await page.locator('#agent-editor').getByRole('heading', { name: 'Brief preview' }).waitFor();
+  await page.getByRole('button', { name: 'Back to the team' }).click();
 
   assert.deepEqual(errors, []);
   await page.close();

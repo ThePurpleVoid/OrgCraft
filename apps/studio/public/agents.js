@@ -94,7 +94,7 @@ export function openNewAgent(app) {
     <div id="a-one" class="agent-fields">
       <label class="wide">Name <input id="a-name" autocomplete="off" maxlength="60"></label>
       <label>Slug (file name and board name) <input id="a-slug" class="mono" autocomplete="off" maxlength="48" spellcheck="false"></label>
-      <label>Group <select id="a-group">${groups.map((g) => `<option>${esc(g)}</option>`).join('')}<option value="+">New group…</option></select></label>
+      <label>Group <select id="a-group" required><option value="">Choose a group</option>${groups.map((g) => `<option>${esc(g)}</option>`).join('')}<option value="+">New group…</option></select></label>
       <label id="a-newgroup-l" hidden>New group name <input id="a-newgroup" autocomplete="off" maxlength="31" placeholder="for example localization"></label>
       <label>Reports to <select id="a-manager"><option value="owner">The owner</option>${team.map((r) => `<option value="${esc(r.slug)}">${esc(r.title)}</option>`).join('')}</select></label>
       <p id="a-check" class="check-line" role="status"></p>
@@ -127,6 +127,7 @@ export function openNewAgent(app) {
     if (st.start === 'copy' && !st.from) return { error: 'Pick the role to copy.' };
     if (st.start === 'import' && !st.imported) return { error: st.importError || 'Pick a role file or a role pack folder.' };
     const g = groupValue();
+    if (!g) return { error: 'Choose a group, or make a new one.' };
     if (!GROUP.test(g)) return { error: 'A group name uses lower-case letters, digits, spaces and hyphens.' };
     const md = draftRole(spec, kit, { start: st.start, from: st.from, md: st.imported?.[0]?.md, title: name.value.trim(), slug: s, group: g, reportsTo: manager.value });
     return [{ slug: s, md, check: c }];
@@ -177,7 +178,9 @@ export function openNewAgent(app) {
     const stops = st.start === 'import' ? errors.filter((i) => /secret/.test(i.message)) : errors;
     const blocking = Array.isArray(p) ? (many ? !p.some((a) => a.check.ok) && 'None of these can be added: every slug is taken.' : '') : p.error;
     const first = stops[0] ?? errors[0];
-    $('#a-error').textContent = st.importError || (first ? `${stops.length ? '' : 'To fix before it can be switched on: '}${first.where.replace(/^roles\//, '')}: ${first.message}` : '');
+    // What still stops Continue, once the owner has named the agent (the group is the usual one now: CPO, PR 4).
+    const why = !first && blocking && name.value.trim() && /group/i.test(blocking) ? blocking : '';
+    $('#a-error').textContent = st.importError || (first ? `${stops.length ? '' : 'To fix before it can be switched on: '}${first.where.replace(/^roles\//, '')}: ${first.message}` : why);
     $('#a-error').classList.toggle('later', !st.importError && !stops.length);
     $('#a-go').disabled = !!(st.importError || stops.length || blocking);
     $('#a-go').textContent = many ? 'Add them, switched off' : st.start === 'import' ? 'Add it, switched off' : 'Continue to the brief';
@@ -190,7 +193,12 @@ export function openNewAgent(app) {
     // Text fields redraw on input. Redrawing again on their change (blur) would replace the copy list under a click.
     if (t.matches('input[type=search], input:not([type])')) return;
     if (t.name === 'start') st.start = t.value;
-    if (t.id === 'a-replace') st.replaceKit = t.checked;
+    if (t.id === 'a-replace') {
+      st.replaceKit = t.checked;
+      // Taking a kit role's place: start in that role's group, unless the owner already picked one.
+      const k = roles.find((r) => r.slug === slug.value.trim());
+      if (t.checked && k?.group && !group.value) setGroup(k.group);
+    }
     if (t.id === 'a-files' || t.id === 'a-folder') {
       st.start = 'import';
       dlg.querySelector('input[value="import"]').checked = true;
@@ -267,11 +275,10 @@ export function openNewAgent(app) {
     app.edit(add[0].slug, src ? { from: src.slug, title: src.title, md: src.md } : undefined);
   };
 
-  // Defaults: the group and manager of whoever the owner is likely adding to (the first lane under the top role).
+  // Defaults: no group (the owner picks one) and the top role as manager.
   const top = team.find((r) => r.reportsTo === 'owner');
-  if (groups.includes('engineering')) group.value = 'engineering';
-  const cto = team.find((r) => r.reportsTo === top?.slug && r.group === group.value) ?? top;
-  if (cto) manager.value = cto.slug;
+  group.value = '';
+  if (top) manager.value = top.slug;
   draw();
   dlg.showModal();
   name.focus();
