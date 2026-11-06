@@ -866,12 +866,27 @@ function wireImpact() {
 async function previewPublish() {
   try {
     const { spec: out } = publishable(spec, published, view.safety.on ? view.safety.items : [], picks);
-    const { changes, issues } = await api('/v1/team/preview', { spec: out });
+    const { changes, issues, needsCode } = await api('/v1/team/preview', { spec: out });
     const errors = issues.filter((i) => i.level === 'error');
-    $('#confirm').disabled = !changes.length || errors.length > 0;
+    // Mounted in a host that publishes through the team's deployment: a change to the commands the team runs is
+    // published from the deployment's own Studio, never through the host (embed spec section 6).
+    const elsewhere = needsCode && S.features?.publishCode === false;
+    $('#confirm').disabled = !changes.length || errors.length > 0 || elsewhere;
     $('#changes').innerHTML = errors.length ? `<p class="result error pad">Fix ${errors.length} error${errors.length > 1 ? 's' : ''} before publishing.</p>` :
       changes.length ? changes.map((c) => `<details><summary><span class="st ${c.status}">${c.status}</span>${esc(c.path)}</summary><pre class="diff">${diff(c.before, c.after)}</pre></details>`).join('')
         : '<p class="muted pad">Nothing to publish: the repository already has this team.</p>';
+    if (elsewhere && !errors.length) {
+      const note = document.createElement('p');
+      note.className = 'result pad';
+      note.textContent = 'This change adds or changes commands the team runs, so it is published from the team\'s own Studio, not from this site. ';
+      if (/^https:\/\//.test(S.features.studio ?? '')) {
+        const a = document.createElement('a');
+        a.href = S.features.studio; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.textContent = 'Use the deployment\'s Studio';
+        note.append(a, '.');
+      }
+      $('#changes').prepend(note);
+    }
   } catch (e) {
     $('#changes').innerHTML = `<p class="result error pad">${esc(e.message)}</p>`;
     $('#confirm').disabled = true;

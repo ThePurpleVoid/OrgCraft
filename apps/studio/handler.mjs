@@ -6,6 +6,7 @@
 //   export const handler = createStudioHandler({ repo, basePath, allowedOrigins, authorize, getInstallationToken });
 //
 // Needs a Node runtime (node:fs and a writable temp dir). Security: E1 to E10 and S1 to S7 of the spec.
+import { createHash, createPrivateKey, createPublicKey, randomUUID, sign as signWith } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,6 +64,12 @@ const BRANCH = /^[A-Za-z0-9._/-]{1,100}$/;
  *   tmpRoot              the folder publishes are planned in (default the system temp folder)
  *   cache                a blobCache() to share across handlers of one customer (default: one per handler)
  *   api, fetch           GitHub's API and fetch (tests use a fake)
+ *   controlPlane         { url, team, hostToken, dpopKey, fetch? }: the deployment does the GitHub work instead
+ *                        (studio-embed.md section 6). repo and getInstallationToken are then not used. url is the
+ *                        deployment's origin; hostToken is this site's access token from signing in through it (a
+ *                        string, or ({ user, request }) → string for one that refreshes); dpopKey the private key
+ *                        (KeyObject or JWK, P-256 or Ed25519) the token is bound to. Publishes that change commands
+ *                        are never made through a host: the page says to use the deployment's Studio instead.
  */
 /**
  * An error message as it may reach the host's log: anything shaped like a GitHub token, a JWT, a bearer header or a
@@ -75,6 +82,65 @@ export const redact = (m) => String(m ?? '')
   .replace(/\b(Bearer|token)\s+[\w.~+/=-]{8,}/gi, '$1 [token]')
   .slice(0, 300);
 
+const b64 = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
+const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * The deployment's side of control-plane mode: each call carries this site's DPoP-bound token and a fresh proof
+ * (RFC 9449) signed with node:crypto, the host's user in x-agent-team-host-user, and never a cookie of the host's.
+ */
+function controlPlaneClient(c) {
+  let origin;
+  try { origin = new URL(c.url); } catch { origin = null; }
+  if (!origin || origin.href !== `${origin.origin}/` || !(origin.protocol === 'https:' || (origin.protocol === 'http:' && LOCAL.has(origin.hostname)))) {
+    throw new TypeError('createStudioHandler: controlPlane.url is the deployment\'s origin, like "https://teams.example.com"');
+  }
+  origin = origin.origin;
+  const team = String(c.team ?? '');
+  if (!/^[A-Za-z0-9_.-]{1,100}$/.test(team) || /^\.\.?$/.test(team)) throw new TypeError('createStudioHandler: controlPlane.team is the team\'s name on the deployment');
+  if (typeof c.hostToken !== 'string' && typeof c.hostToken !== 'function') throw new TypeError('createStudioHandler: controlPlane.hostToken is this site\'s access token, or a function that returns it');
+  let key;
+  try { key = c.dpopKey?.type === 'private' ? c.dpopKey : createPrivateKey({ key: c.dpopKey, format: 'jwk' }); } catch { key = null; }
+  const kind = key?.asymmetricKeyType;
+  if (!key || !(kind === 'ec' && key.asymmetricKeyDetails?.namedCurve === 'prime256v1') && kind !== 'ed25519') {
+    throw new TypeError('createStudioHandler: controlPlane.dpopKey is the private key (P-256 or Ed25519) the token is bound to');
+  }
+  const alg = kind === 'ec' ? 'ES256' : 'EdDSA';
+  const { kty, crv, x, y } = createPublicKey(key).export({ format: 'jwk' });
+  const jwk = kind === 'ec' ? { kty, crv, x, y } : { kty, crv, x };
+  const fetchImpl = c.fetch ?? globalThis.fetch;
+  const prefix = `/v1/teams/${encodeURIComponent(team)}/studio`;
+
+  const proof = (htm, htu, token) => {
+    const input = `${b64({ typ: 'dpop+jwt', alg, jwk })}.${b64({ htm, htu, iat: Math.floor(Date.now() / 1000), jti: randomUUID(), ath: createHash('sha256').update(token).digest('base64url') })}`;
+    const sig = alg === 'ES256' ? signWith('sha256', Buffer.from(input), { key, dsaEncoding: 'ieee-p1363' }) : signWith(null, Buffer.from(input), key);
+    return `${input}.${sig.toString('base64url')}`;
+  };
+
+  return {
+    studio: `${origin}/teams/${encodeURIComponent(team)}`,
+    async call(request, path, input, user) {
+      let token;
+      try { token = typeof c.hostToken === 'function' ? await c.hostToken({ user, request }) : c.hostToken; } catch { token = null; }
+      if (typeof token !== 'string' || !/^[A-Za-z0-9._~+/-]+=*$/.test(token)) throw new HttpError(503, 'this site is not signed in to the team\'s deployment yet');
+      const target = prefix + path;
+      const search = path === '/v1/team/pr' ? `?branch=${encodeURIComponent(new URL(request.url).searchParams.get('branch') ?? '')}` : '';
+      const headers = {
+        authorization: `DPoP ${token}`, dpop: proof(request.method, origin + target, token),
+        'x-agent-team-studio': '1', 'x-agent-team-host-user': user.name === user.id ? user.id : `${user.name} (${user.id})`, accept: 'application/json',
+        ...(input ? { 'content-type': 'application/json' } : {}),
+      };
+      let res;
+      try {
+        res = await fetchImpl(origin + target + search, { method: request.method, headers, body: input ? JSON.stringify(input) : undefined, redirect: 'error' });
+      } catch { throw new HttpError(502, 'the team\'s deployment did not answer; try again'); }
+      let data = null;
+      try { data = await res.json(); } catch { data = null; }
+      return { status: res.status, data, retryAfter: /^\d{1,6}$/.test(res.headers.get('retry-after') ?? '') ? res.headers.get('retry-after') : null };
+    },
+  };
+}
+
 export function createStudioHandler(opts = {}) {
   const { repo, authorize, getInstallationToken, limiter = null, logger = (e) => console.info(JSON.stringify(e)), api = 'https://api.github.com', fetch: fetchImpl = globalThis.fetch } = opts;
   const basePath = String(opts.basePath ?? '').replace(/\/+$/, '');
@@ -82,13 +148,14 @@ export function createStudioHandler(opts = {}) {
   // Where publishes are planned: the system temp folder, or one of the host's own (hosted mode: one per customer, S3).
   const tmpRoot = opts.tmpRoot ?? null;
   const allowedOrigins = new Set(opts.allowedOrigins ?? []);
-  if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repo ?? '')) throw new TypeError('createStudioHandler: repo is "owner/name"');
+  const cp = opts.controlPlane ? controlPlaneClient(opts.controlPlane) : null;
+  if (!cp && !/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repo ?? '')) throw new TypeError('createStudioHandler: repo is "owner/name"');
   if (!basePath.startsWith('/')) throw new TypeError('createStudioHandler: basePath is the path the host mounts it at, e.g. "/api/agent-team/studio"');
   if (!allowedOrigins.size || [...allowedOrigins].some((o) => { try { return new URL(o).origin !== o; } catch { return true; } })) throw new TypeError('createStudioHandler: allowedOrigins lists the host page origin(s), exactly, like "https://admin.example.com"');
   if (typeof authorize !== 'function') throw new TypeError('createStudioHandler: authorize(request, action) is required');
-  if (typeof getInstallationToken !== 'function') throw new TypeError('createStudioHandler: getInstallationToken({ repo, permissions }) is required');
+  if (!cp && typeof getInstallationToken !== 'function') throw new TypeError('createStudioHandler: getInstallationToken({ repo, permissions }) is required');
   if (!/^[A-Za-z0-9._-][A-Za-z0-9._/-]{0,40}\/$/.test(branchPrefix) || branchPrefix.includes('..')) throw new TypeError('createStudioHandler: branchPrefix is like "agent-team/"');
-  if (!limiter) console.warn('agent-team studio: no limiter given, so publish limits (10 per user per hour, one at a time per repository) are not enforced across instances; GitHub\'s create-only refs are the only serialisation');
+  if (!limiter && !cp) console.warn('agent-team studio: no limiter given, so publish limits (10 per user per hour, one at a time per repository) are not enforced across instances; GitHub\'s create-only refs are the only serialisation');
 
   const assets = loadAssets();
   const version = core.VERSION;
@@ -122,7 +189,7 @@ export function createStudioHandler(opts = {}) {
     return t;
   }
 
-  const backend = githubBackend({ repo, token, installation: opts.installationId ?? 'default', api, fetch: fetchImpl, cache });
+  const backend = cp ? null : githubBackend({ repo, token, installation: opts.installationId ?? 'default', api, fetch: fetchImpl, cache });
 
   async function allowed(request, action) {
     if (!ACTIONS.has(action)) throw new HttpError(500, 'unknown action');
@@ -136,7 +203,7 @@ export function createStudioHandler(opts = {}) {
     if (!user) throw new HttpError(401, 'sign in to the admin site first');
     if (action === 'read') return user;
     const u2 = await allowed(request, action);
-    if (!u2) throw new HttpError(403, action === 'publish-code' ? 'this change adds or changes commands the team runs, and you are not allowed to publish those; ask an admin who is' : 'you can view the team, but not publish it');
+    if (!u2) throw new HttpError(403, action === 'publish-code' ? 'this change adds or changes commands the team runs, and you are not allowed to publish those; ask an admin who is' : 'you can view the team, but not publish it', action === 'publish-code' ? { type: 'publish-code' } : {});
     return u2;
   }
 
@@ -210,6 +277,28 @@ export function createStudioHandler(opts = {}) {
     throw new HttpError(404, 'no such endpoint');
   }
 
+  // Control-plane mode (studio-embed.md section 6): the host's own sign-in and E2 checks stand here, as in every mode;
+  // the deployment reads the repository and opens the pull request, for this site's token and the host's user.
+  const PROXIED = new Set(['GET /v1/team', 'GET /v1/team/pr', 'POST /v1/team/preview', 'POST /v1/team/graph', 'POST /v1/team/suggestions', 'POST /v1/team/from-template', 'POST /v1/team/publish']);
+  async function proxy(request, path) {
+    if (!PROXIED.has(`${request.method} ${path}`)) throw new HttpError(404, 'no such endpoint');
+    const user = await gate(request, path === '/v1/team/publish' ? 'publish' : 'read');
+    const input = request.method === 'POST' ? await body(request) : null;
+    const r = await cp.call(request, path, input, user);
+    if (r.status === 403 && r.data?.type !== 'consent' && /commands the team runs/.test(r.data?.error ?? '')) {
+      // Never through a host (section 6): the person publishes a change to what runs from the deployment's own Studio.
+      return json(403, { error: `this change adds or changes commands the team runs, so it is published from the team's own Studio, not through this site: ${cp.studio}`, type: 'publish-code', studio: cp.studio });
+    }
+    const data = r.data;
+    // The page hides publishing a change to commands, and links the deployment's Studio in its place.
+    if (r.status === 200 && path === '/v1/team' && data && typeof data === 'object') return json(200, { ...data, features: { ...(data.features ?? {}), publishCode: false, studio: cp.studio } });
+    if (r.status === 200) return json(200, data);
+    if (r.status === 401) throw new HttpError(502, 'the team\'s deployment did not accept this site\'s sign-in; sign in through it again', { type: 'host-sign-in' });
+    const message = typeof data?.error === 'string' ? redact(data.error) : `the team's deployment answered ${r.status}`;
+    const extra = r.retryAfter ? { 'retry-after': r.retryAfter } : {};
+    return json(r.status >= 400 && r.status < 600 ? r.status : 502, { error: message, ...(typeof data?.type === 'string' ? { type: data.type } : {}) }, extra);
+  }
+
   async function publish(request, input) {
     let user = await gate(request, 'publish');
     const spec = specOf(input.spec);
@@ -266,7 +355,7 @@ export function createStudioHandler(opts = {}) {
       if (request.headers.get('x-agent-team-studio') !== '1') return json(403, { error: 'missing the x-agent-team-studio header' });
       if (hasBody && !String(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) return json(415, { error: 'send JSON' });
       if (unsafePath(path)) return json(404, { error: 'not found' });
-      return await route(request, path);
+      return await (cp ? proxy(request, path) : route(request, path));
     } catch (e) {
       const status = e instanceof HttpError || e instanceof core.CoreError ? e.status : 500;
       // The host's own log gets the reason for an unexpected failure, with anything token-shaped taken out (E3, E9).

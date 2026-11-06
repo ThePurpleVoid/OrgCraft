@@ -67,7 +67,11 @@ Then, from the repository root:
 
 ```sh
 # 1. The control plane, then the Studio pointed at it (each in its own terminal; the team id is yours to pick).
-node apps/server/bin.mjs                  # http://127.0.0.1:4849, data in ~/.agent-team/server
+#    Your step-up passphrase (owner checklist, part B): hash it once; the prompt does not echo, only the hash is kept.
+node deploy/server/step-up-hash.mjs > ~/.agent-team/step-up.hash && chmod 600 ~/.agent-team/step-up.hash
+AGENT_TEAM_STEP_UP_SECRET_HASH="$(cat ~/.agent-team/step-up.hash)" \
+  node apps/server/bin.mjs                # http://127.0.0.1:4849, data in ~/.agent-team/server
+#    (Without the hash, a local server makes its own passphrase in ~/.agent-team/server/step-up.secret.)
 T=$(cat ~/.agent-team/server/admin.token)
 curl -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"id":"my-team"}' localhost:4849/v1/teams
 AGENT_TEAM_SERVER=http://127.0.0.1:4849 AGENT_TEAM_SERVER_TOKEN="$T" AGENT_TEAM_SERVER_TEAM=my-team \
@@ -84,6 +88,7 @@ docker run --rm -v ~/.agent-team/runner-secrets:/run/agent-team:ro -v agent-team
   node apps/runner/bin.mjs register --server http://host.docker.internal:4849 --code XXXX-XXXX-XXXX --name my-mac
 
 # 4. Start it. ANTHROPIC_API_KEY comes from your shell (part B of the owner checklist; not before).
+read -s ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY AGENT_TEAM_MERGER_APP_ID=<the merger app's id>
 docker run -d --name agent-team-runner --restart unless-stopped \
   -e ANTHROPIC_API_KEY -e AGENT_TEAM_MERGER_APP_ID \
   -v agent-team-runner:/data agent-team-runner

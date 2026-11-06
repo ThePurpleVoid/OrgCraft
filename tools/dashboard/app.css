@@ -60,7 +60,7 @@ html:has(> body > .atd), body:has(> .atd) { margin: 0; background: var(--bg, #f5
 .atd-defs dl { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 8px 16px; margin: 12px 0 0; font-size: 14px }
 .atd-defs dt { font-weight: 600 } .atd-defs dd { margin: 0; color: var(--ink2) }
 
-/* The team views (ported from the CoachSpotter board). */
+/* The team views. */
 .atd .team-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start }
 .atd .team-layout.with-panel { grid-template-columns: minmax(0, 1fr) 380px }
 .atd .team-flow-wrap { overflow: hidden }
