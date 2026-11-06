@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Studio: discussion meetings no longer say they run as a written round.** The meetings editor's warning and the timeline's "(a written round until the runner supports discussions)" are gone now that the runner holds real discussions (#152). The Rounds hint and the timeline say a discussion runs for up to N rounds and ends early when no one has more to add.
 - **Discussion meetings (phase 4, CPO D23).** A meeting with `format: discussion` now runs as one: the attendees answer in turn for up to `rounds` rounds (2 to 5), each turn carrying the whole transcript so they answer each other, and the facilitator closes with minutes, action items and decisions. An attendee with nothing more to add replies with `done: true` (team tool `meeting_reply`) and is not asked again; when nobody is left the meeting closes early. At the cap, each attendee still to speak is skipped once (`fromRound`). A discussion that passes its overall deadline (rounds x attendees x the turn deadline, at most four hours) gets its closing turn early with `timedOut`. A busy attendee still answers after its current step. Migration `012_discussion_meetings.sql`; contracts additive (`rounds`, `round`, `done`, `fromRound`, `timedOut`). The dry run has a discussion, proved end to end with the fake model.
 ## 0.20.0
 
