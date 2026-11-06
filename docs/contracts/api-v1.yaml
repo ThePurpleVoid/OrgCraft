@@ -103,7 +103,7 @@ paths:
     post:
       x-min-role: admin
       tags: [events]
-      summary: Append envelopes (runners and integrations). Ids make retries safe
+      summary: "Append envelopes from an integration. Ids make retries safe. Only report.*, message.*, usage.recorded and team.published are taken (issue #135); any other type in the batch refuses the whole batch with 403 (refused lists them), because the control plane and runners write the rest themselves"
       security: [ { session: [] }, { runner: [] } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { events: { type: array, items: { $ref: "schema/event.v1.json" }, maxItems: 500 } } } } } }
       responses: { "200": { description: Stored (duplicates ignored) } }
@@ -445,7 +445,7 @@ paths:
       x-min-role: admin
       tags: [github]
       summary: "GitHub App installations this workspace proved it owns (studio-embed.md S9). Only these are used, by the hosted Studio and as repo.installations on session.start. Needs sign-in and GITHUB_APP_SLUG"
-      responses: { "200": { description: "{ installations: [ { id, account, accountType, provenBy, githubLogin, provenAt, method } ] }" } }
+      responses: { "200": { description: "{ installations: [ { id, account, accountType, provenBy, githubLogin, provenAt, method, proverLeft } ] }: proverLeft is true when the person who proved it is no longer an owner or admin here (prove it again or disconnect it)" } }
     post:
       x-min-role: admin
       tags: [github]

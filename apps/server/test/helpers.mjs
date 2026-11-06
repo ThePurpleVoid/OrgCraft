@@ -36,7 +36,9 @@ export async function plane(fn, { now, ...extra } = {}) {
   };
   /** Headers with a fresh single-use step-up token, for writes that need one. */
   const su = async () => ({ authorization: `Bearer ${ADMIN}`, 'x-step-up': (await call('POST', '/auth/step-up', { secret: STEP_UP_SECRET })).body.token });
-  try { await fn({ db, call, base, server, m3: server.m3, su, woke: () => woke }); } finally { server.runners?.closeAll(); server.closeAllConnections(); server.close(); await db.close(); }
+  // Server-written events (approvals, budgets, chat) for a test's fixtures: the API refuses them (#135).
+  const inject = (team, events) => server.m3.appendEvents('acme', team, events);
+  try { await fn({ db, call, base, server, m3: server.m3, su, inject, woke: () => woke }); } finally { server.runners?.closeAll(); server.closeAllConnections(); server.close(); await db.close(); }
 }
 
 /** Reads a server-sent event stream: until(n) resolves once n events with ids have arrived. */

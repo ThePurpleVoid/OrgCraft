@@ -122,7 +122,7 @@ test('outside text is quoted and cut to 120 characters; roles are named by title
 test('nothing is sent before verification and opt-in; the code expires in 15 minutes; then each kind arrives once (criterion 5)', async () => {
   const provider = fakeProvider();
   let clock = new Date('2026-11-06T09:00:00Z');
-  await plane(async ({ db, call, su }) => {
+  await plane(async ({ db, call, su, inject }) => {
     await setup(call, provider);
     // No key in the vault: the code cannot go out, and nothing calls the provider.
     assert.deepEqual((({ teamName, ready }) => ({ teamName, ready }))((await call('GET', '/teams/shop/emails')).body), { teamName: 'Shop', ready: false }, 'the page can say emails are not set up');
@@ -146,7 +146,7 @@ test('nothing is sent before verification and opt-in; the code expires in 15 min
     const code = /(\d{6})$/.exec(verify.subject)[1];
 
     // Events before verification: none sent.
-    await call('POST', '/teams/shop/events', { events: [SAMPLES.approval] });
+    await inject('shop', [SAMPLES.approval]);
     await drain(db, key, drainOpts(provider));
     assert.equal(provider.sent.length, 1);
     // Choosing kinds before verifying is refused.
@@ -161,7 +161,7 @@ test('nothing is sent before verification and opt-in; the code expires in 15 min
     assert.equal((await call('POST', `/teams/shop/emails/${add.body.id}/verify`, { code: code2 })).status, 200);
 
     // Verified but nothing switched on: still nothing.
-    await call('POST', '/teams/shop/events', { events: [SAMPLES.budget100] });
+    await inject('shop', [SAMPLES.budget100]);
     await drain(db, key, drainOpts(provider));
     assert.equal(provider.sent.length, 2);
     const list = (await call('GET', '/teams/shop/emails')).body;
@@ -173,7 +173,7 @@ test('nothing is sent before verification and opt-in; the code expires in 15 min
     // Every kind switched on: each event arrives exactly once, a retry after a failure sends only what failed.
     assert.equal((await call('PATCH', `/teams/shop/emails/${add.body.id}`, { kinds: Object.keys(KINDS) })).status, 200);
     const before = provider.sent.length;
-    await call('POST', '/teams/shop/events', { events: Object.values(SAMPLES).map((e) => ({ ...e, id: `${e.id}_b` })) });
+    await inject('shop', Object.values(SAMPLES).map((e) => ({ ...e, id: `${e.id}_b` })));
     await drain(db, key, drainOpts(provider));
     const got = provider.sent.slice(before);
     assert.deepEqual(got.map((m) => m.subject.split(' ')[1]), ['Approval', '80%', 'Daily', 'QA', 'Minutes:', 'Ready']);
@@ -189,7 +189,7 @@ test('nothing is sent before verification and opt-in; the code expires in 15 min
 
     // A provider outage: the event is retried later and sent once it recovers.
     provider.fail = true;
-    await call('POST', '/teams/shop/events', { events: [{ ...SAMPLES.blocked, id: 'ev_outage' }] });
+    await inject('shop', [{ ...SAMPLES.blocked, id: 'ev_outage' }]);
     await drain(db, key, drainOpts(provider));
     const [sink] = await db.tenant('acme', ({ q }) => q('select last_error, failures from email_sinks'));
     assert.match(sink.last_error, /503/);
@@ -203,7 +203,7 @@ test('nothing is sent before verification and opt-in; the code expires in 15 min
 test('without a key in the vault the real provider is never called and deliveries are logged as skipped', async () => {
   let calls = 0;
   const fetch = async () => { calls++; return new Response('{}', { status: 200 }); };
-  await plane(async ({ db, call }) => {
+  await plane(async ({ db, call, inject }) => {
     await call('POST', '/teams', { id: 'shop', name: 'Shop' });
     assert.equal((await call('POST', '/teams/shop/sinks', { format: 'email', provider: 'resend', sender: 'team@shop.example', secret: 'EMAIL_PROVIDER_KEY' })).status, 201);
     assert.equal((await call('POST', '/teams/shop/sinks', { format: 'email', provider: 'nope', sender: 'team@shop.example', secret: 'X' })).status, 400);
@@ -214,7 +214,7 @@ test('without a key in the vault the real provider is never called and deliverie
     await db.tenant('acme', ({ q }) => q("insert into email_subscriptions(id, tenant, team, principal, email, kinds, verified_at) values ('eml_v', 'acme', 'shop', 'admin', 'owner@shop.example', '{approval}', now())"));
     const add = await call('POST', '/teams/shop/emails', { email: 'second@shop.example' });
     assert.deepEqual([add.body.sent, add.body.reason], [false, 'no provider key stored as EMAIL_PROVIDER_KEY']);
-    await call('POST', '/teams/shop/events', { events: [SAMPLES.approval] });
+    await inject('shop', [SAMPLES.approval]);
     await drain(db, key, { fetch, email: { publicUrl: PUBLIC } });
     assert.equal(calls, 0);
     const rows = await db.tenant('acme', ({ q }) => q('select status, error from email_deliveries'));
@@ -231,12 +231,12 @@ test('without a key in the vault the real provider is never called and deliverie
 
 test('unsubscribe turns off one kind for one team without sign-in, and "Turn it back on" works (criterion 4)', async () => {
   const provider = fakeProvider();
-  await plane(async ({ db, call, su, base }) => {
+  await plane(async ({ db, call, su, base, inject }) => {
     await setup(call, provider);
     await withKey(call, su);
     const sid = await verified(call, provider);
     await call('PATCH', `/teams/shop/emails/${sid}`, { kinds: ['approval', 'budget100'] });
-    await call('POST', '/teams/shop/events', { events: [SAMPLES.approval] });
+    await inject('shop', [SAMPLES.approval]);
     await drain(db, key, drainOpts(provider));
     const mail = provider.sent.at(-1);
     const unsub = /Turn off these emails: (\S+)/.exec(mail.text)[1].replace(PUBLIC + '/v1', base);
@@ -287,7 +287,7 @@ test('unsubscribe turns off one kind for one team without sign-in, and "Turn it 
 
 test('someone who is no longer a member gets nothing, even with a verified address (security review V1)', async () => {
   const provider = fakeProvider();
-  await plane(async ({ db, call, su }) => {
+  await plane(async ({ db, call, su, inject }) => {
     await setup(call);
     await withKey(call, su);
     await db.system(`insert into people(id, provider, subject, login) values ('per_stillhere', 'github', '101', 'stays'), ('per_leftteam', 'github', '102', 'left')`);
@@ -297,7 +297,7 @@ test('someone who is no longer a member gets nothing, even with a verified addre
       ('eml_left', 'acme', 'shop', 'per_leftteam', 'left@shop.example', '{blocked}', now()),
       ('eml_stranger', 'acme', 'shop', 'per_neveramember', 'stranger@shop.example', '{blocked}', now())`);
     await db.system(`insert into email_subscriptions(id, tenant, team, principal, email, kinds, verified_at) values ('eml_admin', 'acme', 'shop', 'admin', 'admin@shop.example', '{blocked}', now())`);
-    await call('POST', '/teams/shop/events', { events: [SAMPLES.blocked] });
+    await inject('shop', [SAMPLES.blocked]);
     await drain(db, key, drainOpts(provider));
     assert.deepEqual(provider.sent.map((m) => m.to).sort(), ['admin@shop.example', 'stays@shop.example'], 'no owner yet: the local admin still gets its emails');
     // Once someone owns the workspace the admin token is retired, so its addresses get nothing (backend-dev review).
@@ -306,7 +306,7 @@ test('someone who is no longer a member gets nothing, even with a verified addre
       await db.system(`insert into members(id, tenant, person, role) values ('mem_3', 'acme', 'per_stillhere2', 'owner')`);
     });
     provider.sent.length = 0;
-    await call('POST', '/teams/shop/events', { events: [{ ...SAMPLES.blocked, id: 'ev_after_owner' }] });
+    await inject('shop', [{ ...SAMPLES.blocked, id: 'ev_after_owner' }]);
     await drain(db, key, drainOpts(provider));
     assert.deepEqual(provider.sent.map((m) => m.to), ['stays@shop.example']);
   }, opts(provider));
@@ -315,7 +315,7 @@ test('someone who is no longer a member gets nothing, even with a verified addre
 test('codes are capped per person per day, and so are wrong codes (security review)', async () => {
   const provider = fakeProvider();
   let clock = new Date('2026-11-06T09:00:00Z');
-  await plane(async ({ call, su }) => {
+  await plane(async ({ call, su, inject }) => {
     await setup(call);
     await withKey(call, su);
     for (let i = 0; i < 10; i++) {
@@ -347,7 +347,7 @@ test('codes are capped per person per day, and so are wrong codes (security revi
 test('an expired Studio link says so instead of redirecting', async () => {
   const provider = fakeProvider();
   let clock = new Date('2026-11-06T09:00:00Z');
-  await plane(async ({ base }) => {
+  await plane(async ({ base, inject }) => {
     const mail = compose(SAMPLES.approval, { teamName: 'Shop' });
     const msg = render(key, mail, { base, tenant: 'acme', team: 'shop', teamName: 'Shop', subscription: 'eml_x', now: clock });
     const link = /Review in the Studio: (\S+)/.exec(msg.text)[1].replace(`${base}/v1`, base);

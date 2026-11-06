@@ -280,3 +280,26 @@ test('an append that takes a lower seq but commits late is still streamed (seq i
     s.close();
   });
 });
+
+test('POST /teams/{team}/events takes only what an integration reports; every server- or runner-written type is refused (#135)', async () => {
+  await plane(async ({ call }) => {
+    await call('POST', '/teams', { id: 'shop' });
+    const written = ['chat.message', 'approval.requested', 'approval.decided', 'decision.requested', 'decision.answered', 'card.updated',
+      'ready.posted', 'ready.previewed', 'run.started', 'run.stopped', 'session.started', 'session.queued', 'session.tool',
+      'proposal.opened', 'proposal.accepted', 'proposal.previewed', 'budget.warned', 'budget.exhausted', 'budget.updated',
+      'meeting.opened', 'meeting.turn', 'meeting.replied', 'meeting.closed', 'meeting.minutes', 'team.transition',
+      'connector.connected', 'notification.sent', 'report.', 'message.', 'custom.thing', ''];
+    for (const type of written) {
+      const r = await call('POST', '/teams/shop/events', { events: [envelope('acme', 'shop', `w-${type}`, type)] });
+      assert.equal(r.status, 403, `${type}: ${JSON.stringify(r.body)}`);
+    }
+    // One bad type refuses the whole batch: nothing of it is stored.
+    const mixed = await call('POST', '/teams/shop/events', { events: [envelope('acme', 'shop', 'ok-1', 'report.note', { detail: 'x' }), envelope('acme', 'shop', 'bad-1', 'chat.message', { from: 'owner', text: 'hi' })] });
+    assert.equal(mixed.status, 403);
+    assert.equal((await call('GET', '/teams/shop/events')).body.events.length, 0);
+    for (const type of ['report.status', 'report.note', 'message.handoff', 'message.signoff', 'usage.recorded', 'team.published']) {
+      const r = await call('POST', '/teams/shop/events', { events: [envelope('acme', 'shop', `ok-${type}`, type, {})] });
+      assert.ok(r.status < 300, `${type}: ${JSON.stringify(r.body)}`);
+    }
+  });
+});
