@@ -174,7 +174,18 @@ function firstPartyPolicy() {
   return policy;
 }
 
-/** Requests per IP and minute on /oauth/* (S8): authorize 20, everything else 60. */
+/**
+ * Who is calling, for rate limits. Behind the Vercel rewrite every request reaches us from Vercel's egress, so the
+ * socket address (and fly-client-ip) is one IP for everyone: use the client IP the edge forwards. A caller who forges
+ * these headers only escapes their own bucket; they can never fill anyone else's, and the global cap still holds.
+ */
+export function forwardedIp(req, header = null) {
+  const h = req.headers;
+  const pick = (v) => String(v ?? '').split(',')[0].trim().slice(0, 64);
+  return (header && pick(h[header])) || pick(h['x-vercel-forwarded-for']) || pick(h['x-forwarded-for']) || req.socket?.remoteAddress || '';
+}
+
+/** Requests per IP and minute on /oauth/* (S8): authorize 20, everything else 60; and 600 a minute in all. */
 function limiter(now) {
   const hits = new Map();
   return (ip, bucket, max) => {
@@ -192,9 +203,10 @@ function limiter(now) {
  * The issuer. `publicUrl` is the issuer and the cookie origin (https). `tenant` is the workspace the first owner is
  * made in. `ownerGithub` is the first owner's numeric GitHub user id, read only while the deployment has no members.
  * `upstream` is githubUpstream(...) (or a stub with the same two methods). `clients` adds apps and the CLI:
- * [{ client_id, redirect_uris, application_type: 'native' }]. `clientIp(req)` names the caller for rate limits.
+ * [{ client_id, redirect_uris, application_type: 'native' }]. `clientIp(req)` names the caller for rate limits, and
+ * `globalPerMinute` caps all /oauth requests together, the backstop if callers cannot be told apart.
  */
-export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), clientIp = (req) => req.socket?.remoteAddress ?? '' }) {
+export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), clientIp = (req) => forwardedIp(req), globalPerMinute = 600 }) {
   const issuer = new URL(publicUrl);
   if (issuer.protocol !== 'https:') throw new Error('sign-in needs an https AGENT_TEAM_PUBLIC_URL (the cookie is Secure and __Host-)');
   if (issuer.pathname !== '/' || issuer.search || issuer.hash) throw new Error('AGENT_TEAM_PUBLIC_URL must be an origin with no path for sign-in');
@@ -237,56 +249,66 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
 
   const web = { client_id: WEB_CLIENT, token_endpoint_auth_method: 'none', redirect_uris: [webRedirect], grant_types: ['authorization_code'], response_types: ['code'] };
   const natives = (clients ?? nativeClients(origin)).map((c) => ({ token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], application_type: 'native', dpop_bound_access_tokens: true, require_auth_time: true, ...c }));
-  const provider = new Provider(origin, {
-    adapter: adapterFor(db),
-    clients: [web, ...natives],
-    // ES256 only: the issuer's key is P-256 (section 2, step 4).
-    clientDefaults: { id_token_signed_response_alg: 'ES256', grant_types: ['authorization_code'], response_types: ['code'] },
-    enabledJWA: { idTokenSigningAlgValues: ['ES256'], dPoPSigningAlgValues: ['ES256', 'EdDSA'] },
-    jwks: { keys: await issuerKeys(db, key, now) },
-    cookies: {
-      keys: [createHmac('sha256', key).update('agent-team/oidc-cookies/v1').digest('base64url')],
-      long: { httpOnly: true, sameSite: 'lax', secure: true },
-      short: { httpOnly: true, sameSite: 'lax', secure: true },
-    },
-    async findAccount(_ctx, sub) {
-      const p = await activePerson(sub);
-      return p ? { accountId: p.id, claims: () => ({ sub: p.id, name: p.name ?? p.login, preferred_username: p.login }) } : undefined;
-    },
-    claims: { openid: ['sub'], profile: ['name', 'preferred_username'] },
-    scopes: ['openid', 'profile', 'offline_access'],
-    responseTypes: ['code'],
-    pkce: { required: () => true },
-    features: {
-      devInteractions: { enabled: false },
-      revocation: { enabled: true },
-      userinfo: { enabled: true },
-      dPoP: { enabled: true },
-      rpInitiatedLogout: { enabled: false },
-      introspection: { enabled: false },
-    },
-    // Apps' refresh tokens come with the refresh_token grant (no offline_access dance), rotate on every use, and are
-    // bound to the device's DPoP key (S3): a reused one revokes the family, a stolen one without the key is refused.
-    issueRefreshToken: async (_ctx, client) => client.grantTypeAllowed('refresh_token'),
-    rotateRefreshToken: true,
-    ttl: { AccessToken: 900, AuthorizationCode: 60, IdToken: 900, Interaction: FLOW_SECONDS, Session: 12 * 3600, Grant: 30 * 86400, RefreshToken: 30 * 86400 },
-    interactions: { policy: firstPartyPolicy(), url: (_ctx, interaction) => `/sign-in?interaction=${interaction.uid}` },
-    loadExistingGrant,
-    clientBasedCORS: () => false,
-    routes: { authorization: '/oauth/authorize', token: '/oauth/token', jwks: '/oauth/jwks', userinfo: '/oauth/userinfo', revocation: '/oauth/revoke', end_session: '/oauth/session/end', introspection: '/oauth/introspect', registration: '/oauth/reg', pushed_authorization_request: '/oauth/par', code_verification: '/oauth/device', device_authorization: '/oauth/device/auth', backchannel_authentication: '/oauth/backchannel', challenge: '/oauth/challenge', credential: '/oauth/credential' },
-    async renderError(ctx, out) {
-      ctx.type = 'text/plain; charset=utf-8';
-      ctx.body = `Sign-in failed: ${String(out.error ?? 'error').replace(/[^\w .,:;'()-]/g, '')}${out.error_description ? ` (${String(out.error_description).replace(/[^\w .,:;'()-]/g, '').slice(0, 300)})` : ''}`;
-    },
-  });
-  // TLS ends at the deployment's proxy, and the issuer is fixed by config: tell the library the scheme ourselves,
-  // and never let a request's forwarded host name the issuer.
-  provider.proxy = true;
-  provider.on('grant.revoked', (ctx, grantId) => {
-    const reuse = ctx.oidc?.route === 'token' && ctx.oidc?.params?.grant_type === 'refresh_token';
-    audit(ctx.oidc?.entities?.Account?.accountId ?? null, reuse ? 'refresh-token.reused' : 'grant.revoked', { grant: grantId, client: ctx.oidc?.client?.clientId ?? null }).catch(() => {});
-  });
-  const callback = provider.callback();
+  let provider, callback, kids = '';
+  /** (Re)builds the library around the current signing keys: at start, and when the tick rotates them. */
+  const build = (keys) => {
+    kids = keys.map((k) => k.kid).join(',');
+    provider = makeProvider(keys);
+    callback = provider.callback();
+  };
+  const makeProvider = (keys) => {
+    const p = new Provider(origin, {
+      adapter: adapterFor(db),
+      clients: [web, ...natives],
+      // ES256 only: the issuer's key is P-256 (section 2, step 4).
+      clientDefaults: { id_token_signed_response_alg: 'ES256', grant_types: ['authorization_code'], response_types: ['code'] },
+      enabledJWA: { idTokenSigningAlgValues: ['ES256'], dPoPSigningAlgValues: ['ES256', 'EdDSA'] },
+      jwks: { keys },
+      cookies: {
+        keys: [createHmac('sha256', key).update('agent-team/oidc-cookies/v1').digest('base64url')],
+        long: { httpOnly: true, sameSite: 'lax', secure: true },
+        short: { httpOnly: true, sameSite: 'lax', secure: true },
+      },
+      async findAccount(_ctx, sub) {
+        const p = await activePerson(sub);
+        return p ? { accountId: p.id, claims: () => ({ sub: p.id, name: p.name ?? p.login, preferred_username: p.login }) } : undefined;
+      },
+      claims: { openid: ['sub'], profile: ['name', 'preferred_username'] },
+      scopes: ['openid', 'profile', 'offline_access'],
+      responseTypes: ['code'],
+      pkce: { required: () => true },
+      features: {
+        devInteractions: { enabled: false },
+        revocation: { enabled: true },
+        userinfo: { enabled: true },
+        dPoP: { enabled: true },
+        rpInitiatedLogout: { enabled: false },
+        introspection: { enabled: false },
+      },
+      // Apps' refresh tokens come with the refresh_token grant (no offline_access dance), rotate on every use, and are
+      // bound to the device's DPoP key (S3): a reused one revokes the family, a stolen one without the key is refused.
+      issueRefreshToken: async (_ctx, client) => client.grantTypeAllowed('refresh_token'),
+      rotateRefreshToken: true,
+      ttl: { AccessToken: 900, AuthorizationCode: 60, IdToken: 900, Interaction: FLOW_SECONDS, Session: 12 * 3600, Grant: 30 * 86400, RefreshToken: 30 * 86400 },
+      interactions: { policy: firstPartyPolicy(), url: (_ctx, interaction) => `/sign-in?interaction=${interaction.uid}` },
+      loadExistingGrant,
+      clientBasedCORS: () => false,
+      routes: { authorization: '/oauth/authorize', token: '/oauth/token', jwks: '/oauth/jwks', userinfo: '/oauth/userinfo', revocation: '/oauth/revoke', end_session: '/oauth/session/end', introspection: '/oauth/introspect', registration: '/oauth/reg', pushed_authorization_request: '/oauth/par', code_verification: '/oauth/device', device_authorization: '/oauth/device/auth', backchannel_authentication: '/oauth/backchannel', challenge: '/oauth/challenge', credential: '/oauth/credential' },
+      async renderError(ctx, out) {
+        ctx.type = 'text/plain; charset=utf-8';
+        ctx.body = `Sign-in failed: ${String(out.error ?? 'error').replace(/[^\w .,:;'()-]/g, '')}${out.error_description ? ` (${String(out.error_description).replace(/[^\w .,:;'()-]/g, '').slice(0, 300)})` : ''}`;
+      },
+    });
+    // TLS ends at the deployment's proxy, and the issuer is fixed by config: tell the library the scheme ourselves,
+    // and never let a request's forwarded host name the issuer.
+    p.proxy = true;
+    p.on('grant.revoked', (ctx, grantId) => {
+      const reuse = ctx.oidc?.route === 'token' && ctx.oidc?.params?.grant_type === 'refresh_token';
+      audit(ctx.oidc?.entities?.Account?.accountId ?? null, reuse ? 'refresh-token.reused' : 'grant.revoked', { grant: grantId, client: ctx.oidc?.client?.clientId ?? null }).catch(() => {});
+    });
+    return p;
+  };
+  build(await issuerKeys(db, key, now));
 
   /** Lets a person in, or not (spec section 2, step 3): a member, an invitee, or the first owner of a fresh deployment. */
   async function admit(who) {
@@ -439,6 +461,7 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     if (!p.startsWith('/oauth/') && p !== '/.well-known/openid-configuration') return false;
     const authorize = p === '/oauth/authorize';
     if (limited(clientIp(req), authorize ? 'authorize' : 'oauth', authorize ? 20 : 60)) throw new Problem(429, 'too many sign-in requests from here; try again in a minute');
+    if (limited('*', 'all', globalPerMinute)) throw new Problem(429, 'too many sign-in requests right now; try again in a minute');
     if (authorize && req.method === 'GET' && url.searchParams.get('client_id') === WEB_CLIENT && !url.searchParams.has('response_type')) { await webStart(req, res, url); return true; }
     const inter = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
     if (inter && req.method === 'GET') { await upstreamStart(req, res, inter[1]); return true; }
@@ -454,9 +477,13 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
 
   /** Forgets expired records (the tick calls it). */
   async function sweep() {
+    // Rotation is due every 90 days: a server that runs that long picks up its new key here, and keeps the old one in
+    // the JWKS for a day.
+    const keys = await issuerKeys(db, key, now);
+    if (keys.map((k) => k.kid).join(',') !== kids) build(keys);
     await db.system("delete from oidc_store where expires_at < now() - interval '1 hour'");
     await db.system("delete from oauth_tokens where expires_at < now() - interval '1 day'");
   }
 
-  return { provider, handle, sessionOf, workspaces, csrfOk, endSessions, sweep, origin, admit };
+  return { get provider() { return provider; }, handle, sessionOf, workspaces, csrfOk, endSessions, sweep, origin, admit };
 }

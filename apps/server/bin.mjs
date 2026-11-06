@@ -19,8 +19,8 @@
 //   GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET   the deployment's GitHub App (its user authorization flow)
 //   AGENT_TEAM_PUBLIC_URL   must then be the https origin people open; it is the issuer and the cookie's origin
 //   AGENT_TEAM_OWNER_GITHUB the first owner's numeric GitHub user id, read only while there are no members
-//   AGENT_TEAM_CLIENT_IP_HEADER  the header the host's proxy puts the caller's IP in (fly-client-ip on Fly.io), for
-//                           sign-in rate limits; without it the socket address is used
+//   AGENT_TEAM_CLIENT_IP_HEADER  a header that names the caller's IP, for sign-in rate limits, tried before
+//                           x-vercel-forwarded-for and the first x-forwarded-for entry (then the socket address)
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -32,7 +32,7 @@ import { ensureTenant } from './store.mjs';
 import { startSinks } from './sinks.mjs';
 import { createControlPlane } from './server.mjs';
 import { hashStepUpSecret, stepUpVerifier } from './m3.mjs';
-import { createIdentity, githubUpstream } from './identity.mjs';
+import { createIdentity, forwardedIp, githubUpstream } from './identity.mjs';
 
 const { values: o } = parseArgs({ options: {
   port: { type: 'string', default: process.env.PORT ?? '4849' },
@@ -86,7 +86,7 @@ const ipHeader = env.AGENT_TEAM_CLIENT_IP_HEADER?.toLowerCase();
 const identity = env.GITHUB_APP_CLIENT_ID ? await createIdentity({
   db, key, tenant, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', ownerGithub: env.AGENT_TEAM_OWNER_GITHUB ?? null,
   upstream: githubUpstream({ clientId: env.GITHUB_APP_CLIENT_ID, clientSecret: env.GITHUB_APP_CLIENT_SECRET }),
-  clientIp: (req) => (ipHeader && String(req.headers[ipHeader] ?? '').trim()) || req.socket?.remoteAddress || '',
+  clientIp: (req) => forwardedIp(req, ipHeader),
 }) : null;
 const server = createControlPlane({ db, key, tenant, adminToken, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', sinks, stepUpVerifier: verifier, identity });
 server.listen(Number(o.port), o.host, () => {
