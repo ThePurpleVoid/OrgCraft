@@ -1,0 +1,193 @@
+// Signing in to a hosted Studio, and proving a person is present (docs/specs/m4-sign-in.md sections 2 and 3).
+//
+// The deployment is its own identity provider: the page never sees an OAuth code, verifier or token. It sends the
+// person to /oauth/authorize, the issuer's callback sets the HttpOnly session cookie, and the page only ever calls its
+// own origin. Step-up is a passkey: the page asks the browser for an assertion and trades it for a single-use su_
+// token, which it keeps in memory for the one call that needed it and never stores.
+//
+// Only a hosted deployment uses this (<meta name="agent-team-mode" content="hosted">). The local Studio keeps its
+// launch link and step-up secret, so nothing here runs there. This module touches no DOM when imported, so the
+// return-path check can be tested in Node and reused by the test issuer.
+
+/** The web client's id at the issuer (spec section 2). */
+export const WEB_CLIENT = 'agent-team-web';
+
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+/**
+ * A `return` the issuer may send the person back to: a path on this host, or '/'. It must start with exactly one '/',
+ * and nothing in it may smuggle a second one in: '//evil', '/\evil', '/%2F%2Fevil', '/%5Cevil', a scheme, or control
+ * characters (raw or percent-encoded) are all refused (spec section 2, Proof).
+ */
+export function safeReturn(raw) {
+  if (typeof raw !== 'string' || !raw || raw.length > 2048) return '/';
+  if (CONTROL.test(raw) || /%(?:[01][0-9a-f]|7f)/i.test(raw)) return '/';
+  if (raw[0] !== '/' || raw[1] === '/' || raw[1] === '\\') return '/';
+  // Encoded slashes and backslashes, anywhere: a server or proxy that decodes once would see '//' or '/\'.
+  if (/\\|%2f|%5c|%25/i.test(raw)) return '/';
+  let url;
+  try { url = new URL(raw, 'https://host.invalid'); } catch { return '/'; }
+  if (url.origin !== 'https://host.invalid') return '/';
+  return url.pathname + url.search + url.hash;
+}
+
+/** Where the sign-in page sends "Continue with GitHub": built only from an interaction id the issuer gave. */
+export function githubStart(interaction) {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(interaction ?? '') ? `/oauth/interaction/${interaction}/github` : null;
+}
+
+/** The URL that starts a web sign-in and comes back to `path`. */
+export function signInUrl(path) {
+  return `/oauth/authorize?client_id=${WEB_CLIENT}&return=${encodeURIComponent(safeReturn(path))}`;
+}
+
+export const isHosted = (doc = globalThis.document) => doc?.querySelector?.('meta[name="agent-team-mode"]')?.content === 'hosted';
+
+// ---- base64url and the WebAuthn JSON shapes (@simplewebauthn's, which the issuer's library speaks)
+
+export function b64urlToBytes(s) {
+  const b = atob(String(s).replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(String(s).length / 4) * 4, '='));
+  return Uint8Array.from(b, (c) => c.charCodeAt(0));
+}
+export function bytesToB64url(buf) {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let s = '';
+  for (const x of bytes) s += String.fromCharCode(x);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function creationOptions(json) {
+  const PKC = globalThis.PublicKeyCredential;
+  if (PKC?.parseCreationOptionsFromJSON) return PKC.parseCreationOptionsFromJSON(json);
+  return {
+    ...json,
+    challenge: b64urlToBytes(json.challenge),
+    user: { ...json.user, id: b64urlToBytes(json.user.id) },
+    excludeCredentials: (json.excludeCredentials ?? []).map((c) => ({ ...c, id: b64urlToBytes(c.id) })),
+  };
+}
+function requestOptions(json) {
+  const PKC = globalThis.PublicKeyCredential;
+  if (PKC?.parseRequestOptionsFromJSON) return PKC.parseRequestOptionsFromJSON(json);
+  return { ...json, challenge: b64urlToBytes(json.challenge), allowCredentials: (json.allowCredentials ?? []).map((c) => ({ ...c, id: b64urlToBytes(c.id) })) };
+}
+function credentialJSON(cred) {
+  if (typeof cred.toJSON === 'function') return cred.toJSON();
+  const r = cred.response;
+  const response = r.attestationObject
+    ? { clientDataJSON: bytesToB64url(r.clientDataJSON), attestationObject: bytesToB64url(r.attestationObject), transports: r.getTransports?.() ?? [] }
+    : { clientDataJSON: bytesToB64url(r.clientDataJSON), authenticatorData: bytesToB64url(r.authenticatorData), signature: bytesToB64url(r.signature), ...(r.userHandle ? { userHandle: bytesToB64url(r.userHandle) } : {}) };
+  return { id: cred.id, rawId: bytesToB64url(cred.rawId), type: cred.type, response, clientExtensionResults: cred.getClientExtensionResults?.() ?? {}, authenticatorAttachment: cred.authenticatorAttachment ?? undefined };
+}
+
+// ---- calls to this origin
+
+/** A same-origin JSON call with the session cookie. Unsafe methods send JSON, so the issuer's CSRF check passes. */
+export async function call(method, path, body, headers = {}) {
+  const res = await fetch(path, {
+    method,
+    credentials: 'same-origin',
+    headers: { accept: 'application/json', ...(method === 'GET' ? {} : { 'content-type': 'application/json' }), ...headers },
+    body: method === 'GET' ? undefined : JSON.stringify(body ?? {}),
+  });
+  let data = null;
+  try { data = await res.json(); } catch { /* empty */ }
+  return { ok: res.ok, status: res.status, data: data ?? {} };
+}
+export const needsStepUp = (r) => r.status === 401 && /step-up-required$/.test(r.data?.type ?? '');
+
+/** The signed-in person, or null after sending the browser to sign in (it comes back to this page). */
+export async function ensureSignedIn(loc = globalThis.location) {
+  const r = await call('GET', '/v1/me');
+  if (r.ok) return r.data;
+  if (r.status === 401) { loc.assign(signInUrl(loc.pathname + loc.search + loc.hash)); return null; }
+  throw new Error(r.data.error ?? `HTTP ${r.status}`);
+}
+
+export async function signOut(loc = globalThis.location) {
+  await call('POST', '/oauth/revoke', {});
+  loc.assign('/sign-in?error=signed-out');
+}
+
+/** Why a WebAuthn ceremony failed, in words a person can act on. */
+function ceremonyError(e) {
+  if (e?.name === 'NotAllowedError') return 'The passkey prompt was closed or timed out, or the passkey could not confirm it is you. Try again.';
+  if (e?.name === 'InvalidStateError') return 'This device already has a passkey for you.';
+  if (e?.name === 'SecurityError') return 'Passkeys only work on the deployment\'s own address, over HTTPS.';
+  if (e?.name === 'NotSupportedError' || !globalThis.PublicKeyCredential) return 'This browser cannot use passkeys.';
+  return e?.message ?? String(e);
+}
+
+/** Registers a passkey on this device. `stepUp` is the header from a step-up, needed for every passkey after the first. */
+export async function addPasskey(name, stepUpHeader = {}) {
+  const opts = await call('GET', '/v1/me/passkeys/options');
+  if (!opts.ok) return { ok: false, status: opts.status, data: opts.data };
+  let cred;
+  try { cred = await navigator.credentials.create({ publicKey: creationOptions(opts.data) }); } catch (e) { return { ok: false, status: 0, data: { error: ceremonyError(e) } }; }
+  return call('POST', '/v1/me/passkeys', { name, credential: credentialJSON(cred) }, stepUpHeader);
+}
+
+/** One passkey assertion traded for one su_ token. Resolves { token } or { error }. */
+export async function passkeyStepUp() {
+  const ch = await call('GET', '/v1/auth/step-up/challenge');
+  if (!ch.ok) return { error: ch.data.error ?? `HTTP ${ch.status}` };
+  let cred;
+  try { cred = await navigator.credentials.get({ publicKey: requestOptions(ch.data) }); } catch (e) { return { error: ceremonyError(e) }; }
+  const r = await call('POST', '/v1/auth/step-up', { webauthn: credentialJSON(cred) });
+  if (!r.ok) return { error: r.status === 429 ? 'Too many tries. Wait a few minutes, then try again.' : r.data.error ?? `HTTP ${r.status}` };
+  return { token: r.data.token };
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+/**
+ * The step-up dialog: why it is needed, then the passkey prompt on a click (Safari only shows it from a user
+ * gesture). Resolves the x-step-up header for one call, or null when the person cancels. The token lives only in
+ * the returned object; the caller sends it once and lets it go.
+ */
+export function stepUpDialog(why, { doc = document } = {}) {
+  let dlg = doc.getElementById('passkey-stepup');
+  if (!dlg) {
+    dlg = doc.createElement('dialog');
+    dlg.id = 'passkey-stepup';
+    dlg.className = 'auth-dialog';
+    dlg.setAttribute('aria-labelledby', 'passkey-stepup-title');
+    dlg.innerHTML = `<form class="dialog" method="dialog">
+      <h2 id="passkey-stepup-title">Confirm it is you</h2>
+      <p class="why"></p>
+      <p class="hint">Your device asks for your fingerprint, face or screen lock. Nothing leaves it but a one-time proof.</p>
+      <p class="result error" role="alert"></p>
+      <div class="dialog-actions"><button type="button" data-act="cancel">Cancel</button><button type="button" class="primary" data-act="go">Use passkey</button></div>
+    </form>`;
+    doc.body.append(dlg);
+  }
+  dlg.querySelector('.why').textContent = why;
+  dlg.querySelector('.result').textContent = '';
+  return new Promise((done) => {
+    const go = dlg.querySelector('[data-act="go"]');
+    const finish = (v) => { dlg.oncancel = null; go.onclick = null; dlg.querySelector('[data-act="cancel"]').onclick = null; if (dlg.open) dlg.close(); done(v); };
+    go.onclick = async () => {
+      go.disabled = true;
+      dlg.querySelector('.result').textContent = '';
+      const r = await passkeyStepUp();
+      go.disabled = false;
+      if (r.token) return finish({ 'x-step-up': r.token });
+      dlg.querySelector('.result').textContent = r.error;
+    };
+    dlg.querySelector('[data-act="cancel"]').onclick = () => finish(null);
+    dlg.oncancel = () => finish(null);
+    dlg.showModal();
+    go.focus();
+  });
+}
+
+/** Calls `path`; if the issuer answers step-up-required, asks for a passkey once and sends it again with the su_ token. */
+export async function withStepUp(why, method, path, body) {
+  const r = await call(method, path, body);
+  if (!needsStepUp(r)) return r;
+  const header = await stepUpDialog(why);
+  if (!header) return { ok: false, status: 0, cancelled: true, data: { error: 'Cancelled: nothing was changed.' } };
+  return call(method, path, body, header);
+}
+
+export { esc };
