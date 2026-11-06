@@ -15,8 +15,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { KIT } from '../../bin/agent-team.mjs';
 import { createStudio } from '../../apps/studio/server.mjs';
-import { localRollout } from '../../apps/studio/rollout.mjs';
-import { choiceWords, rolloutHtml, stateLine, summaryLine, UNKNOWN_HINT } from '../../apps/studio/public/rollout.js';
+import { changeUrl, localRollout, pendingOf } from '../../apps/studio/rollout.mjs';
+import { choiceWords, rolloutHtml, sortRoles, stateLine, summaryLine, UNKNOWN_HINT } from '../../apps/studio/public/rollout.js';
 import { context } from '../../tools/report.mjs';
 
 const require = createRequire(import.meta.url);
@@ -67,6 +67,8 @@ function studio(root, reports) {
 let root, s1, s2, s3, version, browser;
 before(async () => {
   root = repo();
+  // Where the change is seen: GitHub, from origin. The credential in it never reaches the page.
+  git(root, 'remote', 'set-url', 'origin', 'https://x-access-token:ghs_secret@github.com/acme/shop.git');
   version = git(root, 'rev-parse', 'HEAD');
   const old = git(root, 'rev-parse', 'HEAD~1');
   const soon = (min) => new Date(Date.now() + min * 60_000).toISOString(); // after the publish commit, whatever the clock
@@ -97,7 +99,7 @@ test('the copy: each state, the summary and the choice words (CPO D61 to D63)', 
   const now = Date.parse('2026-11-06T12:00:00Z');
   const t = (slug) => ({ 'web-dev': 'Web dev' })[slug] ?? slug;
   assert.deepEqual(stateLine({ state: 'moved', lastAt: '2026-11-06T11:50:00Z' }, { now }), { text: 'On the new version', tone: 'ok' });
-  assert.equal(stateLine({ state: 'next-task', lastAt: '2026-11-06T11:50:00Z' }, { now }).text, 'Picks up the new version at its next task');
+  assert.deepEqual(stateLine({ state: 'next-task', lastAt: '2026-11-06T11:50:00Z' }, { now }), { text: 'Picks up the new version at its next task', tone: 'plain' }, 'the normal path: no amber (CPO)');
   assert.equal(stateLine({ state: 'finishing', task: 'Invoices', plan: { choice: 'handoff', to: 'web-dev' }, lastAt: '2026-11-06T11:50:00Z' }, { now, titleOf: t }).text, 'Finishing "Invoices" on the old version · handing off to Web dev');
   assert.equal(stateLine({ state: 'off-finishing', task: 'Docs', lastAt: '2026-11-06T11:50:00Z' }, { now }).text, 'Switched off · finishing "Docs" first');
   assert.deepEqual(stateLine({ state: 'off' }, { now }), { text: 'Off', tone: 'grey' });
@@ -106,6 +108,8 @@ test('the copy: each state, the summary and the choice words (CPO D61 to D63)', 
   assert.deepEqual(stateLine({ state: 'no-report' }, { now }), { text: 'No report since the publish', tone: 'grey' });
   assert.deepEqual(stateLine({ state: 'moved', lastAt: '2026-11-06T09:00:00Z' }, { now }), { text: 'On the new version · last heard 3 h ago', tone: 'grey' }, 'D14: quiet over 2 h is grey');
   assert.equal(choiceWords({ choice: 'finish' }), 'then switches over');
+  assert.deepEqual(sortRoles([{ role: 'b', state: 'off' }, { role: 'z', state: 'moved' }, { role: 'a', state: 'moved' }, { role: 'y', state: 'unknown' }, { role: 'x', state: 'no-report' }, { role: 'w', state: 'next-task' }, { role: 'v', state: 'off-finishing' }, { role: 'u', state: 'finishing' }]).map((x) => x.role),
+    ['u', 'v', 'w', 'x', 'y', 'a', 'z', 'b'], 'what needs a look first; by title inside a group');
   assert.equal(choiceWords({ choice: 'pause' }), 'paused');
   assert.equal(summaryLine({ moved: 1, of: 4, finishing: 2, offFinishing: 0, unknown: 1 }), '1 of 4 roles on the new version, 2 finishing work first · 1 not reporting a version');
   assert.equal(summaryLine({ moved: 3, of: 3, finishing: 0, unknown: 0, allMoved: true }), 'All 3 roles on the new version.');
@@ -121,7 +125,11 @@ test('the local data: the default branch says what merged, its message gives the
   assert.equal(r.pr, 7);
   assert.deepEqual(r.roles.find((x) => x.role === 'docs-keeper').state, 'off');
   assert.equal(r.pending, null);
+  assert.equal(r.changeUrl, 'https://github.com/acme/shop/pull/7', 'the pull request, without the credential');
+  assert.equal(changeUrl(repo({ publish: false }), { version }), null, 'not GitHub: no link');
   assert.equal(localRollout(repo({ publish: false }), { current: [] }).version, null, 'nothing merged yet');
+  assert.equal(pendingOf(root), null, 'pendingOf agrees with localRollout');
+  assert.equal(pendingOf('/nonexistent-dir'), null, 'no repository: nothing pending, no throw');
 });
 
 test('desktop: one line per role from the reports since the merge, n of m, and the plan (criteria 1 to 3)', { skip }, async () => {
@@ -131,11 +139,16 @@ test('desktop: one line per role from the reports since the merge, n of m, and t
   await page.goto(`http://127.0.0.1:${s1.address().port}/?t=${s1.launchToken}`);
   await page.getByRole('button', { name: 'Rollout' }).click();
   const view = page.locator('#rollout-page');
-  await view.getByRole('heading', { name: new RegExp(`^Rollout of ${version.slice(0, 7)}, published \\d+ \\w+ · #7$`) }).waitFor();
+  await view.getByRole('heading', { name: new RegExp(`^Rollout of ${version.slice(0, 7)}, published \\d+ \\w+ · see the change$`) }).waitFor();
   const line = (slug) => view.locator(`.ro-row[data-role="${slug}"] .ro-state`);
   // 10 roles counted: 11 published minus the one reporting no version; docs-keeper was switched off (outside the count).
   await view.getByText('1 of 9 roles on the new version, 2 finishing work first · 1 not reporting a version').waitFor();
   assert.equal(await line('qa-web').textContent(), 'On the new version');
+  assert.deepEqual((await view.locator('.ro-row').evaluateAll((els) => els.map((e) => e.dataset.role))).slice(0, 4), ['backend-dev', 'web-dev', 'architect', 'chief-of-staff'], 'mid-task first, then idle, then no report');
+  assert.equal(await view.locator('.ro-row').last().getAttribute('data-role'), 'docs-keeper', 'off last');
+  const link = view.getByRole('link', { name: 'see the change' });
+  assert.equal(await link.getAttribute('href'), 'https://github.com/acme/shop/pull/7');
+  assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
   assert.equal(await line('web-dev').textContent(), 'Finishing "Search" on the old version · then switches over');
   assert.equal(await line('backend-dev').textContent(), 'Finishing "Invoices" on the old version · handing off to Web dev');
   assert.equal(await line('architect').textContent(), 'Picks up the new version at its next task');
@@ -173,7 +186,7 @@ test('360px: the lines stack, nothing scrolls sideways; and the empty and waitin
 
   await page.goto(`http://127.0.0.1:${s3.address().port}/?t=${s3.launchToken}`);
   await page.goto(`http://127.0.0.1:${s3.address().port}/#rollout`);
-  await page.getByText(/^Waiting for the change to merge\. Roles keep running [0-9a-f]{7}, published \d+ \w+ until it does\.$/).waitFor();
+  await page.getByText(/^Waiting for the change to merge\. Roles keep running [0-9a-f]{7}, published \d+ \w+ until it does\. As of your last git fetch\.$/).waitFor();
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'rollout-waiting-phone.png') });
   assert.deepEqual(errors, []);
   await page.close();

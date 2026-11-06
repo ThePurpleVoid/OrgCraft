@@ -23,6 +23,19 @@ export function defaultBranch(root) {
 }
 
 /**
+ * Where a person sees the published change: the pull request (or the commit) on GitHub, from this checkout's origin.
+ * Null for another host or no origin. Credentials in the remote URL are never carried over.
+ */
+export function changeUrl(root, { version, pr } = {}) {
+  const raw = git(root, ['remote', 'get-url', 'origin']);
+  const m = /^(?:https:\/\/(?:[^@/]+@)?|git@|ssh:\/\/git@)github\.com[:/]([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(raw);
+  if (!m) return null;
+  const base = `https://github.com/${m[1]}/${m[2]}`;
+  if (Number.isInteger(pr) && pr > 0) return `${base}/pull/${pr}`;
+  return /^[0-9a-f]{7,40}$/.test(String(version ?? '')) ? `${base}/commit/${version}` : null;
+}
+
+/**
  * { version, name, publishedAt, pr, roles, summary, asOf, pending } for the view. `version` is null when nothing has
  * reached the default branch yet (the empty state). `pending` is { version, name } when this checkout has a team
  * change that is not on the default branch yet (published, waiting for its merge).
@@ -30,12 +43,20 @@ export function defaultBranch(root) {
 export function localRollout(root, board = { current: [] }) {
   const base = defaultBranch(root);
   const merged = lastTeamCommit(root, base ?? 'HEAD');
-  const mine = lastTeamCommit(root, 'HEAD');
-  const waiting = !!base && !!mine && mine !== merged && !isAncestor(root, mine, base);
-  const pending = waiting ? { version: mine, name: versionName(mine) } : null;
+  const pending = pendingOf(root, base, merged);
   if (!merged) return { version: null, name: null, roles: [], summary: null, pr: null, asOf: board?.asOf ?? null, pending };
   const p = publishedBody(root, { sha: merged });
-  return { ...rollout({ version: p.version, publishedAt: p.publishedAt, roles: p.roles, off: p.off, plan: p.plan, board }), pr: p.pr, asOf: board?.asOf ?? null, pending };
+  return { ...rollout({ version: p.version, publishedAt: p.publishedAt, roles: p.roles, off: p.off, plan: p.plan, board }), pr: p.pr, changeUrl: changeUrl(root, { version: p.version, pr: p.pr }), asOf: board?.asOf ?? null, pending };
+}
+
+/**
+ * { version, name } when this checkout has a team change the default branch does not have yet, else null. Reads the
+ * remote-tracking refs, so it is as of the last git fetch. Never throws (every git call fails soft).
+ */
+export function pendingOf(root, base = defaultBranch(root), merged = lastTeamCommit(root, base ?? 'HEAD')) {
+  const mine = lastTeamCommit(root, 'HEAD');
+  const waiting = !!base && !!mine && mine !== merged && !isAncestor(root, mine, base);
+  return waiting ? { version: mine, name: versionName(mine) } : null;
 }
 
 function isAncestor(root, a, b) {

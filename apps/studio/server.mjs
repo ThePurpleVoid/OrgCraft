@@ -22,7 +22,7 @@ import { ownershipFromMarkdown, suggestAreas, suggestChecks } from './suggest.mj
 import { loadKit, loadTemplates } from '../../packages/team-model/node.mjs';
 import * as core from './core.mjs';
 import { liveSource } from './live.mjs';
-import { localRollout } from './rollout.mjs';
+import { changeUrl, localRollout, pendingOf } from './rollout.mjs';
 import { chatSource } from './chat.mjs';
 import { runRequest, RunRefused } from './runs.mjs';
 import { openPullRequest, prSupport, pullRequestText } from './pr.mjs';
@@ -258,8 +258,8 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       // repository's default branch and the board. Either way this checkout says whether a publish is still waiting.
       if (req.method === 'GET' && url.pathname === '/v1/team/rollout') {
         if (chat.connected) {
-          const pending = localRollout(root, { current: [] }).pending;
-          return relay(res, async () => ({ source: 'server', ...(await chat.rollout()), pending }));
+          const pending = pendingOf(root);
+          return relay(res, async () => { const r = await chat.rollout(); return { source: 'server', ...r, changeUrl: changeUrl(root, r), pending }; });
         }
         try { return send(res, 200, { source: live.kind, ...localRollout(root, await live.board()) }); } catch (e) { return send(res, 502, { source: live.kind, error: e.message }); }
       }

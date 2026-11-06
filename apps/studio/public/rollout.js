@@ -36,7 +36,7 @@ export function stateLine(r, { titleOf = human, now = Date.now() } = {}) {
   const heard = age !== null && age > QUIET_S ? ` · last heard ${ago(age)} ago` : '';
   switch (r.state) {
     case 'moved': return { text: `On the new version${heard}`, tone: heard ? 'grey' : 'ok' };
-    case 'next-task': return { text: `Picks up the new version at its next task${heard}`, tone: heard ? 'grey' : 'warn' };
+    case 'next-task': return { text: `Picks up the new version at its next task${heard}`, tone: heard ? 'grey' : 'plain' };
     case 'finishing': return { text: `Finishing ${task} on the old version · ${choiceWords(r.plan, titleOf)}${heard}`, tone: heard ? 'grey' : 'warn' };
     case 'off-finishing': return { text: `Switched off · finishing ${task} first${heard}`, tone: heard ? 'grey' : 'warn' };
     case 'off': return { text: 'Off', tone: 'grey' };
@@ -56,14 +56,21 @@ export function summaryLine(s) {
 
 const fmtTime = (iso) => { const d = new Date(iso ?? ''); return Number.isNaN(+d) ? '' : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
 
-/** The whole view from GET /v1/team/rollout, as markup. */
+/** What needs a look first (CPO): mid-task, idle, no report, unknown, on the new version, off; by title inside each. */
+const ORDER = ['finishing', 'off-finishing', 'next-task', 'no-report', 'unknown', 'moved', 'off'];
+export function sortRoles(roles, titleOf = human) {
+  const rank = (r) => { const i = ORDER.indexOf(r.state); return i < 0 ? ORDER.length : i; };
+  return [...(roles ?? [])].sort((a, b) => rank(a) - rank(b) || String(titleOf(a.role)).localeCompare(String(titleOf(b.role))));
+}
+
+/** The whole view from GET /v1/team/rollout, as markup. The change link's href is set by createRollout, through the DOM. */
 export function rolloutHtml(data, { titleOf = human, now = Date.now() } = {}) {
   if (!data) return '<p class="muted">Reading the rollout…</p>';
   if (data.error) return `<p class="result error" role="alert">${esc(data.error)}</p>`;
   const pending = data.pending
-    ? `<p class="notice" role="status">Waiting for the change to merge. Roles keep running ${esc(data.name ?? 'the version before it')} until it does.</p>` : '';
+    ? `<p class="notice" role="status">Waiting for the change to merge. Roles keep running ${esc(data.name ?? 'the version before it')} until it does. As of your last git fetch.</p>` : '';
   if (!data.version) return `<h2 class="flush ro-head">Rollout</h2>${pending || `<p class="muted">${esc(EMPTY)}</p>`}`;
-  const rows = (data.roles ?? []).map((r) => {
+  const rows = sortRoles(data.roles, titleOf).map((r) => {
     const line = stateLine(r, { titleOf, now });
     return `<li class="ro-row ro-${line.tone}" data-role="${esc(r.role)}">
       <span class="ro-dot" aria-hidden="true"></span>
@@ -72,7 +79,7 @@ export function rolloutHtml(data, { titleOf = human, now = Date.now() } = {}) {
     </li>`;
   }).join('');
   const newest = (data.roles ?? []).map((r) => r.lastAt).filter(Boolean).sort().at(-1);
-  return `<h2 class="flush ro-head">Rollout of ${esc(data.name)}${data.pr ? ` <span class="muted">· #${esc(data.pr)}</span>` : ''}</h2>
+  return `<h2 class="flush ro-head">Rollout of ${esc(data.name)}${data.changeUrl ? ' <span class="muted">· <a class="ro-change" target="_blank" rel="noopener noreferrer">see the change</a></span>' : ''}</h2>
     ${pending}
     <p class="ro-summary">${esc(summaryLine(data.summary))}</p>
     <ul class="plain ro-list">${rows}</ul>
@@ -83,7 +90,12 @@ export function rolloutHtml(data, { titleOf = human, now = Date.now() } = {}) {
 /** The Rollout page: loads when shown, and again whenever the board changes while it is open. */
 export function createRollout({ root, titleOf, apiUrl }) {
   let data = null, es = null, timer = null;
-  const draw = () => { root.innerHTML = rolloutHtml(data, { titleOf }); };
+  const draw = () => {
+    root.innerHTML = rolloutHtml(data, { titleOf });
+    // https only, set through the DOM, never written into markup.
+    const a = root.querySelector('.ro-change');
+    if (a) { try { const u = new URL(data.changeUrl); if (u.protocol === 'https:') a.href = u.href; else a.parentElement.remove(); } catch { a.parentElement.remove(); } }
+  };
   async function load() {
     try {
       const res = await requestJson('/v1/team/rollout');

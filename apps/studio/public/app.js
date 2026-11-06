@@ -825,7 +825,8 @@ async function ours(work) {
 
 /** The roles on in the draft, for hand-off targets (criterion 10: never one that is off). */
 const onRoles = () => view.team.map((r) => ({ slug: r.slug, title: r.title }));
-const roleTitle = (slug) => view.bySlug.get(slug)?.title ?? slug;
+// A deep link straight to the Rollout page arrives before anything has rendered the team, so build it here if needed.
+const roleTitle = (slug) => (view ??= derive()).bySlug.get(slug)?.title ?? slug;
 /** The rollout page reads the board and the repository through the local Studio's server; an embedded Studio has neither yet. */
 const rolloutOn = () => !env.embedded && feature('live', S.features);
 const managerOfRole = (slug) => view.bySlug.get(slug)?.reportsTo ?? '';
