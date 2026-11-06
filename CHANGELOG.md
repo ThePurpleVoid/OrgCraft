@@ -65,6 +65,8 @@ Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD
 - **M3 on a Mac** (apps/runner/README.md): the control plane, Studio and runner on one Mac. The deploy key and merger app key are installed into the runner's closed folder from a one-off container, and the git config pushes over ssh with a pinned GitHub host key.
 
 ### Studio (nothing changes on sync)
+- A custom agent whose name the pinned kit now ships (and that team.json "replaces" does not list) is an error, with two fixes in its editor: **Rename mine** (checked like a new slug) or **Use the kit's role** (#30, criterion 14, A7).
+- A group that only custom agents use gets its own library section in its colour, listing them as well as Your agents (criterion 13). The New agent dialog no longer defaults the group to "engineering": the owner picks one.
 - The agent editor resolves path conflicts where they happen (#30, criterion 9): an area another role writes is held, never written as a second writer, until the owner picks "Read only, send fixes as BUG", "Take a narrower area" (checked again) or "Move the whole area to this agent". A move asks twice when the board says the writer is working on it now.
 - An imported role pack's `needs.resources` show as "Needs a <type>: connect one or skip", bound only on Connect (criterion 12). Its areas go through the same conflict choices.
 - Hands to: the role picker starts on "Choose a role" and adds roles by name. Clearing Identity is now an error from the kit's own check (0.11.1), no longer refilled with the template text.

@@ -1,6 +1,6 @@
 // Agent Team Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
-import { resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
+import { checkUpgrade, resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
 import { createChat } from './chat.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
@@ -59,7 +59,20 @@ function derive() {
     };
   };
   const all = Object.keys(spec.roles).sort().map(info);
-  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team: all.filter((r) => r.enabled && bySlug.has(r.slug)), issues: validate(spec, S.kit) };
+  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team: all.filter((r) => r.enabled && bySlug.has(r.slug)), issues: checksOf(spec) };
+}
+
+/**
+ * The team's checks, plus A7: a custom agent with the name of a role the pinned kit added since the team last synced
+ * (and not marked in team.json "replaces") is an error, with two fixes in its editor. Sync refuses it the same way.
+ */
+function checksOf(sp) {
+  const replaces = new Set(sp.options?.replaces ?? []);
+  const clashes = checkUpgrade(sp, S.kit, S.kitRoles).filter((c) => !replaces.has(c.slug))
+    .map((c) => ({ level: 'error', where: `roles/${c.slug}`, message: `the kit (${S.kitVersion}) adds a role called ${c.slug}, the same name as this agent: rename yours, or use the kit's`, fix: 'kit-clash' }));
+  // The "replaces the kit's" note says the opposite of a clash (the replacement was never chosen), so the clash wins.
+  const clashed = new Set(clashes.map((c) => c.where));
+  return [...validate(sp, S.kit).filter((i) => !(clashed.has(i.where) && /^replaces the kit's/.test(i.message))), ...clashes];
 }
 
 /** Every change goes through here, so undo, redo and the redraw are in one place. */
@@ -569,7 +582,7 @@ function openEditor(slug, origin) {
   editor ??= createAgentEditor($('#agent-editor'), {
     spec: () => spec, kit: S.kit, roles: () => view.all, team: () => view.team,
     // A switched-off agent is checked as if it were on, so the editor shows what stands between it and the team.
-    issues: () => (spec.roles[editor.slug]?.enabled ? view.issues : validate({ ...spec, roles: { ...spec.roles, [editor.slug]: { ...spec.roles[editor.slug], enabled: true } } }, S.kit)),
+    issues: () => (spec.roles[editor.slug]?.enabled ? view.issues : checksOf({ ...spec, roles: { ...spec.roles, [editor.slug]: { ...spec.roles[editor.slug], enabled: true } } })),
     change, ctx, api,
     close: () => { editor.close(); render(); },
     setOn: (s) => { switchRole(s, true); },
