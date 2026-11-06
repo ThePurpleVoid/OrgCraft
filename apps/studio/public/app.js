@@ -3,6 +3,7 @@
 import { resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
 import { createChat } from './chat.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
+import { createAgentEditor } from './agent-editor.js';
 import { bind, renderAreas, renderChecks, renderSystemInspector, renderSystemsStrip, roleSystemsHtml, wireBindings } from './panels.js';
 
 const $ = (s) => document.querySelector(s);
@@ -34,6 +35,8 @@ let sugg = null; // owned area and check suggestions from the repository
 let scale = 1;
 let live = null; // { on, source, where, board, error, es } when the live board is shown
 let chat = null; // the chief-of-staff chat, made the first time it is opened
+let editor = null; // the custom agent editor (agent-editor.js)
+let lastEdit = { key: '', at: 0 }; // typing in one field folds into one undo step
 /** Phones get the control room (chat, live board) and a read-only team: building the team needs a large screen. */
 const small = matchMedia('(max-width: 640px)');
 
@@ -60,16 +63,31 @@ function derive() {
 }
 
 /** Every change goes through here, so undo, redo and the redraw are in one place. */
-function change(fn) {
+/**
+ * Every change goes through here, so undo, redo and the redraw are in one place. `key` folds a run of typing in one
+ * field into one undo step; `quiet` updates what follows the text (checks, the editor's preview) without redrawing
+ * the form being typed in.
+ */
+function change(fn, { quiet = false, key = '' } = {}) {
   if (small.matches) { flash('Editing the team needs a larger screen'); render(); return; }
-  undo.push(JSON.stringify(spec));
-  if (undo.length > 200) undo.shift();
+  const now = Date.now();
+  if (!key || key !== lastEdit.key || now - lastEdit.at > 1500) {
+    undo.push(JSON.stringify(spec));
+    if (undo.length > 200) undo.shift();
+  }
+  lastEdit = { key, at: now };
   redo.length = 0;
   fn(spec);
+  if (quiet && editor?.slug) { view = derive(); renderIssues(); renderLibrary(); editor.live(); syncUndo(); return; }
   render();
+}
+function syncUndo() {
+  $('#undo').disabled = !undo.length;
+  $('#redo').disabled = !redo.length;
 }
 function step(from, to) {
   if (!from.length) return;
+  lastEdit = { key: '', at: 0 };
   to.push(JSON.stringify(spec));
   spec = JSON.parse(from.pop());
   render();
@@ -420,6 +438,8 @@ function wireLibrary() {
     const l = e.target.closest('.lib-role');
     if (l && !e.target.dataset.toggle) {
       e.preventDefault();
+      // A custom agent opens in its editor (on a large screen); any other role in the inspector.
+      if (isCustom(spec.roles[l.dataset.slug]) && !small.matches) return openEditor(l.dataset.slug);
       select(l.dataset.slug);
       // On a phone the inspector sits below the canvas: bring it into view, or the tap seems to do nothing.
       if (small.matches) $('#inspector').scrollIntoView({ block: 'start' });
@@ -429,7 +449,7 @@ function wireLibrary() {
   $('#search').addEventListener('input', (e) => { query = e.target.value; renderLibrary(); });
   $('#new-agent').onclick = () => {
     if (small.matches) return flash('Editing the team needs a larger screen');
-    openNewAgent({ spec: () => spec, kit: S.kit, kitVersion: S.kitVersion, roles: () => view.all, change, select });
+    openNewAgent({ spec: () => spec, kit: S.kit, kitVersion: S.kitVersion, roles: () => view.all, change, select, edit: openEditor });
   };
 }
 
@@ -457,8 +477,7 @@ function renderInspector() {
   if (ownProject && small.matches) {
     body = `<p class="notice">Open the Studio on a larger screen to edit this agent.</p>`;
   } else if (ownProject) {
-    body = `<div class="field"><span>Brief (markdown)</span><textarea id="i-brief" rows="18">${esc(role.brief)}</textarea></div>
-      <p><button type="button" id="i-export">Export as a role pack</button></p>`;
+    body = `<p class="row"><button type="button" id="i-edit" class="primary">Edit this agent</button><button type="button" id="i-export">Export as a role pack</button></p>`;
   } else {
     const sections = splitBrief(kitMd).sections.filter((s) => !/^## every thread/i.test(s.heading));
     const mine = new Map((role.extension?.sections ?? []).map((s) => [s.name.toLowerCase(), s]));
@@ -480,6 +499,8 @@ function renderInspector() {
   $('#i-dormant').onchange = (e) => change(() => setExtField(r.slug, 'Status', e.target.checked ? `dormant until the owner or the lane's executive opens it for a request.` : 'active'));
   const reset = $('#i-reset');
   if (reset) reset.onclick = () => change(() => { delete spec.roles[r.slug].extension; });
+  const ed = $('#i-edit');
+  if (ed) ed.onclick = () => openEditor(r.slug);
   const out = $('#i-export');
   if (out) out.onclick = async () => { const said = await exportPack(spec, r.slug); if (said !== 'cancelled') note(said); };
   const brief = $('#i-brief');
@@ -535,8 +556,25 @@ function setMode(m) {
 
 function select(slug) { selected = slug; selectedSystem = null; render(); }
 
+/** Opens a custom agent in the editor. `origin` ({ from, title, md }) is the role a copy started from. */
+function openEditor(slug, origin) {
+  editor ??= createAgentEditor($('#agent-editor'), {
+    spec: () => spec, kit: S.kit, roles: () => view.all, team: () => view.team,
+    // A switched-off agent is checked as if it were on, so the editor shows what stands between it and the team.
+    issues: () => (spec.roles[editor.slug]?.enabled ? view.issues : validate({ ...spec, roles: { ...spec.roles, [editor.slug]: { ...spec.roles[editor.slug], enabled: true } } }, S.kit)),
+    change, ctx, api,
+    close: () => { editor.close(); render(); },
+    setOn: (s) => { switchRole(s, true); },
+  });
+  selected = slug;
+  view = derive();
+  editor.open(slug, origin);
+  render();
+}
+
 function render() {
   view = derive();
+  if (editor?.slug) { renderLibrary(); renderIssues(); syncUndo(); editor.draw(); return; }
   renderCanvas();
   renderLibrary();
   renderInspector();
