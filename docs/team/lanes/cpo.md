@@ -444,7 +444,7 @@ What follows is the CPO's reading, labelled as mine. It reuses the email story (
 Placeholders as in the email copy, plus `{channel}` and `{admin}`. Messages use plain Slack blocks: a section of text, one button, one context line.
 
 **Approval needed** (breaks through quiet hours)
-- Fallback text: `{team}: {role} needs your approval`
+- Fallback text: DM `{team}: {role} needs your approval` · channel `{team}: {role} is waiting for an approval`
 - DM:
   > *{role} needs your approval before it can go on.*
   > "{summary}"
