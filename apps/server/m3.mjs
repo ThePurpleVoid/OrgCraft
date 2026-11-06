@@ -536,12 +536,18 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     } finally {
       checking.delete(tenant);
     }
+    return mintStepUp(tenant, by, { method: 'secret' });
+  }
+
+  /** A single-use su_ token for `by` in `tenant`, 5 minutes, kept only as a hash; minted after a proof of presence
+   *  (the local step-up secret, or a passkey assertion in passkeys.mjs). Never from a session alone (K2). */
+  async function mintStepUp(tenant, by, detail = {}) {
     const tid = id('su');
     const raw = randomBytes(24).toString('base64url');
     const expires = new Date(Date.now() + STEP_UP_MINUTES * 60_000);
     await db.tenant(tenant, async ({ q }) => {
       await q('insert into step_up_tokens(id, tenant, principal, hash, expires_at) values ($1, $2, $3, $4, $5)', [tid, tenant, by, sha(raw), expires.toISOString()]);
-      await q("insert into audit(tenant, actor_kind, actor_id, action, target, decision) values ($1, 'person', $2, 'step-up', $3, 'allowed')", [tenant, by, tid]);
+      await q("insert into audit(tenant, actor_kind, actor_id, action, target, decision, detail) values ($1, 'person', $2, 'step-up', $3, 'allowed', $4)", [tenant, by, tid, JSON.stringify(detail)]);
     });
     return { token: `${tid}.${raw}`, expires: expires.toISOString() };
   }
@@ -683,7 +689,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     requireStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
     createCard, changeCard, getCard, answerCard, requestApproval, decideApproval,
-    stepUp, postChat, getChat, inbox, teamExtras,
+    stepUp, mintStepUp, postChat, getChat, inbox, teamExtras,
   };
 }
 

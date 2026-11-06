@@ -19,6 +19,7 @@ import * as store from './store.mjs';
 import { attachRunners } from './runners.mjs';
 import { createM3 } from './m3.mjs';
 import { createBus } from './bus.mjs';
+import { createPasskeys } from './passkeys.mjs';
 
 /** The bus hears every stored event (deliveries) and run and approval changes (stops, results). */
 function wireBus(m3, bus) {
@@ -121,6 +122,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
+  const passkeys = identity ? createPasskeys({ db, m3, origin: identity.origin, now }) : null;
   let tickMisses = [];
   const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl });
   if (!givenBus) wireBus(m3, bus);
@@ -253,6 +255,20 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (answer) send(res, answer.status, answer.body, answer.headers);
   }
 
+  /** CRON_SECRET for /v1/internal/*: 404 when unset; the right secret always passes; wrong ones get 429 after 10 a minute. */
+  function cron(req) {
+    if (!cronSecret) throw new Problem(404, 'not found');
+    const at = now().getTime();
+    tickMisses = tickMisses.filter((x) => x > at - 60_000);
+    const got = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
+    // The right secret always passes, so wrong guesses cannot lock the real cron out; guesses are slowed.
+    if (!got || !same(got, cronSecret)) {
+      if (tickMisses.length >= 10) throw new Problem(429, 'too many wrong tick secrets; try again in a minute');
+      tickMisses.push(at);
+      throw new Problem(401, 'send Authorization: Bearer <CRON_SECRET>');
+    }
+  }
+
   async function route(req, res) {
     const url = new URL(req.url, 'http://x');
     const parts = url.pathname.replace(/\/+$/, '').split('/').slice(1).map(decodeURIComponent);
@@ -298,27 +314,46 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
 
     // The tick for hosts without a long-lived process (a cron). Refused unless CRON_SECRET is set (issue #28 D8).
     if (a === 'internal' && team === 'tick' && !b && m === 'POST') {
-      if (!cronSecret) throw new Problem(404, 'not found');
-      const at = now().getTime();
-      tickMisses = tickMisses.filter((x) => x > at - 60_000);
-      const got = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
-      // The right secret always passes, so wrong guesses cannot lock the real cron out; guesses are slowed.
-      if (!got || !same(got, cronSecret)) {
-        if (tickMisses.length >= 10) throw new Problem(429, 'too many wrong tick secrets; try again in a minute');
-        tickMisses.push(at);
-        throw new Problem(401, 'send Authorization: Bearer <CRON_SECRET>');
-      }
+      cron(req);
       await bus.tick();
       return send(res, 200, { ok: true });
+    }
+    // For the deploy's smoke check: who the sign-in rate limits think is calling, and whether the request came
+    // through our edge. Never the edge header's value. CRON_SECRET, because the admin token is not for the network.
+    if (a === 'internal' && team === 'caller' && !b && m === 'GET') {
+      if (!identity) throw new Problem(404, 'not found');
+      cron(req);
+      return send(res, 200, identity.caller(req));
     }
 
     const who = await person(req);
     if (a === 'me' && !team && m === 'GET') return send(res, 200, await meView(who));
+    // Passkeys and step-up for a signed-in person (spec section 3). Their own, so any member may manage them.
+    if (passkeys && ((a === 'me' && team === 'passkeys') || (a === 'auth' && team === 'step-up'))) {
+      const step = req.headers['x-step-up'] ?? null;
+      if (a === 'auth' && b === 'challenge' && !c && m === 'GET') return send(res, 200, await passkeys.challenge(mustBePerson(who)));
+      if (a === 'auth' && !b && m === 'POST') {
+        const body = await readJson(req, 16 * 1024);
+        // The typed secret is local mode's only (spec section 3): a hosted deployment steps up with a passkey.
+        if (!body?.webauthn) throw new Problem(400, 'step up with your passkey: GET /v1/auth/step-up/challenge, then POST { webauthn }', { type: 'step-up-method' });
+        return send(res, 201, await passkeys.stepUp(mustBePerson(who), body.webauthn));
+      }
+      if (a === 'me' && !b && m === 'GET') return send(res, 200, await passkeys.list(mustBePerson(who)));
+      if (a === 'me' && b === 'options' && !c && m === 'GET') return send(res, 200, await passkeys.registrationOptions(mustBePerson(who)));
+      if (a === 'me' && !b && m === 'POST') return send(res, 201, await passkeys.register(mustBePerson(who), await readJson(req, 64 * 1024), step));
+      if (a === 'me' && b && !c && m === 'DELETE') return send(res, 200, await passkeys.remove(mustBePerson(who), b, step));
+      throw new Problem(404, 'not found');
+    }
     // A member elsewhere only: nothing here shows which teams exist (spec section 4).
     if (!who.tenant) throw new Problem(404, 'not found');
     if (who.via === 'cookie' && WRITES.has(m) && who.role !== 'owner') throw new Problem(403, 'only an owner can change this workspace yet', { type: 'forbidden' });
     return idempotent(req, res, who.tenant, who.principal, url.pathname, () => personRoute(req, res, who, url, parts));
   }
+
+  const mustBePerson = (who) => {
+    if (who.via !== 'cookie') throw new Problem(400, 'passkeys belong to a signed-in person, not the admin token');
+    return who;
+  };
 
   /** GET /v1/me: the signed-in person, their workspaces and roles, and how many passkeys they have. */
   async function meView(who) {
@@ -354,8 +389,6 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     }
     if (a === 'auth' && team === 'step-up' && !b && m === 'POST') {
       const body = await readJson(req, 4 * 1024);
-      // The typed secret is local mode's step-up; a signed-in person steps up with a passkey (M4 order 2).
-      if (who.via === 'cookie') throw new Problem(400, 'the step-up secret is for local mode; sign-in steps up with a passkey', { type: 'step-up-method' });
       const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
       return send(res, 201, await m3.stepUp(t, me, body?.secret, { verifier: stepUpVerifier, bearer }), {}, { secrets: ['token'] });
     }
