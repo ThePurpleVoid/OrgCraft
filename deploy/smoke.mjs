@@ -7,7 +7,8 @@
 //   4. the caller's IP resolves through the site: GET /v1/internal/caller (Bearer CRON_SECRET) answers { ip, edge }. Through
 //      the site, edge must be true (the middleware's x-agent-team-edge matched) and ip must be this machine's own
 //      address, the one the container sees directly, not a Vercel egress address. Per-caller rate limits, and so
-//      sign-in, depend on it (#73). The server answers 404 while sign-in is off; the check is then skipped.
+//      sign-in, depend on it (#73). It fails closed: anything but a pass (404 while sign-in is off, no CRON_SECRET,
+//      an error) is "caller IP not verified", exit 4. Only --api-only skips it, since there is no edge there.
 //
 //   AGENT_TEAM_ADMIN_TOKEN=… CRON_SECRET=… node deploy/smoke.mjs --site https://<site> --api https://<container host>
 //   --api-only skips the Studio page check (when --site is the container itself, as in CI).
@@ -87,21 +88,20 @@ async function streamCheck() {
 async function callerCheck() {
   if (o['api-only']) return;
   const cron = process.env.CRON_SECRET ?? '';
-  if (!cron) return console.log('smoke: skip caller IP check (no CRON_SECRET)');
+  const unverified = (why) => { console.log(`smoke: FAIL caller IP not verified: ${why}. Keep sign-in off`); return 'caller'; };
+  if (!cron) return unverified('no CRON_SECRET');
   const who = async (base) => {
     const r = await fetch(`${base}/v1/internal/caller`, { headers: { authorization: `Bearer ${cron}` }, signal: AbortSignal.timeout(10_000) }).catch(() => null);
     if (!r) return { error: 'no answer' };
-    if (r.status === 404) return { off: true };
     if (!r.ok) return { error: `answered ${r.status}` };
     return r.json().catch(() => ({ error: 'not JSON' }));
   };
   const plain = (ip) => String(ip ?? '').replace(/^::ffff:/i, '');
   const direct = await who(api), via = await who(site);
-  if (direct.off && via.off) return console.log('smoke: skip caller IP check (sign-in is off: the server answers 404 until it is on)');
-  if (direct.off || via.off) { console.log('smoke: FAIL caller IP check: only one of the container and the site answers /v1/internal/caller'); return 'caller'; }
-  if (direct.error || via.error) { console.log(`smoke: FAIL caller IP check: container ${direct.error ?? 'ok'}, site ${via.error ?? 'ok'}`); return 'caller'; }
-  if (via.edge !== true) { console.log('smoke: FAIL the site\'s requests do not carry the edge secret (AGENT_TEAM_EDGE_SECRET differs between Vercel and Fly, or the middleware did not run)'); return 'caller'; }
-  if (!plain(via.ip) || plain(via.ip) !== plain(direct.ip)) { console.log(`smoke: FAIL through the site the caller is ${via.ip || 'unknown'}, directly ${direct.ip || 'unknown'}: the server is reading a proxy's address, not the caller's (or this machine reached the two over different IP versions)`); return 'caller'; }
+  if (direct.error || via.error) return unverified(`/v1/internal/caller: container ${direct.error ?? 'ok'}, site ${via.error ?? 'ok'} (404 while sign-in is off)`);
+  if (via.edge !== true) return unverified('the site\'s requests do not carry the edge secret (AGENT_TEAM_EDGE_SECRET differs between Vercel and Fly, or the middleware did not run)');
+  if (direct.edge !== false) return unverified('the container reports the edge on a direct request');
+  if (!plain(via.ip) || plain(via.ip) !== plain(direct.ip)) return unverified(`through the site the caller is ${via.ip || 'unknown'}, directly ${direct.ip || 'unknown'}: the server is reading a proxy's address, not the caller's (or this machine reached the two over different IP versions)`);
   ok(`caller IP resolves through the site (${via.ip}, as the container sees it directly)`);
 }
 

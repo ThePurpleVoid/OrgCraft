@@ -148,7 +148,16 @@ jobs:
       - name: Smoke test (read-only), including streams and the caller's IP through the Vercel rewrite
         env:
           AGENT_TEAM_ADMIN_TOKEN: ${{ secrets.AGENT_TEAM_ADMIN_TOKEN }}
-        run: CRON_SECRET="$(cat "$RUNNER_TEMP/cron-secret")" node deploy/smoke.mjs --site "$PUBLIC_URL" --api "https://$FLY_APP.fly.dev"
+        run: |
+          code=0
+          CRON_SECRET="$(cat "$RUNNER_TEMP/cron-secret")" node deploy/smoke.mjs --site "$PUBLIC_URL" --api "https://$FLY_APP.fly.dev" || code=$?
+          if [ "$code" = 4 ]; then
+            # The sign-in gate fails closed, but the deploy itself is fine: say so loudly and keep the job green.
+            echo "::warning::Caller IP not verified through the site: keep sign-in off (docs/deploy/vercel-supabase.md)"
+            echo "### Caller IP not verified: keep sign-in off" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit "$code"
 
   runner:
     # The runner, a second Fly app next to the control plane, with one volume at /data. Off until the owner sets the
