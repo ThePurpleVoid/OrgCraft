@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- This repository's own team is on 0.6.0.
+
 ## 0.6.0
 
 **Agent Team Studio, local mode** (phase 2 of the [Studio plan](docs/product/delivery-plan.md)): build your team visually and publish it to a branch.

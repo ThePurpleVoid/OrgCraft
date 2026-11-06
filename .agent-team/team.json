@@ -1,5 +1,5 @@
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.5.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.6.0",
   "preset": "minimal",
   "include": [
     "cpo",
