@@ -141,6 +141,8 @@ export function checkTool(name, input, ctx) {
     case 'meeting_reply':
       out = { meeting: f.text('meeting', { need: true, max: 80 }), text: f.text('text', { need: true, max: 8000 }) };
       if (out.meeting && !MEETING.test(out.meeting)) problems.push('meeting is the meeting id from your turn, such as mtg_01…');
+      if (f.a.done !== undefined && typeof f.a.done !== 'boolean') problems.push('done is true when you have nothing more to add (a discussion), or left out');
+      else if (f.a.done === true) out.done = true;
       break;
     case 'meeting_close': {
       out = { meeting: f.text('meeting', { need: true, max: 80 }), minutes: f.text('minutes', { need: true, max: 20_000 }) };

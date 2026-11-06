@@ -66,16 +66,30 @@ export function wakePrompt(m, role, { resume = false } = {}) {
   return `${lead}, then handle this.\n\n${head}${m.id ? ` (event ${m.id})` : ''}:\n\n${fields}`;
 }
 
-/** A meeting turn (written round): the agenda and the replies so far, or, for the facilitator, the closing turn. */
+/**
+ * A meeting turn: the agenda and the replies so far, or, for the facilitator, the closing turn. In a discussion
+ * (rounds > 1) the replies are the transcript of every round so far, and the attendee answers the others.
+ */
 function meetingPrompt(lead, d) {
-  const replies = (d.replies ?? []).map((r) => `- ${r.role}, verbatim:\n${String(r.text ?? '').split('\n').map((l) => `  > ${l}`).join('\n')}`).join('\n');
+  const discussion = (d.rounds ?? 1) > 1;
+  const replies = (d.replies ?? []).map((r) => `- ${r.role}${discussion ? ` (round ${r.round ?? 1})` : ''}, verbatim:\n${String(r.text ?? '').split('\n').map((l) => `  > ${l}`).join('\n')}`).join('\n');
   const skipped = (d.skipped ?? []).map((s) => `${s.role} (${s.reason})`).join(', ');
   const head = `MEETING "${d.title ?? d.definition}" (meeting ${d.meeting})`;
   const agenda = `Agenda: ${d.agenda || 'none given'}`;
   if (d.closing) {
-    return `${lead}, then close this meeting: you run it.\n\n${head}: ${d.capped ? 'it reached its cost cap, so not every attendee had a turn. Write partial minutes and say so.' : 'every attendee has had a turn.'}\n${agenda}\n\n`
-      + `Replies${d.note ? ` (${d.note})` : ''}:\n${replies || '(none)'}${skipped ? `\n\nSkipped: ${skipped}` : ''}\n\n`
+    const why = d.capped ? 'it reached its cost cap, so not every attendee had a turn. Write partial minutes and say so.'
+      : d.timedOut ? 'it ran past its time, so the discussion stopped early. Write minutes of what was said and say so.'
+      : discussion ? `the discussion is over after ${d.round} of ${d.rounds} rounds.` : 'every attendee has had a turn.';
+    return `${lead}, then close this meeting: you run it.\n\n${head}: ${why}\n${agenda}\n\n`
+      + `${discussion ? 'Transcript' : 'Replies'}${d.note ? ` (${d.note})` : ''}:\n${replies || '(none)'}${skipped ? `\n\nSkipped: ${skipped}` : ''}\n\n`
+      + `${discussion ? 'Sum up where the discussion landed: what was agreed, what is still open, and who does what next. ' : ''}`
       + `Call meeting_close with { meeting: "${d.meeting}", minutes } and, if the meeting agreed any, actionItems [{ to, task, doneWhen }] and decisions for the owner [{ question, options, recommended }]. The minutes go to the chat and the board; they are not committed.`;
+  }
+  if (discussion) {
+    return `${lead}, then take your turn in this discussion.\n\n${head}, round ${d.round} of ${d.rounds}, turn ${d.turn} of ${d.of}.\n${agenda}\n\n`
+      + `${replies ? `Transcript so far${d.note ? ` (${d.note})` : ''}:\n${replies}\n\n` : ''}`
+      + `${(d.round ?? 1) > 1 ? 'Answer the others: say where you agree or disagree and why, and what you would change; do not repeat yourself. ' : ''}`
+      + `Reply with meeting_reply { meeting: "${d.meeting}", text } in a few sentences; it goes verbatim into the minutes. If you have nothing more to add, say so in text and set done: true, and you will not be asked again. Then go back to what you were doing.`;
   }
   return `${lead}, then take your turn in this meeting.\n\n${head}, turn ${d.turn} of ${d.of}.\n${agenda}\n\n`
     + `${replies ? `Replies so far${d.note ? ` (${d.note})` : ''}:\n${replies}\n\n` : ''}`

@@ -156,7 +156,7 @@ A role pack is a folder another team can import: `<slug>.md` and a `pack.json`. 
 
 - `when` is days and a wall-clock time in the team's `TIMEZONE`, or `{ "label": "design" }` for a meeting that starts when an item gets that label.
 - `attendees` names roles, whole lanes (an executive and everyone reporting up to it; dormant roles only when named) and optionally the rule `"worked-since-last"`. `facilitator` runs it.
-- `format` is `round` (each attendee answers once) or `discussion` (2 to 5 `rounds`). `ifBusy` is `next-pause`, `proxy` (answered for it from the board) or `skip`.
+- `format` is `round` (each attendee answers once) or `discussion` (2 to 5 `rounds`: attendees answer each other, and one with nothing more to add stops early). `ifBusy` is `next-pause`, `proxy` (answered for it from the board) or `skip`.
 - `capUsd` is the most one meeting may cost; it must be above zero and not above the team's daily cap.
 
 `sync` adds a **Meetings** table to the project instructions and `- meeting` to the `Wakes on` of every role a meeting names. `validate` checks that attendees and the facilitator are on the team, ids are unique, days and times are valid, the agenda is not empty and the cap is in range. It warns when two meetings share a role at the same time and when a meeting has fewer than two attendees besides the facilitator.

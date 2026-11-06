@@ -114,6 +114,7 @@ Only the attendee whose turn it is, in an open meeting of the caller's run, once
 | --- | --- | --- |
 | `meeting` | yes | the id from the turn, `mtg_…` |
 | `text` | yes | at most 8,000 characters; stored verbatim and shown to later attendees |
+| `done` | no | in a discussion, true when you have nothing more to add (say so in `text`): you are not asked in later rounds |
 
 Emits `meeting.replied`, then the next `meeting.turn` (or the facilitator's closing turn). Result: `{ "event": "<id>" }`. Refused with "it is not your turn in …" or "meeting … is not taking replies".
 

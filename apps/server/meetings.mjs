@@ -1,5 +1,8 @@
-// Meetings in the written-round format (plans/m3-meetings-seams.md, with the architect's review A1 to A12). No new
-// runner op: the control plane drives a meeting through the ordinary deliveries.
+// Meetings (plans/m3-meetings-seams.md, with the architect's review A1 to A12). No new runner op: the control plane
+// drives a meeting through the ordinary deliveries. Two formats: a written round (each attendee answers once) and a
+// discussion (phase 4, CPO D23): the attendees answer in turn for up to `rounds` rounds (2 to 5), each turn carrying
+// the whole transcript so they answer each other; an attendee that has nothing more to add says so (meeting_reply
+// done: true) and gets no later rounds, and when nobody is left the facilitator closes early.
 //
 //   start   POST /v1/teams/{team}/meetings { meeting: <definition id> } opens an instance (mtg_…) of a definition the
 //           run was started with (RunCreate.team.meetings, attendees already resolved by the Studio)
@@ -47,13 +50,13 @@ export function checkMeetingDefs(list, roles, frontDoor) {
     }
     if (m.rule !== undefined && m.rule !== null && m.rule !== 'worked-since-last') throw new Problem(400, `${where}: rule is worked-since-last or nothing`);
     if (m.format !== undefined && !['round', 'discussion'].includes(m.format)) throw new Problem(400, `${where}: format is round or discussion`);
+    if (m.format === 'discussion' && m.rounds !== undefined && !(Number.isInteger(m.rounds) && m.rounds >= 2 && m.rounds <= 5)) throw new Problem(400, `${where}: a discussion has 2 to 5 rounds`);
     if (m.ifBusy !== undefined && !IF_BUSY.includes(m.ifBusy)) throw new Problem(400, `${where}: ifBusy is ${IF_BUSY.join(', ')}`);
     if (!(typeof m.capUsd === 'number' && Number.isFinite(m.capUsd) && m.capUsd > 0 && m.capUsd <= 1_000_000)) throw new Problem(400, `${where}: capUsd is above zero`);
     if (!attendees.length && m.rule !== 'worked-since-last') throw new Problem(400, `${where}: has no attendees besides the facilitator`);
     return {
       id: m.id, title: m.title, agenda: m.agenda ?? '', facilitator, attendees, ...(m.rule ? { rule: m.rule } : {}),
-      // A discussion runs as a written round for now (CPO D23).
-      format: m.format ?? 'round', ifBusy: m.ifBusy ?? 'next-pause', owner: { minutes: m.owner?.minutes !== false, speaks: m.owner?.speaks === true },
+      format: m.format ?? 'round', rounds: m.format === 'discussion' ? m.rounds ?? 3 : 1, ifBusy: m.ifBusy ?? 'next-pause', owner: { minutes: m.owner?.minutes !== false, speaks: m.owner?.speaks === true },
       capUsd: m.capUsd,
     };
   });
@@ -88,22 +91,32 @@ export function checkAdhoc(a, roster, facilitator) {
 /** Minor units, rounded up (A2): the cap is never below what the definition says. */
 const minor = (usd) => Math.ceil(usd * 100 - 1e-9);
 
-/** The replies a turn carries: the oldest dropped first so the list stays under 40 KB (A4). */
-function carried(replies) {
+/**
+ * The replies a turn carries, under 40 KB (A4). Past it, an attendee's earlier-round replies go first, oldest first,
+ * so every voice keeps its latest reply (architect, discussion meetings); only then the oldest of what is left.
+ */
+export function carried(replies) {
   const out = [...replies];
   let dropped = 0;
-  while (out.length && Buffer.byteLength(JSON.stringify(out)) > REPLIES_MAX) { out.shift(); dropped++; }
+  while (out.length && Buffer.byteLength(JSON.stringify(out)) > REPLIES_MAX) {
+    const older = out.findIndex((r, i) => out.slice(i + 1).some((x) => x.role === r.role));
+    out.splice(older >= 0 ? older : 0, 1);
+    dropped++;
+  }
   return { replies: out, ...(dropped ? { dropped, note: `${dropped} earlier ${dropped === 1 ? 'reply was' : 'replies were'} left out to keep this turn small` } : {}) };
 }
 
 export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_TURN_MINUTES }) {
   const base = String(publicUrl || '').replace(/\/+$/, '');
-  const COLS = 'id, team, run, definition, title, agenda, facilitator, attendees, if_busy, minutes_to_chat, state, outcome, capped, turn, turn_event, turn_due, replies, skipped, minutes, cap, currency, spent, closed_by_session, close_billed, opened_by, opened_at, closed_at, version, adhoc';
+  const COLS = 'id, team, run, definition, title, agenda, facilitator, attendees, if_busy, minutes_to_chat, state, outcome, capped, turn, turn_event, turn_due, replies, skipped, minutes, cap, currency, spent, closed_by_session, close_billed, opened_by, opened_at, closed_at, version, adhoc, format, rounds, round, done, timed_out';
   const view = (m) => m && ({
     id: m.id, team: m.team, run: m.run, definition: m.definition, title: m.title, agenda: m.agenda, facilitator: m.facilitator, attendees: m.attendees, ifBusy: m.if_busy,
     state: m.state, outcome: m.outcome, capped: m.capped, turn: m.turn, replies: m.replies, skipped: m.skipped, minutes: m.minutes,
-    cap: Number(m.cap), spent: Number(m.spent), currency: m.currency, adhoc: Boolean(m.adhoc), openedBy: m.opened_by, openedAt: m.opened_at, closedAt: m.closed_at, version: Number(m.version),
+    cap: Number(m.cap), spent: Number(m.spent), currency: m.currency, adhoc: Boolean(m.adhoc), format: m.format, rounds: m.rounds, round: m.round, done: m.done, openedBy: m.opened_by, openedAt: m.opened_at, closedAt: m.closed_at, version: Number(m.version),
   });
+  // The attendees asked in the meeting's current round: everyone but those who said they were done in an earlier one.
+  const asked = (m) => m.attendees.filter((r) => !m.done.includes(r) || m.replies.some((x) => x.role === r && (x.round ?? 1) === m.round && x.done));
+  const place = (m, role) => ({ turn: asked(m).indexOf(role) + 1, of: asked(m).length });
   const opts = (m, more = {}) => ({ subject: `meeting/${m.id}`, run: m.run, actor: SYSTEM, ...more });
   const page = (m) => `${base}/t/${encodeURIComponent(m.team)}/meetings/${m.id}`;
 
@@ -162,11 +175,13 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
   async function open(ctx, team, run, d, { def, attendees, cap, by, actor, adhoc = false }) {
     const mid = id('mtg');
     const definition = def ?? `adhoc-${mid.slice(4)}`;
-    const [row] = await ctx.q(`insert into meetings(id, tenant, team, run, definition, title, agenda, facilitator, attendees, if_busy, minutes_to_chat, cap, currency, opened_by, adhoc)
-                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) on conflict (team, definition) where state <> 'closed' do nothing returning ${COLS}`,
-      [mid, ctx.tenant, team, run.id, definition, d.title, d.agenda ?? '', d.facilitator, JSON.stringify(attendees), d.ifBusy ?? 'next-pause', d.owner?.minutes !== false, cap.amount, cap.currency, by, adhoc]);
+    const format = d.format === 'discussion' ? 'discussion' : 'round';
+    const rounds = format === 'discussion' ? d.rounds ?? 3 : 1;
+    const [row] = await ctx.q(`insert into meetings(id, tenant, team, run, definition, title, agenda, facilitator, attendees, if_busy, minutes_to_chat, cap, currency, opened_by, adhoc, format, rounds)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) on conflict (team, definition) where state <> 'closed' do nothing returning ${COLS}`,
+      [mid, ctx.tenant, team, run.id, definition, d.title, d.agenda ?? '', d.facilitator, JSON.stringify(attendees), d.ifBusy ?? 'next-pause', d.owner?.minutes !== false, cap.amount, cap.currency, by, adhoc, format, rounds]);
     if (!row) throw new Problem(409, `meeting ${definition} was opened just now`);
-    await ctx.emit(team, 'meeting.opened', { meeting: mid, definition, title: d.title, agenda: d.agenda ?? '', facilitator: d.facilitator, attendees, format: d.format ?? 'round', ifBusy: d.ifBusy ?? 'next-pause', cap: cap.amount, currency: cap.currency, by, ...(adhoc ? { adhoc: true } : {}) },
+    await ctx.emit(team, 'meeting.opened', { meeting: mid, definition, title: d.title, agenda: d.agenda ?? '', facilitator: d.facilitator, attendees, format, rounds, ifBusy: d.ifBusy ?? 'next-pause', cap: cap.amount, currency: cap.currency, by, ...(adhoc ? { adhoc: true } : {}) },
       { ...opts(row), actor });
     await ctx.audit({ team, actorKind: actor.kind, actorId: actor.id, session: actor.session ?? null, action: 'meeting', target: mid, decision: 'allowed', detail: { op: 'start', definition, adhoc } });
     return advance(ctx, row);
@@ -223,25 +238,36 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
     return { meeting: m.id, attendees: m.attendees, cap: Number(m.cap), currency: m.currency };
   }
 
-  /** Sends the next turn: to the next attendee who can take it, or the closing turn to the facilitator. */
+  /**
+   * Sends the next turn: to the next attendee who can take it, the first of the next round when a discussion has
+   * rounds left and someone still to speak, or the closing turn to the facilitator.
+   */
   async function advance(ctx, m) {
     const { q } = ctx;
     for (;;) {
-      if (m.capped || m.turn >= m.attendees.length) {
+      const left = m.attendees.filter((r) => !m.done.includes(r));
+      if (!m.capped && m.turn >= m.attendees.length && m.round < m.rounds && left.length) {
+        m = await save(q, m, { round: m.round + 1, turn: 0 });
+        continue;
+      }
+      if (m.capped || m.timed_out || m.turn >= m.attendees.length) {
+        const of = asked(m).length;
         const ev = await ctx.emit(m.team, 'meeting.turn', {
-          meeting: m.id, definition: m.definition, title: m.title, agenda: m.agenda, to: m.facilitator, turn: m.attendees.length + 1, of: m.attendees.length,
-          closing: true, capped: m.capped, ...carried(m.replies), skipped: m.skipped,
+          meeting: m.id, definition: m.definition, title: m.title, agenda: m.agenda, to: m.facilitator, turn: of + 1, of,
+          round: m.round, rounds: m.rounds, closing: true, capped: m.capped, ...(m.timed_out ? { timedOut: true } : {}), ...carried(m.replies), skipped: m.skipped,
         }, opts(m));
         return save(q, m, { state: 'closing', turn_event: ev.id, turn_due: await due(q) });
       }
       const role = m.attendees[m.turn];
+      // An attendee that said it has nothing more to add is not asked again (no event: it chose to stop).
+      if (m.done.includes(role)) { m = await save(q, m, { turn: m.turn + 1 }); continue; }
       if (m.if_busy !== 'next-pause') {
         const [busy] = await q("select 1 from sessions where run = $1 and role = $2 and state = 'running' limit 1", [m.run, role]);
         if (busy) { m = await skip(ctx, m, role, 'busy'); continue; }
       }
       const ev = await ctx.emit(m.team, 'meeting.turn', {
-        meeting: m.id, definition: m.definition, title: m.title, agenda: m.agenda, to: role, turn: m.turn + 1, of: m.attendees.length,
-        closing: false, capped: false, ...carried(m.replies),
+        meeting: m.id, definition: m.definition, title: m.title, agenda: m.agenda, to: role, ...place(m, role),
+        round: m.round, rounds: m.rounds, closing: false, capped: false, ...carried(m.replies),
       }, opts(m));
       return save(q, m, { turn_event: ev.id, turn_due: await due(q) });
     }
@@ -249,7 +275,7 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
 
   /** meeting.skipped for the attendee whose turn it is; its turn's deliveries still waiting are dropped. */
   async function skip(ctx, m, role, reason) {
-    await ctx.emit(m.team, 'meeting.skipped', { meeting: m.id, definition: m.definition, role, reason, turn: m.turn + 1, ...(reason === 'busy' && m.if_busy === 'proxy' ? { proxy: true } : {}) }, opts(m));
+    await ctx.emit(m.team, 'meeting.skipped', { meeting: m.id, definition: m.definition, role, reason, turn: place(m, role).turn, round: m.round, ...(reason === 'busy' && m.if_busy === 'proxy' ? { proxy: true } : {}) }, opts(m));
     if (m.turn_event) await ctx.q("update deliveries set state = 'dead' where event = $1 and state in ('pending', 'held')", [m.turn_event]);
     return save(ctx.q, m, { turn: m.turn + 1, skipped: [...m.skipped, { role, reason }] });
   }
@@ -262,8 +288,9 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
     if (name === 'meeting_reply') {
       if (m.state !== 'open') return { problems: [`meeting ${m.id} is not taking replies (${m.state === 'closing' ? 'the facilitator is writing the minutes' : 'it is closed'})`] };
       if (m.attendees[m.turn] !== sess.role) return { problems: [`it is not your turn in ${m.id}${m.attendees[m.turn] ? `: it is ${m.attendees[m.turn]}'s` : ''}`] };
-      const ev = await ctx.emit(sess.team, 'meeting.replied', { meeting: m.id, definition: m.definition, role: sess.role, turn: m.turn + 1, text: i.text }, opts(m, { actor }));
-      const next = await save(ctx.q, m, { turn: m.turn + 1, replies: [...m.replies, { role: sess.role, text: i.text }] });
+      const done = i.done === true && m.format === 'discussion';
+      const ev = await ctx.emit(sess.team, 'meeting.replied', { meeting: m.id, definition: m.definition, role: sess.role, turn: place(m, sess.role).turn, round: m.round, text: i.text, ...(done ? { done: true } : {}) }, opts(m, { actor }));
+      const next = await save(ctx.q, m, { turn: m.turn + 1, replies: [...m.replies, { role: sess.role, text: i.text, ...(m.format === 'discussion' ? { round: m.round } : {}), ...(done ? { done: true } : {}) }], ...(done ? { done: [...m.done, sess.role] } : {}) });
       await advance(ctx, next);
       return { event: ev.id };
     }
@@ -273,7 +300,7 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
     const outcome = m.capped ? 'capped' : 'completed';
     const closed = await save(ctx.q, m, { state: 'closed', outcome, minutes: i.minutes, closed_by_session: sess.id, closed_at: ctx.now.toISOString(), turn_due: null });
     const ev = await ctx.emit(sess.team, 'meeting.closed', {
-      meeting: m.id, definition: m.definition, title: m.title, outcome, minutes: i.minutes, replies: m.replies.length, skipped: m.skipped,
+      meeting: m.id, definition: m.definition, title: m.title, outcome, minutes: i.minutes, replies: m.replies.length, skipped: m.skipped, rounds: m.round, ...(m.timed_out ? { timedOut: true } : {}),
       spent: Number(m.spent), cap: Number(m.cap), currency: m.currency, actionItems: (i.actionItems ?? []).length, decisions: (i.decisions ?? []).length, url: page(m),
     }, opts(m, { actor }));
     if (closed.minutes_to_chat) {
@@ -355,9 +382,20 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
     if (!bill) return;
     let next = await save(q, m, { spent: Number(m.spent) + cost, ...(bill === 'close' ? { close_billed: true } : {}) });
     if (next.state === 'open' && Number(next.spent) >= Number(next.cap)) {
-      // The cap: the rest of the round is skipped, and the facilitator closes with what it has (partial minutes).
-      next = await save(q, next, { capped: true });
-      while (next.turn < next.attendees.length) next = await skip(ctx, next, next.attendees[next.turn], 'capped');
+      // The cap: the rest of the round is skipped, later rounds are not held, and the facilitator closes with what it
+      // has (partial minutes).
+      // One meeting.skipped per attendee still to speak (architect: not one per turn per round), from the round it
+      // would have spoken in next.
+      if (next.turn_event) await q("update deliveries set state = 'dead' where event = $1 and state in ('pending', 'held')", [next.turn_event]);
+      const out = [];
+      for (const [i, role] of next.attendees.entries()) {
+        if (next.done.includes(role)) continue;
+        const fromRound = i >= next.turn ? next.round : next.round + 1;
+        if (fromRound > next.rounds) continue;
+        await ctx.emit(next.team, 'meeting.skipped', { meeting: next.id, definition: next.definition, role, reason: 'capped', round: fromRound, fromRound, ...(fromRound === next.round ? { turn: place(next, role).turn } : {}) }, opts(next));
+        out.push({ role, reason: 'capped' });
+      }
+      next = await save(q, next, { capped: true, turn: next.attendees.length, skipped: [...next.skipped, ...out] });
       await advance(ctx, next);
     }
   }
@@ -374,6 +412,15 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
         } else {
           await advance(ctx, await skip(ctx, m, m.attendees[m.turn], 'missed'));
         }
+      }
+      // A discussion has an overall deadline: rounds x attendees x the turn deadline, at most four hours. Past it the
+      // facilitator gets the closing turn early (timedOut), so a stalled discussion cannot hang for a day.
+      const stalled = await ctx.q(`select m.id from meetings m join runs r on r.id = m.run where m.state = 'open' and m.format = 'discussion' and not m.timed_out and r.state = 'running'
+                                     and m.opened_at + make_interval(mins => least(m.rounds * jsonb_array_length(m.attendees) * $1, 240)) <= now() for update of m skip locked`, [turnMinutes]);
+      for (const r of stalled) {
+        const m = await lock(ctx.q, r.id);
+        if (m.turn_event) await ctx.q("update deliveries set state = 'dead' where event = $1 and state in ('pending', 'held')", [m.turn_event]);
+        await advance(ctx, await save(ctx.q, m, { timed_out: true }));
       }
     });
   }
