@@ -176,8 +176,8 @@ paths:
     patch:
       x-min-role: viewer
       tags: [notifications]
-      summary: Choose the kinds to email (approval, budget80, budget100, blocked, minutes); the address must be verified
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes] } } } } } } }
+      summary: Choose the kinds to email (approval, budget80, budget100, blocked, minutes, ready); the address must be verified
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
       responses: { "200": { description: The address }, "409": { description: Not verified yet } }
     delete: { x-min-role: viewer, tags: [notifications], summary: Remove the address, responses: { "200": { description: Removed } } }
   /teams/{team}/emails/{email}/verify:
@@ -204,7 +204,7 @@ paths:
       x-min-role: viewer
       tags: [notifications]
       summary: "Finish Connect Slack from the Studio's /slack/callback page: links the caller's Slack account (same workspace as the team's) and sends the first DM once a kind is on"
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, state], properties: { code: { type: string }, state: { type: string }, kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes] } } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, state], properties: { code: { type: string }, state: { type: string }, kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
       responses: { "201": { description: "{ linked, name, kinds, welcomed }" }, "400": { description: The state is not this caller's }, "409": { description: Another workspace, or Slack not connected }, "410": { description: Started more than 10 minutes ago } }
   /teams/{team}/slack/me:
     parameters: [ { $ref: "#/components/parameters/team" } ]
@@ -212,7 +212,7 @@ paths:
       x-min-role: viewer
       tags: [notifications]
       summary: Choose the kinds to get as a Slack DM
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes] } } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
       responses: { "200": { description: The link }, "404": { description: Not linked } }
     delete: { x-min-role: viewer, tags: [notifications], summary: "Disconnect Slack: stops every DM from this team (channel posts keep going)", responses: { "200": { description: Removed } } }
   /teams/{team}/slack/channels:
@@ -222,7 +222,7 @@ paths:
       x-min-role: admin
       tags: [notifications]
       summary: "Pick a channel; kinds default to budget80, budget100 and minutes (approval and BLOCKED start off). The channel gets a first post saying who chose it"
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [channel, name], properties: { channel: { type: string, pattern: "^[CG][A-Z0-9]{2,20}$" }, name: { type: string }, kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes] } } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [channel, name], properties: { channel: { type: string, pattern: "^[CG][A-Z0-9]{2,20}$" }, name: { type: string }, kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
       responses: { "201": { description: "The channel, and posted (or reason)" }, "409": { description: Already picked, or Slack not connected } }
   /teams/{team}/slack/channels/{channel}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: channel, in: path, required: true, schema: { type: string } } ]
@@ -230,7 +230,7 @@ paths:
       x-min-role: admin
       tags: [notifications]
       summary: Choose the kinds posted to this channel
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes] } } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
       responses: { "200": { description: The channel } }
     delete: { x-min-role: admin, tags: [notifications], summary: Stop posting to this channel, responses: { "200": { description: Removed } } }
   /slack/{action}:
@@ -669,7 +669,7 @@ components:
       required: [id, kind, title, options, version, url]
       properties:
         id: { type: string }
-        kind: { type: string, description: "approval, decision, budget, ongoing-work, meeting-invite, channel-failed; clients render unknown kinds generically" }
+        kind: { type: string, description: "approval, decision, budget, ready, ongoing-work, meeting-invite, channel-failed; clients render unknown kinds generically" }
         team: { type: string }
         subject: { type: string }
         title: { type: string }

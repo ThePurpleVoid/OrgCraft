@@ -17,7 +17,7 @@ const CHECKPOINT_MS = 10 * 60_000;
 const BACKOFF = [5, 30, 120, 600];
 const MAX_ATTEMPTS = 10;
 const LIVE = ['starting', 'running', 'idle', 'waiting'];
-const RUNNER_MAY_SEND = (type) => /^session\./.test(type) || ['usage.recorded', 'report.heartbeat', 'chat.message'].includes(type) || /^proposal\.(opened|updated|accepted|failed)$/.test(type);
+const RUNNER_MAY_SEND = (type) => /^session\./.test(type) || ['usage.recorded', 'report.heartbeat', 'chat.message'].includes(type) || /^proposal\.(opened|updated|accepted|failed|previewed)$/.test(type);
 const TOOL_EVENT = { report: 'report.status', handoff: 'message.handoff', bug: 'message.bug', signoff: 'message.signoff', blocked: 'message.blocked' };
 const SESSION_STATE = { 'session.started': 'running', 'session.idle': 'idle', 'session.ended': 'ended' };
 
@@ -337,6 +337,15 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         }
         if (tool === 'meeting_reply') await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: r.event });
         out = r;
+      } else if (tool === 'ready_to_try') {
+        const r = await m3.readyToTry(ctx, sess, i, { roster, opts });
+        if (r.problems) {
+          const ev = await ctx.emit(sess.team, 'session.tool', { tool: `team.${tool}`, decision: 'refused', rule: 'ready', detail: r.problems.join(' ') }, opts);
+          await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'refused', rule: 'ready', event: ev.id, detail: { problems: r.problems } });
+          return { refused: r.problems };
+        }
+        await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: r.event });
+        out = r;
       } else if (tool === 'ask_owner') {
         const expiresAt = i.expires ? new Date(i.expires) : new Date(ctx.now.getTime() + 7 * 86_400_000);
         const card = await m3.createCard(ctx, sess.team, {
@@ -389,7 +398,10 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
           const env = { ...e, tenant: conn.tenant, team: sess.team, source: `/tenants/${conn.tenant}/teams/${sess.team}`, run: sess.run, teamVersion: sess.team_version ?? e.teamVersion,
             actor: { kind: 'role', id: sess.role, instance: sess.instance ?? null, session: sess.id, via: e.actor?.via === 'tool' ? 'tool' : 'hook' } };
           if (e.type === 'chat.message') env.data = { ...(e.data ?? {}), from: sess.role };
+          // One stored event per deployment, whatever id the frame had, so a repeat after a reconnect is a no-op.
+          if (e.type === 'proposal.previewed') { env.data = m3.checkPreviewed(e.data); env.id = `previewed-${env.data.ref}-${env.data.deployment}`; }
           const out = await m3.appendIn(ctx, sess.team, [env]);
+          if (e.type === 'proposal.previewed' && out.length) await m3.previewArrived(ctx, sess.team, env.data);
           if (e.type === 'chat.message' && out.length) {
             await ctx.q('insert into chat_messages(tenant, team, event, from_kind, from_id, text, reply_to, at) values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict do nothing',
               [conn.tenant, sess.team, env.id, 'role', sess.role, String(env.data.text ?? ''), env.data.replyTo ?? null, env.time]);

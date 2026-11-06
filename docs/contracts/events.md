@@ -64,6 +64,7 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | `session.started`, `session.idle`, `session.ended` | `role`, `instance`, `worktree`, `branch`, `model` (provider and name, as values), `reason` |
 | `session.tool` | `tool`, `target` (path, command or MCP server and tool), `decision` (allowed, refused, needs-approval), `rule` |
 | `proposal.opened`, `proposal.updated`, `proposal.accepted`, `proposal.failed` | `connector` (for example `github`), `ref` (for a repository, the pull request number), `url`, `branch`, `headSha`, `approval` (on accepted and failed), `result` (the merge commit, on accepted), `reason` (on failed: head-moved, checks, conflict). Emitted by the runner, which proposes and accepts for its sessions (work contract `propose` and `accept`) |
+| `proposal.previewed` | `connector`, `ref` (the pull request number), `sha` (the commit deployed, normally the merge commit), `url` (https), `environment`, `state` (always `success`: only a deployment that is up is sent), `deployment` (the provider's deployment id). Emitted by the runner after `proposal.accepted`, from the repository's deployment statuses. The control plane stores one per deployment (id `previewed-<ref>-<deployment>`, whatever the frame said) and adds the URL to that PR's open `ready` card |
 | `usage.recorded` | `inputTokens`, `outputTokens`, `cost` (in the currency's minor unit), `currency`, `meeting` (optional: the meeting whose turn this was; the server counts it toward that meeting's cap only when the session was given one of its turns, and otherwise ignores the tag) |
 | `budget.warned` (at 80% of the day's cap), `budget.exhausted` | `scope` (day, run), `day` (UTC date), `spent`, `cap` (minor units), `currency`, `cardId` (string: the budget card's id, on exhausted) |
 | `budget.updated` | `currency`, `perDay`, `perRun` (minor units, or null), `sessions`, `by` (member): the team's caps after a change |
@@ -76,6 +77,8 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | `decision.requested`, `decision.answered` | `question`, `options`, `recommended`, `answer`, `by`, `cardId` (string), `session` (the session that asked, which the answer wakes) |
 | `approval.requested` | `action` (a classification from the policy), `command` or `call`, `why`, `summary` and `recommendation` (optional, shown in the approval email), `risk`, `expires`, `cardId` (string), `session`, `pr` and `headSha` (for `accept`: the approval is for that exact head) |
 | `approval.decided` | `approval`, `decision` (approved, denied, expired, superseded: the head moved), `by` (member), `note`, `session`, `headSha` |
+| `ready.posted` | `pr`, `title`, `summary`, `commit` (the merge commit), `preview` and `environment` (when the deployment was already up), `issue`, `task`, `cardId`, `session`. The front door's `ready_to_try` ([team-tools.md](team-tools.md)); the email and Slack kind "Ready to try" (`ready`) follows it |
+| `ready.previewed` | `pr`, `cardId`, `url`, `environment`: a preview arrived after the card went out, and the open card now links it |
 | `card.updated` | `card` (object): the whole card at its new `version` ([clients.md](clients.md) section 6). Emitted on every change (created, answered, expired, superseded); a client keeps the latest per card id |
 
 ### Meetings

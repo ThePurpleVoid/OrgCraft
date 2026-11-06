@@ -11,7 +11,7 @@ import { checkMeetingDefs } from './meetings.mjs';
 
 const scrypt = promisify(scryptCb);
 
-export const CHAT_TYPES = ['chat.message', 'decision.requested', 'decision.answered', 'approval.requested', 'approval.decided', 'card.updated',
+export const CHAT_TYPES = ['chat.message', 'decision.requested', 'decision.answered', 'approval.requested', 'approval.decided', 'card.updated', 'ready.posted', 'ready.previewed',
   'run.started', 'run.paused', 'run.resumed', 'run.stopped', 'budget.warned', 'budget.exhausted'];
 export const STEP_UP_MINUTES = 5;
 export const APPROVAL_HOURS = 24;
@@ -396,7 +396,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   /** Answers a decision or budget card (POST /v1/cards/{card}). Approval cards are answered through /approvals. */
   /** The least role that may answer each kind of card: a budget card raises spending, an admin's call like PUT budget. */
-  const CARD_ROLE = { approval: 'approver', decision: 'approver', budget: 'admin' };
+  const CARD_ROLE = { approval: 'approver', decision: 'approver', budget: 'admin', ready: 'approver' };
 
   async function answerCard(tenant, cid, body, by, { stepUp = null, role = 'owner' } = {}) {
     const { option, version, note } = body ?? {};
@@ -420,6 +420,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       await ctx.audit({ team: row.team, actorKind: 'person', actorId: by, session: row.session, action: 'card', target: cid, decision: option, detail: { kind: row.kind, version: row.version } });
       let event;
       if (row.kind === 'budget') event = await budgetAnswer(ctx, row, option);
+      // "Got it" on a Ready to try card only closes it: nothing waits on it, so it wakes nobody.
+      else if (row.kind === 'ready') event = null;
       else event = await ctx.emit(row.team, 'decision.answered', { cardId: cid, session: row.session, answer: option, by, ...(note ? { note } : {}) }, { actor: personActor(by), subject: row.card.subject, ...(row.run ? { run: row.run } : {}) });
       return { card, event: event?.id ?? null };
     });
@@ -652,9 +654,58 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     });
   }
 
+  // ---- Ready to try (demo step 12, G-12) ----------------------------------------------------------------------------
+
+  /**
+   * The front door's ready_to_try, after tools/1 passed: only for a PR this team merged with an approval (the
+   * runner's proposal.accepted), with the preview the runner found (proposal.previewed), never a link the model wrote.
+   * A later preview is added to the open card by previewArrived. Returns { card, event, preview } or { problems }.
+   */
+  async function readyToTry(ctx, sess, i, { opts }) {
+    const [acc] = await ctx.q("select envelope from events where team = $1 and type = 'proposal.accepted' and envelope->'data'->>'ref' = $2 order by seq desc limit 1", [sess.team, String(i.pr)]);
+    if (!acc) return { problems: [`PR ${i.pr} has not merged with an approval on this team, so it is not ready to try yet. Call ready_to_try after the merge.`] };
+    const a = acc.envelope.data ?? {};
+    const commit = typeof a.result === 'string' ? a.result : null;
+    const p = await latestPreview(ctx, sess.team, i.pr);
+    const subject = `ready/${i.pr}`;
+    // One open card per PR: telling the owner again replaces the old card.
+    for (const old of await ctx.q("select id from cards where team = $1 and subject = $2 and state = 'open' for update", [sess.team, subject])) await changeCard(ctx, sess.team, old.id, { state: 'superseded' });
+    const links = [...(httpsUrl(a.url) ? [{ rel: 'pull-request', url: a.url }] : []), ...(p ? [{ rel: 'preview', url: p.url }] : [])];
+    const card = await createCard(ctx, sess.team, {
+      kind: 'ready', subject, session: sess.id, run: sess.run, title: i.title, body: [i.summary, p ? null : PREVIEW_PENDING].filter(Boolean).join('\n\n'),
+      options: [{ id: 'seen', label: 'Got it', style: 'primary', stepUp: false }], expiresAt: new Date(ctx.now.getTime() + 7 * 86_400_000), links,
+      data: { pr: i.pr, commit, preview: p?.url ?? null, environment: p?.environment ?? null },
+    });
+    const ev = await ctx.emit(sess.team, 'ready.posted', clean({ pr: i.pr, title: i.title, summary: i.summary, commit, preview: p?.url, environment: p?.environment, issue: i.issue, task: i.task, cardId: card.id, session: sess.id }), { ...opts, subject });
+    const text = `${i.title}: ready to try.${p ? ` Preview: ${p.url}` : ' The preview link follows when the deployment is up.'}${httpsUrl(a.url) ? ` Merged in ${a.url}` : ''}`;
+    const chat = await ctx.emit(sess.team, 'chat.message', { from: sess.role, text, attachments: [card.url] }, { ...opts, subject: 'chat' });
+    await ctx.q('insert into chat_messages(tenant, team, event, from_kind, from_id, text, at) values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing', [ctx.tenant, sess.team, chat.id, 'role', sess.role, text, chat.time]);
+    return { card: card.id, event: ev.id, preview: p?.url ?? null };
+  }
+
+  async function latestPreview(ctx, team, pr) {
+    const [row] = await ctx.q("select envelope from events where team = $1 and type = 'proposal.previewed' and envelope->'data'->>'ref' = $2 order by seq desc limit 1", [team, String(pr)]);
+    return row ? row.envelope.data : null;
+  }
+
+  /** A proposal.previewed the runner sent: added to the PR's open Ready to try card, with ready.previewed. */
+  async function previewArrived(ctx, team, d) {
+    const [row] = await ctx.q("select id, version, card from cards where team = $1 and subject = $2 and kind = 'ready' and state = 'open' for update", [team, `ready/${d.ref}`]);
+    if (!row || row.card.data?.preview === d.url) return null;
+    const c = row.card;
+    const next = {
+      ...c, version: row.version + 1, body: String(c.body ?? '').replace(PREVIEW_PENDING, '').trim(),
+      links: [...(c.links ?? []).filter((l) => l.rel !== 'preview'), { rel: 'preview', url: d.url }],
+      data: { ...c.data, preview: d.url, environment: d.environment ?? null },
+    };
+    await ctx.q('update cards set version = $2, card = $3 where id = $1', [row.id, next.version, JSON.stringify(next)]);
+    await ctx.emit(team, 'card.updated', { card: next }, { subject: c.subject });
+    return ctx.emit(team, 'ready.previewed', clean({ pr: c.data?.pr ?? d.ref, cardId: row.id, url: d.url, environment: d.environment }), { subject: c.subject });
+  }
+
   // ---- The person's inbox and summary extras (clients.md section 5) ------------------------------------------------
 
-  const URGENCY = "case kind when 'approval' then 0 when 'budget' then 1 when 'decision' then 2 else 3 end";
+  const URGENCY = "case kind when 'approval' then 0 when 'budget' then 1 when 'decision' then 2 when 'ready' then 4 else 3 end";
 
   async function inbox(tenant, { cursor = '', limit = 100 } = {}) {
     const n = Math.min(Math.max(Number(limit) || 100, 1), 500);
@@ -718,9 +769,32 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     appendIn: appendInTx, onStored: (fn) => listeners.push(fn), hooks,
     requireStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
-    createCard, changeCard, getCard, answerCard, requestApproval, decideApproval,
+    createCard, changeCard, getCard, answerCard, requestApproval, decideApproval, readyToTry, previewArrived, checkPreviewed,
     stepUp, mintStepUp, postChat, getChat, inbox, teamExtras,
   };
+}
+
+// ---- Ready to try helpers ------------------------------------------------------------------------------------------
+
+const PREVIEW_PENDING = 'The preview link is not up yet. It appears here when the deployment is ready.';
+const httpsUrl = (u) => typeof u === 'string' && u.length <= 2000 && /^https:\/\/[^\s/]+(\/\S*)?$/.test(u);
+const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null));
+
+/**
+ * A runner's proposal.previewed (events.md): the deployment that is up for a merged PR. Only a successful deployment
+ * with an https URL is stored, cleaned to the catalogue's fields. The event id is the bus's: one per deployment.
+ */
+export function checkPreviewed(data) {
+  const d = data ?? {};
+  const ref = typeof d.ref === 'string' && /^[1-9]\d{0,9}$/.test(d.ref) ? Number(d.ref) : d.ref;
+  if (!Number.isSafeInteger(ref) || ref < 1) throw new Problem(400, 'proposal.previewed needs ref, the pull request number');
+  if (!httpsUrl(d.url)) throw new Problem(400, 'proposal.previewed needs url, an https:// address');
+  if (d.state !== 'success') throw new Problem(400, 'proposal.previewed is sent only for a successful deployment (state success)');
+  const dep = typeof d.deployment === 'number' ? String(d.deployment) : d.deployment;
+  if (typeof dep !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(dep)) throw new Problem(400, 'proposal.previewed needs deployment, the deployment id');
+  if (d.sha !== undefined && !(typeof d.sha === 'string' && /^[0-9a-f]{7,64}$/.test(d.sha))) throw new Problem(400, 'sha must be a commit sha');
+  if (d.environment !== undefined && !(typeof d.environment === 'string' && d.environment.length <= 100)) throw new Problem(400, 'environment is text of at most 100 characters');
+  return clean({ connector: typeof d.connector === 'string' ? d.connector.slice(0, 60) : undefined, ref, sha: d.sha, url: d.url, environment: d.environment, state: 'success', deployment: dep });
 }
 
 // ---- The step-up secret (issue #28 D3) ----------------------------------------------------------------------------
