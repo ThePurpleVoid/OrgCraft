@@ -28,8 +28,11 @@ before(async () => {
   const root = mkdtempSync(join(tmpdir(), 'studio-agents-'));
   execFileSync('git', ['-C', root, 'init', '-q']);
   execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
+  // Publish commits, so the repository needs an author of its own (CI has no global git identity).
+  execFileSync('git', ['-C', root, 'config', 'user.name', 'Studio test']);
+  execFileSync('git', ['-C', root, 'config', 'user.email', 'studio-test@example.com']);
   execFileSync('git', ['-C', root, 'add', '-A']);
-  execFileSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'team']);
+  execFileSync('git', ['-C', root, 'commit', '-qm', 'team']);
   studio = createStudio({ root, env: {} });
   await new Promise((r) => studio.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${studio.address().port}`;
