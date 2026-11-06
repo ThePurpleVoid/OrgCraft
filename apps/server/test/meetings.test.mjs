@@ -339,6 +339,10 @@ test('G-15: the front door starts an ad hoc meeting from the chat; no cap given 
     assert.equal((await tool(p.call, qa, 'meeting_reply', { meeting: r.body.meeting, text: 'Reproduced on staging.' })).status, 200);
     const close = await turnFor(runner, r.body.meeting, 'chief-of-staff', { closing: true });
     assert.equal(close.session, fd.session, 'the front door that started it runs it');
+    // An action item for a role on the team that did not attend: refused, so a reply cannot steer work outside the meeting.
+    const outside = await tool(p.call, close, 'meeting_close', { meeting: r.body.meeting, minutes: 'm', actionItems: [{ to: 'designer', task: 'Redraw checkout', doneWhen: 'drawn' }] });
+    assert.equal(outside.status, 422, JSON.stringify(outside.body));
+    assert.match(JSON.stringify(outside.body), /designer did not attend/);
     const done = await tool(p.call, close, 'meeting_close', { meeting: r.body.meeting, minutes: 'The card form times out; reproduced.', actionItems: [{ to: 'web-dev', task: 'Fix the card form timeout', doneWhen: 'checkout passes on staging' }] });
     assert.equal(done.status, 200, JSON.stringify(done.body));
     const page = (await p.call('GET', `/teams/shop/meetings/${r.body.meeting}`)).body;
