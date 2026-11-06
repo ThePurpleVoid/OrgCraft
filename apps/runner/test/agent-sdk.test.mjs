@@ -125,6 +125,11 @@ test('the tier map and the cost fallback come from the shared price table; the S
   const none = await agentSdkAdapter({ sdk: sdkWith({ usage }) }).turn(o);
   assert.equal(none.usage.costUsd, estimate({ model: PRICES.tiers.routine, inputTokens: 1000, outputTokens: 500, cacheReadTokens: 2000 }, PRICES).usd);
   assert.ok(none.usage.costUsd > 0, 'no reported cost: the list price, not zero');
+  // A model the table does not list is not free: it counts at the dearest listed model's prices.
+  const unlisted = await agentSdkAdapter({ sdk: sdkWith({ usage }) }).turn({ ...o, model: 'claude-not-in-the-table' });
+  const dearest = Math.max(...Object.keys(PRICES.models).map((id) => estimate({ model: id, inputTokens: 1000, outputTokens: 500, cacheReadTokens: 2000 }, PRICES).usd));
+  assert.ok(unlisted.usage.costUsd > 0, 'an unlisted model is never counted as free');
+  assert.ok(unlisted.usage.costUsd >= none.usage.costUsd && Math.abs(unlisted.usage.costUsd - dearest) < 1e-12, 'at the dearest listed model');
   const reported = await agentSdkAdapter({ sdk: sdkWith({ usage, total_cost_usd: 0.1234 }) }).turn(o);
   assert.equal(reported.usage.costUsd, 0.1234);
 

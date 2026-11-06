@@ -48,7 +48,7 @@ export function dryrunAdapter({ control, qaRole = 'qa-web', frontDoor = 'chief-o
         log(t, 'chief-of-staff:handoff', { to: b.role, ok: !r.isError, detail: r.isError ? r.text : undefined });
         return { usage: usage() };
       }
-      const answered = /The owner answered your question[^:]*: "([^"]*)"/.exec(t.prompt);
+      const answered = /The owner answered your question.*?: "([^"]*)"/.exec(t.prompt);
       if (answered) {
         t.say(`Noted: ${answered[1] === 'new-page' ? 'on a page of its own' : 'on the home page'}. I've passed it on.`);
         log(t, 'chief-of-staff:answered', { answer: answered[1] });
