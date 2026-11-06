@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **M3 design fix:** `run.resumed` now restarts every session a pause stopped, from its last checkpoint, after an owner's resume or the budget's next-day resume. Pause and resume handlers act only if the run's state and version still match (found in review of #54).
+
 ## 0.9.2
 
 ### Security
