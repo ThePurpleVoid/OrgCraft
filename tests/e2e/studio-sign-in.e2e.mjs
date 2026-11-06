@@ -112,6 +112,16 @@ test('sign in with GitHub, add a first passkey, step up with it, and sign out', 
   await page.goto(`${iss.origin}/account`);
   // "Not now" was pressed above, so this visit does not ask for a passkey again.
   await page.getByText('Add a passkey before you can approve anything').waitFor();
+  // S5: the passkey changes show as a notice on this visit, until "Got it"; the next visit has none.
+  const notices = page.getByRole('status', { name: 'Changes to your account' });
+  await notices.getByText('A passkey "Work laptop" was removed on').waitFor();
+  await notices.getByText('A passkey "Work laptop" was added on').waitFor();
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'account-notices-desktop-light.png') });
+  await notices.getByRole('button', { name: 'Got it' }).click();
+  await notices.waitFor({ state: 'detached' });
+  await page.reload();
+  await page.getByText('Add a passkey before you can approve anything').waitFor();
+  assert.equal(await notices.count(), 0, 'seen notices stay dismissed');
   assert.equal(await page.locator('#passkey-add').isVisible(), false);
   await page.getByRole('button', { name: 'Sign out' }).click();
   await page.getByRole('heading', { name: 'You are signed out' }).waitFor();

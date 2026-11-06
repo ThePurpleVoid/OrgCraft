@@ -44,6 +44,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
   const interactions = new Map(); // uid -> { return, state }
   const challenges = new Map(); // challenge -> { kind, person, expires }
   const passkeys = new Map(); // person -> [{ id, name, createdAt, lastUsed }]
+  const notices = new Map(); // person -> [{ action, at, passkey, name }], oldest first (GET /v1/me lists them newest first)
   const stepUps = new Map(); // su_ -> { person, expires }
   const failures = new Map(); // person -> [ms]
   const upstream = { login: 'octo' }; // who the stub GitHub signs in; tests change it
@@ -114,7 +115,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       const rpOk = (authData) => authData && authData.subarray(0, 32).equals(createHash('sha256').update(new URL(origin).hostname).digest());
       const verified = (authData) => (authData[32] & 0x05) === 0x05; // user present and user verified
 
-      if (p === '/v1/me' && req.method === 'GET') return send(200, { id: who.id, login: who.login, name: who.name, workspaces: who.workspaces, passkeys: mine.length, authTime: new Date(session.authTime).toISOString() });
+      if (p === '/v1/me' && req.method === 'GET') return send(200, { id: who.id, login: who.login, name: who.name, workspaces: who.workspaces, passkeys: mine.length, authTime: new Date(session.authTime).toISOString(), notices: [...(notices.get(who.id) ?? [])].reverse() });
       if (p === '/v1/me/passkeys' && req.method === 'GET') return send(200, { passkeys: mine });
       if (p === '/v1/me/passkeys/options' && req.method === 'GET') {
         return send(200, {
@@ -136,12 +137,15 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
         if (!verified(auth)) return problem(400, 'webauthn', 'the passkey did not verify the person');
         const k = { id: body.credential.id, name: String(body.name ?? 'Passkey').slice(0, 60), createdAt: new Date().toISOString(), lastUsed: null };
         passkeys.set(who.id, [...mine, k]);
+        notices.set(who.id, [...(notices.get(who.id) ?? []), { action: 'passkey.added', at: new Date().toISOString(), passkey: k.id, name: k.name }]);
         return send(201, k);
       }
       const del = /^\/v1\/me\/passkeys\/([^/]+)$/.exec(p);
       if (del && req.method === 'DELETE') {
         if (!stepped()) return problem(401, 'step-up-required', 'Removing a passkey needs a fresh step-up');
+        const gone = mine.find((k) => k.id === decodeURIComponent(del[1]));
         passkeys.set(who.id, mine.filter((k) => k.id !== decodeURIComponent(del[1])));
+        if (gone) notices.set(who.id, [...(notices.get(who.id) ?? []), { action: 'passkey.removed', at: new Date(Date.now() + 1).toISOString(), passkey: gone.id, name: gone.name }]);
         return send(200, {});
       }
       if (p === '/v1/auth/step-up/challenge' && req.method === 'GET') {

@@ -402,3 +402,12 @@ body.editing .layout, body.editing .readonly-note { display: none; }
 .lib-role .state.s-waiting, .lib-role .state.s-review { color: var(--accent); }
 .lib-role .state.s-blocked { color: var(--error); }
 .lib-role .state.quiet, .lib-role .state.s-idle, .lib-role .state.s-done { color: var(--muted); }
+
+/* Add a runner: the one-time code, large and easy to read aloud or copy. */
+.runner-code { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+.runner-code p { margin: 0 0 6px; }
+.runner-code .code { display: block; font: 600 24px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em; margin: 4px 0 8px; user-select: all; }
+.runner-code pre { white-space: pre-wrap; word-break: break-all; background: var(--bg); border-radius: 6px; padding: 8px; margin: 0 0 8px; font-size: 12px; }
+.runner-list p { margin: 0 0 8px; }
+.notices ul { margin: 4px 0 8px; padding-left: 18px; }
+.notices p { margin: 0 0 6px; }

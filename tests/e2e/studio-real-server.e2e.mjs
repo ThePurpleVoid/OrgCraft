@@ -152,3 +152,39 @@ test('against the real control plane: chat, cards, an approval with step-up, a s
   assert.deepEqual(errors, []);
   await page.close();
 });
+
+test('Add a runner: a code after step-up, shown once, that registers a runner on the real control plane', { skip }, async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: SHOTS ? 2 : 1 });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${base}/?t=${studio.launchToken}`);
+  await page.goto(`${base}/#chat`);
+  await page.getByRole('button', { name: 'Add a runner…' }).click();
+  const dlg = page.locator('#runner-dialog');
+  await dlg.getByText('No runner is registered yet.').waitFor();
+  await dlg.getByLabel('Name for the machine').fill("Dana's Mac mini");
+  await dlg.getByRole('button', { name: 'Get a code' }).click();
+  const su = page.locator('#stepup-dialog');
+  await su.getByLabel('Step-up secret').fill(SECRET);
+  await su.getByRole('button', { name: 'Confirm' }).click();
+  const code = (await dlg.getByLabel('Runner code').textContent()).trim();
+  assert.match(code, /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+  const cmd = await dlg.locator('#runner-cmd').textContent();
+  assert.match(cmd, new RegExp(`^agent-team-runner register --server 'http://127\\.0\\.0\\.1:\\d+' --code ${code} --name 'Dana'\\\\''s Mac mini'$`));
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'runner-code.png') });
+
+  // The code is what register sends: the real control plane trades it for a runner key, once.
+  const cp = `http://127.0.0.1:${plane.address().port}`;
+  const reg = await fetch(`${cp}/v1/runners`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, name: "Dana's Mac mini", capabilities: { sandboxes: ['process'], runtimes: ['agent-sdk'] } }) });
+  assert.equal(reg.status, 201);
+  assert.ok((await reg.json()).key);
+
+  // Shown once: closing the dialog clears it, and opening it again lists the runner, not the code.
+  await dlg.getByRole('button', { name: 'Close' }).click();
+  await page.getByRole('button', { name: 'Add a runner…' }).click();
+  await dlg.getByText("Dana's Mac mini").waitFor();
+  assert.equal(await dlg.getByLabel('Runner code').count(), 0);
+  assert.equal(await dlg.getByRole('button', { name: 'Get a code' }).isVisible(), true);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
