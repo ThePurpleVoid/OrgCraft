@@ -111,8 +111,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   // ---- Budget (section 6) ---------------------------------------------------------------------------------------
 
   async function budgetRow(q, team) {
-    const [b] = await q('select currency, per_day, per_run, sessions from budgets where team = $1', [team]);
-    return b ? { currency: b.currency, perDay: b.per_day === null ? null : Number(b.per_day), perRun: b.per_run === null ? null : Number(b.per_run), sessions: Number(b.sessions) } : null;
+    const [b] = await q('select currency, per_day, per_run, sessions, meeting_cap from budgets where team = $1', [team]);
+    return b ? { currency: b.currency, perDay: b.per_day === null ? null : Number(b.per_day), perRun: b.per_run === null ? null : Number(b.per_run), sessions: Number(b.sessions), meetingCap: b.meeting_cap === null || b.meeting_cap === undefined ? null : Number(b.meeting_cap) } : null;
   }
 
   async function today(q, team, at) {
@@ -124,7 +124,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   async function getBudget(tenant, team) {
     await getTeam(db, tenant, team);
     return db.tenant(tenant, async ({ q }) => {
-      const b = (await budgetRow(q, team)) ?? { currency: 'USD', perDay: null, perRun: null, sessions: 3 };
+      const b = (await budgetRow(q, team)) ?? { currency: 'USD', perDay: null, perRun: null, sessions: 3, meetingCap: null };
       return { ...b, today: await today(q, team, now()) };
     });
   }
@@ -134,20 +134,24 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     await getTeam(db, tenant, team);
     const b = body ?? {};
     for (const k of ['perDay', 'perRun']) if (b[k] !== undefined && b[k] !== null && !(isInt(b[k]) && b[k] >= 0)) throw new Problem(400, `${k} is a whole number of minor units, or null`);
+    if (b.meetingCap !== undefined && b.meetingCap !== null && !(isInt(b.meetingCap) && b.meetingCap > 0)) throw new Problem(400, 'meetingCap is a whole number of minor units above zero, or null (a tenth of perDay)');
     if (b.sessions !== undefined && !(isInt(b.sessions) && b.sessions >= 1 && b.sessions <= 100)) throw new Problem(400, 'sessions is 1 to 100');
     if (b.currency !== undefined && !/^[A-Z]{3}$/.test(b.currency)) throw new Problem(400, 'currency is an ISO 4217 code, like USD');
     return tx(tenant, async (ctx) => {
-      const old = (await budgetRow(ctx.q, team)) ?? { currency: 'USD', perDay: null, perRun: null, sessions: 3 };
-      const next = { currency: b.currency ?? old.currency, perDay: b.perDay !== undefined ? b.perDay : old.perDay, perRun: b.perRun !== undefined ? b.perRun : old.perRun, sessions: b.sessions ?? old.sessions };
+      const old = (await budgetRow(ctx.q, team)) ?? { currency: 'USD', perDay: null, perRun: null, sessions: 3, meetingCap: null };
+      const next = { currency: b.currency ?? old.currency, perDay: b.perDay !== undefined ? b.perDay : old.perDay, perRun: b.perRun !== undefined ? b.perRun : old.perRun, sessions: b.sessions ?? old.sessions, meetingCap: b.meetingCap !== undefined ? b.meetingCap : old.meetingCap ?? null };
+      if (next.meetingCap !== null && next.perDay !== null && next.meetingCap > next.perDay) throw new Problem(409, `meetingCap (${next.meetingCap}) is above perDay (${next.perDay})`);
       // No cap (null) means unlimited for perRun; for perDay it means no run may start. Either way, going from a number
       // to null, or to a bigger number, lets more be spent.
       const raises = (o, n, nullIsUnlimited) => (o === null ? (nullIsUnlimited ? false : n !== null) : n === null ? true : n > o);
-      const raising = raises(old.perDay, next.perDay, false) || raises(old.perRun, next.perRun, true) || next.sessions > old.sessions;
+      // A null meetingCap means a tenth of perDay, so going from a number to null may raise it too.
+      const meetingDefault = (x) => (x.meetingCap ?? (x.perDay === null ? 0 : Math.max(1, Math.floor(x.perDay / 10))));
+      const raising = raises(old.perDay, next.perDay, false) || raises(old.perRun, next.perRun, true) || next.sessions > old.sessions || meetingDefault(next) > meetingDefault(old);
       if (raising && !(await useStepUp(ctx, by, stepUp))) throw new StepUpRequired('Raising a budget');
-      await ctx.q(`insert into budgets(tenant, team, currency, per_day, per_run, sessions, updated_by) values ($1, $2, $3, $4, $5, $6, $7)
+      await ctx.q(`insert into budgets(tenant, team, currency, per_day, per_run, sessions, meeting_cap, updated_by) values ($1, $2, $3, $4, $5, $6, $7, $8)
                    on conflict (team) do update set currency = excluded.currency, per_day = excluded.per_day, per_run = excluded.per_run,
-                   sessions = excluded.sessions, updated_by = excluded.updated_by, updated_at = now()`,
-        [tenant, team, next.currency, next.perDay, next.perRun, next.sessions, by]);
+                   sessions = excluded.sessions, meeting_cap = excluded.meeting_cap, updated_by = excluded.updated_by, updated_at = now()`,
+        [tenant, team, next.currency, next.perDay, next.perRun, next.sessions, next.meetingCap, by]);
       await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'budget', target: team, decision: 'allowed', detail: { from: old, to: next, stepUp: raising } });
       await ctx.emit(team, 'budget.updated', { ...next, by }, { actor: personActor(by), subject: 'budget' });
       return { ...next, today: await today(ctx.q, team, ctx.now) };

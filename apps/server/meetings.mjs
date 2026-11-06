@@ -59,6 +59,32 @@ export function checkMeetingDefs(list, roles, frontDoor) {
   });
 }
 
+/**
+ * An ad hoc meeting (G-15): { title, agenda?, attendees: [slug], cap?: { amount, currency } }. The facilitator is the
+ * front door; a busy attendee answers after its current step (next-pause). Returns { input } or { problems }.
+ */
+export function checkAdhoc(a, roster, facilitator) {
+  const problems = [];
+  const slugs = new Set((roster?.roles ?? []).map((r) => r.slug));
+  if (!a || typeof a !== 'object' || Array.isArray(a)) return { problems: ['send { title, agenda, attendees }'] };
+  if (typeof a.title !== 'string' || !a.title.trim() || a.title.length > 200) problems.push('title is text of at most 200 characters');
+  if (a.agenda !== undefined && (typeof a.agenda !== 'string' || a.agenda.length > 4000)) problems.push('agenda is text of at most 4,000 characters');
+  const attendees = [];
+  if (!Array.isArray(a.attendees) || !a.attendees.length || a.attendees.length > 20) problems.push('attendees is a list of 1 to 20 role slugs');
+  else for (const s of a.attendees) {
+    if (typeof s !== 'string' || !slugs.has(s)) problems.push(`${s} is not a role on this team`);
+    else if (s === facilitator) continue;
+    else if (!attendees.includes(s)) attendees.push(s);
+  }
+  if (!problems.length && !attendees.length) problems.push('a meeting needs someone besides the role that runs it');
+  let cap;
+  if (a.cap !== undefined && a.cap !== null) {
+    if (typeof a.cap !== 'object' || !Number.isSafeInteger(a.cap.amount) || a.cap.amount <= 0 || typeof a.cap.currency !== 'string' || !/^[A-Z]{3}$/.test(a.cap.currency)) problems.push('cap is { amount: whole minor units above zero, currency: an ISO 4217 code }, like the budget');
+    else cap = { amount: a.cap.amount, currency: a.cap.currency };
+  }
+  return problems.length ? { problems: [...new Set(problems)] } : { input: { title: a.title, agenda: a.agenda ?? '', attendees, ...(cap ? { cap } : {}), ifBusy: 'next-pause', format: 'round', owner: { minutes: true } } };
+}
+
 /** Minor units, rounded up (A2): the cap is never below what the definition says. */
 const minor = (usd) => Math.ceil(usd * 100 - 1e-9);
 
@@ -72,11 +98,11 @@ function carried(replies) {
 
 export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_TURN_MINUTES }) {
   const base = String(publicUrl || '').replace(/\/+$/, '');
-  const COLS = 'id, team, run, definition, title, agenda, facilitator, attendees, if_busy, minutes_to_chat, state, outcome, capped, turn, turn_event, turn_due, replies, skipped, minutes, cap, currency, spent, closed_by_session, close_billed, opened_by, opened_at, closed_at, version';
+  const COLS = 'id, team, run, definition, title, agenda, facilitator, attendees, if_busy, minutes_to_chat, state, outcome, capped, turn, turn_event, turn_due, replies, skipped, minutes, cap, currency, spent, closed_by_session, close_billed, opened_by, opened_at, closed_at, version, adhoc';
   const view = (m) => m && ({
     id: m.id, team: m.team, run: m.run, definition: m.definition, title: m.title, agenda: m.agenda, facilitator: m.facilitator, attendees: m.attendees, ifBusy: m.if_busy,
     state: m.state, outcome: m.outcome, capped: m.capped, turn: m.turn, replies: m.replies, skipped: m.skipped, minutes: m.minutes,
-    cap: Number(m.cap), spent: Number(m.spent), currency: m.currency, openedBy: m.opened_by, openedAt: m.opened_at, closedAt: m.closed_at, version: Number(m.version),
+    cap: Number(m.cap), spent: Number(m.spent), currency: m.currency, adhoc: Boolean(m.adhoc), openedBy: m.opened_by, openedAt: m.opened_at, closedAt: m.closed_at, version: Number(m.version),
   });
   const opts = (m, more = {}) => ({ subject: `meeting/${m.id}`, run: m.run, actor: SYSTEM, ...more });
   const page = (m) => `${base}/t/${encodeURIComponent(m.team)}/meetings/${m.id}`;
@@ -94,29 +120,74 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
   }
   const due = (q) => q(`select now() + make_interval(mins => $1) as t`, [turnMinutes]).then((r) => r[0].t);
 
-  /** POST /v1/teams/{team}/meetings: an instance of a definition of the run that is going (A3). */
+  /** The meeting definition's cap in the budget's money, after the checks every start makes (A2; CTO, G-15). */
+  async function capFor(q, team, now, { usd = null, cap = null } = {}) {
+    const [b] = await q('select currency, per_day, meeting_cap from budgets where team = $1', [team]);
+    if (b?.per_day === null || b?.per_day === undefined) throw new Problem(409, 'set a daily cap first');
+    const currency = b.currency ?? 'USD';
+    let amount;
+    if (cap) {
+      if (cap.currency !== currency) throw new Problem(409, `the meeting's cap is in ${cap.currency} and this team's budget is in ${currency}`);
+      amount = cap.amount;
+    } else if (usd !== null) {
+      // capUsd is in US dollars; until meetings.json says a currency, a team budgeted in another one cannot convert it.
+      if (currency !== 'USD') throw new Problem(409, `meeting caps are in US dollars and this team's budget is in ${currency}; meetings need a USD budget for now`);
+      amount = minor(usd);
+    } else {
+      // No cap given: the team's default meeting cap, else a tenth of the daily cap. Never open-ended.
+      amount = b.meeting_cap !== null && b.meeting_cap !== undefined ? Number(b.meeting_cap) : Math.max(1, Math.floor(Number(b.per_day) / 10));
+    }
+    if (amount > Number(b.per_day)) throw new Problem(409, `the meeting's cap (${amount}) is above the team's daily cap (${b.per_day})`);
+    const [day] = await q('select spent, raised from budget_days where team = $1 and day = $2::date', [team, now.toISOString().slice(0, 10)]);
+    const left = Number(b.per_day) + Number(day?.raised ?? 0) - Number(day?.spent ?? 0);
+    if (left < amount) throw new Problem(409, `today's budget has ${Math.max(left, 0)} left, less than the meeting's cap of ${amount}`);
+    return { amount, currency };
+  }
+
+  async function goingRun(q, team) {
+    const [run] = await q("select id, state, roster from runs where team = $1 and state <> 'stopped' order by started_at desc limit 1 for update", [team]);
+    if (!run) throw new Problem(409, 'no run is going: start one first');
+    if (run.state !== 'running') throw new Problem(409, `the run is ${run.state}; resume it first`);
+    return run;
+  }
+
+  /** Inserts the instance, says meeting.opened and sends the first turn. `d` is a checked definition. */
+  async function open(ctx, team, run, d, { def, attendees, cap, by, actor, adhoc = false }) {
+    const mid = id('mtg');
+    const definition = def ?? `adhoc-${mid.slice(4)}`;
+    const [row] = await ctx.q(`insert into meetings(id, tenant, team, run, definition, title, agenda, facilitator, attendees, if_busy, minutes_to_chat, cap, currency, opened_by, adhoc)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) on conflict (team, definition) where state <> 'closed' do nothing returning ${COLS}`,
+      [mid, ctx.tenant, team, run.id, definition, d.title, d.agenda ?? '', d.facilitator, JSON.stringify(attendees), d.ifBusy ?? 'next-pause', d.owner?.minutes !== false, cap.amount, cap.currency, by, adhoc]);
+    if (!row) throw new Problem(409, `meeting ${definition} was opened just now`);
+    await ctx.emit(team, 'meeting.opened', { meeting: mid, definition, title: d.title, agenda: d.agenda ?? '', facilitator: d.facilitator, attendees, format: d.format ?? 'round', ifBusy: d.ifBusy ?? 'next-pause', cap: cap.amount, currency: cap.currency, by, ...(adhoc ? { adhoc: true } : {}) },
+      { ...opts(row), actor });
+    await ctx.audit({ team, actorKind: actor.kind, actorId: actor.id, session: actor.session ?? null, action: 'meeting', target: mid, decision: 'allowed', detail: { op: 'start', definition, adhoc } });
+    return advance(ctx, row);
+  }
+
+  /**
+   * POST /v1/teams/{team}/meetings: an instance of a definition of the run that is going (A3), or, with { adhoc },
+   * an unscheduled one ({ title, agenda, attendees, cap?: { amount, currency } }, run by the front door; G-15).
+   */
   async function start(tenant, team, body, by) {
     const def = body?.meeting;
-    if (typeof def !== 'string' || !MEETING_ID.test(def)) throw new Problem(400, 'send { "meeting": "<the meeting\'s id in meetings.json>" }');
+    if (body?.adhoc === undefined && (typeof def !== 'string' || !MEETING_ID.test(def))) throw new Problem(400, 'send { "meeting": "<the meeting\'s id in meetings.json>" } or { "adhoc": { title, agenda, attendees } }');
     return m3.tx(tenant, async (ctx) => {
       const { q } = ctx;
       if (!(await q('select 1 from teams where id = $1', [team])).length) throw new Problem(404, 'no such team');
-      const [run] = await q("select id, state, roster from runs where team = $1 and state <> 'stopped' order by started_at desc limit 1 for update", [team]);
-      if (!run) throw new Problem(409, 'no run is going: start one first');
-      if (run.state !== 'running') throw new Problem(409, `the run is ${run.state}; resume it first`);
+      const run = await goingRun(q, team);
+      const actor = { kind: 'person', id: by, via: 'studio' };
+      if (body.adhoc !== undefined) {
+        const a = checkAdhoc(body.adhoc, run.roster, run.roster.frontDoor);
+        if (a.problems) throw new Problem(400, a.problems.join(' '));
+        const cap = await capFor(q, team, ctx.now, { cap: a.input.cap });
+        return view(await open(ctx, team, run, { ...a.input, facilitator: run.roster.frontDoor }, { attendees: a.input.attendees, cap, by, actor, adhoc: true }));
+      }
       const d = (run.roster?.meetings ?? []).find((m) => m.id === def);
       if (!d) throw new Problem(404, `the run's team has no meeting ${def}; publish it and start a new run`);
-      const [open] = await q("select id from meetings where team = $1 and definition = $2 and state <> 'closed'", [team, def]);
-      if (open) throw new Problem(409, `meeting ${def} is already open (${open.id})`);
-      const cap = minor(d.capUsd);
-      const [b] = await q('select currency, per_day from budgets where team = $1', [team]);
-      if (b?.per_day === null || b?.per_day === undefined) throw new Problem(409, 'set a daily cap first');
-      // capUsd is in US dollars; until meetings.json says a currency, a team budgeted in another one cannot convert it.
-      if ((b.currency ?? 'USD') !== 'USD') throw new Problem(409, `meeting caps are in US dollars and this team's budget is in ${b.currency}; meetings need a USD budget for now`);
-      if (cap > Number(b.per_day)) throw new Problem(409, `the meeting's cap (${cap}) is above the team's daily cap (${b.per_day})`);
-      const [day] = await q('select spent, raised from budget_days where team = $1 and day = $2::date', [team, ctx.now.toISOString().slice(0, 10)]);
-      const left = Number(b.per_day) + Number(day?.raised ?? 0) - Number(day?.spent ?? 0);
-      if (left < cap) throw new Problem(409, `today's budget has ${Math.max(left, 0)} left, less than the meeting's cap of ${cap}`);
+      const [already] = await q("select id from meetings where team = $1 and definition = $2 and state <> 'closed'", [team, def]);
+      if (already) throw new Problem(409, `meeting ${def} is already open (${already.id})`);
+      const cap = await capFor(q, team, ctx.now, { usd: d.capUsd });
       const attendees = [...d.attendees];
       if (d.rule === 'worked-since-last') {
         // Who reported or sent a message since this meeting last closed (or since the run started).
@@ -127,17 +198,21 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
         for (const r of rows) if (slugs.has(r.actor_id) && r.actor_id !== d.facilitator && !attendees.includes(r.actor_id)) attendees.push(r.actor_id);
       }
       if (!attendees.length) throw new Problem(409, `nobody to meet: no attendee of ${def} has worked since it last met`);
-      const mid = id('mtg');
-      const [row] = await q(`insert into meetings(id, tenant, team, run, definition, title, agenda, facilitator, attendees, if_busy, minutes_to_chat, cap, currency, opened_by)
-                             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) on conflict (team, definition) where state <> 'closed' do nothing returning ${COLS}`,
-        [mid, tenant, team, run.id, def, d.title, d.agenda, d.facilitator, JSON.stringify(attendees), d.ifBusy, d.owner?.minutes !== false, cap, b.currency ?? 'USD', by]);
-      if (!row) throw new Problem(409, `meeting ${def} was opened just now`);
-      await ctx.emit(team, 'meeting.opened', { meeting: mid, definition: def, title: d.title, agenda: d.agenda, facilitator: d.facilitator, attendees, format: d.format, ifBusy: d.ifBusy, cap, currency: b.currency ?? 'USD', by },
-        { ...opts(row), actor: { kind: 'person', id: by, via: 'studio' } });
-      await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'meeting', target: mid, decision: 'allowed', detail: { op: 'start', definition: def } });
-      const m = await advance(ctx, row);
-      return view(m);
+      return view(await open(ctx, team, run, d, { def, attendees, cap, by, actor }));
     });
+  }
+
+  /** The front door's meeting_start (G-15): an unscheduled meeting it runs, from a chat request such as "X and Y on Z, now". */
+  async function startAdhoc(ctx, sess, i, roster) {
+    const run = await goingRun(ctx.q, sess.team);
+    if (run.id !== sess.run) return { problems: ['this session is not in the run that is going'] };
+    const a = checkAdhoc(i, roster, sess.role);
+    if (a.problems) return a;
+    let cap;
+    try { cap = await capFor(ctx.q, sess.team, ctx.now, { cap: a.input.cap }); } catch (e) { if (e instanceof Problem) return { problems: [e.message] }; throw e; }
+    const actor = { kind: 'role', id: sess.role, instance: sess.instance ?? null, session: sess.id, via: 'tool' };
+    const m = await open(ctx, sess.team, run, { ...a.input, facilitator: sess.role }, { attendees: a.input.attendees, cap, by: sess.role, actor, adhoc: true });
+    return { meeting: m.id, attendees: m.attendees, cap: Number(m.cap), currency: m.currency };
   }
 
   /** Sends the next turn: to the next attendee who can take it, or the closing turn to the facilitator. */
@@ -317,5 +392,5 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
     return (await db.tenant(tenant, ({ q }) => q(`select ${COLS} from meetings where team = $1 order by opened_at desc limit 50`, [team]))).map(view);
   }
 
-  return { start, get, list, tool, project, tick, sent, instanceFor };
+  return { start, startAdhoc, get, list, tool, project, tick, sent, instanceFor };
 }
