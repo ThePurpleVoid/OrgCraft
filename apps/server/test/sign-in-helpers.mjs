@@ -129,13 +129,13 @@ export function browser(local, { ip = 'browser' } = {}) {
   return b;
 }
 
-export async function issuer(fn, { ownerGithub = OWNER, now, clientIp = (req) => req.headers['x-test-ip'] ?? '', cronSecret, clients, streamCheckMs, githubApp } = {}) {
+export async function issuer(fn, { ownerGithub = OWNER, now, clientIp = (req) => req.headers['x-test-ip'] ?? '', cronSecret, clients, streamCheckMs, githubApp, studio } = {}) {
   const db = await fresh();
   await store.ensureTenant(db, 'acme');
   const gh = await stubGitHub();
   const upstream = githubUpstream({ clientId: 'Iv1.test', clientSecret: 'gh-secret', url: gh.url, apiUrl: gh.url });
   const identity = await createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub, upstream, ...(clientIp ? { clientIp } : {}), ...(now ? { now } : {}), ...(clients ? { clients } : {}), ...(githubApp ? { githubApp: { url: gh.url, ...githubApp } } : {}) });
-  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, publicUrl: ORIGIN, identity, tickMs: 0, stepUpVerifier: verifier, ...(cronSecret ? { cronSecret } : {}), ...(now ? { now } : {}), ...(streamCheckMs ? { streamCheckMs } : {}) });
+  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, publicUrl: ORIGIN, identity, tickMs: 0, stepUpVerifier: verifier, ...(cronSecret ? { cronSecret } : {}), ...(now ? { now } : {}), ...(streamCheckMs ? { streamCheckMs } : {}), ...(studio ? { studio } : {}) });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const local = `http://127.0.0.1:${server.address().port}`;
   try {

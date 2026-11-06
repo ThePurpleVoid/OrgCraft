@@ -114,3 +114,41 @@ const studio = mount(document.getElementById('team-studio'), {
 - `headers` is called before each request, so a short-lived token stays fresh. The handler still checks every
   request with your `authorize`; the page only hides what a person cannot do.
 - A page that loads `studio.js` with a plain module script tag can use `globalThis.AgentTeamStudio.mount` instead.
+
+## 5. Publish through the team's deployment instead (control-plane mode)
+
+From kit 0.21.0, a site whose team runs on a deployment of the control plane can skip its own GitHub App: the
+handler sends read, preview and publish to the deployment's `/v1/teams/{team}/studio/` routes, and the deployment's
+GitHub App opens the pull request (spec section 6).
+
+1. Register your site on the deployment (an owner, with a passkey step-up): its name, origins and callback URL. You get
+   a client id and a secret, shown once.
+2. Your server signs your admin in through the deployment once (authorization code with PKCE, `client_secret_basic`
+   and a DPoP key), and keeps the access and refresh tokens and the DPoP key server-side. The person says yes on the
+   deployment's consent page, which says your site may open pull requests for them.
+3. Mount the handler with `controlPlane` in place of `repo` and `getInstallationToken`:
+
+```js
+export const handler = createStudioHandler({
+  basePath: '/api/agent-team/studio',
+  allowedOrigins: ['https://admin.example.com'],
+  authorize,                                        // your own admin sign-in, as before
+  controlPlane: {
+    url: 'https://teams.example.com',               // the deployment's origin
+    team: 'shop',                                   // the team's name there
+    hostToken: async ({ user }) => tokens.accessFor(user), // the token from step 2 (refresh it as it expires)
+    dpopKey,                                        // the private key it is bound to: a KeyObject or JWK, P-256 or Ed25519
+  },
+});
+```
+
+- Every call carries `Authorization: DPoP <token>`, a fresh DPoP proof signed with `dpopKey` (node:crypto, no
+  dependencies), and `x-agent-team-host-user` with your user's name and id. The host's cookies are never forwarded.
+- Your `authorize` still decides who may read and publish on your page, first. The deployment then checks the token's
+  person: the pull request and its commit are theirs, and the PR body says "Published through <your site> for
+  <your user>".
+- A change to the commands the team runs is never published through a site. The page says so in the Publish dialog
+  and links the deployment's own Studio (`features.studio`); the handler refuses it with `type: 'publish-code'`.
+- The deployment limits each site to 10 publishes in 10 minutes and 60 previews a minute; over that the handler
+  passes on the 429 with `Retry-After`. A token the deployment no longer accepts answers 502 with
+  `type: 'host-sign-in'`: sign your admin in through it again.
