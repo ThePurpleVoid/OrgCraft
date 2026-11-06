@@ -367,7 +367,7 @@ export class Session {
     for (let round = 1; ; round++) {
       let r;
       try {
-        r = await this.deps.tools.call('request_approval', { ...input, pr: this.proposal.ref, headSha, ...(round > 1 ? { why: `${input.why} (asked again: the pull request's head moved to ${headSha} after the last approval)` } : {}) });
+        r = await this.deps.tools.call('request_approval', { ...input, pr: this.proposal.ref, headSha, ...(round > 1 ? { why: `${input.why} (asked again: the pull request's head moved to ${headSha} after the last approval; the new head includes commits this session did not push, so look at them before approving)` } : {}) });
       } catch (e) {
         return { text: `The control plane could not be reached (${e.message}). Nothing was sent; try again shortly.`, isError: true };
       }
