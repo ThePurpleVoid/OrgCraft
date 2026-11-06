@@ -584,7 +584,7 @@ function teamHtml() {
   return `<h2>Team</h2><dl class="team-facts">${rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('')}</dl>
     <h2>Coding agents</h2>
     <label class="switch"><input type="checkbox" id="t-agents-md"${teamTargets(spec.options).includes('agents-md') ? ' checked' : ''}> Also write AGENTS.md, for coding agents other than Claude Code</label>
-    <p class="hint">Publish writes the team's instructions into AGENTS.md at the top of the repository. Text you wrote in that file yourself stays. Their board cards read "self-reported": without hooks, a card changes only when the role reports.</p>
+    <p class="hint">Publish writes the team's instructions into AGENTS.md at the top of the repository. Text you wrote in that file yourself stays. Roles run by those agents show "self-reported" on the board: without hooks, a card changes only when the role reports.</p>
     <p class="hint">Every team gets the core rules: one door for the owner's requests, the owner's words passed on unchanged, one writer per area, the four message kinds and the board. A team's template or preset adds the rest.</p>
     <p class="muted">Pick a role on the canvas or in the library.</p>`;
 }
