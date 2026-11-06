@@ -87,6 +87,7 @@ export function createChat({ root, onOpen } = {}) {
     connected: null, error: null, events: [], next: null, cards: new Map(), answers: new Map(), pending: [],
     notes: new Map(), // card id -> note shown above it (changed, step-up)
     run: null, cost: null, summary: null, busy: false, loaded: false, es: null, team: null,
+    runError: null, budget: null, plan: null, // GET /v1/team/budget and /v1/team/run/plan, read when the start dialog opens
     older: [], local: new Set(), // pages fetched with 'Show earlier'; events this page posted
 
   };
@@ -97,10 +98,39 @@ export function createChat({ root, onOpen } = {}) {
       <div class="chat-run row">
         <span id="run-state" class="pill" role="status"></span>
         <span id="cost" class="cost" role="status"></span>
+        <button id="run-start" type="button" class="primary" hidden>Start a run…</button>
         <button id="run-pause" type="button"></button>
         <button id="run-stop" type="button" class="danger">Stop</button>
       </div>
     </div>
+    <dialog id="start-dialog" class="start-dialog">
+      <form method="dialog" class="dialog" id="start-form">
+        <h2>Start a run</h2>
+        <p class="muted">The team runs as it was last published, not as the canvas shows it now. It keeps going until you pause or stop it, or today's cap is reached.</p>
+        <p id="start-plan" class="plan" role="status">Reading the published team…</p>
+        <label for="start-cap">Daily cap</label>
+        <div class="money"><input id="start-cap" type="number" inputmode="decimal" min="0.01" step="0.01" required placeholder="e.g. 20.00"><span id="start-currency" class="muted"></span></div>
+        <p class="hint" id="start-cap-hint">The most the team may spend in a day (UTC). A run cannot start without one. Raising it later asks you to confirm it is you.</p>
+        <p id="start-result" class="result" role="status"></p>
+        <div class="dialog-actions">
+          <button value="cancel" type="submit" formnovalidate>Cancel</button>
+          <button id="start-go" type="button" class="primary" disabled>Start</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="stepup-dialog" class="stepup-dialog">
+      <form class="dialog" id="stepup-form">
+        <h2>Confirm it is you</h2>
+        <p id="stepup-why"></p>
+        <label>Step-up secret <input id="stepup-secret" type="password" autocomplete="current-password" required></label>
+        <p class="hint">The control plane checks it. Neither this page nor the Studio keeps it.</p>
+        <p id="stepup-result" class="result error" role="status"></p>
+        <div class="dialog-actions">
+          <button id="stepup-cancel" type="button">Cancel</button>
+          <button type="submit" class="primary">Confirm</button>
+        </div>
+      </form>
+    </dialog>
     <div id="chat-log" class="chat-log" aria-live="polite" aria-label="Chat with the chief of staff"></div>
     <form id="chat-form" class="chat-form">
       <textarea id="chat-text" rows="1" placeholder="Message the chief of staff" aria-label="Message the chief of staff"></textarea>
@@ -190,7 +220,7 @@ export function createChat({ root, onOpen } = {}) {
     }
     st.pending = st.pending.filter((p) => !seen.has(p.clientId));
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
-    log.innerHTML = html + (st.error ? `<p class="result error">${esc(st.error)}</p>` : '');
+    log.innerHTML = html + [st.error, st.runError].filter(Boolean).map((m) => `<p class="result error">${esc(m)}</p>`).join('');
     if (atBottom) log.scrollTop = log.scrollHeight;
     renderRun();
   }
@@ -200,7 +230,7 @@ export function createChat({ root, onOpen } = {}) {
     const c = st.cost ?? s?.cost;
     $('#chat-where', root).textContent = st.team ? `· ${st.team}` : '';
     const pill = $('#run-state', root);
-    pill.textContent = state ? human(state) : st.connected === false ? 'Not connected' : 'Not running';
+    pill.textContent = state ? human(state) : st.connected === false ? 'Not connected' : st.connected ? 'Not running' : '…';
     pill.className = `pill ${state === 'running' ? 'ok' : state === 'paused' ? 'warn' : ''}`;
     const cost = $('#cost', root);
     if (c && typeof c.today === 'number') {
@@ -209,10 +239,16 @@ export function createChat({ root, onOpen } = {}) {
       cost.title = c.capPerDay ? `${pct}% of today's cap${c.state === 'exhausted' ? ': the cap is reached' : ''}` : '';
       cost.classList.toggle('over', c.state === 'exhausted');
     } else cost.textContent = '';
+    const going = state === 'running' || state === 'paused';
     const pause = $('#run-pause', root);
     pause.textContent = state === 'paused' ? 'Resume' : 'Pause';
-    pause.disabled = st.busy || !(state === 'running' || state === 'paused');
-    $('#run-stop', root).disabled = st.busy || !(state === 'running' || state === 'paused');
+    pause.disabled = st.busy || !going;
+    pause.hidden = !going && st.connected === true;
+    $('#run-stop', root).disabled = st.busy || !going;
+    $('#run-stop', root).hidden = !going && st.connected === true;
+    // With no run going, the one control is Start (the control plane allows one run per team).
+    $('#run-start', root).hidden = going || st.connected !== true;
+    $('#run-start', root).disabled = st.busy;
   }
 
   async function load() {
@@ -231,7 +267,12 @@ export function createChat({ root, onOpen } = {}) {
     if (!st.older.length) st.next = r.data.next ?? null;
     takeCards(Array.isArray(r.data.cards) ? r.data.cards : Object.values(r.data.cards ?? {}));
     takeCards(st.events.filter((e) => e.type === 'card.updated').map((e) => e.data?.card));
-    if ('run' in r.data || 'cost' in r.data) { st.run = r.data.run ?? null; st.cost = r.data.cost ?? null; render(); }
+    if ('run' in r.data || 'cost' in r.data) {
+      st.run = r.data.run ?? null; st.cost = r.data.cost ?? null;
+      // The chat page is newer than any summary read before it: a stopped run must not linger from one.
+      if (st.summary) st.summary = { ...st.summary, run: st.run?.state ?? null };
+      render();
+    }
     else { render(); loadRun(); }
   }
 
@@ -294,14 +335,101 @@ export function createChat({ root, onOpen } = {}) {
     render();
   }
 
+  /** Asks for the step-up secret in a dialog. Resolves true once the Studio server holds a step-up token. */
+  function stepUp(why) {
+    const dlg = $('#stepup-dialog', root);
+    const form = $('#stepup-form', root);
+    const input = $('#stepup-secret', root);
+    $('#stepup-why', root).textContent = why;
+    $('#stepup-result', root).textContent = '';
+    input.value = '';
+    return new Promise((done) => {
+      const finish = (ok) => { form.onsubmit = null; $('#stepup-cancel', root).onclick = null; dlg.oncancel = null; if (dlg.open) dlg.close(); done(ok); };
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const secret = input.value;
+        input.value = '';
+        const r = await api('/v1/team/step-up', { secret });
+        if (r.ok) return finish(true);
+        $('#stepup-result', root).textContent = r.status === 401 ? 'That secret was not accepted. Try again.' : r.data.error ?? `HTTP ${r.status}`;
+        input.focus();
+      };
+      $('#stepup-cancel', root).onclick = () => finish(false);
+      dlg.oncancel = () => finish(false);
+      dlg.showModal();
+      input.focus();
+    });
+  }
+  const needsStepUp = (r) => r.status === 401 && /step-up-required$/.test(r.data.type ?? '');
+
   async function control(action) {
     if (action === 'stop' && !confirm('Stop the run? Every role session stops after its current step. You can start a new run later.')) return;
     st.busy = true; renderRun();
-    const r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
+    let r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
+    // Resuming a run the budget paused needs a recent sign-in.
+    if (needsStepUp(r) && await stepUp('Resuming a run that today\'s cap paused lets the team spend again.')) r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
     st.busy = false;
-    if (!r.ok) st.error = r.data.error ?? `HTTP ${r.status}`;
+    // Kept apart from load errors, which the next load clears: a refused resume (today's cap is spent) must stay visible.
+    st.runError = r.ok || needsStepUp(r) ? null : r.data.error ?? `HTTP ${r.status}`;
     await load();
   }
+
+  // ---- start a run: the published team, a daily cap first, then Start
+  const toMinor = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : null; };
+  function renderStart() {
+    const plan = $('#start-plan', root);
+    if (!st.plan) plan.textContent = 'Reading the published team…';
+    else if (!st.plan.ok) plan.textContent = st.plan.error;
+    else plan.textContent = `${st.plan.summary}${st.plan.repo?.url ? ` Repository: ${st.plan.repo.url} (${st.plan.repo.ref}).` : ''}`;
+    plan.classList.toggle('refused', !!st.plan && !st.plan.ok);
+    $('#start-currency', root).textContent = st.budget?.currency ?? 'USD';
+    // Start stays off until there is a published team and a daily cap: the control plane refuses a run without one.
+    $('#start-go', root).disabled = st.busy || !st.plan?.ok || toMinor($('#start-cap', root).value) === null;
+  }
+  async function openStart() {
+    st.plan = null; st.budget = null;
+    $('#start-result', root).textContent = '';
+    $('#start-result', root).classList.remove('error');
+    $('#start-cap', root).value = '';
+    renderStart();
+    $('#start-dialog', root).showModal();
+    const [plan, budget] = await Promise.all([api('/v1/team/run/plan'), api('/v1/team/budget')]);
+    st.plan = plan.ok ? plan.data : { ok: false, error: plan.data.error ?? `HTTP ${plan.status}` };
+    st.budget = budget.ok && budget.data.connected !== false ? budget.data : null;
+    if (st.budget?.perDay != null) $('#start-cap', root).value = (st.budget.perDay / 100).toFixed(2);
+    if (!budget.ok) { $('#start-result', root).textContent = budget.data.error ?? `HTTP ${budget.status}`; $('#start-result', root).classList.add('error'); }
+    renderStart();
+  }
+  async function start() {
+    const out = $('#start-result', root);
+    const fail = (msg) => { out.textContent = msg; out.classList.add('error'); st.busy = false; renderStart(); };
+    out.classList.remove('error');
+    const perDay = toMinor($('#start-cap', root).value);
+    if (perDay === null) return fail('Set a daily cap first.');
+    st.busy = true; renderStart();
+    if (st.budget?.perDay !== perDay) {
+      out.textContent = 'Saving the daily cap…';
+      let b = await api('/v1/team/budget', { perDay, key: newId() });
+      if (needsStepUp(b)) {
+        if (!(await stepUp(`Raising the daily cap to ${fmtMoney(perDay, st.budget?.currency ?? 'USD')} lets the team spend more.`))) return fail('The cap was not changed, so the run did not start.');
+        b = await api('/v1/team/budget', { perDay, key: newId() });
+      }
+      if (!b.ok) return fail(b.data.error ?? `HTTP ${b.status}`);
+      st.budget = b.data;
+    }
+    out.textContent = 'Starting…';
+    const r = await api('/v1/team/run/start', { key: newId() });
+    // 409: a run is already going, today's cap is spent, or the team is not published. The control plane says which.
+    if (!r.ok) return fail(r.data.error ?? `HTTP ${r.status}`);
+    st.busy = false;
+    $('#start-dialog', root).close();
+    await load();
+    await loadRun();
+  }
+  $('#run-start', root).onclick = openStart;
+  $('#start-go', root).onclick = start;
+  $('#start-cap', root).addEventListener('input', renderStart);
+  $('#start-form', root).addEventListener('submit', (e) => { if (e.submitter?.id !== 'start-go' && e.submitter?.value !== 'cancel') { e.preventDefault(); if (!$('#start-go', root).disabled) start(); } });
 
   $('#chat-form', root).addEventListener('submit', (e) => {
     e.preventDefault();

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Studio (nothing changes on sync)
+
+- **Start a run from the Studio's Chat page** (milestone M3, issue #28). With no run going, the header offers **Start a run…**. The dialog says what will run: the team as last published (the commit, not the unsaved canvas), how many roles, and which one reports to you. **Start** stays off until a daily cap is set; setting or raising the cap asks for the step-up secret, lowering it never does. The Studio's server builds the run request from the repository: the commit SHA, the origin URL with any credentials stripped, a summary, and for each role its manager, the paths it writes, its model and its rendered brief (at most 20 KB). It refuses with "publish first" when the team's files have changes nobody published. The control plane's 409s are shown as it words them, for example a run that is already going or today's cap being spent.
+- Resuming a run that today's cap paused asks for the step-up secret in a dialog, and a refused resume stays on screen.
+- On a phone the team page no longer shows drag and edit hints that contradict the read-only note. The Team and Chat tabs and the run buttons are 44px touch targets, and Pause and Stop stay on one line (qa-web findings on PR #36).
+
 ## 0.9.2
 
 ### Security

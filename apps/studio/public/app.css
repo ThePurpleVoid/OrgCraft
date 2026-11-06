@@ -159,6 +159,9 @@ body:not([data-page="chat"]) .chat-only, body[data-page="chat"] .team-only { dis
 .readonly-note { display: none; margin: 0; padding: 6px 16px; background: var(--off); border-bottom: 1px solid var(--line); }
 body.small .readonly-note { display: block; }
 body.small #undo, body.small #redo, body.small #publish { display: none; }
+.small-only { display: none; }
+body.small .small-only { display: inline; }
+body.small .edit-only { display: none; }
 button.danger { color: var(--error); border-color: var(--error); }
 button.danger:hover:not(:disabled) { background: var(--error); color: var(--accent-ink); }
 button.link { border: 0; background: none; color: var(--accent); padding: 0; text-decoration: underline; }
@@ -211,6 +214,12 @@ a { color: var(--accent); }
   .pages { order: 2; }
   .chat-head { padding: 8px 12px; }
   .chat-title, .meter { display: none; }
+  /* touch targets: 44px tall, and the run controls stay on one line */
+  .pages button, .chat-run button { min-height: 44px; }
+  .chat-head { flex-wrap: nowrap; }
+  .chat-run { flex-wrap: nowrap; width: 100%; justify-content: flex-end; gap: 6px; }
+  .chat-run .cost { margin-right: auto; white-space: normal; }
+  .chat-run button, .chat-run .pill { padding: 6px 12px; white-space: nowrap; }
   .brand .muted { display: none; }
   .brand { flex: 1 1 0; }
   .chat-log { padding: 12px; }
@@ -218,3 +227,14 @@ a { color: var(--accent); }
   .chat-form { padding-left: 12px; padding-right: 12px; }
   .chat-form textarea { font-size: 16px; } /* no zoom on focus in iOS Safari */
 }
+
+/* start a run: the published team, today's cap, then Start */
+.start-dialog, .stepup-dialog { width: min(480px, 94vw); }
+.start-dialog .plan { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--off); font-size: 13px; overflow-wrap: anywhere; }
+.start-dialog .plan.refused { border-left: 3px solid var(--error); color: var(--error); background: none; }
+.start-dialog .money { display: flex; align-items: center; gap: 6px; }
+.start-dialog .money input { width: 9em; }
+.start-dialog .result:empty { display: none; }
+.start-dialog .result.error { color: var(--error); }
+.stepup-dialog p { margin: 0 0 10px; }
+@media (max-width: 640px) { .start-dialog, .stepup-dialog { width: calc(100vw - 24px); } .dialog-actions button { min-height: 44px; } }
