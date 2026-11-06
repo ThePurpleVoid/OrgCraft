@@ -574,3 +574,18 @@
 .ats .n-channel .hint { margin-left: 4px; }
 @media (max-width: 640px) { .ats .n-steps > summary.button, .ats #slack-connect, .ats #channel-new { min-height: 44px; } }
 .ats .result button.link.tap { min-height: 44px; padding: 0 4px; }
+
+/* The rollout page (CPO copy "Rollout view after a publish", D61 to D63): one line per role, read-only. */
+.ats:not([data-page="rollout"]) .rollout-only, .ats[data-page="rollout"] :is(main.layout, #agent-editor, .readonly-note, .team-only) { display: none !important; }
+.ats.no-rollout #pages [data-page="rollout"], .ats[data-page="gallery"] .rollout-only { display: none !important; }
+.ats .rollout-page { max-width: 820px; margin: 0 auto; padding: 18px 16px 40px; }
+.ats .ro-summary { font-size: 15px; font-weight: 600; margin: 4px 0 12px; }
+.ats .ro-list { border-top: 1px solid var(--line); }
+.ats .ro-row { display: grid; grid-template-columns: 12px minmax(120px, 220px) 1fr; gap: 10px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.ats .ro-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); align-self: center; }
+.ats .ro-ok .ro-dot { background: var(--ok); } .ats .ro-ok .ro-state { color: var(--ok); }
+.ats .ro-warn .ro-dot { background: var(--warn); }
+.ats .ro-grey .ro-state, .ats .ro-grey .ro-title { color: var(--muted); }
+.ats .ro-why { min-height: 44px; padding: 0 4px; }
+@media (max-width: 640px) { .ats .ro-row { grid-template-columns: 12px 1fr; } .ats .ro-state { grid-column: 2; } }
+.ats .ro-head { text-transform: none; letter-spacing: 0; font-size: 18px; color: var(--ink); }
