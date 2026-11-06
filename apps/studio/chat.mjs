@@ -35,7 +35,7 @@ export function chatSource(env = process.env) {
   async function currentRun() {
     const body = await call('GET', `/teams/${t}/runs`);
     const runs = Array.isArray(body) ? body : body?.runs ?? [];
-    const open = runs.filter((r) => (r.state ?? r.status) !== 'stopped');
+    const open = runs.filter((r) => ['running', 'paused'].includes(r.state ?? r.status));
     return open.sort((a, b) => String(b.started ?? b.time ?? '').localeCompare(String(a.started ?? a.time ?? '')))[0] ?? null;
   }
 

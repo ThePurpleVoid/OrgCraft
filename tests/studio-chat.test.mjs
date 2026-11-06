@@ -121,11 +121,12 @@ test('answers only requests addressed to localhost (DNS rebinding)', async () =>
       const port = new URL(base).port;
       assert.equal(await get(`127.0.0.1:${port}`), 200);
       assert.equal(await get(`localhost:${port}`), 200);
-      assert.equal(await get(`evil.example:${port}`), 421);
+      assert.equal(await get(`evil.example:${port}`), 403);
     });
   } finally { cp.close(); }
   const lo = { address: '127.0.0.1', port: 4848 };
   assert.equal(hostAllowed('rebound.example', lo, {}), false);
   assert.equal(hostAllowed('studio.lan:4848', lo, { STUDIO_ALLOWED_HOSTS: 'studio.lan' }), true);
-  assert.equal(hostAllowed('anything', { address: '0.0.0.0' }, {}), true);
+  assert.equal(hostAllowed('rebound.example', { address: '0.0.0.0' }, {}), false);
+  assert.equal(hostAllowed('localhost:4848', { address: '0.0.0.0' }, {}), true);
 });

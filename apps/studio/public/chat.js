@@ -279,7 +279,7 @@ export function createChat({ root, onOpen } = {}) {
       // Someone or something changed the card first. Show what it says now; nobody approves what they did not see.
       st.cards.set(cardId, r.data.card);
       st.notes.set(cardId, { kind: 'changed', text: 'This card changed before your answer arrived, so nothing was sent. Here is what it says now; answer again if it still applies.' });
-    } else if (r.status === 401 && r.data.type === 'step-up-required') {
+    } else if (r.status === 401 && /step-up-required$/.test(r.data.type ?? '')) {
       // Until sign-in lands (M4), the proof is the admin token typed again; the Studio server keeps the step-up token.
       st.notes.set(cardId, { kind: 'stepup', option, text: 'Confirm it is you: type the admin token to answer. It is checked by the control plane and not stored in this page.' });
     } else if (!r.ok) {
