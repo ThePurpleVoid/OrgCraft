@@ -2,6 +2,7 @@
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
 import { resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
 import { createChat } from './chat.js';
+import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { bind, renderAreas, renderChecks, renderSystemInspector, renderSystemsStrip, roleSystemsHtml, wireBindings } from './panels.js';
 
 const $ = (s) => document.querySelector(s);
@@ -10,7 +11,13 @@ const TIERS = ['deep', 'standard', 'routine', 'light'];
 const GROUP_ORDER = ['executive', 'engineering', 'quality', 'product', 'design'];
 const field = (md, name) => (new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm').exec(md ?? '')?.[1] ?? '').trim();
 const titleOf = (md, slug) => (/^#\s+(.+)$/m.exec(md ?? '')?.[1] ?? slug).replace(/\s*\(.*\)\s*$/, '').trim();
-const groupColor = (g) => `var(--g-${GROUP_ORDER.includes(g) ? g : 'other'})`;
+/** The kit's groups have a colour each; a group the team made up gets its own, the same every time (PRD 6.6 A5). */
+const groupColor = (g) => {
+  if (GROUP_ORDER.includes(g) || g === 'other' || !g) return `var(--g-${GROUP_ORDER.includes(g) ? g : 'other'})`;
+  let h = 0;
+  for (const c of g) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return `hsl(${h} 55% var(--g-light, 48%))`;
+};
 
 let S = null; // { root, kitVersion, kit, spec, git }
 let spec = null;
@@ -381,26 +388,42 @@ function wireCanvas() {
 function renderLibrary() {
   const q = query.toLowerCase();
   const groups = new Map();
+  const mine = [];
   for (const r of view.all) {
     if (q && !`${r.title} ${r.slug} ${r.group}`.toLowerCase().includes(q)) continue;
+    if (isCustom(spec.roles[r.slug])) { mine.push(r); continue; }
     if (!groups.has(r.group)) groups.set(r.group, []);
     groups.get(r.group).push(r);
   }
-  const keys = [...groups.keys()].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
-  $('#library').innerHTML = keys.map((g) => `<div class="group-title"><span class="dot" style="background:${groupColor(g)}"></span>${esc(g)}</div>` +
-    groups.get(g).sort((a, b) => a.title.localeCompare(b.title)).map((r) => `<label class="lib-role${r.slug === selected ? ' selected' : ''}" draggable="true" data-slug="${r.slug}">
+  const row = (r) => `<label class="lib-role${r.slug === selected ? ' selected' : ''}" draggable="true" data-slug="${r.slug}">
       <input type="checkbox" ${r.enabled ? 'checked' : ''} data-toggle="${r.slug}" aria-label="${r.enabled ? 'Switch off' : 'Switch on'} ${esc(r.title)}">
-      <span class="name">${esc(r.title)}</span><span class="tag">${r.source === 'kit' ? '' : 'yours'}${r.dormant ? ' dormant' : ''}</span></label>`).join('')).join('') || '<p class="muted">No roles match.</p>';
+      <span class="name">${esc(r.title)}</span><span class="tag">${r.source === 'project-replaces-kit' ? 'replaces kit' : imported.has(r.slug) ? 'imported' : isCustom(spec.roles[r.slug]) ? 'custom' : r.source === 'kit' ? '' : 'yours'}${r.dormant ? ' dormant' : ''}</span>${isCustom(spec.roles[r.slug]) ? `<button type="button" class="link export" data-export="${r.slug}" aria-label="Export ${esc(r.title)} as a role pack" title="Export as a role pack">Export</button>` : ''}</label>`;
+  const byTitle = (a, b) => a.title.localeCompare(b.title);
+  const keys = [...groups.keys()].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
+  // Your agents: the custom roles on this team, on or off (PRD 6.6 A6), each still in its own group's colour.
+  const yours = mine.length ? `<div class="group-title yours"><span class="dot" style="background:var(--warn)"></span>Your agents</div>` +
+    mine.sort(byTitle).map((r) => row(r).replace('<span class="name">', `<span class="dot" style="background:${groupColor(r.group)}" title="${esc(r.group)}"></span><span class="name">`)).join('') : '';
+  $('#library').innerHTML = (yours + keys.map((g) => `<div class="group-title"><span class="dot" style="background:${groupColor(g)}"></span>${esc(g)}</div>` +
+    groups.get(g).sort(byTitle).map(row).join('')).join('')) || '<p class="muted">No roles match.</p>';
 }
 
 function wireLibrary() {
   $('#library').addEventListener('change', (e) => {
     const slug = e.target.dataset.toggle;
-    if (slug) change(() => setEnabled(spec, slug, e.target.checked));
+    if (slug) switchRole(slug, e.target.checked);
   });
-  $('#library').addEventListener('click', (e) => { const l = e.target.closest('.lib-role'); if (l && !e.target.dataset.toggle) { e.preventDefault(); select(l.dataset.slug); } });
+  $('#library').addEventListener('click', async (e) => {
+    const out = e.target.closest('[data-export]');
+    if (out) { e.preventDefault(); const said = await exportPack(spec, out.dataset.export); if (said !== 'cancelled') note(said); return; }
+    const l = e.target.closest('.lib-role');
+    if (l && !e.target.dataset.toggle) { e.preventDefault(); select(l.dataset.slug); }
+  });
   $('#library').addEventListener('dragstart', (e) => { const l = e.target.closest('.lib-role'); if (l) { e.dataTransfer.setData('text/x-role', l.dataset.slug); e.dataTransfer.effectAllowed = 'copy'; } });
   $('#search').addEventListener('input', (e) => { query = e.target.value; renderLibrary(); });
+  $('#new-agent').onclick = () => {
+    if (small.matches) return flash('Editing the team needs a larger screen');
+    openNewAgent({ spec: () => spec, kit: S.kit, kitVersion: S.kitVersion, roles: () => view.all, change, select });
+  };
 }
 
 // ------------------------------------------------------------------------------------------------ inspector
@@ -424,8 +447,11 @@ function renderInspector() {
       ${managers.map((m) => `<option value="${m.slug}" ${m.slug === r.reportsTo ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select></div>
     <label class="row"><input type="checkbox" id="i-dormant" style="width:auto" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>`;
   let body;
-  if (ownProject) {
-    body = `<div class="field"><span>Brief (markdown)</span><textarea id="i-brief" rows="18">${esc(role.brief)}</textarea></div>`;
+  if (ownProject && small.matches) {
+    body = `<p class="notice">Open the Studio on a larger screen to edit this agent.</p>`;
+  } else if (ownProject) {
+    body = `<div class="field"><span>Brief (markdown)</span><textarea id="i-brief" rows="18">${esc(role.brief)}</textarea></div>
+      <p><button type="button" id="i-export">Export as a role pack</button></p>`;
   } else {
     const sections = splitBrief(kitMd).sections.filter((s) => !/^## every thread/i.test(s.heading));
     const mine = new Map((role.extension?.sections ?? []).map((s) => [s.name.toLowerCase(), s]));
@@ -441,12 +467,14 @@ function renderInspector() {
   }
   el.innerHTML = head + (r.enabled ? roleSystemsHtml(ctx, r.slug) : '') + body;
   wireBindings(el, ctx);
-  $('#i-enabled').onchange = (e) => change(() => setEnabled(spec, r.slug, e.target.checked));
+  $('#i-enabled').onchange = (e) => switchRole(r.slug, e.target.checked);
   $('#i-tier').onchange = (e) => change(() => setExtField(r.slug, 'Model', r.model.replace(/^[a-z]+/i, e.target.value) || e.target.value));
   $('#i-manager').onchange = (e) => setManager(r.slug, e.target.value);
   $('#i-dormant').onchange = (e) => change(() => setExtField(r.slug, 'Status', e.target.checked ? `dormant until the owner or the lane's executive opens it for a request.` : 'active'));
   const reset = $('#i-reset');
   if (reset) reset.onclick = () => change(() => { delete spec.roles[r.slug].extension; });
+  const out = $('#i-export');
+  if (out) out.onclick = async () => { const said = await exportPack(spec, r.slug); if (said !== 'cancelled') note(said); };
   const brief = $('#i-brief');
   if (brief) brief.onchange = (e) => change(() => { spec.roles[r.slug].brief = e.target.value; });
   for (const ta of el.querySelectorAll('textarea[data-section]')) {
@@ -473,6 +501,22 @@ function flash(text) {
   pill.textContent = text;
   clearTimeout(flashTimer);
   flashTimer = setTimeout(renderIssues, 3500);
+}
+
+/** A short confirmation in the checks pill, in the ok colour. */
+function note(text) {
+  const pill = $('#checks');
+  pill.className = 'pill ok';
+  pill.textContent = text;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(renderIssues, 5000);
+}
+
+/** Switches a role on or off. A custom agent with an error in its checks stays off until it is fixed (CPO story D2). */
+function switchRole(slug, on) {
+  const why = on && isCustom(spec.roles[slug]) && switchOnRefusal(spec, S.kit, slug);
+  if (why) { render(); return flash(why); }
+  change(() => setEnabled(spec, slug, on));
 }
 
 function setMode(m) {

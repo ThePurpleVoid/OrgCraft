@@ -8,7 +8,7 @@
   :root:not([data-theme="light"]) {
     --bg: #12151c; --panel: #1a1e27; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2d3340; --accent: #7c9bff; --accent-ink: #0b0e14;
     --error: #ff8a80; --warn: #e3b341; --ok: #56d364; --off: #222733; --drop: #24304f;
-    --g-executive: #b69cff; --g-engineering: #7c9bff; --g-quality: #4fd1d9; --g-product: #ff9a6b; --g-design: #ff7ac6; --g-other: #9aa3b2;
+    --g-executive: #b69cff; --g-engineering: #7c9bff; --g-quality: #4fd1d9; --g-product: #ff9a6b; --g-design: #ff7ac6; --g-other: #9aa3b2; --g-light: 68%;
     color-scheme: dark;
   }
 }
@@ -263,3 +263,48 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-directio
 .auth-dialog { width: min(440px, calc(100vw - 24px)); }
 .auth-dialog .result:empty, .auth-card .result:empty { display: none; }
 @media (max-width: 640px) { .auth-card { padding: 18px; } .auth-dialog .dialog-actions button { min-height: 44px; } }
+
+/* New agent (agents.js; PRD 6.6 A1, A5, A6; mockup 01) */
+.palette-head { display: flex; gap: 6px; align-items: center; }
+.palette-head input { flex: 1; min-width: 0; }
+.palette-head button { white-space: nowrap; }
+.group-title.yours { margin-top: 4px; }
+.lib-role { position: relative; }
+.lib-role .export { font-size: 11px; position: absolute; right: 6px; padding: 2px 4px; background: var(--off); border-radius: 4px; opacity: 0; }
+.lib-role:hover .export, .lib-role.selected .export, .lib-role:focus-within .export { opacity: 1; }
+.lib-role.selected .export { background: var(--panel); }
+.agent-dialog { padding: 0; gap: 0; }
+.agent-dialog > h2, .agent-dialog > .muted { padding: 0 20px; }
+.agent-dialog > h2 { padding-top: 18px; }
+.agent-dialog > .muted { margin: 4px 0 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.starts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 0 20px; }
+.start { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; min-width: 0; }
+.start.on { border: 2px solid var(--accent); padding: 11px; background: var(--drop); }
+.start > label { flex-direction: row; align-items: center; color: var(--ink); font-size: 14px; cursor: pointer; }
+.start > label input { width: auto; margin: 0 4px 0 0; }
+.start p { margin: 0; font-size: 12.5px; color: var(--muted); }
+.start > label.file { flex-direction: column; align-items: stretch; gap: 3px; font-size: 12px; color: var(--muted); }
+.start .file input { font-size: 12px; max-width: 100%; }
+.copy-list { display: flex; flex-direction: column; gap: 2px; max-height: 150px; overflow: auto; }
+.copy-list button { display: flex; justify-content: space-between; gap: 8px; text-align: left; border: 1px solid transparent; background: none; padding: 5px 8px; border-radius: 6px; color: var(--ink); }
+.copy-list button[aria-selected="true"] { border-color: var(--accent); background: var(--panel); }
+.copy-list .tag { font-size: 11px; color: var(--muted); }
+.agent-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 12px; padding: 14px 20px 0; }
+.agent-fields .wide, .agent-fields .check-line, .agent-fields > .row { grid-column: 1 / -1; }
+.agent-fields > .row { flex-direction: row; align-items: center; gap: 6px; }
+.check-line { margin: 0; padding: 7px 10px; border-radius: 6px; background: var(--off); border-left: 3px solid var(--line); font-size: 13px; }
+.check-line.ok { border-left-color: var(--ok); }
+.check-line.bad { border-left-color: var(--error); color: var(--error); }
+.pack-list { padding: 14px 20px 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.pack-list p { margin: 0 0 4px; }
+.pack-role { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; padding: 6px 10px; border-radius: 6px; background: var(--off); border-left: 3px solid var(--ok); }
+.pack-role.bad { border-left-color: var(--error); }
+.agent-dialog > .result { margin: 10px 20px 0; color: var(--error); }
+.agent-dialog > .result:empty { display: none; }
+.agent-dialog > .result.later { color: var(--warn); }
+.agent-note { margin: 10px 20px 0; }
+.dialog-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding: 12px 20px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.dialog-foot .dialog-actions { margin-left: auto; }
+#agent-dialog { width: min(900px, 94vw); }
+#agent-dialog [hidden] { display: none; }
+@media (max-width: 760px) { .starts, .agent-fields { grid-template-columns: 1fr; } }
