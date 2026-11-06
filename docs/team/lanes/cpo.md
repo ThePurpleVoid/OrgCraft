@@ -629,6 +629,6 @@ The server added a sixth kind: a feature moved to "Ready to try" (lane status). 
 - Switch label: `Ready to try` · hint under it: `When something the team built is ready for you to look at.`
 - Email subject: `[{team}] Ready to try: {feature}` · body:
   > {role} says "{feature}" is ready for you to try.
-  > {how_to_try_line, e.g. "Open the preview link" or nothing}
-- Email link and Slack button: `Try it in the Studio` (or `Open the preview` when the item has a preview link)
-- Slack fallback: `{team}: {feature} is ready to try` · DM and channel text: `*"{feature}" is ready to try.*` then `{role} finished it and it passed its checks.`
+  > It's done and passed its checks.
+- Email link and Slack button: `Try it in the Studio`, or `See the preview in the Studio` when the item has a preview link (every link goes through the Studio's signed link, so the label says so)
+- Slack fallback: `{team}: {feature} is ready to try` · DM and channel text: `*"{feature}" is ready to try.*` then `It's done and passed its checks.` ({role} is the sender, usually the chief of staff, not the builder, so the Slack line names no one.)
