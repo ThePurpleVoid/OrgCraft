@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Studio: change safety, part 1** (issue #30, CPO story "change safety part 1", criteria 1 to 6 and 12; mockup 06). Board-only: the Studio warns, it never stops or restarts anything. With board reports, every card and library row shows the role's state and task ("working · #142 Dark mode"); a report older than 2 h reads "last heard 3 h ago" in grey. A draft change that touches a role's work in flight marks its card amber with the reason ("switched off in this draft"), keeps a switched-off card on the canvas as a ghost, and opens a popover with the task, branch, PR and meetings, "Undo <change>" and "Review the impact". The inspector shows "Now, on the live version", a draft banner names the live version by commit, and the top bar counts "N changes · M touch work in progress" (hidden when M is 0). With no board reports none of it shows. The impact step in Publish (criteria 8 to 11) follows.
+
 ## 0.15.0
 
 Other coding agents (CPO story "Other coding agents", criteria 1 to 5 and 7, and the dashboard side of 6; D42 to D48).
