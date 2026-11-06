@@ -315,7 +315,8 @@ test('D8: /internal/tick is refused without CRON_SECRET and checks it', async ()
   await plane(async ({ call }) => {
     assert.equal((await call('POST', '/internal/tick', undefined, { authorization: `Bearer ${secret}` })).status, 200);
     for (let i = 0; i < 10; i++) assert.equal((await call('POST', '/internal/tick', undefined, { authorization: 'Bearer wrong' })).status, 401);
-    assert.equal((await call('POST', '/internal/tick', undefined, { authorization: `Bearer ${secret}` })).status, 429, 'ten misses a minute and the path pauses');
+    assert.equal((await call('POST', '/internal/tick', undefined, { authorization: 'Bearer wrong' })).status, 429, 'ten misses a minute and guesses are refused');
+    assert.equal((await call('POST', '/internal/tick', undefined, { authorization: `Bearer ${secret}` })).status, 200, 'the real cron is never locked out');
   }, { tickMs: 0, cronSecret: secret });
   await assert.rejects(plane(async () => {}, { tickMs: 0, cronSecret: 'short' }), /at least 32 characters/);
 });

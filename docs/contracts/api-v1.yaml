@@ -388,7 +388,7 @@ components:
               description: "The repository sessions work in. No credentials in the URL (400): the run reaches it through a connector"
               required: [url]
               properties:
-                url: { type: string, description: An https:// or ssh:// URL }
+                url: { type: string, description: "An https://, ssh:// or git@host:path URL; or a path or file:// URL for a runner on the same machine (local mode)" }
                 ref: { type: string, default: main, description: The branch worktrees start from }
             summary: { type: string, maxLength: 2000, description: What the team is for, from the team file }
             roles:

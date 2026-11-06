@@ -284,9 +284,13 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (!cronSecret) throw new Problem(404, 'not found');
       const at = now().getTime();
       tickMisses = tickMisses.filter((x) => x > at - 60_000);
-      if (tickMisses.length >= 10) throw new Problem(429, 'too many wrong tick secrets; try again in a minute');
       const got = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
-      if (!got || !same(got, cronSecret)) { tickMisses.push(at); throw new Problem(401, 'send Authorization: Bearer <CRON_SECRET>'); }
+      // The right secret always passes, so wrong guesses cannot lock the real cron out; guesses are slowed.
+      if (!got || !same(got, cronSecret)) {
+        if (tickMisses.length >= 10) throw new Problem(429, 'too many wrong tick secrets; try again in a minute');
+        tickMisses.push(at);
+        throw new Problem(401, 'send Authorization: Bearer <CRON_SECRET>');
+      }
       await bus.tick();
       return send(res, 200, { ok: true });
     }

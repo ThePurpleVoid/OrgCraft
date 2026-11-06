@@ -229,10 +229,15 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     if (team.repo !== undefined && team.repo !== null) {
       const r = team.repo;
       if (!r || typeof r !== 'object' || typeof r.url !== 'string' || r.url.length > 500) throw new Problem(400, 'team.repo is { url, ref }');
-      let u;
-      try { u = new URL(r.url); } catch { throw new Problem(400, 'team.repo.url is a URL'); }
-      if (u.protocol !== 'https:' && u.protocol !== 'ssh:') throw new Problem(400, 'team.repo.url is an https:// or ssh:// URL');
-      if (u.password || (u.protocol === 'https:' && u.username)) throw new Problem(400, 'team.repo.url must not carry credentials: the run reaches the repo through a connector');
+      // https:// or ssh:// (git@host:path too), or a path or file:// URL for a runner on the same machine (local mode).
+      const scp = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s]+$/.test(r.url);
+      const local = /^\/[^\s]*$/.test(r.url);
+      if (!scp && !local) {
+        let u;
+        try { u = new URL(r.url); } catch { throw new Problem(400, 'team.repo.url is a URL'); }
+        if (!['https:', 'ssh:', 'file:'].includes(u.protocol)) throw new Problem(400, 'team.repo.url is an https://, ssh:// or file:// URL, or a path');
+        if (u.password || (u.protocol === 'https:' && u.username)) throw new Problem(400, 'team.repo.url must not carry credentials: the run reaches the repo through a connector');
+      }
       if (r.ref !== undefined && (typeof r.ref !== 'string' || !/^[A-Za-z0-9._/-]{1,200}$/.test(r.ref) || r.ref.includes('..'))) throw new Problem(400, 'team.repo.ref is a branch name');
       repo = { url: r.url, ref: r.ref ?? 'main' };
     }
