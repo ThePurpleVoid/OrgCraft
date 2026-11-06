@@ -23,7 +23,7 @@
   <p class="readonly-note hint team-only">On a small screen the team is read-only. Edit it on a larger screen.</p>
   <main class="layout team-only">
     <aside class="palette" aria-label="Role library">
-      <input id="search" type="search" placeholder="Search roles" aria-label="Search roles">
+      <div class="palette-head"><input id="search" type="search" placeholder="Search roles" aria-label="Search roles"><button id="new-agent" type="button" class="primary edit-only">New agent</button></div>
       <p class="hint"><span class="edit-only">Switch roles on and off, or drag one onto a manager on the canvas.</span><span class="small-only">The roles in this team. Change them on a larger screen.</span></p>
       <div id="library"></div>
     </aside>
@@ -66,6 +66,7 @@
       </div>
     </form>
   </dialog>
+  <dialog id="agent-dialog" aria-labelledby="agent-title"></dialog>
   <script type="module" src="app.js"></script>
 </body>
 </html>
