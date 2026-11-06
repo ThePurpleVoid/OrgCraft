@@ -583,8 +583,19 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     });
   }
 
+  /** For writes outside this module that need step-up (runner codes, secrets: issue #28 D4). Throws when absent. */
+  async function requireStepUp(tenant, by, token, what) {
+    const { result } = await tx(tenant, async (ctx) => {
+      const used = await useStepUp(ctx, by, token);
+      if (used) await ctx.audit({ actorKind: 'person', actorId: by, action: 'step-up', target: used, decision: 'used', rule: what });
+      return used;
+    });
+    if (!result) throw new StepUpRequired(what);
+    return result;
+  }
+
   return {
-    appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
+    requireStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
     createCard, changeCard, getCard, answerCard, requestApproval, decideApproval,
     stepUp, postChat, getChat, inbox, teamExtras,

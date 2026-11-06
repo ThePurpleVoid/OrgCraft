@@ -67,9 +67,11 @@ test('report intake is unchanged: the kit\'s scripts keep their own retry-safe i
 });
 
 test('a runner registers once with a one-time code and gets a key only it holds', async () => {
-  await plane(async ({ call, db }) => {
+  await plane(async ({ call, db, su }) => {
     assert.equal((await call('POST', '/runners/codes', {}, {})).status, 401, 'only a signed-in person mints codes');
-    const minted = await call('POST', '/runners/codes', { name: 'laptop' });
+    const noStepUp = await call('POST', '/runners/codes', { name: 'laptop' });
+    assert.equal(noStepUp.body.type, 'step-up-required', 'adding hands needs step-up (issue #28 D4)');
+    const minted = await call('POST', '/runners/codes', { name: 'laptop' }, await su());
     assert.equal(minted.status, 201);
     assert.match(minted.body.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
     assert.ok(Date.parse(minted.body.expires) > Date.now());
@@ -86,7 +88,7 @@ test('a runner registers once with a one-time code and gets a key only it holds'
     assert.equal(retry.status, 409, 'a retry learns the runner was registered, but the key is shown only once');
     assert.equal(retry.body.id, got.body.id);
     assert.equal(retry.body.key, undefined);
-    const codeAgain = await call('POST', '/runners/codes', { name: 'x' }, { ...auth, 'idempotency-key': 'code-1' });
+    const codeAgain = await call('POST', '/runners/codes', { name: 'x' }, { ...(await su()), 'idempotency-key': 'code-1' });
     assert.equal((await call('POST', '/runners/codes', { name: 'x' }, { ...auth, 'idempotency-key': 'code-1' })).body.code, undefined);
     const kept = (await db.system('select response::text as r from idempotency_keys')).map((x) => x.r).join('\n');
     assert.ok(!kept.includes(got.body.key.split('.')[1]), 'the runner key is not kept in the idempotency table');
@@ -102,10 +104,10 @@ test('a runner registers once with a one-time code and gets a key only it holds'
     assert.ok(!JSON.stringify(listed).includes(got.body.key.split('.')[1]), 'the key is never listed');
     assert.ok(!('hash' in listed[0]));
 
-    const late = (await call('POST', '/runners/codes')).body.code;
+    const late = (await call('POST', '/runners/codes', undefined, await su())).body.code;
     await db.system("update runner_codes set expires_at = now() - interval '1 second' where runner is null");
     assert.equal((await call('POST', '/runners', { code: late, name: 'late' })).status, 401, 'codes expire');
-    const fresh = (await call('POST', '/runners/codes')).body.code;
+    const fresh = (await call('POST', '/runners/codes', undefined, await su())).body.code;
     assert.equal((await call('POST', '/runners', { code: fresh, name: '' })).status, 400, 'a runner needs a name');
     assert.equal((await call('POST', '/runners', { code: fresh, name: 'ok', capabilities: [] })).status, 400);
 
@@ -184,10 +186,10 @@ test('/me/stream carries every team of mine live, never another tenant\'s, and r
 });
 
 test('the new tables keep tenants apart, even when asked directly', async () => {
-  await plane(async ({ call, db }) => {
+  await plane(async ({ call, db, su }) => {
     await call('POST', '/teams', { id: 'mine' }, { ...auth, 'idempotency-key': 'k' });
-    const { code } = (await call('POST', '/runners/codes')).body;
-    await call('POST', '/runners/codes');
+    const { code } = (await call('POST', '/runners/codes', undefined, await su())).body;
+    await call('POST', '/runners/codes', undefined, await su());
     await call('POST', '/runners', { code, name: 'r' });
     await store.ensureTenant(db, 'rival');
     for (const table of ['idempotency_keys', 'runner_codes', 'runners']) {

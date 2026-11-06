@@ -247,6 +247,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
 
   async function personRoute(req, res, t, url, parts) {
     const m = req.method;
+    const stepUp = req.headers['x-step-up'] ?? null;
     const [, a, team, b, c] = parts;
     if (a === 'me' && team === 'summary' && !b && m === 'GET') {
       const tag = `W/"${(await store.tenantHead(db, t)).seq}-${Math.floor(now().getTime() / 60_000)}"`;
@@ -268,7 +269,6 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       const { seq, ...body } = await m3.inbox(t, q);
       return etagged(req, res, seq, body, `${q.cursor ?? ''}|${q.limit ?? ''}`);
     }
-    const stepUp = req.headers['x-step-up'] ?? null;
     if (a === 'auth' && team === 'step-up' && !b && m === 'POST') {
       const body = await readJson(req, 4 * 1024);
       const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
@@ -280,6 +280,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (a === 'cards' && team && !b && m === 'POST') return send(res, 200, await did(m3.answerCard(t, team, await readJson(req, 16 * 1024), 'admin', { stepUp })));
     if (a === 'runners' && team === 'codes' && !b && m === 'POST') {
       const body = req.headers['content-type'] ? (await readJson(req, 16 * 1024)) ?? {} : {};
+      await m3.requireStepUp(t, 'admin', stepUp, 'Adding a runner');
       return send(res, 201, await store.mintRunnerCode(db, t, 'admin', body), {}, { secrets: ['code'] });
     }
     if (a === 'runners' && !team && m === 'GET') return send(res, 200, { runners: await store.listRunners(db, t) });
@@ -337,6 +338,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (a === 'secrets' && !team && m === 'GET') return send(res, 200, { secrets: await store.listSecrets(db, t) });
     if (a === 'secrets' && team && !b && m === 'PUT') {
       const body = await readJson(req, 64 * 1024);
+      await m3.requireStepUp(t, 'admin', stepUp, 'Writing a secret');
       await store.putSecret(db, key, t, team, body?.value);
       return send(res, 200, { ok: true, name: team });
     }

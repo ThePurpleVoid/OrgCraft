@@ -33,7 +33,8 @@ revoked with `DELETE /v1/teams/my-team/report-tokens/{id}`.
 runs (such as `board/supabase`), with its token kept in the vault:
 
 ```bash
-curl -X PUT -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"value":"<their token>"}' localhost:4849/v1/secrets/OWN_BOARD_TOKEN
+SU=$(curl -s -H "authorization: Bearer $T" -H 'content-type: application/json' -d "{\"secret\":\"$(cat ~/.agent-team/server/step-up.secret)\"}" localhost:4849/v1/auth/step-up | jq -r .token)
+curl -X PUT -H "authorization: Bearer $T" -H "x-step-up: $SU" -H 'content-type: application/json' -d '{"value":"<their token>"}' localhost:4849/v1/secrets/OWN_BOARD_TOKEN
 curl -H "authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"url":"https://<ref>.supabase.co/functions/v1/team-report","header":"x-team-token","secret":"OWN_BOARD_TOKEN"}' \
   localhost:4849/v1/teams/my-team/sinks
@@ -62,10 +63,10 @@ The run state, live version, daily cap and inbox count in the summary fill in as
 ## Register a runner
 
 A runner (the process that runs agent sessions, `docs/contracts/runner-protocol.md`) is registered once with a
-one-time code. A person mints it; the runner redeems it for its key, which is shown once and kept only as a hash:
+one-time code. A person mints it, with a step-up (below), since a runner is another pair of hands; the runner redeems it for its key, which is shown once and kept only as a hash:
 
 ```bash
-curl -X POST -H "authorization: Bearer $T" localhost:4849/v1/runners/codes      # → { "code": "K7QM-…", "expires": … }
+curl -X POST -H "authorization: Bearer $T" -H "x-step-up: $SU" localhost:4849/v1/runners/codes   # → { "code": "K7QM-…", … }
 curl -H 'content-type: application/json' -d '{"code":"K7QM-…","name":"my laptop","capabilities":{"runtimes":["agent-sdk"]}}' localhost:4849/v1/runners
 # → { "id": "rnr_…", "key": "rnr_….…", … }
 ```

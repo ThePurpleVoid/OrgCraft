@@ -5,9 +5,12 @@ import { openDb } from '../db.mjs';
 import { masterKey } from '../vault.mjs';
 import * as store from '../store.mjs';
 import { createControlPlane } from '../server.mjs';
+import { hashStepUpSecret, stepUpVerifier } from '../m3.mjs';
 
 export const key = masterKey(randomBytes(32).toString('base64'));
 export const ADMIN = 'adm_test';
+export const STEP_UP_SECRET = 'a long step-up secret';
+export const verifier = stepUpVerifier(await hashStepUpSecret(STEP_UP_SECRET));
 
 export async function fresh() {
   const url = process.env.TEST_DATABASE_URL;
@@ -24,14 +27,16 @@ export async function plane(fn, { now, ...extra } = {}) {
   const db = await fresh();
   await store.ensureTenant(db, 'acme');
   let woke = 0;
-  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, sinks: { wake: () => woke++ }, ...(now ? { now } : {}), ...extra });
+  const server = createControlPlane({ db, key, tenant: 'acme', adminToken: ADMIN, sinks: { wake: () => woke++ }, stepUpVerifier: verifier, ...(now ? { now } : {}), ...extra });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}/v1`;
   const call = async (method, path, body, headers = { authorization: `Bearer ${ADMIN}` }) => {
     const res = await fetch(base + path, { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: res.status, body: await res.json().catch(() => null), headers: res.headers };
   };
-  try { await fn({ db, call, base, server, m3: server.m3, woke: () => woke }); } finally { server.runners?.closeAll(); server.closeAllConnections(); server.close(); await db.close(); }
+  /** Headers with a fresh single-use step-up token, for writes that need one. */
+  const su = async () => ({ authorization: `Bearer ${ADMIN}`, 'x-step-up': (await call('POST', '/auth/step-up', { secret: STEP_UP_SECRET })).body.token });
+  try { await fn({ db, call, base, server, m3: server.m3, su, woke: () => woke }); } finally { server.runners?.closeAll(); server.closeAllConnections(); server.close(); await db.close(); }
 }
 
 /** Reads a server-sent event stream: until(n) resolves once n events with ids have arrived. */

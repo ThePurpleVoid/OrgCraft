@@ -92,12 +92,10 @@ test('step-up: a slow hash, the bearer token refused, single use, a lockout afte
   await plane(async ({ call }) => {
     const off = await call('POST', '/auth/step-up', { secret: SECRET });
     assert.deepEqual([off.status, off.body.type], [401, 'step-up-required'], 'with no step-up hash configured, nothing that needs it passes');
-  });
+  }, { stepUpVerifier: null });
   assert.throws(() => stepUpVerifier('sha256$abc'), /not a scrypt hash/);
   assert.throws(() => stepUpVerifier('scrypt$16384$8$1$c2FsdHNhbHRzYWx0c2FsdA$a2V5a2V5a2V5a2V5a2V5a2V5a2V5a2V5'), /2\^15 to 2\^20/);
   assert.throws(() => stepUpVerifier('scrypt$2097152$8$1$c2FsdHNhbHRzYWx0c2FsdA$a2V5a2V5a2V5a2V5a2V5a2V5a2V5a2V5'), /2\^15 to 2\^20/);
-  await plane(async () => {
-  });
 });
 
 test('budget: raising or setting a cap needs step-up, lowering does not, and a run needs a daily cap', async () => {
