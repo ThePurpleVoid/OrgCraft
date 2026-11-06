@@ -8,6 +8,8 @@
 //   spend.json        { "usd": 6 } the next turn reports that cost, then the file is used up (step 11)
 //   meeting-spend.json { "usd": 1 } the next attendee's meeting turn costs that and does not answer (the cap path)
 //
+// When the builder's merge lands it hands the PR to the front door, which tells the owner it is Ready to try (G-12).
+//
 // The front door also asks the owner one decision (step 7) and says what they chose when the answer comes. In a
 // meeting every role answers its turn and the facilitator closes it with minutes made of the replies.
 // Every step is written to the control folder's log.jsonl with the run and session ids.
@@ -71,7 +73,18 @@ export function dryrunAdapter({ control, qaRole = 'qa-web', frontDoor = 'chief-o
       }
       const [k, from] = kind(t.prompt);
       if (k === 'HANDOFF' && from) {
-        t.say(`${from} says it is done: ${/changed: (.*)/.exec(t.prompt)?.[1] ?? 'see the board'}.`);
+        const changed = /changed: (.*)/.exec(t.prompt)?.[1] ?? 'see the board';
+        const pr = Number(/\bpr: #?(\d+)/.exec(t.prompt)?.[1]);
+        // G-12: a merged change is "Ready to try"; the server adds the merge commit and the preview link itself.
+        if (/^merged: /.test(changed) && pr) {
+          const title = changed.slice('merged: '.length).slice(0, 120);
+          const r = await t.call('ready_to_try', { pr, title, summary: `${from} finished it and the owner approved the merge.` });
+          let out = {};
+          try { out = JSON.parse(r.text); } catch { /* refused: the text says why */ }
+          log(t, 'chief-of-staff:ready', { pr, card: out.card, preview: out.preview ?? null, ok: !r.isError, detail: r.isError ? r.text.slice(0, 300) : undefined });
+          return { usage: usage() };
+        }
+        t.say(`${from} says it is done: ${changed}.`);
         log(t, 'chief-of-staff:reported', { from });
       }
       return { usage: usage() };
@@ -109,7 +122,9 @@ export function dryrunAdapter({ control, qaRole = 'qa-web', frontDoor = 'chief-o
       } else if (k === 'SIGNOFF') {
         const r = await t.call('request_approval', { action: 'accept', call: `merge the pull request for: ${task}`, why: `${from} signed off` });
         log(t, 'builder:accept', { ok: !r.isError, detail: r.text.slice(0, 500) });
-        if (!r.isError) await t.call('handoff', { to: frontDoor, task, changed: `merged: ${task}`, verify: 'the base branch has the change', doneWhen: 'you tell the owner' });
+        let pr;
+        try { pr = JSON.parse(r.text.slice(0, r.text.indexOf('}') + 1)).pr; } catch { /* not merged: no PR to name */ }
+        if (!r.isError) await t.call('handoff', { to: frontDoor, task, changed: `merged: ${task}`, verify: 'the base branch has the change', doneWhen: 'you tell the owner', ...(pr ? { pr } : {}) });
       }
       return { usage: usage() };
     },

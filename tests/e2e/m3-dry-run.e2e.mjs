@@ -3,6 +3,7 @@
 // The owner's side goes through the Studio's own API, as the page would: the daily cap with step-up, Start, a chat
 // request, then the approval card answered with step-up. The run must end in a merge pinned to the approved head.
 // A second request walks step 9b: a push after the approval makes the merge fail head-moved, and a new card asks again.
+// After the merge, step 12: Ready to try, with the preview link the runner reads from the (stand-in) host.
 // Then a meeting (a written round, minutes in the chat) and its cap, and step 11, the daily cap.
 //
 //   npm ci --prefix apps/server && npm ci --prefix apps/runner && node --test tests/e2e/m3-dry-run.e2e.mjs
@@ -93,8 +94,17 @@ test('a chat request ends in a pull request, an approval card with step-up, and 
   assert.equal(merged.mergedHead, head);
   const main = execFileSync('git', ['-C', h.bare, 'show', 'main:app/request.md'], { encoding: 'utf8' });
   assert.match(main, /hello to new visitors/);
-  await waitFor(() => hk.log().some((l) => l.step === 'chief-of-staff:reported'), 60_000);
-  console.log(JSON.stringify({ pr: merged.ref, headSha: merged.mergedHead, result: merged.result }));
+  // Step 12 (G-12): the front door says it is Ready to try. The card goes out before the deployment is up, then
+  // the stand-in host deploys the merge commit, the runner reads the link and the open card gains it.
+  const told = await waitFor(() => hk.log().find((l) => l.step === 'chief-of-staff:ready' && l.pr === merged.ref), 60_000);
+  assert.ok(told.ok, told.detail);
+  const ready = await waitFor(async () => (await cards()).find((x) => x.kind === 'ready' && x.id === told.card), 60_000);
+  assert.deepEqual([ready.state, ready.data.pr, ready.data.commit, ready.data.preview], ['open', merged.ref, merged.result, null]);
+  const dep = hk.deploy({ ref: merged.ref });
+  const live = await waitFor(async () => (await cards()).find((x) => x.id === ready.id && x.data?.preview), 60_000);
+  assert.equal(live.data.preview, dep.url, 'the link is the deployment\'s, read by the runner');
+  assert.ok(live.links.some((l) => l.rel === 'preview' && l.url === dep.url));
+  console.log(JSON.stringify({ pr: merged.ref, headSha: merged.mergedHead, result: merged.result, preview: live.data.preview }));
 });
 
 test('step 9b: a push after the approval stops the merge (head-moved); a new card names the new head, and only that merges', { skip, timeout: 180_000 }, async () => {

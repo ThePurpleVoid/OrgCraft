@@ -11,7 +11,7 @@ import { startModelProxy } from './modelproxy.mjs';
 export const PROTOCOL = 'runner/1';
 const RUNNER_VERSION = '0.1.0';
 /** What the runner key may send as events (runner-protocol.md, "What each credential may send"). */
-const MAY_EMIT = (type, frontDoor) => /^session\./.test(type) || type === 'usage.recorded' || type === 'report.heartbeat' || /^proposal\.(opened|updated|accepted|failed)$/.test(type) || (type === 'chat.message' && frontDoor);
+const MAY_EMIT = (type, frontDoor) => /^session\./.test(type) || type === 'usage.recorded' || type === 'report.heartbeat' || /^proposal\.(opened|updated|accepted|failed|previewed)$/.test(type) || (type === 'chat.message' && frontDoor);
 const RENEW_BEFORE_MS = 2 * 60_000;
 
 /**
@@ -19,7 +19,7 @@ const RENEW_BEFORE_MS = 2 * 60_000;
  * clones, worktrees and memory files, `adapter` the runtime (agentSdkAdapter() or stubAdapter(...)).
  * Returns { sessions, link, ready, close() }; ready resolves with the first welcome.
  */
-export function startRunner({ server, key, root, work = root, sandbox = null, proposals = null, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
+export function startRunner({ server, key, root, work = root, sandbox = null, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
   // The model key stays in this process; sessions reach the model through the loopback proxy (modelproxy.mjs).
   const proxy = modelProxy === undefined ? startModelProxy({ log }) : modelProxy;
   const sessions = new Map();
@@ -106,7 +106,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     }
     let s;
     const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
-    s = new Session(body, { adapter, root, work, sandbox, proposals, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval });
+    s = new Session(body, { adapter, root, work, sandbox, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval });
     s.tools = tools;
     setToken(s, body.token, body.tokenExpires);
     sessions.set(body.session, s);

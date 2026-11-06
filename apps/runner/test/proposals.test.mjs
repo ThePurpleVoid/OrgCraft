@@ -104,6 +104,32 @@ test('GitHub proposals: an app JWT, an installation token, the pull request foun
   assert.throws(() => githubProposals({ appId: '', privateKey }), /app id/);
 });
 
+test('GitHub previews: the newest successful https deployment of the commit, read with a deployments-only token', async () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+  const S = 'c'.repeat(40);
+  const calls = [];
+  let grant = 201;
+  const statuses = { 7: [{ state: 'failure', environment_url: 'https://broken.example.app' }], 6: [{ state: 'success', environment_url: 'https://user:pw@shop.example.app' }], 5: [{ state: 'success', environment_url: 'https://shop-abc.vercel.app' }] };
+  const fetch = async (url, init = {}) => {
+    const path = url.replace('https://api.github.com', '');
+    calls.push({ path, body: init.body ? JSON.parse(init.body) : undefined });
+    const json = (status, body) => ({ status, json: async () => body });
+    if (path === '/repos/acme/shop/installation') return json(200, { id: 77 });
+    if (path === '/app/installations/77/access_tokens') return grant === 201 ? json(201, { token: 'ghs_read', expires_at: new Date(Date.now() + 3600_000).toISOString() }) : json(grant, { message: 'The permissions requested are not granted to this installation.' });
+    if (path === `/repos/acme/shop/deployments?sha=${S}&per_page=10`) return json(200, [{ id: 7, environment: 'Preview' }, { id: 6, environment: 'Preview' }, { id: 5, environment: 'Preview' }]);
+    const m = /^\/repos\/acme\/shop\/deployments\/(\d+)\/statuses\?per_page=1$/.exec(path);
+    if (m) return json(200, statuses[m[1]] ?? []);
+    return json(404, {});
+  };
+  const g = githubProposals({ appId: 1, privateKey, fetch });
+  assert.deepEqual(await g.preview({ repo: 'https://github.com/acme/shop', sha: S }), { deployment: 5, environment: 'Preview', url: 'https://shop-abc.vercel.app/' }, 'a failed one and one with a password in its link are passed over');
+  assert.deepEqual(calls.find((c) => c.body)?.body, { repositories: ['shop'], permissions: { deployments: 'read' } }, 'the preview token reads deployments and nothing else');
+  assert.equal(await g.preview({ repo: 'https://github.com/acme/shop', sha: 'abc' }), null, 'only a full commit');
+  const g2 = githubProposals({ appId: 1, privateKey, fetch });
+  grant = 422;
+  assert.equal(await g2.preview({ repo: 'https://github.com/acme/shop', sha: S }), null, 'an app without Deployments read: no link, no error');
+});
+
 test('the runner opens the pull request after the first checkpoint, and merges it pinned to the approved head only on approval', async () => {
   const { bare, root } = origin();
   let moveHead = false, movedTo = null;
@@ -126,7 +152,7 @@ test('the runner opens the pull request after the first checkpoint, and merges i
       return {};
     },
   });
-  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter, proposals: localProposals(), log: (m) => process.env.DBG && console.error('LOG', m) });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter, proposals: localProposals(), previewDelays: Array(40).fill(50), log: (m) => process.env.DBG && console.error('LOG', m) });
   try {
     await runner.ready;
     const f = cp.start({ role: 'web-dev', run: 'run_5', repo: { url: bare }, worktree: 'web/5-form', areas: ['form.txt'] });
@@ -146,6 +172,17 @@ test('the runner opens the pull request after the first checkpoint, and merges i
     assert.equal(accepted.data.result, sh(bare, 'rev-parse', 'main'));
     assert.equal(sh(bare, 'show', 'main:form.txt'), 'form 1');
     assert.ok(!results[0].isError, results[0].text);
+    // G-12: the host deploys the merge commit; the runner reads the link from the deployment, and sends it once.
+    writeFileSync(join(bare, 'agent-team-deployments.json'), JSON.stringify([
+      { id: 40, sha: accepted.data.result, environment: 'Preview', state: 'pending', url: 'https://shop-pending.example.app' },
+      { id: 41, sha: accepted.data.result, environment: 'Preview', state: 'success', url: 'http://shop-plain.example.app' },
+      { id: 42, sha: accepted.data.result, environment: 'Preview', state: 'success', url: 'https://shop-git-web-5-form.example.app/' },
+    ]));
+    await cp.until(() => cp.events.some((e) => e.type === 'proposal.previewed'));
+    const pv = cp.events.filter((e) => e.type === 'proposal.previewed');
+    assert.equal(pv.length, 1);
+    assert.deepEqual(pv[0].data, { connector: 'local', ref: 1, sha: accepted.data.result, url: 'https://shop-git-web-5-form.example.app/', environment: 'Preview', state: 'success', deployment: 42 }, 'only a successful https deployment of the merge commit');
+    assert.equal(pv[0].actor?.session, f.body.session);
 
     // A second round on a new branch, whose head moves between the approval and the merge.
     moveHead = true;

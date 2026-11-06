@@ -82,6 +82,9 @@ function meetingPrompt(lead, d) {
     + `Answer with meeting_reply { meeting: "${d.meeting}", text } in a few sentences; it goes verbatim into the minutes. Then go back to what you were doing.`;
 }
 
+// How long to wait between looks for a merge's preview deployment: about ten minutes in all (G-12).
+const PREVIEW_DELAYS = [10e3, 20e3, 30e3, 60e3, 60e3, 60e3, 120e3, 120e3, 120e3];
+
 export class Session {
   /**
    * `body` is the session.start body (docs/contracts/runner-protocol.md, with the M3 fields). `deps`:
@@ -406,6 +409,7 @@ export class Session {
       try {
         const m = await this.deps.proposals.accept({ repo: this.body.repo.url, ref: this.proposal.ref, branch: this.copy.branch, base: this.copy.base, headSha: approved, approval });
         await this.emit('proposal.accepted', { ...base, result: m.result });
+        this.watchPreview({ connector: base.connector, ref: base.ref, sha: m.result });
         // The base has it now (squashed): later work starts from there, on a fresh pull request.
         // Only when the remote branch is gone: otherwise the next push onto it would be refused (not a fast-forward).
         this.proposal = null;
@@ -469,5 +473,30 @@ export class Session {
 
   emit(type, data, opts = {}) {
     return this.deps.emit(this, type, data, opts);
+  }
+
+  /**
+   * After a merge: wait for the host's deployment of the merge commit and send proposal.previewed with its link
+   * (G-12). The link is read from the connector, never from the model. Gives up quietly after the last delay
+   * (about ten minutes by default), or when the session ends; a repository with no deployments sends nothing.
+   */
+  watchPreview({ connector, ref, sha }) {
+    const look = this.deps.proposals?.preview;
+    if (!look || !sha) return;
+    const delays = this.deps.previewDelays ?? PREVIEW_DELAYS;
+    this.previewing = (async () => {
+      for (const ms of delays) {
+        const stop = await Promise.race([new Promise((r) => setTimeout(() => r(false), ms).unref?.()), this.ended.then(() => true)]);
+        if (stop || this.state === 'ended') return null;
+        const p = await look.call(this.deps.proposals, { repo: this.body.repo.url, sha }).catch((e) => { this.deps.log?.(`preview of ${sha}: ${e.message}`); return null; });
+        if (p) {
+          await this.emit('proposal.previewed', { connector, ref, sha, url: p.url, environment: p.environment, state: 'success', deployment: p.deployment })
+            .catch((e) => this.deps.log?.(`proposal.previewed for ${ref}: ${e.message}`));
+          return p;
+        }
+      }
+      this.deps.log?.(`no preview of ${sha} (pull request ${ref}) came up; nothing sent`);
+      return null;
+    })();
   }
 }

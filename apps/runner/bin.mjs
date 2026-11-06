@@ -126,8 +126,10 @@ if (process.env.AGENT_TEAM_RUNNER_ADAPTER === 'dryrun') {
   console.error(`[runner] model: the dry run's scripted fake (control folder ${control})`);
 } else adapter = agentSdkAdapter({ effort: o.effort });
 
+// The dry run looks for a merge's preview every second for ten minutes, so the harness need not wait (G-12).
+const previewDelays = process.env.AGENT_TEAM_RUNNER_ADAPTER === 'dryrun' ? Array(600).fill(1000) : undefined;
 const runner = startRunner({
-  server, key, root: data, work, sandbox, proposals, id: saved.id ?? o.name, maxSessions: Number(o['max-sessions']) || 8,
+  server, key, root: data, work, sandbox, proposals, previewDelays, id: saved.id ?? o.name, maxSessions: Number(o['max-sessions']) || 8,
   adapter,
   log: (m) => console.error(`[runner] ${m}`),
 });
