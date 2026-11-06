@@ -13,6 +13,10 @@ RUN npm ci --omit=dev --ignore-scripts --prefix apps/server && npm cache clean -
 # The server imports the event envelope package and the board summariser by relative path.
 COPY packages/events/ packages/events/
 COPY tools/board.mjs tools/board.mjs
+# Sign-in checks a return path with the Studio's own safeReturn (one function, so the page and the issuer agree);
+# the root package.json makes it an ES module.
+COPY package.json package.json
+COPY apps/studio/public/auth.js apps/studio/public/auth.js
 COPY apps/server/ apps/server/
 COPY deploy/server/ deploy/server/
 COPY deploy/supabase/prod-ca-2021.crt deploy/supabase/prod-ca-2021.crt
