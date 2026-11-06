@@ -1,8 +1,8 @@
 # Added to the suite's docker-compose-prebuilt.yml by run.sh: the issuer under test, on the suite's network, by the
-# name its browser and back channel use.
+# name its browser and back channel use. Every image is pinned by digest (the suite's are release-v5.3.3).
 services:
   op:
-    image: node:22-bookworm-slim
+    image: node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
     working_dir: /kit/apps/server
     volumes:
       - ${KIT_DIR}:/kit:ro
@@ -17,4 +17,9 @@ services:
       default:
         aliases: [op.agent-team.test]
   server:
+    image: registry.gitlab.com/openid/conformance-suite:release-v5.3.3@sha256:377ab51f011d821c4b6f7729053e85adf062d691e51a3615f40507fd900a2436
     depends_on: [op]
+  nginx:
+    image: registry.gitlab.com/openid/conformance-suite/nginx:release-v5.3.3@sha256:d80183af68cb51c72c86b498780d94d6192cbc6adcc70a7d28ac6a01eff0d0db
+  mongodb:
+    image: mongo:6.0.13@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070

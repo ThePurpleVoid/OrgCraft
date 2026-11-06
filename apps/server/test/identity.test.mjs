@@ -372,3 +372,26 @@ test('the issuer refuses a non-https public URL and a login in place of the owne
   await assert.rejects(createIdentity({ db, key, publicUrl: ORIGIN, tenant: 'acme', ownerGithub: 'octo', upstream }), /numeric/);
   await db.close();
 });
+
+// The conformance harness (conformance/op.mjs) loosens the issuer through `configure`; nothing else may (security
+// review of #113). Without it: no client registration, and PKCE for every client, confidential ones too.
+test('the deployment issuer: registration off, and PKCE required for every client', () => issuer(async ({ local, gh, browser }) => {
+  const meta = await (await fetch(`${local}/.well-known/openid-configuration`)).json();
+  assert.equal(meta.registration_endpoint, undefined);
+  const reg = await fetch(`${local}/oauth/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['https://evil.example/cb'] }) });
+  assert.equal(reg.status, 404);
+  gh.as = owner;
+  const redirect = 'https://partner.example/cb';
+  for (const client of ['agent-team-ios', 'agent-team-android', 'partner']) {
+    const uri = client === 'partner' ? redirect : `${ORIGIN}/app/${client.slice(11)}/callback`;
+    const q = new URLSearchParams({ response_type: 'code', client_id: client, redirect_uri: uri, scope: 'openid', state: 's', nonce: 'n' });
+    const r = await browser().fetch(`${ORIGIN}/oauth/authorize?${q}`);
+    const at = new URL(r.headers.get('location') ?? 'x:', ORIGIN);
+    assert.equal(at.searchParams.get('error'), 'invalid_request', client);
+    assert.match(at.searchParams.get('error_description') ?? '', /requires PKCE/, client);
+  }
+}, { clients: [
+  { client_id: 'agent-team-ios', redirect_uris: [`${ORIGIN}/app/ios/callback`] },
+  { client_id: 'agent-team-android', redirect_uris: [`${ORIGIN}/app/android/callback`] },
+  { client_id: 'partner', client_secret: 'a-long-enough-client-secret-for-the-test', token_endpoint_auth_method: 'client_secret_basic', application_type: 'web', redirect_uris: ['https://partner.example/cb'], dpop_bound_access_tokens: false },
+] }));
