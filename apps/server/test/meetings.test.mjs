@@ -94,6 +94,8 @@ test('proof 1: a round of three ends with the minutes in the chat and one report
     const notes = (await events(p.call, 'report.note')).filter((e) => e.data.meeting === m.body.id);
     assert.equal(notes.length, 1, 'one report.note on the board');
     assert.match(notes[0].data.detail, /^Minutes: Daily standup .*\/t\/shop\/meetings\/mtg_/);
+    const [mins] = await events(p.call, 'meeting.minutes');
+    assert.deepEqual([mins.data.meeting, mins.data.meetingId, mins.data.actions, mins.data.decisions, mins.data.needsYou], ['Daily standup', m.body.id, [{ to: 'web-dev', task: 'Ship receipts' }], [], 0], 'the email sink\'s meeting.minutes (events.md)');
     const handoff = (await events(p.call, 'message.handoff')).find((e) => e.data.meeting === m.body.id);
     assert.deepEqual([handoff.data.to, handoff.actor.id, handoff.subject], ['web-dev', 'chief-of-staff', `meeting/${m.body.id}`]);
     assert.match(handoff.data.detail, /From Daily standup: Ship receipts\. Done when: receipts are on the order page/);

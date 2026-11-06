@@ -199,6 +199,11 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
       await ctx.q('insert into chat_messages(tenant, team, event, from_kind, from_id, text, at) values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing', [ctx.tenant, sess.team, chat.id, 'role', sess.role, text, chat.time]);
     }
     await ctx.emit(sess.team, 'report.note', { detail: `Minutes: ${m.title} ${page(m)}`, meeting: m.id }, opts(m, { actor }));
+    // events.md meeting.minutes: what the email sink sends to people who switched on "Meeting minutes".
+    await ctx.emit(sess.team, 'meeting.minutes', {
+      meeting: m.title, meetingId: m.id, date: ctx.now.toISOString().slice(0, 10), decisions: (i.decisions ?? []).map((d) => ({ text: d.question })),
+      actions: (i.actionItems ?? []).map((a) => ({ to: a.to, task: a.task })), needsYou: (i.decisions ?? []).length,
+    }, opts(m, { actor }));
     for (const a of i.actionItems ?? []) {
       await ctx.emit(sess.team, 'message.handoff', { to: a.to, task: a.task, doneWhen: a.doneWhen, changed: `an action item from ${m.title}`, verify: 'the minutes', detail: `From ${m.title}: ${a.task}. Done when: ${a.doneWhen}`, meeting: m.id }, opts(m, { actor }));
     }
