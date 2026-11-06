@@ -114,6 +114,16 @@ paths:
       tags: [events]
       summary: Where every role stands now (the board projection)
       responses: { "200": { description: Board, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } } }
+  /teams/{team}/rollout:
+    parameters:
+      - { $ref: "#/components/parameters/team" }
+      - { name: version, in: query, schema: { type: string, pattern: "^[0-9a-f]{7,40}$" }, description: "A published commit; default: the latest team.published event's" }
+      - { name: publishedAt, in: query, schema: { type: string, format: date-time }, description: "When it merged (with version)" }
+    get:
+      x-min-role: viewer
+      tags: [events]
+      summary: "The rollout after a publish merges (demo step 17): per role moved, next-task, finishing (with the change step's plan), off-finishing, off, no-report or unknown, and the summary. A role counts as moved only when a report after the merge names the new version. Read-only"
+      responses: { "200": { description: "{ version, name, publishedAt, pr, roles: [{ role, state, teamVersion, status, task, lastAt, stale, plan? }], summary: { moved, of, finishing, offFinishing, unknown, noReport, allMoved } }; version null when nothing is published yet" } }
   /teams/{team}/report-tokens:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post:
@@ -274,6 +284,18 @@ paths:
       summary: Say something to the chief of staff. Stored verbatim
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [text], properties: { text: { type: string, maxLength: 20000 }, replyTo: { type: string }, clientId: { type: string, maxLength: 80, description: "Made by the client (a ULID). A repeat returns the first message with 200" } } } } } }
       responses: { "200": { description: The chat.message event already stored for this clientId }, "201": { description: The chat.message event } }
+  /teams/{team}/meetings:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { x-min-role: viewer, tags: [meetings], summary: "The team's latest meetings (at most 50), newest first", responses: { "200": { description: "{ meetings: [Meeting] }" } } }
+    post:
+      x-min-role: editor
+      tags: [meetings]
+      summary: "Start a meeting now: an instance (mtg_…) of a definition the running run was started with. 404 for an unknown definition; 409 when no run is running, the definition is already open, or today's budget has less left than the meeting's cap"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [meeting], properties: { meeting: { type: string, description: The definition id } } } } } }
+      responses: { "201": { description: "The meeting: { id, definition, title, facilitator, attendees, state, outcome, capped, turn, replies, skipped, minutes, cap, spent, currency, run }" } }
+  /teams/{team}/meetings/{meeting}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: meeting, in: path, required: true, schema: { type: string } } ]
+    get: { x-min-role: viewer, tags: [meetings], summary: "One meeting, for its page (/t/{team}/meetings/{meeting})", responses: { "200": { description: The meeting }, "404": { description: No such meeting } } }
   /approvals/{approval}:
     post:
       x-min-role: approver
@@ -608,6 +630,24 @@ components:
                   pool: { type: integer, description: "Most instances, so to: role#instance can be checked" }
                   model: { type: string }
                   brief: { type: string, description: "The role's brief as text, at most 20 KB; sent to the runner as session.start prompt.brief" }
+            meetings:
+              type: array
+              maxItems: 50
+              description: "Additive (meetings). The team's meetings.json entries, frozen with the run like the roles, with attendees already resolved to role slugs by the Studio (meetingAttendees, the facilitator left out). A missing facilitator means the front door"
+              items:
+                type: object
+                required: [id, title, attendees, capUsd]
+                properties:
+                  id: { type: string, description: The definition id in meetings.json }
+                  title: { type: string, maxLength: 200 }
+                  agenda: { type: string, maxLength: 4000 }
+                  facilitator: { type: string }
+                  attendees: { type: array, items: { type: string }, description: In the order turns go }
+                  rule: { enum: [worked-since-last], description: The server also invites roles that reported since the meeting last closed }
+                  format: { enum: [round, discussion], description: A discussion runs as a written round for now }
+                  ifBusy: { enum: [next-pause, proxy, skip], default: next-pause }
+                  owner: { type: object, properties: { minutes: { type: boolean, default: true }, speaks: { type: boolean, default: false } } }
+                  capUsd: { type: number, exclusiveMinimum: 0, description: "Stored as cap in the budget's minor units, rounded up" }
     Card:
       type: object
       description: Anything a person answers, the same on every client and channel (clients.md section 6)

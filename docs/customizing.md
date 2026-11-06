@@ -10,7 +10,7 @@ A team template is a ready-made team for one kind of work: which roles are on, i
 
 | Template | Group | Who is on it |
 | --- | --- | --- |
-| `startup-product-team` | Build a product | The engineering preset: chief of staff, CTO and CPO lanes, builders, QA and reviewers |
+| `startup-product-team` | Build a product | The engineering preset: a chief of staff, a CTO and a CPO with their teams, builders, QA and reviewers |
 | `customer-support-team` | Run a business function | Chief of staff, support lead, customer success lead, problem-report triager, and the custom agents support responder and knowledge base writer |
 | `content-studio` | Run a business function | Chief of staff, editor, writer (the content lead role), fact checker, brand designer, marketing lead and analytics lead |
 
@@ -52,7 +52,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.15.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.16.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],

@@ -407,3 +407,43 @@ test('a run.resumed wake resumes each role from its checkpoint, and a checkpoint
     await cp.close();
   }
 });
+
+test('a meeting turn: the prompt has the agenda and the replies so far, meeting_reply goes to the server, and the turn\'s usage is tagged', async () => {
+  const { bare, root } = origin();
+  const cp = await fakeControlPlane();
+  const prompts = [];
+  const adapter = stubAdapter({ qa: async (t) => {
+    prompts.push(t.prompt);
+    const id = /\(meeting (mtg_[\w-]+)/.exec(t.prompt)?.[1];
+    if (id && !/close this meeting/.test(t.prompt)) await t.call('meeting_reply', { meeting: id, text: 'Tested checkout; nothing blocks me.' });
+    return { usage: { inputTokens: 10, outputTokens: 10, costUsd: 0.02 } };
+  } });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  try {
+    await runner.ready;
+    const turn = { specversion: '1.0', id: 'ev_turn_1', type: 'meeting.turn', version: 1, actor: { kind: 'system', id: 'control-plane' }, data: { meeting: 'mtg_01abc', definition: 'standup', title: 'Daily standup', agenda: 'What is next?', to: 'qa', turn: 2, of: 3, closing: false, capped: false, replies: [{ role: 'web-dev', text: 'Built the cart.' }] } };
+    const f = cp.start({ role: 'qa', run: 'run_m', repo: { url: bare }, wake: turn });
+    await cp.until(() => cp.events.some((e) => e.type === 'session.idle'));
+    assert.match(prompts[0], /MEETING "Daily standup" \(meeting mtg_01abc\), turn 2 of 3/);
+    assert.match(prompts[0], /Agenda: What is next\?/);
+    assert.match(prompts[0], /web-dev, verbatim:\n {2}> Built the cart\./);
+    const reply = cp.toolCalls.find((c) => c.tool === 'meeting_reply');
+    assert.deepEqual(reply.input, { meeting: 'mtg_01abc', text: 'Tested checkout; nothing blocks me.' });
+    // An ordinary message next: its usage is not the meeting's.
+    cp.send('session.message', { session: f.body.session, message: 'carry on' });
+    await cp.until(() => cp.events.filter((e) => e.type === 'session.idle').length === 2);
+    const usage = cp.events.filter((e) => e.type === 'usage.recorded');
+    assert.deepEqual(usage.map((e) => e.data.meeting ?? null), ['mtg_01abc', null]);
+    // The closing turn reads as one.
+    const { wakePrompt } = await import('../session.mjs');
+    const closing = wakePrompt({ ...turn, data: { ...turn.data, to: 'chief-of-staff', closing: true, capped: true, skipped: [{ role: 'designer', reason: 'capped' }] } }, 'chief-of-staff');
+    assert.match(closing, /close this meeting/);
+    assert.match(closing, /cost cap/);
+    assert.match(closing, /Skipped: designer \(capped\)/);
+    assert.match(closing, /meeting_close with \{ meeting: "mtg_01abc", minutes \}/);
+    noFailedTurns(cp);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});

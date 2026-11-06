@@ -104,7 +104,7 @@ export function createControlPlane(opts) {
   const m3 = opts.m3 ?? createM3({ db: opts.db, now: opts.now, publicUrl: opts.publicUrl });
   let runners = null;
   // The bus: what wakes whom, and sending it to runners (m3-design sections 2 to 4, 7).
-  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl });
+  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl, meetingTurnMinutes: opts.meetingTurnMinutes });
   wireBus(m3, bus);
   // Runners connect here over a WebSocket (runner-protocol.md).
   runners = attachRunners(server, { db: opts.db, ops: bus.ops, welcome: bus.welcome, onLost: bus.onLost, ...(opts.runnerOptions ?? {}) });
@@ -526,6 +526,9 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
       if (b === 'runs' && !c && m === 'POST') return send(res, 201, await did(m3.startRun(t, team, (await readJson(req, MAX_BODY)) ?? {}, me)));
+      if (b === 'meetings' && !c && m === 'GET') return send(res, 200, { meetings: await bus.meetings.list(t, team) });
+      if (b === 'meetings' && !c && m === 'POST') return send(res, 201, await did(bus.meetings.start(t, team, (await readJson(req, 16 * 1024)) ?? {}, me)));
+      if (b === 'meetings' && c && !parts[5] && m === 'GET') return send(res, 200, await bus.meetings.get(t, team, c));
       if (b === 'chat' && !c && m === 'GET') return send(res, 200, await m3.getChat(t, team, Object.fromEntries(url.searchParams)));
       if (b === 'chat' && !c && m === 'POST') {
         const { created, event } = await did(m3.postChat(t, team, await readJson(req, 64 * 1024), me));
@@ -540,6 +543,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         const { seq, ...body } = await store.board(db, t, team, { days, role, now: now() });
         return send(res, 200, body, { etag: tag });
       }
+      // The rollout view after a publish merges (demo step 17): which roles have picked up the new team version.
+      if (b === 'rollout' && !c && m === 'GET') return send(res, 200, await store.rollout(db, t, team, { version: url.searchParams.get('version') ?? '', publishedAt: url.searchParams.get('publishedAt') ?? '', now: now() }));
       if (b === 'report-tokens' && !c && m === 'POST') {
         const tok = await store.mintReportToken(db, t, team);
         const base = publicUrl || `http://${req.headers.host}`;

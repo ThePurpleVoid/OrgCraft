@@ -2,7 +2,7 @@
 # Reports what this thread is doing to the team board.
 #
 #   team-status.sh <role>[#instance] <kind> [<status>|-] [--task "..."] [--issue N] [--pr N] [--branch b]
-#                  [--commit sha] [--platform p] [--to role] [--severity 1-4] [--evidence path,path]
+#                  [--commit sha] [--platform p] [--to role] [--severity 1-4] [--evidence path,path] [--team-version sha]
 #                  [--detail "..."] [--session id]
 #
 #   kind    status | handoff | bug | signoff | blocked | note | heartbeat
@@ -59,7 +59,7 @@ if [ "$kind" = status ] && [ -z "$status" ]; then
   echo "team-status: not reported (a status report needs a status)" >&2; exit 0
 fi
 
-task=""; issue=""; pr=""; branch=""; commit=""; platform=""; to=""; severity=""; evidence=""; detail=""
+task=""; issue=""; pr=""; branch=""; commit=""; platform=""; to=""; severity=""; evidence=""; detail=""; team_version=""
 session="${AGENT_TEAM_SESSION:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -68,6 +68,7 @@ while [ $# -gt 0 ]; do
     --pr) pr="${2:-}"; shift 2 ;;
     --branch) branch="${2:-}"; shift 2 ;;
     --commit) commit="${2:-}"; shift 2 ;;
+    --team-version) team_version="${2:-}"; shift 2 ;;
     --platform) platform="${2:-}"; shift 2 ;;
     --to) to="${2:-}"; shift 2 ;;
     --severity) severity="${2:-}"; shift 2 ;;
@@ -87,6 +88,10 @@ fi
 if [ -z "$commit" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   commit="$(git rev-parse --short=12 HEAD 2>/dev/null || true)"
 fi
+# The team version this checkout runs: the last commit that changed .agent-team (the rollout view after a publish).
+if [ -z "$team_version" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  team_version="$(git log -1 --format=%H -- .agent-team 2>/dev/null | cut -c1-12 || true)"
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "team-status: not reported (jq is not installed)" >&2
@@ -97,10 +102,10 @@ id="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}${RANDOM}"
 payload=$(jq -nc --arg id "$id" --arg at "$at" --arg role "$role" --arg instance "$instance" --arg kind "$kind" --arg status "$status" \
   --arg task "$task" --arg issue "$issue" --arg pr "$pr" --arg branch "$branch" --arg commit "$commit" \
   --arg platform "$platform" --arg to "$to" --arg severity "$severity" --arg evidence "$evidence" --arg detail "$detail" \
-  --arg session "$session" \
+  --arg session "$session" --arg team_version "$team_version" \
   '{id: $id, at: $at, role: $role, instance: $instance, kind: $kind, status: $status, task: $task, issue: $issue, pr: $pr,
     branch: $branch, commit: $commit, platform: $platform, to: $to, severity: $severity,
-    evidence: ($evidence | split(",") | map(select(. != ""))), detail: $detail, session: $session,
+    evidence: ($evidence | split(",") | map(select(. != ""))), detail: $detail, session: $session, team_version: $team_version,
     source: "team-status.sh"} | with_entries(select(.value != "" and .value != []))')
 
 mkdir -p "$AT_HOME" 2>/dev/null && printf '%s\n' "$payload" >>"$AT_HOME/events.jsonl" 2>/dev/null \

@@ -3,6 +3,7 @@
 // The owner's side goes through the Studio's own API, as the page would: the daily cap with step-up, Start, a chat
 // request, then the approval card answered with step-up. The run must end in a merge pinned to the approved head.
 // A second request walks step 9b: a push after the approval makes the merge fail head-moved, and a new card asks again.
+// Then a meeting (a written round, minutes in the chat) and its cap, and step 11, the daily cap.
 //
 //   npm ci --prefix apps/server && npm ci --prefix apps/runner && node --test tests/e2e/m3-dry-run.e2e.mjs
 //   M3_DRY_RUN_RUNNER=docker uses the runner image (docker build -f apps/runner/Dockerfile -t agent-team-runner .;
@@ -122,6 +123,31 @@ test('step 9b: a push after the approval stops the merge (head-moved); a new car
   const merged = await proposal((p) => p.ref === opened.ref && p.state === 'merged');
   assert.equal(merged.mergedHead, moved.head);
   console.log(JSON.stringify({ pr: merged.ref, headSha: merged.mergedHead, result: merged.result }));
+});
+
+test('meetings: a written round ends with the minutes in the chat; a turn that blows the cap closes it capped', { skip, timeout: 120_000 }, async () => {
+  const m = await hk.meeting('standup');
+  assert.deepEqual(m.attendees, ['qa-web', 'web-dev'], 'resolved by the Studio, the facilitator left out');
+  await waitFor(async () => (await hk.meetingNow(m.id)).state === 'closed', 60_000);
+  const done = await hk.meetingNow(m.id);
+  assert.equal(done.outcome, 'completed');
+  assert.deepEqual(done.replies.map((r) => r.role), ['qa-web', 'web-dev']);
+  const page = await studio('GET', '/v1/team/chat');
+  const minutes = (page.items ?? []).find((e) => e.type === 'chat.message' && e.data?.meeting === m.id);
+  assert.ok(minutes, 'the minutes are in the chat');
+  assert.match(minutes.data.text, /qa-web: qa-web: on track/);
+  assert.equal(execFileSync('git', ['-C', h.bare, 'log', '--oneline', '--all', '--grep', 'inutes'], { encoding: 'utf8' }).trim(), '', 'minutes are never committed');
+
+  // The cap: the first attendee's turn costs $1, the cap is $0.50; the rest is skipped and the minutes are partial.
+  hk.meetingSpend(1);
+  const c = await hk.meeting('standup');
+  await waitFor(async () => (await hk.meetingNow(c.id)).state === 'closed', 60_000);
+  const capped = await hk.meetingNow(c.id);
+  assert.deepEqual([capped.outcome, capped.capped, capped.spent >= capped.cap], ['capped', true, true]);
+  assert.deepEqual(capped.skipped.map((x) => [x.role, x.reason]), [['qa-web', 'capped'], ['web-dev', 'capped']]);
+  assert.ok(hk.log().some((l) => l.step === 'meeting:closed' && l.meeting === c.id && l.capped), 'the facilitator wrote partial minutes');
+  const run = await studio('GET', '/v1/team/run');
+  assert.equal(run.run?.state, 'running', 'the meeting\'s cap stops the meeting, not the run');
 });
 
 test('step 11: a turn that takes the day past the cap pauses the run and puts a budget card in the chat', { skip, timeout: 120_000 }, async () => {
