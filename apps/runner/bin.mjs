@@ -43,7 +43,7 @@ import { startRunner } from './runner.mjs';
 import { checkServer } from './link.mjs';
 import { githubProposals, localProposals } from './proposals.mjs';
 import { useGitConfig } from './worktree.mjs';
-import { privateDir, selfCheck } from './sandbox.mjs';
+import { crossCheck, hardlinksProtected, parseSlots, privateDir, sandboxPool, selfCheck } from './sandbox.mjs';
 
 const { values: o, positionals: [cmd] } = parseArgs({ allowPositionals: true, options: {
   server: { type: 'string', default: process.env.AGENT_TEAM_SERVER },
@@ -85,7 +85,15 @@ if (!server || !key) fail('not registered: run agent-team-runner register --serv
 try { checkServer(server); } catch (e) { fail(e.message); }
 mkdirSync(data, { recursive: true, mode: 0o700 });
 const id = (v) => (v === undefined || v === '' ? undefined : Number(v));
-const sandbox = process.env.AGENT_TEAM_SANDBOX_UID ? { uid: id(process.env.AGENT_TEAM_SANDBOX_UID), gid: id(process.env.AGENT_TEAM_SANDBOX_GID), exec: process.env.AGENT_TEAM_SANDBOX_EXEC || 'setpriv' } : null;
+// The agent users: a pool (AGENT_TEAM_SANDBOX_UIDS, each uid with a group of the same number; the image's default),
+// one per live session (#28), with AGENT_TEAM_SANDBOX_GID as the shared work group; or one shared user
+// (AGENT_TEAM_SANDBOX_UID), which serves one team only.
+const exec = process.env.AGENT_TEAM_SANDBOX_EXEC || 'setpriv';
+let sandbox = null;
+try {
+  if (process.env.AGENT_TEAM_SANDBOX_UIDS) sandbox = sandboxPool({ slots: parseSlots(process.env.AGENT_TEAM_SANDBOX_UIDS), sharedGid: id(process.env.AGENT_TEAM_SANDBOX_GID), exec });
+  else if (process.env.AGENT_TEAM_SANDBOX_UID) sandbox = { uid: id(process.env.AGENT_TEAM_SANDBOX_UID), gid: id(process.env.AGENT_TEAM_SANDBOX_GID), exec };
+} catch (e) { fail(`the sandbox settings are wrong: ${e.message}`); }
 let work = data;
 if (sandbox) {
   if (!process.env.AGENT_TEAM_RUNNER_WORK) fail('a sandbox needs AGENT_TEAM_RUNNER_WORK, a folder outside the data folder');
@@ -93,10 +101,14 @@ if (sandbox) {
   if (work === data || work.startsWith(`${data}/`)) fail('AGENT_TEAM_RUNNER_WORK must be outside the data folder, which sessions cannot reach');
   process.umask(0o007); // what the runner makes for a session is shared with it through the group, and no one else
   privateDir(data);
-  // Check the sandbox this platform actually gives before taking any session.
-  const check = selfCheck(sandbox, { data });
-  if (!check.ok) fail(`refusing to start: the sandbox does not hold here: ${check.problems.join('; ')}`);
-  console.error(`[runner] sandbox checked: sessions run as uid ${sandbox.uid}, cannot read this process's environment or ${data}, and have no capabilities`);
+  // Check the sandbox this platform actually gives before taking any session: every agent user, and, for a pool,
+  // that one cannot reach another's folder and that hard links are protected (review of #28, C).
+  const slots = sandbox.slots ?? [sandbox];
+  if (sandbox.slots && !hardlinksProtected()) fail('refusing to start: fs.protected_hardlinks is not 1 here, so one agent user could hard-link another\'s files; a pool of agent users needs it');
+  const problems = slots.flatMap((s) => selfCheck(s, { data }).problems);
+  if (sandbox.slots) problems.push(...crossCheck(sandbox, work).problems);
+  if (problems.length) fail(`refusing to start: the sandbox does not hold here: ${problems.join('; ')}`);
+  console.error(`[runner] sandbox checked: sessions run as ${sandbox.slots ? `their own uid (${slots.length} agent users, one per live session)` : `uid ${sandbox.uid}, one team only`}, cannot read this process's environment or ${data}, and have no capabilities`);
 } else if (process.env.ANTHROPIC_API_KEY && process.env.AGENT_TEAM_RUNNER_UNSANDBOXED !== '1') {
   // A real model key in a runner whose sessions share its user would be readable by every session (F3).
   fail('refusing to start: ANTHROPIC_API_KEY is set but there is no sandbox. Run the runner in its container (apps/runner/Dockerfile); for development only, AGENT_TEAM_RUNNER_UNSANDBOXED=1 overrides this');

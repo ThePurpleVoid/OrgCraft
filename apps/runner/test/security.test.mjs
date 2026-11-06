@@ -274,7 +274,8 @@ test('when the remote cannot be reached, the push is refused and the session is 
 
 // Needs root (to switch uid without the container's capability-carrying setpriv) and setpriv; skips otherwise.
 // In the container image (CI's runner-image job) it runs as the runner user with the image's own sandbox settings.
-const IMAGE = process.env.AGENT_TEAM_SANDBOX_EXEC ? { uid: Number(process.env.AGENT_TEAM_SANDBOX_UID), gid: Number(process.env.AGENT_TEAM_SANDBOX_GID), exec: process.env.AGENT_TEAM_SANDBOX_EXEC } : null;
+// The image gives a pool (AGENT_TEAM_SANDBOX_UIDS); this test uses its first agent user with the shared group.
+const IMAGE = process.env.AGENT_TEAM_SANDBOX_EXEC ? { uid: Number(process.env.AGENT_TEAM_SANDBOX_UID ?? /^\d+/.exec(process.env.AGENT_TEAM_SANDBOX_UIDS ?? '')?.[0]), gid: Number(process.env.AGENT_TEAM_SANDBOX_GID), exec: process.env.AGENT_TEAM_SANDBOX_EXEC } : null;
 const canSwitch = !!IMAGE || (process.getuid?.() === 0 && (() => { try { execFileSync('setpriv', ['--version']); return true; } catch { return false; } })());
 test('F3: a session runs as another user and cannot read the runner\'s environment or data folder', { skip: canSwitch ? false : 'needs root and setpriv to switch users (the container image has both)' }, async () => {
   const { Session } = await import('../session.mjs');
@@ -303,7 +304,7 @@ test('F3: a session runs as another user and cannot read the runner\'s environme
       c.stdin.end(); c.on('close', (code) => done({ code, out }));
     });
     const who = await asAgent('id -u');
-    assert.equal(who.out.trim(), '10002');
+    assert.equal(who.out.trim(), String(sandbox.uid));
     assert.match((await asAgent('grep CapEff /proc/self/status')).out, /CapEff:\s+0+\n/, 'no capabilities');
     assert.match(read(`/proc/${holder.pid}/environ`, 'utf8'), /sk-ant-f3-marker/, 'the stand-in holds the marker');
     const env = await asAgent(`cat /proc/${holder.pid}/environ; cat /proc/1/environ; cat /proc/${process.pid}/environ`);
