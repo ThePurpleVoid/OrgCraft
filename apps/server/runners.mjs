@@ -129,7 +129,9 @@ export function attachRunners(server, { db, ops = {}, welcome = async () => ({})
       return out.ok ? ack(f.id, out.body) : nack(f.id, out.problem);
 
       async function onHello(b) {
-        conn.hello = { version: typeof b.version === 'string' ? b.version.slice(0, 50) : null, capabilities: b.capabilities && typeof b.capabilities === 'object' && !Array.isArray(b.capabilities) ? b.capabilities : {} };
+        conn.hello = { version: typeof b.version === 'string' ? b.version.slice(0, 50) : null, capabilities: b.capabilities && typeof b.capabilities === 'object' && !Array.isArray(b.capabilities) ? b.capabilities : {},
+          // The sessions the runner says it still runs: after a restart, none of the ones it had.
+          sessions: Array.isArray(b.sessions) ? b.sessions.filter((x) => typeof x === 'string' && x.length <= 100).slice(0, 500) : [] };
         clearTimeout(helloTimer);
         await db.tenant(conn.tenant, ({ q }) => q('update runners set last_seen = now(), version = coalesce($2, version), capabilities = $3 where id = $1',
           [conn.runner, conn.hello.version, JSON.stringify(conn.hello.capabilities).length <= 16 * 1024 ? JSON.stringify(conn.hello.capabilities) : '{}']));

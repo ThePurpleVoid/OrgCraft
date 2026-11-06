@@ -22,7 +22,7 @@ async function setup({ call, base, su }, { sessions = 3, reply } = {}) {
   const runner = await fakeRunner(base, r.key, { runner: r.id, reply: reply ?? ((f) => (f.op === 'session.checkpoint' ? { commit: 'c0ffee1', memory: '# notes' } : {})) });
   const run = await call('POST', '/teams/shop/runs', { team: roster() });
   assert.equal(run.status, 201, JSON.stringify(run.body));
-  return { runner, run: run.body, runnerId: r.id };
+  return { runner, run: run.body, runnerId: r.id, key: r.key };
 }
 const start = (runner, role) => runner.next((f) => f.op === 'session.start' && f.body.role === role);
 const tool = (call, s, name, input, extra = {}) => call('POST', `/sessions/${s.session}/tools/${name}`, input, { authorization: `Bearer ${s.token}`, ...extra });
@@ -294,6 +294,49 @@ test('a session whose runner went quiet is not started a second time elsewhere',
     assert.equal(runner.frames.filter((f) => f.op === 'session.start').length, 1);
     const [d] = await p.db.system("select state from deliveries order by created_at desc limit 1");
     assert.equal(d.state, 'pending', 'it waits for the runner, or for the tick to give the session up');
+  }, { tickMs: 0 });
+});
+
+test('a runner that restarted gets its sessions started again with what woke them; one stopped while it was away is told to stop', async () => {
+  await plane(async (p) => {
+    const { runner, run, runnerId, key } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    const state = async () => (await p.db.system('select state from sessions where id = $1', [s.session]))[0].state;
+    runner.close();
+    await waitFor(async () => (await state()) === 'unknown');
+    // Restarted: its hello names none of the sessions it had, so they are not "resumed" on it as ghosts.
+    const again = await fakeRunner(p.base, key, { runner: runnerId });
+    assert.deepEqual(again.welcome.body.sessions, []);
+    const re = await again.next((f) => f.op === 'session.start' && f.body.role === 'chief-of-staff');
+    assert.deepEqual([re.body.session, re.body.resume, re.body.wake.data.text], [s.session, true, 'go'], 'started again, woken by what it had not finished');
+    // Away again; the run stops meanwhile. Back, still running the session: it is told to stop.
+    again.close();
+    await waitFor(async () => (await state()) === 'unknown');
+    assert.equal((await p.call('POST', `/runs/${run.id}/stop`, {}, await p.su())).status, 200);
+    assert.equal(await state(), 'stopped', 'stopped here although its runner was away');
+    const third = await fakeRunner(p.base, key, { runner: runnerId, sessions: [s.session] });
+    assert.deepEqual(third.welcome.body.sessions, []);
+    const stop = await third.next((f) => f.op === 'session.stop' && f.body.session === s.session);
+    assert.equal(stop.body.mode, 'now');
+    third.close();
+  }, { tickMs: 0 });
+});
+
+test('an approved merge is not let go to the runner while its run is not running, not even on a resend', async () => {
+  await plane(async (p) => {
+    const { runner, run } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    const w = await runner.request('approval.wait', { session: s.session, approval: { action: 'accept', call: 'merge pull request 7', why: 'qa signed off', pr: 7, headSha: 'a'.repeat(40) } });
+    assert.equal(w.op, 'ack', JSON.stringify(w.body));
+    assert.equal((await p.call('POST', `/runs/${run.id}/pause`)).status, 200);
+    const results = () => runner.frames.filter((f) => f.op === 'approval.result').length;
+    const before = results();
+    assert.equal((await p.call('POST', `/approvals/${w.body.approval}`, { decision: 'approved', version: 1 }, await p.su())).status, 200);
+    await runner.request('approval.wait', { session: s.session, approval: { id: w.body.approval }, resend: true });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(results(), before, 'held: a paused run merges nothing, whatever the runner does');
   }, { tickMs: 0 });
 });
 

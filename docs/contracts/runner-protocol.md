@@ -29,7 +29,11 @@ A **runner** is the data plane: a process that holds checkouts, sandboxes and re
 
 ### Additive fields (since M3)
 
-- `welcome`: `sessions`, the sessions this runner should resume after a reconnect.
+- `hello`: `sessions`, the ids of the sessions the runner still runs (none after it restarts).
+- `welcome`: `sessions`, the sessions this runner should resume after a reconnect: only those it named in `hello`. Its other sessions it lost (it restarted or crashed); the control plane stops them and delivers again what woke them since their last `session.idle` or `session.ended`, so they start again from their checkpoints. They are started again through the ordinary path: `session.start` with `resume: true` and the stored `checkpoint` (if it has one), the wake being the message they had not finished. A session it named that was stopped while it was away gets `session.stop` (`mode` now, `reason` run-stopped, run-paused or stopped) straight after the welcome, and its `session.ended` carries that reason.
+- `session.message` is acknowledged once the session has it. A runner that has no such session (it restarted, or the session ended) answers `nack` with `error: no-session` (an optional field of `nack`, next to `problem`); the control plane then stops that session and starts it again with the message as its wake, so a person's message is never dropped.
+- `approval.result` for an approved `accept` is sent only while its run is running, on the first answer and on a resend: a stopped or paused run lands no merge whatever a runner does.
+- **Nothing is spent or merged while the control plane is away.** It keeps the budget and every approval, so while the link is down a session starts no new model turn (one in flight ends) and merges nothing, even on an approval it already has. It carries on once it is welcomed again and the control plane has answered one request; by then a stop sent with the welcome has reached it, and a stopped session does not merge.
 - `session.start`: `resume` (boolean), `checkpoint` (`commit`, `memory`) for a resume, `token` and `tokenExpires` (the session token), `caps.remainingToday` and `caps.remainingRun` (minor units), and `delivery` (the bus delivery it answers).
 - `session.message`: `delivery`.
 - `session.stop`: `reason` (owner, budget, error).

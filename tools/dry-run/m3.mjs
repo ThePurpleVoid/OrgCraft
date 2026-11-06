@@ -92,8 +92,16 @@ export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), por
   const adminToken = `adm_${randomBytes(18).toString('base64url')}`;
   const db = await openDb({ dataDir: join(dir, 'control-plane') });
   await store.ensureTenant(db, TENANT);
-  const plane = createControlPlane({ db, key: masterKey(randomBytes(32).toString('base64')), tenant: TENANT, adminToken, stepUpVerifier: stepUpVerifier(await hashStepUpSecret(secret)), pollMs: 200 });
-  await new Promise((r, j) => { plane.once('error', j); plane.listen(port, '127.0.0.1', r); });
+  const planeOpts = { db, key: masterKey(randomBytes(32).toString('base64')), tenant: TENANT, adminToken, stepUpVerifier: stepUpVerifier(await hashStepUpSecret(secret)), pollMs: 200 };
+  // A cut link (a network partition): the runner's reconnects are refused until it is lifted.
+  let cut = false;
+  const listen = async (at) => {
+    const p = createControlPlane(planeOpts);
+    p.prependListener('upgrade', (req, socket) => { if (cut) socket.destroy(); });
+    await new Promise((r, j) => { p.once('error', j); p.listen(at, '127.0.0.1', () => { p.off('error', j); r(); }); });
+    return p;
+  };
+  let plane = await listen(port);
   const cp = `http://127.0.0.1:${plane.address().port}`;
   log(`[dry-run] control plane on ${cp}`);
   const auth = { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' };
@@ -112,7 +120,7 @@ export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), por
   const { code } = await json(await fetch(`${cp}/v1/runners/codes`, { method: 'POST', headers: { ...auth, 'x-step-up': su } }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(ANTHROPIC_|CLAUDE_|AGENT_TEAM_)/.test(k)));
   Object.assign(env, { AGENT_TEAM_RUNNER_ADAPTER: 'dryrun', AGENT_TEAM_DRYRUN_CONTROL: control, AGENT_TEAM_PROPOSALS: 'local', NO_PROXY: '127.0.0.1,localhost' });
-  let child;
+  let child, launch;
   if (runner === 'docker') {
     // Same paths inside as outside, so repo.url (file:///…) and the control folder mean the same in both.
     // The runner and its sessions are other users in there: the stand-in remote and the control folder are shared.
@@ -126,29 +134,55 @@ export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), por
     // The runner's git trusts the folder it does not own (the bare repository, made by this user).
     execFileSync('docker', ['run', '--rm', '-v', `${vol}:/data`, image, 'sh', '-c', `printf '[safe]\\n\\tdirectory = *\\n' > /data/runner/gitconfig`], { stdio: 'inherit' });
     await runChild('docker', run('node', 'apps/runner/bin.mjs', 'register', '--server', cp, '--code', code, '--name', 'dry-run'), { env });
-    child = spawn('docker', ['run', '--name', vol, ...run('node', 'apps/runner/bin.mjs', 'start').slice(1)], { env, stdio: ['ignore', 'inherit', 'inherit'] });
-    child.dockerName = vol;
+    // The registration and the runner's own state live in the volume, so a restart is the same runner.
+    launch = () => { const c = spawn('docker', ['run', '--name', vol, ...run('node', 'apps/runner/bin.mjs', 'start').slice(1)], { env, stdio: ['ignore', 'inherit', 'inherit'] }); c.dockerName = vol; return c; };
   } else {
     const data = join(dir, 'runner');
     const bin = join(KIT, 'apps/runner/bin.mjs');
     await runChild(process.execPath, [bin, 'register', '--server', cp, '--code', code, '--name', 'dry-run', '--data', data], { env });
-    child = spawn(process.execPath, [bin, 'start', '--data', data], { env, stdio: ['ignore', 'inherit', 'inherit'] });
+    launch = () => spawn(process.execPath, [bin, 'start', '--data', data], { env, stdio: ['ignore', 'inherit', 'inherit'] });
   }
+  child = launch();
   const state = { dir, link, studio: studioUrl, cp, secret, adminToken, team: TEAM, control, bare, root, runner, pid: child.pid };
   writeFileSync(join(dir, 'state.json'), JSON.stringify(state, null, 2), { mode: 0o600 });
   // Ready when the runner has said hello on its connection.
   await waitFor(() => plane.runners?.connected?.(TENANT)?.length, 30_000).catch(() => log('the runner has not connected yet; carrying on'));
 
+  /** Stop the runner: SIGKILL is a crash (nothing is flushed), SIGTERM a clean stop. */
+  async function stopRunner(signal = 'SIGKILL') {
+    if (child.dockerName) { try { execFileSync('docker', [signal === 'SIGKILL' ? 'kill' : 'stop', child.dockerName], { stdio: 'ignore' }); execFileSync('docker', ['rm', '-f', child.dockerName], { stdio: 'ignore' }); } catch { /* gone */ } } else child.kill(signal);
+    await new Promise((r) => (child.exitCode !== null || child.signalCode !== null ? r() : child.once('exit', r)));
+  }
+  /** Start the same runner again (same registration, same working folder) and wait for it to connect. */
+  async function startRunner() {
+    child = launch();
+    await waitFor(() => plane.runners?.connected?.(TENANT)?.length, 30_000);
+  }
+  /** The control plane goes away (a crash or a redeploy: nothing listening, no tick) until planeUp(); its data is kept. */
+  async function planeDown() {
+    const p = plane;
+    const closed = new Promise((r) => p.close(() => r()));
+    p.runners?.closeAll?.(); p.closeAllConnections?.();
+    await closed;
+  }
+  /** A new control plane on the same data and port, as after a restart. */
+  async function planeUp() { plane = await listen(Number(new URL(cp).port)); }
+  /** Cut only the runner's link: its sockets dropped and its reconnects refused, until cutRunner(false). */
+  function cutRunner(on = true) {
+    cut = on;
+    if (on) for (const c of plane.runners?.all?.() ?? []) c.ws.terminate();
+  }
+  const connected = () => plane.runners?.connected?.(TENANT)?.length ?? 0;
+
   async function down() {
-    if (child.dockerName) { try { execFileSync('docker', ['rm', '-f', child.dockerName], { stdio: 'ignore' }); } catch { /* gone */ } } else child.kill('SIGTERM');
-    await new Promise((r) => (child.exitCode !== null ? r() : child.once('exit', r)));
+    await stopRunner('SIGTERM');
     studio.closeAllConnections?.(); studio.close();
     plane.runners?.closeAll?.(); plane.closeAllConnections?.(); plane.close();
     await db.close?.();
   }
   /** What the control plane recorded for the sessions and pull requests (the harness's debugging aid). */
   const events = async () => (await db.system("select type, actor_id, envelope->'data' as data from events where team = $1 and (type like 'session.%' or type like 'proposal.%' or type like 'message.%') order by seq", [TEAM]));
-  return { ...state, plane, events, down };
+  return { ...state, get plane() { return plane; }, connected, events, down, stopRunner, startRunner, planeDown, planeUp, cutRunner, db };
 }
 
 export async function waitFor(fn, ms = 60_000, every = 200) {
