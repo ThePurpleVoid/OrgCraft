@@ -10,7 +10,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.10.0",
+  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.11.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -93,6 +93,31 @@ A role pack is a folder another team can import: `<slug>.md` and a `pack.json`. 
 ```
 
 `roles` lists the briefs in the folder. `needs` says what the agent expects: tools, the types of systems it is bound to (never their details or secrets), the areas it writes and its structured wakes. `kit` and `needs.wakes` were added in 0.10; every field but `roles` is optional, and a folder of `.md` files without `pack.json` imports too. On import every brief gets the full checks, including the secret scan.
+
+## Meetings: `meetings.json`
+
+`.agent-team/meetings.json` defines the team's recurring and event-triggered meetings. The Studio's Meetings view edits it; you can write it by hand too. The runner holds the meetings; until a runner is connected they are definitions the chief of staff keeps as a schedule.
+
+```json
+{ "meetings": [ {
+  "id": "standup", "title": "Daily standup",
+  "when": { "days": ["mon", "tue", "wed", "thu", "fri"], "at": "09:00" },
+  "attendees": { "roles": ["web-dev", "backend-dev"], "lanes": ["cto"], "rule": null },
+  "facilitator": "chief-of-staff", "format": "round", "rounds": 1,
+  "agenda": "1. Done since last time\n2. Next\n3. Blocked on",
+  "ifBusy": "next-pause", "owner": { "minutes": true, "speaks": false },
+  "capUsd": 1.0, "skipIfQuiet": true
+} ] }
+```
+
+- `when` is days and a wall-clock time in the team's `TIMEZONE`, or `{ "label": "design" }` for a meeting that starts when an item gets that label.
+- `attendees` names roles, whole lanes (an executive and everyone reporting up to it; dormant roles only when named) and optionally the rule `"worked-since-last"`. `facilitator` runs it.
+- `format` is `round` (each attendee answers once) or `discussion` (2 to 5 `rounds`). `ifBusy` is `next-pause`, `proxy` (answered for it from the board) or `skip`.
+- `capUsd` is the most one meeting may cost; it must be above zero and not above the team's daily cap.
+
+`sync` adds a **Meetings** table to the project instructions and `- meeting` to the `Wakes on` of every role a meeting names. `validate` checks that attendees and the facilitator are on the team, ids are unique, days and times are valid, the agenda is not empty and the cap is in range. It warns when two meetings share a role at the same time and when a meeting has fewer than two attendees besides the facilitator.
+
+Cost estimates use the kit's dated price table, [`packages/model-prices/prices.json`](../packages/model-prices), and each role's model tier.
 
 ## Replace a kit role: `<role>.md`
 

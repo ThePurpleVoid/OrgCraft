@@ -1,0 +1,19 @@
+{
+  "schema": "agent-team/model-prices@1",
+  "asOf": "2026-10-06",
+  "currency": "USD",
+  "source": "Anthropic API list prices, first-party (https://www.anthropic.com/pricing). Cache writes are the 5-minute rate.",
+  "tiers": {
+    "deep": "claude-opus-5-5",
+    "standard": "claude-opus-5-5",
+    "routine": "claude-sonnet-5-5",
+    "light": "claude-haiku-5-5"
+  },
+  "models": {
+    "claude-fable-5-1": { "inputPerMTok": 10, "outputPerMTok": 50, "cacheReadPerMTok": 0.25, "cacheWritePerMTok": 12.5 },
+    "claude-opus-5-5": { "inputPerMTok": 4, "outputPerMTok": 20, "cacheReadPerMTok": 0.2, "cacheWritePerMTok": 5 },
+    "claude-sonnet-5-5": { "inputPerMTok": 2, "outputPerMTok": 10, "cacheReadPerMTok": 0.2, "cacheWritePerMTok": 2.5 },
+    "claude-haiku-5-5": { "inputPerMTok": 0.1, "outputPerMTok": 0.5, "cacheReadPerMTok": 0.01, "cacheWritePerMTok": 0.125,
+      "note": "for prompts up to 100K tokens; longer prompts cost $0.50 / $2.50" }
+  }
+}

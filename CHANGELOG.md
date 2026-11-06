@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.0
+
+Meeting definitions, kit side (PRD 6.7 M8, CPO story criteria 11 and 12, issue #30), and one shared model price table. Additive: a team without `meetings.json` behaves as before.
+
+- **`.agent-team/meetings.json`** ([customizing](docs/customizing.md#meetings-meetingsjson)) is part of the team model as `spec.meetings` and round-trips through `importLayer`/`compileLayer`. `sync` adds a **Meetings** table to the project instructions and `- meeting` to the `Wakes on` of every role a meeting names (attendees, whole lanes without their dormant roles, and the facilitator).
+- **`validate` checks meetings:** attendees and the facilitator on the team, unique ids, valid days and times, an agenda, a cap above zero and within the daily cap (`validate(spec, kit, { dailyCapUsd })`, or `team.json` `budgets.dailyUsd`), discussion rounds 2 to 5. It warns on two meetings with a shared role at the same time and on a meeting with fewer than two attendees.
+- New in `packages/team-model`: `meetingAttendees`, `meetingWhen`, `renderMeetings`, `applyMeetings`, `checkMeetings`, `meetingEstimate`.
+- **`packages/model-prices`:** `prices.json` (`agent-team/model-prices@1`, prices as of 2026-10-06) is the one table of model prices and of the model each tier runs on, for Studio estimates and the runner. `tierModel`, `priceOf`, `estimate`, `checkPrices`; `node.mjs` has `loadPrices`. The SDK's reported cost stays the source of truth for money spent.
+- **The role template is industry-neutral and ready to publish:** one-line placeholders that talk about areas and tools, not paths and CLIs, and a `Wakes on` of `- handoff` and `- meeting`, so a new agent drafted from it starts with no warnings. The line forms the runner reads are documented in [customizing](docs/customizing.md#wakes-on-and-sign-off-evidence).
+- **What existing teams see on sync:** `docs/team/role-template.md` changes and the version stamps change. A team that adds `meetings.json` gets the Meetings section and the wake lines.
+
 ## 0.10.0
 
 Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD 6.9 part 1). Everything is additive: a layer without the new sections or files behaves as before.
