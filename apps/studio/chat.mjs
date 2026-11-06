@@ -47,6 +47,8 @@ export function chatSource(env = process.env) {
     team,
     where: `${server}/v1/teams/${t}`,
     Upstream,
+    /** One held meeting (a link to its minutes names it): { definition, title, … }. */
+    meeting: (id) => call('GET', `/teams/${t}/meetings/${encodeURIComponent(id)}`),
     /** A page of the chat, newest last. `before` is the opaque cursor the control plane gave. */
     chat: ({ before } = {}) => call('GET', `/teams/${t}/chat${before ? `?before=${encodeURIComponent(before)}` : ''}`),
     /** The owner's words, verbatim. The client id makes a retry land once. */

@@ -20,6 +20,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeReturn } from '../../apps/studio/public/auth.js';
+import { KINDS, SUGGESTED } from '../../apps/server/email.mjs';
 
 const PUBLIC = fileURLToPath(new URL('../../apps/studio/public/', import.meta.url));
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
@@ -49,6 +50,11 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
   const failures = new Map(); // person -> [ms]
   const upstream = { login: 'octo' }; // who the stub GitHub signs in; tests change it
   const log = []; // { method, path, status } for the tests
+  // A person's email addresses per team, as apps/server/email.mjs keeps them (kit #101), and the codes it "sent".
+  const teams = new Set(['sample-app']);
+  const emails = []; // { id, team, person, email, verified, kinds, code, tries, createdAt }
+  const codes = []; // { email, code }
+  const mail = { sink: true }; // false: the team has no email sink yet, so no code is sent
   let origin = '';
 
   const server = createServer(async (req, res) => {
@@ -115,6 +121,47 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       const rpOk = (authData) => authData && authData.subarray(0, 32).equals(createHash('sha256').update(new URL(origin).hostname).digest());
       const verified = (authData) => (authData[32] & 0x05) === 0x05; // user present and user verified
 
+      // The emails API of kit #101, in memory: the same paths, bodies and refusals as apps/server/server.mjs.
+      const em = /^\/v1\/teams\/([^/]+)\/emails(?:\/([^/]+)(\/verify)?)?$/.exec(p);
+      if (em) {
+        const [, team, sid, verify] = em;
+        if (!teams.has(team)) return problem(404, 'not-found', `no team ${team}`);
+        const kinds = () => Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label, breakthrough: k.breakthrough, suggested: SUGGESTED.includes(id) }));
+        const view = (e) => ({ id: e.id, email: e.email, verified: e.verified, kinds: e.kinds, createdAt: e.createdAt });
+        const own = emails.filter((e) => e.team === team && e.person === who.id);
+        if (!sid && req.method === 'GET') return send(200, { teamName: team === 'sample-app' ? 'Sample app' : team, ready: mail.sink, kinds: kinds(), emails: own.map(view) });
+        if (!sid && req.method === 'POST') {
+          const address = String((await read()).email ?? '').trim().toLowerCase();
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) return problem(400, 'bad-request', 'send { email } with one email address');
+          let e = own.find((x) => x.email === address);
+          if (e?.verified) return send(201, { id: e.id, email: address, verified: true, sent: false, reason: 'this address is already verified' });
+          if (!e) { e = { id: rid('eml_'), team, person: who.id, email: address, verified: false, kinds: [], createdAt: new Date().toISOString() }; emails.push(e); }
+          e.code = String(Math.floor(Math.random() * 1e6)).padStart(6, '0');
+          e.tries = 0;
+          if (!mail.sink) return send(201, { id: e.id, email: address, verified: false, sent: false, reason: 'this team has no email sink yet' });
+          codes.push({ email: address, code: e.code });
+          return send(201, { id: e.id, email: address, verified: false, sent: true });
+        }
+        const e = own.find((x) => x.id === sid);
+        if (!e) return problem(404, 'not-found', 'no such email address');
+        if (verify && req.method === 'POST') {
+          if (e.verified) return send(200, { id: e.id, verified: true });
+          if (!e.code || e.tries >= 5) return problem(410, 'gone', 'too many tries or no code: ask for a new code');
+          if (String((await read()).code ?? '').trim() !== e.code) { e.tries++; return problem(400, 'bad-request', 'that code is not right'); }
+          e.verified = true; e.code = null;
+          return send(200, { id: e.id, verified: true });
+        }
+        if (!verify && req.method === 'PATCH') {
+          const body = await read();
+          const list = Array.isArray(body.kinds) ? [...new Set(body.kinds.map(String))] : null;
+          if (!list || list.some((k) => !KINDS[k])) return problem(400, 'bad-request', `send { kinds: [...] } from ${Object.keys(KINDS).join(', ')}`);
+          if (!e.verified) return problem(409, 'conflict', 'verify the address with its code first');
+          e.kinds = list;
+          return send(200, view(e));
+        }
+        if (!verify && req.method === 'DELETE') { emails.splice(emails.indexOf(e), 1); return send(200, { ok: true }); }
+      }
+
       if (p === '/v1/me' && req.method === 'GET') return send(200, { id: who.id, login: who.login, name: who.name, workspaces: who.workspaces, passkeys: mine.length, authTime: new Date(session.authTime).toISOString(), notices: [...(notices.get(who.id) ?? [])].reverse() });
       if (p === '/v1/me/passkeys' && req.method === 'GET') return send(200, { passkeys: mine });
       if (p === '/v1/me/passkeys/options' && req.method === 'GET') {
@@ -175,7 +222,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
     }
 
     // The Studio's static pages, as the hosted deployment serves them.
-    const name = p === '/' ? 'account.html' : p === '/sign-in' ? 'sign-in.html' : p === '/account' ? 'account.html' : p.slice(1);
+    const name = p === '/' ? 'account.html' : p === '/sign-in' ? 'sign-in.html' : p === '/account' ? 'account.html' : /^\/teams\/[^/]+\/notifications$/.test(p) ? 'notifications.html' : p.slice(1);
     const file = normalize(join(PUBLIC, name));
     if (req.method !== 'GET' || !file.startsWith(PUBLIC) || !existsSync(file)) return send(404, { error: 'not found' });
     res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
@@ -185,7 +232,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
   // localhost, not 127.0.0.1: WebAuthn needs a domain for rpId, and browsers treat localhost as a secure context.
   origin = `http://localhost:${server.address().port}`;
   return {
-    origin, upstream, sessions, passkeys, stepUps, log,
+    origin, upstream, sessions, passkeys, stepUps, log, emails, codes, mail, teams,
     /** Ages every session's sign-in, as if it happened `ms` ago. */
     age(ms) { for (const s of sessions.values()) s.authTime -= ms; },
     close: () => { server.closeAllConnections?.(); server.close(); },
