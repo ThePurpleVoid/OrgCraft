@@ -20,6 +20,9 @@ export function agentSdkAdapter({ effort, settingSources = ['project'], executab
   return {
     runtime: 'agent-sdk',
     async turn(o) {
+      // The model key comes only from the runner's own environment (passed in o.env). Without one, refuse rather
+      // than let the SDK fall back on whatever credentials the machine happens to have: spending is the owner's call.
+      if (!o.env?.ANTHROPIC_API_KEY) throw new Error('no model key: set ANTHROPIC_API_KEY in the runner\'s environment');
       const { query, createSdkMcpServer, tool } = await load();
       // Tool names reach the model as mcp__team__<name>; policy.mjs lets that prefix through to the field checks.
       const team = createSdkMcpServer({

@@ -26,8 +26,43 @@ test('the team tools become an in-process MCP server whose calls go through the 
   assert.deepEqual(calls, [['signoff', { to: 'qa-web' }]]);
 });
 
+test('without a model key in the runner\'s environment the adapter refuses, and never falls back on ambient credentials', async () => {
+  let loaded = false;
+  const a = agentSdkAdapter();
+  await assert.rejects(a.turn({ env: { PATH: process.env.PATH }, signal: new AbortController().signal, tools: [], callTool: () => {}, preToolUse: () => {}, get prompt() { loaded = true; return ''; } }), /no model key/);
+  assert.equal(loaded, false, 'nothing was started');
+});
+
+test('a session gets the model key only from the runner\'s own environment, and nothing else of it but the toolchain', async () => {
+  const { Session } = await import('../session.mjs');
+  const saved = { ...process.env };
+  try {
+    process.env.ANTHROPIC_API_KEY = 'sk-test-runner-own';
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'ambient';
+    process.env.AGENT_TEAM_RUNNER_KEY = 'rk_secret';
+    process.env.GITHUB_TOKEN = 'ghp_ambient';
+    const { origin } = await import('./helpers.mjs');
+    const { bare, root } = origin();
+    const s = new Session({ session: 'ses_env', role: 'web-dev', team: 't', repo: { url: bare } }, { root, emit: async () => {}, adapter: { turn: async () => ({}) } });
+    s.pump = () => {};
+    await s.start();
+    assert.equal(s.env.ANTHROPIC_API_KEY, 'sk-test-runner-own');
+    for (const k of ['CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_TEAM_RUNNER_KEY', 'GITHUB_TOKEN']) assert.equal(s.env[k], undefined, k);
+    delete process.env.ANTHROPIC_API_KEY;
+    const t = new Session({ session: 'ses_env2', role: 'web-dev', team: 't', repo: { url: bare } }, { root, emit: async () => {}, adapter: { turn: async () => ({}) } });
+    t.pump = () => {};
+    await t.start();
+    assert.equal(t.env.ANTHROPIC_API_KEY, undefined);
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
+});
+
+// Real model calls spend money, which is the owner's step: the smoke test is opt-in, with both set explicitly.
 const key = process.env.ANTHROPIC_API_KEY;
-test('smoke: a real model reports through the team tools', { skip: key ? false : 'skipped: set ANTHROPIC_API_KEY to run the real-model smoke test (it costs a few cents)' }, async () => {
+const smoke = process.env.RUNNER_SMOKE === '1' && key;
+test('smoke: a real model reports through the team tools', { skip: smoke ? false : 'skipped: opt in with RUNNER_SMOKE=1 and ANTHROPIC_API_KEY (a real model call, a few cents)' }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'runner-smoke-'));
   const bare = join(dir, 'team.git'), seed = join(dir, 'seed');
   execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', bare]);

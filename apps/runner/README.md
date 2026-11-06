@@ -61,8 +61,10 @@ npm test
 Against a stand-in control plane on a real WebSocket and real git (`test/fake-control-plane.mjs`): the chief of
 staff hands off, the second role wakes and signs off, and every event carries its run and session; a merge waits
 for its approval and a denied one never runs; checkpoints push and return memory; the token never reaches the
-agent; the budget stops a session offline; reconnects resume. The real-model smoke test runs only when
-`ANTHROPIC_API_KEY` is set (it costs a few cents) and says so when it skips.
+agent; the budget stops a session offline; reconnects resume. The real-model smoke test is opt-in: it runs only with both
+`RUNNER_SMOKE=1` and `ANTHROPIC_API_KEY` set (a real model call, a few cents), and says so when it skips. Without a
+key in the runner's own environment the SDK adapter refuses to start a turn, so it never falls back on credentials
+the machine happens to have.
 
 ## Not yet
 
