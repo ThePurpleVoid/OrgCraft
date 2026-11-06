@@ -111,6 +111,7 @@ export function createAgentEditor(root, app) {
     const team = app.team();
     const origin = origins.get(slug);
     const groups = [...new Set([...roles.map((r) => r.group), field(md, 'Group').toLowerCase()].filter((g) => g && g !== 'other'))].sort();
+    const manager = managerOf(md);
     const managers = team.filter((r) => r.slug !== slug);
     const tier = (/^[a-z]+/i.exec(field(md, 'Model'))?.[0] ?? '').toLowerCase();
     const dormant = /^dormant/i.test(field(md, 'Status'));
@@ -152,7 +153,7 @@ export function createAgentEditor(root, app) {
               <div><span class="lbl" id="e-status-l">When it starts</span>
                 <div class="seg" role="radiogroup" aria-labelledby="e-status-l"><button type="button" role="radio" aria-checked="${!dormant}" data-status="on">On</button><button type="button" role="radio" aria-checked="${dormant}" data-status="dormant">Dormant until asked</button></div></div>
               <label>Group <select id="e-group">${groups.map((g) => `<option ${g === field(md, 'Group').toLowerCase() ? 'selected' : ''}>${esc(g)}</option>`).join('')}<option value="+">New group…</option></select></label>
-              <label>Reports to <select id="e-manager"><option value="owner">The owner</option>${managers.map((m) => `<option value="${esc(m.slug)}" ${m.slug === field(md, 'Reports to').split(/\s/)[0] ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select></label>
+              <label>Reports to <select id="e-manager"><option value="owner">The owner</option>${managers.map((m) => `<option value="${esc(m.slug)}" ${m.slug === manager ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}${manager && manager !== 'owner' && !managers.some((m) => m.slug === manager) ? `<option value="${esc(manager)}" selected>${esc(manager)} (not on this team)</option>` : ''}</select></label>
               <label id="e-newgroup-l" hidden>New group name <input id="e-newgroup" maxlength="31" autocomplete="off"></label>
             </div>
           </section>
@@ -172,7 +173,7 @@ export function createAgentEditor(root, app) {
 
           <section id="sec-tools"><h2>Tools and systems</h2>
             <div class="chips">${tools.map((t, i) => `<span class="chip">${esc(t)}<button type="button" data-remove-tool="${i}" aria-label="Remove ${esc(t)}">×</button></span>`).join('')}
-              <span class="add-row inline"><input id="e-tool" placeholder="Add a tool, skill or MCP server" aria-label="Tool to add" autocomplete="off"><button type="button" id="e-tool-add">Add</button></span></div>
+              <span class="add-row inline"><input id="e-tool" placeholder="Add a tool, skill or connected service" aria-label="Tool to add" autocomplete="off"><button type="button" id="e-tool-add">Add</button></span></div>
             <div class="ed-systems">${roleSystemsHtml(app.ctx, slug).replace('<h2>Systems</h2>', '')}</div>
             ${free.length ? `<div class="add-row"><select id="e-bind" aria-label="System to connect"><option value="">Connect a system…</option>${free.map((r) => `<option value="${esc(r.id)}">${esc(r.name || r.id)}</option>`).join('')}</select>
               <select id="e-bind-perm" aria-label="Permission"><option>read</option><option>write</option><option>deploy</option></select><button type="button" id="e-bind-add">Connect</button></div>` : ''}
@@ -186,7 +187,7 @@ export function createAgentEditor(root, app) {
               ${wake('meeting', 'A meeting it is invited to')}
               ${wake('issue-label', 'An issue or task with a label', true, 'label, for example contract-review')}
               ${wake('schedule', 'A schedule', true, 'days and time, for example mon-fri 09:30')}
-              ${wake('pr-paths', 'A pull request that changes these areas', true, 'for example apps/web/**, tests/a11y/')}
+              ${wake('pr-paths', 'A pull request that changes these areas', true, 'for example contracts/**, reports/')}
               ${wake('label', 'A pull request with a label', true, 'label, for example a11y')}
             </div>
             <p id="e-wake-problem" class="result error" role="alert"></p>
@@ -227,6 +228,9 @@ export function createAgentEditor(root, app) {
     if (f) f.scrollTop = scroll;
   }
 
+  /** The manager the brief names: the first word of its Reports to line, which is what sync and the runner read. */
+  const managerOf = (md) => field(md, 'Reports to').trim().split(/\s/)[0] ?? '';
+
   /** The parts that follow every keystroke: the preview, the checks, the section states and the heading. */
   function live() {
     if (!slug || !app.spec().roles[slug]) return;
@@ -242,7 +246,8 @@ export function createAgentEditor(root, app) {
 
     const mine = app.issues().filter((i) => i.where === `roles/${slug}`);
     loadUnresolved();
-    const hands = unresolved.list.map((p) => ({ level: 'warning', message: `Hands to names "${p}", which is not a role on this team` }));
+    // The template's example Hands to text is reported once, as example text, not also as an unknown role.
+    const hands = (example('hands to', briefSection(md, 'hands to')) ? [] : unresolved.list).map((p) => ({ level: 'warning', message: `Hands to names "${p}", which is not a role on this team` }));
     const examples = [['identity', 'Identity'], ['owns', 'What it owns'], ['hands to', 'Hands to']]
       .filter(([k]) => example(k, k === 'owns' ? ownsPaths(md).prose : briefSection(md, k)) && !(k === 'owns' && ownsPaths(md).paths.length))
       .map(([, label]) => ({ level: 'warning', message: `${label} still has the template's example text: write this agent's own` }));
@@ -251,7 +256,11 @@ export function createAgentEditor(root, app) {
     if (/signoff/i.test(briefSection(md, 'hands to')) && !realEvidence && !mine.some((i) => /sign-?off evidence/i.test(i.message))) {
       examples.push({ level: 'warning', message: 'sends SIGNOFF but lists no sign-off evidence (screenshots, logs, links)' });
     }
-    const all = [...mine, ...hands, ...examples];
+    // A manager typed in the markdown that is not on the team: the kit quietly reroutes it, so the file and the team would disagree.
+    const boss = managerOf(md);
+    const lost = boss && boss !== 'owner' && !app.team().some((r) => r.slug === boss && r.slug !== slug)
+      ? [{ level: 'error', message: `Reports to names "${boss}", which is not a role on this team: pick a manager` }] : [];
+    const all = [...mine, ...lost, ...hands, ...examples];
     const errors = all.filter((i) => i.level === 'error');
     const count = root.querySelector('#e-count');
     count.className = `pill ${errors.length ? 'error' : all.length ? 'warn' : 'ok'}`;

@@ -141,6 +141,17 @@ test('a Contract reviewer from Blank: every section, live preview, undo per fiel
   await ed.getByLabel('Rules').fill('- Never sign on the owner\'s behalf');
   await ed.locator('#e-checks li.pass', { hasText: 'No secrets in the text' }).waitFor();
 
+  // A manager typed into the markdown that is not on the team is an error, and the picker shows it rather than another.
+  const before = await raw(page);
+  await ed.locator('summary', { hasText: 'The whole brief as markdown' }).click();
+  await page.locator('#e-raw').fill(before.replace(/^\*\*Reports to:\*\* .*$/m, '**Reports to:** nobody-here'));
+  await page.locator('#e-raw').dispatchEvent('change');
+  await ed.locator('#e-checks li.error', { hasText: 'Reports to names "nobody-here"' }).waitFor();
+  assert.equal(await ed.locator('#e-manager').inputValue(), 'nobody-here');
+  await ed.locator('#e-manager').selectOption('chief-of-staff');
+  await ed.locator('#e-checks li.pass', { hasText: 'Reports to a manager on the team' }).waitFor();
+  assert.equal(await raw(page), before);
+
   // Nothing on the way assumed code (criterion 16): no "repository", "CI" or "pull request" outside the PR wake.
   const words = await ed.locator('.ed-form').evaluate((el) => [...el.querySelectorAll('h2, .hint, label, .lbl')].map((x) => x.textContent).join(' '));
   assert.doesNotMatch(words.replace(/A pull request (that changes these areas|with a label)/g, ''), /\b(repository|CI|pull request|merge|branch)\b/i);
