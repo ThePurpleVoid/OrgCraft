@@ -140,7 +140,14 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     return tx(tenant, async (ctx) => {
       const old = (await budgetRow(ctx.q, team)) ?? { currency: 'USD', perDay: null, perRun: null, sessions: 3, meetingCap: null };
       const next = { currency: b.currency ?? old.currency, perDay: b.perDay !== undefined ? b.perDay : old.perDay, perRun: b.perRun !== undefined ? b.perRun : old.perRun, sessions: b.sessions ?? old.sessions, meetingCap: b.meetingCap !== undefined ? b.meetingCap : old.meetingCap ?? null };
-      if (next.meetingCap !== null && next.perDay !== null && next.meetingCap > next.perDay) throw new Problem(409, `meetingCap (${next.meetingCap}) is above perDay (${next.perDay})`);
+      // Lowering perDay below the stored meetingCap brings the meeting cap down with it (a lowering, so no step-up);
+      // only a meetingCap sent in this request above perDay is refused.
+      let clamped = false;
+      if (next.meetingCap !== null && next.perDay !== null && next.meetingCap > next.perDay) {
+        if (b.meetingCap !== undefined) throw new Problem(409, `meetingCap (${next.meetingCap}) is above perDay (${next.perDay})`);
+        next.meetingCap = Math.max(1, next.perDay);
+        clamped = true;
+      }
       // No cap (null) means unlimited for perRun; for perDay it means no run may start. Either way, going from a number
       // to null, or to a bigger number, lets more be spent.
       const raises = (o, n, nullIsUnlimited) => (o === null ? (nullIsUnlimited ? false : n !== null) : n === null ? true : n > o);
@@ -152,7 +159,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
                    on conflict (team) do update set currency = excluded.currency, per_day = excluded.per_day, per_run = excluded.per_run,
                    sessions = excluded.sessions, meeting_cap = excluded.meeting_cap, updated_by = excluded.updated_by, updated_at = now()`,
         [tenant, team, next.currency, next.perDay, next.perRun, next.sessions, next.meetingCap, by]);
-      await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'budget', target: team, decision: 'allowed', detail: { from: old, to: next, stepUp: raising } });
+      await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'budget', target: team, decision: 'allowed', detail: { from: old, to: next, stepUp: raising, ...(clamped ? { meetingCapClamped: true } : {}) } });
       await ctx.emit(team, 'budget.updated', { ...next, by }, { actor: personActor(by), subject: 'budget' });
       return { ...next, today: await today(ctx.q, team, ctx.now) };
     });

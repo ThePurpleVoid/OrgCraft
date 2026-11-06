@@ -125,9 +125,13 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
     const [b] = await q('select currency, per_day, meeting_cap from budgets where team = $1', [team]);
     if (b?.per_day === null || b?.per_day === undefined) throw new Problem(409, 'set a daily cap first');
     const currency = b.currency ?? 'USD';
+    // The team's meeting cap: the owner's meeting_cap (raising it needs step-up), else a tenth of the daily cap.
+    const teamCap = b.meeting_cap !== null && b.meeting_cap !== undefined ? Number(b.meeting_cap) : Math.max(1, Math.floor(Number(b.per_day) / 10));
     let amount;
     if (cap) {
       if (cap.currency !== currency) throw new Problem(409, `the meeting's cap is in ${cap.currency} and this team's budget is in ${currency}`);
+      // An ad hoc cap (from chat or the Studio) cannot go around the step-up-protected meeting cap.
+      if (cap.amount > teamCap) throw new Problem(409, `the meeting's cap (${cap.amount}) is above the team's meeting cap (${teamCap}); an owner can raise it in Budget`);
       amount = cap.amount;
     } else if (usd !== null) {
       // capUsd is in US dollars; until meetings.json says a currency, a team budgeted in another one cannot convert it.
@@ -135,12 +139,15 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
       amount = minor(usd);
     } else {
       // No cap given: the team's default meeting cap, else a tenth of the daily cap. Never open-ended.
-      amount = b.meeting_cap !== null && b.meeting_cap !== undefined ? Number(b.meeting_cap) : Math.max(1, Math.floor(Number(b.per_day) / 10));
+      amount = teamCap;
     }
     if (amount > Number(b.per_day)) throw new Problem(409, `the meeting's cap (${amount}) is above the team's daily cap (${b.per_day})`);
     const [day] = await q('select spent, raised from budget_days where team = $1 and day = $2::date', [team, now.toISOString().slice(0, 10)]);
-    const left = Number(b.per_day) + Number(day?.raised ?? 0) - Number(day?.spent ?? 0);
-    if (left < amount) throw new Problem(409, `today's budget has ${Math.max(left, 0)} left, less than the meeting's cap of ${amount}`);
+    // Meetings still open hold what is left of their caps, so several together cannot overrun today's budget.
+    const [held] = await q("select coalesce(sum(greatest(cap - spent, 0)), 0) as held from meetings where team = $1 and state <> 'closed'", [team]);
+    const heldNow = Number(held?.held ?? 0);
+    const left = Number(b.per_day) + Number(day?.raised ?? 0) - Number(day?.spent ?? 0) - heldNow;
+    if (left < amount) throw new Problem(409, `today's budget has ${Math.max(left, 0)} left${heldNow ? ` after ${heldNow} held by open meetings` : ''}, less than the meeting's cap of ${amount}`);
     return { amount, currency };
   }
 
@@ -206,6 +213,7 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
   async function startAdhoc(ctx, sess, i, roster) {
     const run = await goingRun(ctx.q, sess.team);
     if (run.id !== sess.run) return { problems: ['this session is not in the run that is going'] };
+    if (sess.role !== roster?.frontDoor) return { problems: ['only the front door starts meetings'] }; // tools.mjs refuses it first; kept here too
     const a = checkAdhoc(i, roster, sess.role);
     if (a.problems) return a;
     let cap;

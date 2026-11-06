@@ -344,7 +344,14 @@ test('G-15: the front door starts an ad hoc meeting from the chat; no cap given 
     assert.equal(r3.status, 422);
     assert.match(JSON.stringify(r3.body), /in EUR and this team's budget is in USD/);
     const r4 = await tool(p.call, fd, 'meeting_start', { title: 'Big', attendees: ['designer'], cap: { amount: 5000, currency: 'USD' } });
-    assert.match(JSON.stringify(r4.body), /above the team's daily cap/);
+    assert.match(JSON.stringify(r4.body), /above the team's meeting cap \(40\); an owner can raise it in Budget/);
+    // An explicit cap cannot go around the step-up-protected meeting cap, from chat or from the Studio.
+    const r5 = await tool(p.call, fd, 'meeting_start', { title: 'Just over', attendees: ['designer'], cap: { amount: 41, currency: 'USD' } });
+    assert.equal(r5.status, 422);
+    assert.match(JSON.stringify(r5.body), /above the team's meeting cap \(40\)/);
+    const s5 = await p.call('POST', '/teams/shop/meetings', { adhoc: { title: 'Just over', attendees: ['designer'], cap: { amount: 41, currency: 'USD' } } });
+    assert.equal(s5.status, 409);
+    assert.match(JSON.stringify(s5.body), /above the team's meeting cap \(40\)/);
     assert.equal((await p.call('PUT', '/teams/shop/budget', { meetingCap: 2000 })).status, 409, 'not above perDay');
     assert.equal((await p.call('PUT', '/teams/shop/budget', { meetingCap: 500 })).status, 401, 'raising it needs step-up');
     // Another role cannot start one.
@@ -354,5 +361,14 @@ test('G-15: the front door starts an ad hoc meeting from the chat; no cap given 
     const byPerson = await p.call('POST', '/teams/shop/meetings', { adhoc: { title: 'Quick sync', attendees: ['designer'] } });
     assert.equal(byPerson.status, 201, JSON.stringify(byPerson.body));
     assert.deepEqual([byPerson.body.adhoc, byPerson.body.facilitator, byPerson.body.cap], [true, 'chief-of-staff', 40]);
+    // Open meetings hold what is left of their caps: two open (40 + 40) and a daily cap of 100 leave at most 20.
+    assert.equal((await p.call('PUT', '/teams/shop/budget', { perDay: 100 })).status, 200);
+    const r6 = await tool(p.call, fd, 'meeting_start', { title: 'One more', attendees: ['qa'], cap: { amount: 30, currency: 'USD' } });
+    assert.equal(r6.status, 422);
+    assert.match(JSON.stringify(r6.body), /after 80 held by open meetings, less than the meeting's cap of 30/);
+    // Lowering perDay below the meeting cap is a lowering: no step-up, and the meeting cap comes down with it.
+    const low = await p.call('PUT', '/teams/shop/budget', { perDay: 30 });
+    assert.equal(low.status, 200, JSON.stringify(low.body));
+    assert.deepEqual([low.body.perDay, low.body.meetingCap], [30, 30]);
   }, { tickMs: 0 });
 });
