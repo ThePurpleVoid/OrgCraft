@@ -33,7 +33,7 @@ The envelope is compatible with [CloudEvents 1.0](https://cloudevents.io), so an
 | `time` | yes | When it happened, in ISO 8601 UTC. Reports may carry their own time. Otherwise it is the time we received them. |
 | `actor` | yes | Who did it. `kind` is one of `role`, `person`, `runner` or `system`. `id` is a role slug, member id, runner id or service name. `instance` tells pool roles apart. `session` is the agent session. `via` says how the event arrived: `hook`, `script` (team-status.sh, report.mjs), `tool` (the team tool server), `studio` or `api`. |
 | `subject` | no | What it is about: `role/<slug>`, `run/<id>`, `approval/<id>`, `pr/<n>`, `meeting/<id>`. |
-| `run`, `teamVersion` | no | The run, and the published team version (commit SHA) the actor was running. Change safety uses them (ADR 0004). |
+| `run`, `teamVersion` | no | The run, and the published team version (commit SHA) the actor was running. Change safety and the rollout view use them (ADR 0004). A kit report (0.16 and later) fills it from the checkout: the last commit that changed `.agent-team`. |
 | `data` | yes | The event's own fields. Its shape depends on `type` and `version`. |
 
 Limits: an event is at most 64 KiB, and evidence is links, not payloads. Secrets never appear in any field. The ingest redacts anything that matches the secret patterns `validate` uses, and records that a redaction happened.
@@ -94,7 +94,7 @@ A meeting runs as a written round ([team-tools.md](team-tools.md), `meeting_repl
 
 | `type` | `data` |
 | --- | --- |
-| `team.published` | `version` (commit SHA), `pr`, `changes` (paths), `by` |
+| `team.published` | `version` (commit SHA), `pr`, `changes` (paths), `by`; optional `publishedAt` (when it merged, else the event's time), `roles` (the slugs the team runs), `off` (slugs switched off, removed or made dormant), `plan` (the change step's choices, `{ [role]: { choice, to? } }`). The rollout view (`GET /teams/{team}/rollout`) reads the latest one |
 | `team.transition` | `from`, `to`, `items` (per in-flight item: role, choice, state). See ADR 0004 |
 | `connector.connected`, `connector.health`, `connector.revoked` | `connector`, `resource`, `status`, `detail` |
 | `notification.sent`, `notification.failed` | `channel`, `to` (member), `event` (the id it was about), `attempt` |
