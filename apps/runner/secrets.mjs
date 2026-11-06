@@ -3,6 +3,7 @@
 const NAMES = [/(^|\/)\.env(\.[^/]*)?$/i, /\.pem$/i, /\.p12$/i, /\.pfx$/i, /\.key$/i, /(^|\/)id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/i, /(^|\/)credentials[^/]*$/i, /(^|\/)\.npmrc$/i, /(^|\/)\.netrc$/i, /(^|\/)\.git-credentials$/i];
 const ALLOW_NAMES = [/\.env\.(example|sample|template)$/i, /id_\w+\.pub$/i];
 export const PATTERNS = [
+  ['runner key', /\brnr_[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{32,}/],
   ['anthropic key', /\bsk-ant-[A-Za-z0-9_-]{20,}/],
   ['github token', /\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9_]{40,}/],
   ['aws access key', /\b(AKIA|ASIA)[A-Z0-9]{16}\b/],

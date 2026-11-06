@@ -13,11 +13,12 @@
 //   - no secret is in the changes (file names and content), the same scan the memory file gets (R4).
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { owns } from './policy.mjs';
 import { findSecrets } from './secrets.mjs';
+import { sharedDir } from './sandbox.mjs';
 
 const run = promisify(execFile);
 /** Pinned for every runner-side git call; they override anything the repository's config says. */
@@ -60,13 +61,20 @@ export function harden(cwd) {
   const m = meta.get(cwd);
   if (!m) throw new Error(`not a working copy this runner made: ${cwd}`);
   const dot = join(cwd, '.git');
-  if (lstatSync(dot).isSymbolicLink() || !lstatSync(dot).isDirectory()) throw new Error('.git is not the runner\'s own directory');
+  const st = lstatSync(dot);
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('.git is not the runner\'s own directory');
+  // With sessions as another user, a .git the agent replaced is the agent's, not the runner's (F3).
+  if (m.sandbox && process.getuid && st.uid !== process.getuid()) throw new Error('.git was replaced by the session; not running git in it');
+  // Nothing in .git may be a link (it could point the runner's git, or its writes, at the runner's own files).
+  const link = readdirSync(dot, { withFileTypes: true }).find((e) => e.isSymbolicLink());
+  if (link) throw new Error(`.git/${link.name} is a link; not running git in this copy`);
   const esc = (v) => String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  rmSync(join(dot, 'config'), { force: true });
   writeFileSync(join(dot, 'config'), [
     '[core]', '\trepositoryformatversion = 0', '\tfilemode = true', '\tbare = false', '\tlogallrefupdates = true',
     '[remote "origin"]', `\turl = "${esc(m.url)}"`, '\tfetch = +refs/heads/*:refs/remotes/origin/*',
     ...(m.branch ? [`[branch "${esc(m.branch)}"]`, '\tremote = origin', `\tmerge = refs/heads/${m.branch}`] : []), '',
-  ].join('\n'));
+  ].join('\n'), { flag: 'wx', mode: 0o640 });
   rmSync(join(dot, 'hooks'), { recursive: true, force: true });
   mkdirSync(join(dot, 'hooks'));
   rmSync(join(dot, 'info', 'attributes'), { force: true });
@@ -78,7 +86,7 @@ export function harden(cwd) {
  * Copies are keyed by the repository and the exact branch (or, read-only, the session), so two repositories with
  * one branch name, or branches that differ only in punctuation, never share a folder.
  */
-export async function prepare({ root, repo, worktree, session }) {
+export async function prepare({ root, work = root, repo, worktree, session, sandbox = null }) {
   if (!repo?.url) throw new Error('session.start needs repo.url');
   const ref = repo.ref || 'main';
   const branch = typeof worktree === 'string' ? worktree : worktree?.branch ?? null;
@@ -87,7 +95,7 @@ export async function prepare({ root, repo, worktree, session }) {
   if (!BRANCH.test(base)) throw new Error(`"${base}" is not a branch name`);
   const repoKey = short(repo.url);
   const cache = join(root, 'repos', `${repoKey}.git`);
-  const cwd = join(root, 'worktrees', repoKey, branch ? `${safe(branch)}-${short(branch)}` : `read-${safe(session)}-${short(session)}`);
+  const cwd = join(work, 'worktrees', repoKey, branch ? `${safe(branch)}-${short(branch)}` : `read-${safe(session)}-${short(session)}`);
   const holder = holders.get(cwd);
   if (holder && holder !== session) throw new Error(`the working copy for ${branch ?? 'that checkout'} is in use by session ${holder}`);
   return locked(cache, async () => {
@@ -101,7 +109,7 @@ export async function prepare({ root, repo, worktree, session }) {
     // checked at a checkpoint is everything between it and HEAD, so the agent cannot shrink the range by moving a
     // ref in its own clone (security review F1).
     const baseSha = await git(cache, 'rev-parse', '--verify', `refs/heads/${base}^{commit}`);
-    meta.set(cwd, { url: repo.url, branch, base, cache, bases: [baseSha] });
+    meta.set(cwd, { url: repo.url, branch, base, cache, bases: [baseSha], sandbox });
     if (existsSync(cwd)) {
       // Resume: keep the copy and whatever the last session left in it, once it is checked to be the same
       // repository and the same branch.
@@ -112,7 +120,8 @@ export async function prepare({ root, repo, worktree, session }) {
       holders.set(cwd, session);
       return { cwd, branch, base, baseSha, head: await git(cwd, 'rev-parse', 'HEAD'), resumed: true };
     }
-    mkdirSync(dirname(cwd), { recursive: true });
+    for (const d of [work, join(work, 'worktrees'), dirname(cwd)]) sharedDir(d, sandbox);
+    // The clone itself (made by git below, with the runner's umask) is the leaf the agent works in.
     // A full copy, with no hard links or alternates into the cache: the session can change only its own files.
     await git(root, 'clone', '--quiet', '--no-hardlinks', '--no-checkout', cache, cwd);
     harden(cwd);
@@ -172,16 +181,8 @@ async function refreshBase(cwd) {
   }
 }
 
-async function history(cwd) {
-  const { bases } = meta.get(cwd) ?? {};
-  if (!bases?.length) throw new Error('no recorded base for this working copy');
-  await refreshBase(cwd);
-  const range = ['HEAD', '--not', ...bases];
-  const names = new Set([
-    ...(await git(cwd, 'log', '--format=', '--name-only', '--no-renames', '--cc', ...range)).split('\n'),
-    ...(await git(cwd, 'diff', '--name-only', '--no-renames', `${bases.at(-1)}...HEAD`)).split('\n'),
-  ].filter(Boolean));
-  const patch = await git(cwd, 'log', '--format=', '-p', '--cc', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', ...range);
+/** The lines a patch adds, per file. */
+function addedLines(patch) {
   const added = new Map();
   // File headers come only between a `diff --` line and its first hunk; inside a hunk, a line starting with
   // `+++ ` or `--- ` is content (an added `++ x` line), so it is scanned like any other.
@@ -195,13 +196,61 @@ async function history(cwd) {
     const pre = line.slice(0, cols);
     if (pre.includes('+') && !pre.includes('-')) added.set(file, (added.get(file) ?? '') + line.slice(cols) + '\n');
   }
+  return [...added].map(([path, text]) => ({ path, text }));
+}
+
+async function history(cwd) {
+  const { bases } = meta.get(cwd) ?? {};
+  if (!bases?.length) throw new Error('no recorded base for this working copy');
+  await refreshBase(cwd).catch((e) => { e.refresh = true; throw e; });
+  const range = ['HEAD', '--not', ...bases];
+  const names = new Set([
+    ...(await git(cwd, 'log', '--format=', '--name-only', '--no-renames', '--cc', ...range)).split('\n'),
+    ...(await git(cwd, 'diff', '--name-only', '--no-renames', `${bases.at(-1)}...HEAD`)).split('\n'),
+  ].filter(Boolean));
+  const patch = await git(cwd, 'log', '--format=', '-p', '--cc', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', ...range);
+  const added = addedLines(patch);
   const messages = await git(cwd, 'log', '--format=%B%x00', ...range);
   const links = [];
   for (const l of (await git(cwd, 'diff', '--raw', '--no-renames', '--no-abbrev', `${bases.at(-1)}...HEAD`)).split('\n')) {
     const m = /^:\d+ 120000 \S+ (\S+) \S+\t(.+)$/.exec(l);
     if (m) links.push({ path: m[2], target: await git(cwd, 'cat-file', 'blob', m[1]) });
   }
-  return { names: [...names], added: [...added].map(([path, text]) => ({ path, text })), messages, links };
+  return { names: [...names], added, messages, links, ...(await binaries(cwd, range)) };
+}
+
+const MAX_BLOB = 20 * 1024 * 1024;
+/**
+ * The binary files the branch would push, every version of them (their lines are not in the patch, so the line
+ * scan never sees them). Returns { binaries: [{ path, text }] (latin1, for the secret scan), large: [paths] }.
+ */
+async function binaries(cwd, range) {
+  const objects = (await git(cwd, 'rev-list', '--objects', '--no-object-names', ...range)).split('\n').filter(Boolean);
+  const named = new Map((await git(cwd, 'rev-list', '--objects', ...range)).split('\n').map((l) => [l.slice(0, l.indexOf(' ') >>> 0), l.slice(l.indexOf(' ') + 1)]));
+  if (!objects.length) return { binaries: [], large: [] };
+  const p = run('git', [...SAFE, 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], { cwd, env: gitEnv(), maxBuffer: 64 * 1024 * 1024 });
+  p.child.stdin.end(objects.join('\n') + '\n');
+  const out = [], large = [], wanted = [];
+  for (const line of (await p).stdout.trim().split('\n')) {
+    const [sha, type, size] = line.split(' ');
+    if (type !== 'blob') continue;
+    if (Number(size) > MAX_BLOB) large.push(named.get(sha) || sha); else wanted.push(sha);
+  }
+  if (wanted.length) {
+    // One `cat-file --batch` for every blob: "<sha> blob <size>\n<content>\n" each.
+    const q = run('git', [...SAFE, 'cat-file', '--batch'], { cwd, env: gitEnv(), encoding: 'buffer', maxBuffer: 512 * 1024 * 1024 });
+    q.child.stdin.end(wanted.join('\n') + '\n');
+    const buf = (await q).stdout;
+    let at = 0;
+    while (at < buf.length) {
+      const nl = buf.indexOf(10, at);
+      const [sha, , size] = buf.subarray(at, nl).toString().split(' ');
+      const body = buf.subarray(nl + 1, nl + 1 + Number(size));
+      at = nl + 1 + Number(size) + 1;
+      if (body.subarray(0, 8000).includes(0)) out.push({ path: named.get(sha) || sha, text: body.toString('latin1') });
+    }
+  }
+  return { binaries: out, large };
 }
 
 /** Whether a link at `path` pointing at `target` leaves the working copy (or reaches into .git). */
@@ -234,7 +283,9 @@ export async function checkpoint({ cwd, branch, role, reason, areas = [], secret
   const stop = (rule, items, error) => ({ commit: null, pushed: false, held, refused: { rule, items: items.slice(0, 20) }, error });
   if (mine.length) {
     await git(cwd, 'add', '-A', '--', ...mine);
-    const hits = findSecrets({ files: mine.map((p) => ({ path: p, text: existsSync(join(cwd, p)) && lstatSync(join(cwd, p)).isFile() ? readFileSync(join(cwd, p), 'utf8') : '' })), values: secrets });
+    // Scanned from what git staged, never by reading the working copy (which could hold links).
+    const staged = addedLines(await git(cwd, 'diff', '--cached', '-p', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv'));
+    const hits = findSecrets({ files: [...mine.map((p) => ({ path: p, text: '' })), ...staged], values: secrets });
     if (hits.length) { await git(cwd, 'reset', '--quiet'); return stop('secret-scan', hits, `not committed: the changes look like they hold a secret (${hits.slice(0, 5).join(', ')})`); }
     if (await git(cwd, 'diff', '--cached', '--name-only')) await git(cwd, '-c', `user.name=${role}`, '-c', 'user.email=runner@agent-team.invalid', 'commit', '--quiet', '--no-verify', '-m', `checkpoint (${role}): ${reason}`);
   }
@@ -242,12 +293,19 @@ export async function checkpoint({ cwd, branch, role, reason, areas = [], secret
   // What the agent committed itself, from the shell, is checked the same way, commit by commit, before anything
   // is pushed. Any git failure here refuses the push (F1: fail closed).
   let h;
-  try { h = await history(cwd); } catch (e) { return { ...stop('history', [], `not pushed: the runner could not read the branch's history (${String(e.stderr || e.message).trim().split('\n').pop()})`), commit }; }
+  try { h = await history(cwd); } catch (e) {
+    const why = String(e.stderr || e.message).trim().split('\n').pop();
+    const text = e.refresh
+      ? `not pushed: the runner could not reach the remote to check the branch against ${meta.get(cwd).base} (${why}). Do not push another way; report BLOCKED if it persists`
+      : `not pushed: the runner could not read the branch's history (${why})`;
+    return { ...stop(e.refresh ? 'remote-unreachable' : 'history', [], text), commit };
+  }
   const outside = h.names.filter((p) => !owns(areas, p));
   if (outside.length) return { ...stop('ownership', outside, `not pushed: the branch's commits change paths outside this role's owned areas (${outside.slice(0, 10).join(', ')})`), commit };
   const links = h.links.filter((l) => leaves(cwd, l.path, l.target)).map((l) => l.path);
   if (links.length) return { ...stop('symlink', links, `not pushed: symlinks point outside the working copy (${links.join(', ')})`), commit };
-  const hits = findSecrets({ files: [...h.names.map((path) => ({ path, text: '' })), ...h.added, { path: 'commit message', text: h.messages }], values: secrets });
+  if (h.large.length) return { ...stop('large-file', h.large, `not pushed: files over 20 MB are not pushed from a session (${h.large.slice(0, 5).join(', ')})`), commit };
+  const hits = findSecrets({ files: [...h.names.map((path) => ({ path, text: '' })), ...h.added, ...h.binaries, { path: 'commit message', text: h.messages }], values: secrets });
   if (hits.length) return { ...stop('secret-scan', [...new Set(hits)], `not pushed: the branch's commits look like they hold a secret (${[...new Set(hits)].slice(0, 5).join(', ')})`), commit };
   try {
     await git(cwd, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`);
