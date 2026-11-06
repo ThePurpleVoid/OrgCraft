@@ -221,7 +221,7 @@ a { color: var(--accent); }
   .chat-head { padding: 8px 12px; }
   .chat-title, .meter { display: none; }
   /* touch targets: 44px tall, and the run controls stay on one line */
-  .pages button, .chat-run button { min-height: 44px; }
+  .pages button, .chat-run button, .chat-form button { min-height: 44px; }
   .chat-head { flex-wrap: nowrap; }
   .chat-run { flex-wrap: nowrap; width: 100%; justify-content: flex-end; gap: 6px; }
   .chat-run .cost { margin-right: auto; white-space: normal; }

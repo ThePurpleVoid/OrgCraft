@@ -54,3 +54,22 @@ test('the popover heading reads as one sentence', () => {
   assert.equal(clauseOf({ kind: 'role-off' }), 'this draft switches it off');
   assert.equal(clauseOf({ kind: 'path-moved' }), 'this draft moves an area it works in away from it');
 });
+
+test('a card deadline shows its day when it is not today (QA #28 D)', async () => {
+  const { fmtWhen } = await import(new URL('../apps/studio/public/chat.js', import.meta.url).href);
+  const now = new Date(2026, 10, 6, 5, 40);
+  assert.doesNotMatch(fmtWhen(new Date(2026, 10, 6, 5, 42).toISOString(), now), /tomorrow|yesterday/);
+  assert.match(fmtWhen(new Date(2026, 10, 7, 5, 42).toISOString(), now), /^tomorrow /);
+  assert.match(fmtWhen(new Date(2026, 10, 9, 5, 42).toISOString(), now), /9/);
+});
+
+test('the popover says what the role is doing, and a quiet row\'s age once (QA notes on #97)', async () => {
+  const { popoverHtml } = await import(pathToFileURL(join(dir, 'safety.mjs')).href + '?again');
+  const item = { id: 'role-off:x', kind: 'role-off', role: 'x' };
+  const html = (row) => popoverHtml({ slug: 'x', title: 'X', items: [item], row, spec: {}, roles: [], newest: null });
+  assert.match(html({ status: 'blocked', age_s: 60 }), /X is blocked, and this draft switches it off/);
+  assert.match(html({ status: 'working', age_s: 60 }), /X is working right now/);
+  const stale = html({ status: 'working', age_s: 3 * 3600, last_at: 'x', task: 'Review', issue: '31' });
+  assert.match(stale, /X has work in flight/);
+  assert.equal((stale.match(/3 h/g) ?? []).length, 1);
+});

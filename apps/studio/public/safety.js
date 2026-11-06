@@ -83,7 +83,9 @@ export function inFlightList(row, spec, roles, slug) {
   if (!row) return [];
   const out = [];
   const task = taskOf(row);
-  out.push(`${esc(stateWord(row))}${row.status_at || row.last_at ? ` · ${esc(ago(row.age_s))}${(row.age_s ?? 0) > 90 ? ' ago' : ''}` : ''}${task ? `: <strong>${esc(task)}</strong>` : ''}`);
+  // A quiet row's state word already says how long ago ("last heard 3 h ago"), so the age is not said twice.
+  const quiet = (row.age_s ?? 0) > QUIET_S;
+  out.push(`${esc(stateWord(row))}${!quiet && (row.status_at || row.last_at) ? ` · ${esc(ago(row.age_s))}${(row.age_s ?? 0) > 90 ? ' ago' : ''}` : ''}${task ? `: <strong>${esc(task)}</strong>` : ''}`);
   if (row.branch || row.pr) out.push([row.branch ? `branch <code>${esc(row.branch)}</code>` : '', row.pr ? `PR #${esc(row.pr)}` : ''].filter(Boolean).join(' · '));
   if (row.waiting_on) out.push(`waiting on ${esc(row.waiting_on)}`);
   for (const m of meetingsOf(spec, roles, slug)) out.push(`invited to ${esc(m)}`);
@@ -103,11 +105,18 @@ function clauses(items) {
   return c.length > 1 ? `${c.slice(0, -1).join(', ')} and ${c.at(-1)}` : c[0];
 }
 
+/** What the role is doing, for the popover heading: "is working right now", "is blocked", "is waiting on qa-web". */
+function doing(row) {
+  if (!row || (row.age_s ?? 0) > QUIET_S) return 'has work in flight';
+  if (row.waiting_on) return `is waiting on ${row.waiting_on}`;
+  return ({ working: 'is working right now', blocked: 'is blocked', waiting: 'is waiting' })[row.status] ?? 'has work in flight';
+}
+
 /** The popover by an amber card (criterion 4): what is in flight, and Undo / Review the impact. */
 export function popoverHtml({ slug, title, items, row, spec, roles, newest }) {
   const first = items[0];
   return `<div class="impact-pop" role="dialog" aria-label="${esc(title)} is working right now" data-slug="${esc(slug)}">
-    <p><strong>${esc(title)} ${row && (row.age_s ?? 0) <= QUIET_S ? 'is working right now' : 'has work in flight'}, and ${esc(clauses(items))}.</strong></p>
+    <p><strong>${esc(title)} ${esc(doing(row))}, and ${esc(clauses(items))}.</strong></p>
     <ul>${inFlightList(row, spec, roles, slug).map((l) => `<li>${l}</li>`).join('')}</ul>
     <p class="hint">Nothing changes for it yet. When you publish, you choose what happens to this work. ${esc(staleNote(newest))}</p>
     <div class="row"><button type="button" data-pop="undo" data-item="${esc(first.id)}">${esc(undoLabel(first))}</button><button type="button" class="primary" data-pop="review">Review the impact</button><button type="button" class="link" data-pop="close">Close</button></div>

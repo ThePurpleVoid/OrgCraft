@@ -40,6 +40,18 @@ export function md(text) {
 }
 
 const fmtTime = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
+/** A time with its day when it is not today ("tomorrow 05:42", "Mon 9 Nov 05:42"), so a deadline never looks past. */
+export const fmtWhen = (iso, now = new Date()) => {
+  const d = new Date(iso);
+  if (Number.isNaN(+d)) return '';
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(d) - day(now)) / 86400000);
+  const t = fmtTime(iso);
+  if (diff === 0) return t;
+  if (diff === 1) return `tomorrow ${t}`;
+  if (diff === -1) return `yesterday ${t}`;
+  return `${d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} ${t}`;
+};
 /** Minor units per major unit for a currency: 100 for USD, 1 for JPY, 1000 for KWD (ISO 4217, as Intl knows it). */
 export function minorDigits(currency) {
   try { return new Intl.NumberFormat('en', { style: 'currency', currency: currency || 'USD' }).resolvedOptions().maximumFractionDigits; } catch { return 2; }
@@ -59,9 +71,11 @@ function speaker(e) {
 }
 
 const by = (e) => { const b = e.data?.by; const n = typeof b === 'object' ? b?.name ?? b?.id : b; return n ? ` by ${n}` : ''; };
+/** Who did it, after a middle dot ("A run started · Dana"), so the line never reads as the team acting "by" someone. */
+const who = (e) => { const b = e.data?.by; const n = typeof b === 'object' ? b?.name ?? b?.id : b; return n ? ` · ${n}` : ''; };
 /** Run and budget events, as one line each in the chat. */
 const TIMELINE = {
-  'run.started': (e) => `The team started a run${by(e)}`,
+  'run.started': (e) => `A run started${who(e)}`,
   'run.paused': (e) => `The run was paused${by(e)}${e.data?.reason ? `: ${e.data.reason}` : ''}`,
   'run.resumed': (e) => `The run resumed${by(e)}`,
   'run.stopped': (e) => `The run stopped${by(e)}${e.data?.reason ? `: ${e.data.reason}` : ''}`,
@@ -190,7 +204,7 @@ export function createChat({ root, onOpen } = {}) {
     }).join('');
     const links = (card.links ?? []).map((l) => safeUrl(l.url) && `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.title ?? LINKS[l.rel] ?? human(l.rel ?? 'link'))}</a>`).filter(Boolean).join(' · ');
     return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}" data-card-id="${esc(card.id)}">
-      <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtTime(card.expires))}` : ''}</div>
+      <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtWhen(card.expires))}` : ''}</div>
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
       ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="Step-up secret" placeholder="Step-up secret" required><button type="submit" class="primary">Confirm</button></form>` : ''}
       <h3>${esc(card.title)}</h3>
