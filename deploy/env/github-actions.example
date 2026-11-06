@@ -1,7 +1,8 @@
 # What .github/workflows/deploy.yml reads. Names only. Set them in GitHub: Settings → Environments → production.
 
 # Secrets (environment "production" → Environment secrets)
-FLY_API_TOKEN=            # Fly.io deploy token (an org token from the Fly dashboard's Tokens page)
+FLY_API_TOKEN=            # Fly.io token: an org token for the first deploy (it creates the app), then an app-scoped deploy token
+FLY_RUNNER_API_TOKEN=     # optional, a deploy token scoped to <FLY_APP>-runner; the runner job uses it instead of FLY_API_TOKEN
 VERCEL_TOKEN=             # Vercel account token (Account Settings → Tokens)
 DATABASE_URL=             # see deploy/env/server.env.example
 AGENT_TEAM_MASTER_KEY=    # see deploy/env/server.env.example
