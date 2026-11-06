@@ -312,7 +312,11 @@ test('F3: a session runs as another user and cannot read the runner\'s environme
     const data = await asAgent(`cat ${join(root, 'runner.json')}; ls ${root}`);
     assert.notEqual(data.code, 0);
     assert.ok(!data.out.includes('rk_live_secret'));
-    if (IMAGE) assert.notEqual((await asAgent('ls /data')).code, 0, 'the image\'s /data is closed to the agent');
+    if (IMAGE) {
+      const own = process.env.AGENT_TEAM_RUNNER_DATA;
+      assert.ok(own, 'the image sets AGENT_TEAM_RUNNER_DATA');
+      assert.notEqual((await asAgent(`ls ${own}`)).code, 0, 'the runner\'s own folder in the image is closed to the agent');
+    }
     // The capability-carrying setpriv is the runner's alone.
     if (IMAGE) assert.match((await asAgent(`${IMAGE.exec} --reuid=0 id`)).out, /Permission denied/);
     // It can work in its copy and commit with git; the runner then checks and pushes what it made.
