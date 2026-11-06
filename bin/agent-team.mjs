@@ -20,7 +20,7 @@
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.12.1 init --preset engineering --project "My App"
+//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.13.0 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -30,7 +30,7 @@ import { parseBrief } from '../tools/briefs.mjs';
 import { check as checkRoster, tree } from '../tools/roster.mjs';
 import { DEFAULT_MODELS, toSubagent } from '../tools/export-subagents.mjs';
 import { graphFrom } from '../tools/roster-graph.mjs';
-import { applyBindings, applyMeetings, checkTemplate, renderMeetings, templateCard, templateLayer, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
+import { applyBindings, applyMeetings, checkTemplate, fitToPacks, roleTemplateFor, teamDoc, teamPacks, renderMeetings, templateCard, templateLayer, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
 import { loadKit, loadTemplates, readLayer, readTemplateDir, writeLayer } from '../packages/team-model/node.mjs';
 
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -72,6 +72,7 @@ export function loadProject(root) {
     hooks: team.hooks ?? false,
     agentTeams: team.agentTeams ?? false,
     replaces: team.replaces ?? [],
+    packs: teamPacks(team),
   };
 }
 
@@ -152,14 +153,18 @@ export function build(root) {
   const md = (path, text) => out.set(path, fill(text, values).trimEnd() + '\n' + mdMarker());
 
   md(`${DOCS}/README.md`, read(join(KIT, 'team/README.md')));
-  md(`${DOCS}/protocols.md`, withExtension(read(join(KIT, 'team/protocols.md')), root, 'protocols.extend.md', `## ${values.PROJECT_NAME} rules`));
+  // The neutral core plus the team's packs (kit 0.13); a team.json without "packs" gets the engineering pack.
+  const kit = loadKit(KIT);
+  for (const p of project.packs) if (!kit.packs[p]) throw new UsageError(`team.json packs lists "${p}", which the kit does not have (packs: ${Object.keys(kit.packs).join(', ')})`);
+  md(`${DOCS}/protocols.md`, withExtension(teamDoc(kit, 'protocols.md', project.packs), root, 'protocols.extend.md', `## ${values.PROJECT_NAME} rules`));
   const systems = resources ? renderSystems(resources) : '';
   const meetingsText = meetings ? renderMeetings(meetings, roles, { timezone: values.TIMEZONE }) : '';
-  md(`${DOCS}/project-instructions.md`, withExtension(read(join(KIT, 'team/project-instructions.md')), root, 'instructions.extend.md', `## ${values.PROJECT_NAME} rules`) + (systems ? `\n${systems}` : '') + (meetingsText ? `\n${meetingsText}` : ''));
+  md(`${DOCS}/project-instructions.md`, withExtension(teamDoc(kit, 'project-instructions.md', project.packs), root, 'instructions.extend.md', `## ${values.PROJECT_NAME} rules`) + (systems ? `\n${systems}` : '') + (meetingsText ? `\n${meetingsText}` : ''));
   // With .agent-team/ownership.json, ownership.md is generated from it; without, it stays the repository's own file.
   if (ownershipData) md(`${DOCS}/ownership.md`, renderOwnership(ownershipData, roles));
   if (gatesData) { const g = renderGates(gatesData).split('\n'); g.splice(1, 0, shMarker()); out.set(`${SCRIPTS}/gates.sh`, g.join('\n')); }
-  md(`${DOCS}/role-template.md`, read(join(KIT, 'team/roles/_template.md')));
+  md(`${DOCS}/role-template.md`, roleTemplateFor(read(join(KIT, 'team/roles/_template.md')), project.packs));
+  for (const r of roles) r.md = fitToPacks(r.md, project.packs);
   for (const r of roles) md(`${DOCS}/roles/${r.slug}.md`, r.md);
 
   for (const f of RUNTIME) {

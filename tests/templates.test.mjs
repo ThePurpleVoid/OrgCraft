@@ -63,6 +63,8 @@ test('init --template writes exactly the layer the Studio makes from the same te
 });
 
 test('business-function templates use no code, Git, CI or engineering words in their briefs', () => {
+  // The message kinds keep their names (D38): BUG is a kind, not engineering copy.
+  const kinds = (l) => l.replace(/\bBUG\b|(team-status\.sh \S+) bug\b/g, '$1').replace(/Claude Code|https:\/\/\S+/g, '');
   const words = /\b(code|git|github|ci|pull requests?|PRs?|merge|deploy|repo(sitory)?|engineer(ing|s)?|bugs?|commits?|branch(es)?|tests?|builds?|cto|qa)\b(?!-)/i;
   for (const [id, files] of Object.entries(templates)) {
     if (JSON.parse(files['template.json']).group !== 'business-function') continue;
@@ -71,12 +73,17 @@ test('business-function templates use no code, Git, CI or engineering words in t
     spawnSync(process.execPath, [cli, 'init', '--template', id, '--project', 'Acme', '--kit', 'file:' + KIT], { cwd: root });
     const card = templateCard(files, kit);
     for (const slug of card.roles) {
-      // The shared "Every thread, every task" footer is the same for every role in every team.
-      const brief = readFileSync(join(root, 'docs/team/roles', `${slug}.md`), 'utf8').split('## Every thread, every task')[0];
-      const hit = brief.split('\n').find((l) => words.test(l));
+      const brief = readFileSync(join(root, 'docs/team/roles', `${slug}.md`), 'utf8');
+      assert.match(brief, /Save your work where the team can see it before long steps/, `${id}/${slug}: footer`);
+      const hit = brief.split('\n').find((l) => words.test(kinds(l)));
       assert.equal(hit, undefined, `${id}/${slug}: ${hit}`);
     }
     for (const text of [card.title, card.summary]) assert.doesNotMatch(text, words, id);
+    assert.deepEqual(card.packs, [], id);
+    for (const doc of ['protocols.md', 'project-instructions.md', 'role-template.md']) {
+      const hit = readFileSync(join(root, 'docs/team', doc), 'utf8').split('\n').find((l) => words.test(kinds(l)));
+      assert.equal(hit, undefined, `${id}/${doc}: ${hit}`);
+    }
   }
 });
 

@@ -5,6 +5,7 @@
   "summary": "Answer customers well: a support lead, a customer success lead, a problem-report triager, and two agents that draft replies and keep the help articles up to date.",
   "group": "business-function",
   "preset": "minimal",
+  "packs": [],
   "roles": [
     "chief-of-staff",
     "support-lead",

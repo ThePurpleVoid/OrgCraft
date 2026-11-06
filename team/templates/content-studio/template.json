@@ -5,6 +5,7 @@
   "summary": "Publish work you can stand behind: an editor who runs the calendar, a writer, a fact checker, a designer, and leads for promotion and for what worked.",
   "group": "business-function",
   "preset": "minimal",
+  "packs": [],
   "roles": [
     "chief-of-staff",
     "content-lead",
