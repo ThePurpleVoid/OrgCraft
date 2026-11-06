@@ -84,6 +84,33 @@ breaks, so the page can say so.
 
 ## 4. The page
 
-The admin page loads the Studio's assets from the handler and mounts it into an element, pointing its API at
-`basePath` (web-dev's `AgentTeamStudio.mount`, section 4 of the spec). Until the mount ships, the handler can be
-exercised with any HTTP client that sends the headers above.
+The admin page loads the Studio's assets from the handler and mounts it into an element of its own, with its API
+pointed at `basePath` (from kit 0.19.0). The assets are versioned by kit release, so the page and the handler always
+match:
+
+```html
+<link rel="stylesheet" href="/api/agent-team/studio/assets/<kit version>/app.css">
+<div id="team-studio"></div>
+<script type="module" src="/your/own/admin-team.js"></script>
+```
+
+```js
+// admin-team.js, served by your site, so a strict CSP (script-src 'self') allows it
+import { mount } from '/api/agent-team/studio/assets/<kit version>/studio.js';
+
+const studio = mount(document.getElementById('team-studio'), {
+  api: '/api/agent-team/studio',                                           // the handler's basePath
+  headers: async () => ({ authorization: `Bearer ${await session.token()}` }), // your admin sign-in
+  features: { publish: true, chat: false, runs: false, live: false },      // step 1: edit and Publish
+  onNavigate: (page) => {},                                                // optional: keep your URL in step
+});
+// later: studio.navigate('board'); studio.destroy();
+```
+
+- `mount(el, { api, headers, features, onNavigate })` returns `{ destroy(), navigate(page) }`.
+- It sizes itself to the element; set `--ats-vh` on the element to give it a height other than the viewport's.
+- It needs no inline scripts or styles, so it runs under a strict Content Security Policy;
+  `tests/e2e/studio-embed.e2e.mjs` mounts it over the handler that way.
+- `headers` is called before each request, so a short-lived token stays fresh. The handler still checks every
+  request with your `authorize`; the page only hides what a person cannot do.
+- A page that loads `studio.js` with a plain module script tag can use `globalThis.AgentTeamStudio.mount` instead.

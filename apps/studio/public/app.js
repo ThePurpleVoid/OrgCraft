@@ -7,9 +7,10 @@ import { createGallery, rolesLine, rulesLine } from './gallery.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
 import { QUIET_S, assess, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
+import { $, $$, apiUrl, ask, configure, env, feature, paint, request, requestJson, stateEl } from './env.js';
+import { SHELL } from './shell.js';
 import { bind, renderAreas, renderChecks, renderSystemInspector, renderSystemsStrip, roleSystemsHtml, wireBindings } from './panels.js';
 
-const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const TIERS = ['deep', 'standard', 'routine', 'light'];
 const GROUP_ORDER = ['executive', 'engineering', 'quality', 'product', 'design'];
@@ -48,7 +49,9 @@ let board = null; // summarize() output from /v1/team/board, kept fresh by its s
 let pop = null; // the slug whose in-flight popover is open
 let picks = new Map(); // impact step: item id -> { choice, target } (criteria 8 and 10)
 let followUps = []; // areas published with "move after merge": [{ path, from, to, pr }] (criterion 11)
-const followKey = () => `agent-team-followups:${S?.root ?? ''}`;
+/** Where the team lives: the folder locally, owner/name of the repository when mounted in a host (S.repo, a URL). */
+const where = () => S?.root ?? String(S?.repo ?? '').replace(/^https:\/\/[^/]+\//, '');
+const followKey = () => `agent-team-followups:${where()}`;
 function saveFollowUps() { try { localStorage.setItem(followKey(), JSON.stringify(followUps)); } catch { /* private mode: this session only */ } }
 function loadFollowUps() { try { followUps = JSON.parse(localStorage.getItem(followKey()) ?? '[]'); } catch { followUps = []; } }
 /** Phones get the control room (chat, live board) and a read-only team: building the team needs a large screen. */
@@ -313,8 +316,8 @@ function nodeSvg(r, p, extra = '') {
 
 function renderCanvas() {
   const canvasMode = ['org', 'flow', 'systems'].includes(mode);
-  document.body.dataset.mode = mode;
-  for (const b of document.querySelectorAll('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
+  stateEl().dataset.mode = mode;
+  for (const b of $$('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
   $('#summary').textContent = `${view.team.length} roles on · ${view.all.length - view.team.length} off · kit ${S.kitVersion}`;
   if (mode === 'systems') renderSystemsStrip($('#systems-strip'), ctx, selectedSystem);
   if (!canvasMode) {
@@ -368,8 +371,7 @@ function liveSummary() {
 /** The board, for change safety: read at start and on every change the stream reports. */
 async function loadBoard() {
   try {
-    const r = await fetch('/v1/team/board');
-    const body = await r.json();
+    const { r, body } = await ours(async () => { const r = await request('/v1/team/board'); return { r, body: await r.json() }; });
     const next = r.ok ? body.board ?? null : null;
     const was = !!board?.current?.length;
     board = next;
@@ -383,8 +385,7 @@ async function loadBoard() {
 
 async function loadLive() {
   try {
-    const r = await fetch('/v1/team/board');
-    const body = await r.json();
+    const { r, body } = await ours(async () => { const r = await request('/v1/team/board'); return { r, body: await r.json() }; });
     Object.assign(live, { source: body.source, where: body.where, board: body.board ?? null, error: r.ok ? null : body.error });
   } catch (e) { live.error = e.message; }
   if (live.on) renderCanvas();
@@ -394,7 +395,7 @@ function toggleLive() {
   if (live?.on) { live.es?.close(); live = null; }
   else {
     live = { on: true, board: null, error: null };
-    live.es = new EventSource('/v1/team/board/stream');
+    live.es = new EventSource(apiUrl('/v1/team/board/stream'));
     live.es.addEventListener('changed', loadLive);
     loadLive();
   }
@@ -506,18 +507,19 @@ function renderLibrary() {
   const byTitle = (a, b) => a.title.localeCompare(b.title);
   const keys = [...groups.keys()].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
   // Your agents: the custom roles on this team, on or off (PRD 6.6 A6), each still in its own group's colour.
-  const yours = mine.length ? `<div class="group-title yours"><span class="dot" style="background:var(--warn)"></span>Your agents</div>` +
-    mine.sort(byTitle).map((r) => row(r).replace('<span class="name">', `<span class="dot" style="background:${groupColor(r.group)}" title="${esc(r.group)}"></span><span class="name">`)).join('') : '';
+  const yours = mine.length ? `<div class="group-title yours"><span class="dot" data-paint="var(--warn)"></span>Your agents</div>` +
+    mine.sort(byTitle).map((r) => row(r).replace('<span class="name">', `<span class="dot" data-paint="${groupColor(r.group)}" title="${esc(r.group)}"></span><span class="name">`)).join('') : '';
   // A group only custom agents use (a new one, D8) gets its own section in its colour, like a kit group, listing its
   // agents again (criterion 13). These rows open the agent; switching it on or off stays in Your agents.
   const kitGroups = new Set(view.all.filter((r) => !isCustom(spec.roles[r.slug])).map((r) => r.group));
   const fresh = [...new Set(mine.map((r) => r.group))].filter((g) => g && !kitGroups.has(g));
   const ref = (r) => `<button type="button" class="lib-ref${r.slug === selected ? ' selected' : ''}" data-slug="${esc(r.slug)}" draggable="true"><span class="name">${esc(r.title)}</span><span class="tag">${imported.has(r.slug) ? 'imported' : 'custom'}${r.enabled ? '' : ' · off'}${r.dormant ? ' · dormant' : ''}</span></button>`;
   const section = (g) => (groups.has(g)
-    ? `<div class="group-title"><span class="dot" style="background:${groupColor(g)}"></span>${esc(g)}</div>` + groups.get(g).sort(byTitle).map(row).join('')
-    : `<div class="group-title" data-group="${esc(g)}"><span class="dot" style="background:${groupColor(g)}"></span>${esc(g)}</div>` + mine.filter((r) => r.group === g).sort(byTitle).map(ref).join(''));
+    ? `<div class="group-title"><span class="dot" data-paint="${groupColor(g)}"></span>${esc(g)}</div>` + groups.get(g).sort(byTitle).map(row).join('')
+    : `<div class="group-title" data-group="${esc(g)}"><span class="dot" data-paint="${groupColor(g)}"></span>${esc(g)}</div>` + mine.filter((r) => r.group === g).sort(byTitle).map(ref).join(''));
   const order = [...keys, ...fresh].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
   $('#library').innerHTML = (yours + order.map(section).join('')) || '<p class="muted">No roles match.</p>';
+  paint($('#library'));
 }
 
 function wireLibrary() {
@@ -602,16 +604,16 @@ function renderInspector() {
   const managers = view.team.filter((m) => m.slug !== r.slug && !under(r.slug, m.slug));
   const ownProject = role.brief !== undefined;
   const kitMd = S.kit.roles[r.slug];
-  const head = `<div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(r.title)}</h2>
+  const head = `<div class="row between"><h2 class="flush">${esc(r.title)}</h2>
       <span class="badge${r.changed ? ' changed' : ''}">${ownProject ? 'your role' : r.changed ? 'kit role, changed' : 'kit role'}</span></div>
     <p class="muted"><code>${esc(r.slug)}</code></p>
     ${nowOnLive(r)}
-    <label class="row"><input type="checkbox" id="i-enabled" style="width:auto" ${r.enabled ? 'checked' : ''}> On this team</label>
+    <label class="row"><input type="checkbox" id="i-enabled" ${r.enabled ? 'checked' : ''}> On this team</label>
     <div class="field"><span>Model tier</span><select id="i-tier">${TIERS.map((t) => `<option ${t === r.tier ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     <div class="field"><span>Reports to</span><select id="i-manager">
       <option value="owner" ${r.reportsTo === 'owner' ? 'selected' : ''}>The owner</option>
       ${managers.map((m) => `<option value="${m.slug}" ${m.slug === r.reportsTo ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select></div>
-    <label class="row"><input type="checkbox" id="i-dormant" style="width:auto" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>`;
+    <label class="row"><input type="checkbox" id="i-dormant" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>`;
   let body;
   if (ownProject && small.matches) {
     body = `<p class="notice">Open the Studio on a larger screen to edit this agent.</p>`;
@@ -620,14 +622,14 @@ function renderInspector() {
   } else {
     const sections = splitBrief(kitMd).sections.filter((s) => !/^## every thread/i.test(s.heading));
     const mine = new Map((role.extension?.sections ?? []).map((s) => [s.name.toLowerCase(), s]));
-    body = `<div class="row" style="justify-content:space-between"><h2>What it does</h2>${r.changed ? '<button id="i-reset" type="button">Reset to kit</button>' : ''}</div>` +
+    body = `<div class="row between"><h2>What it does</h2>${r.changed ? '<button id="i-reset" type="button">Reset to kit</button>' : ''}</div>` +
       sections.map((s) => {
         const name = s.heading.replace(/^##\s+/, '');
         const m = mine.get(name.toLowerCase());
         return `<details class="section"${m ? ' open' : ''}><summary>${esc(name)}${m ? `<span class="badge changed">${m.mode === 'replace' ? 'replaced' : 'added to'}</span>` : ''}</summary>
           <div class="kit-text">${esc(s.body.join('\n').trim())}</div>
           <div class="field"><span>Your text</span><textarea data-section="${esc(name)}" rows="3" placeholder="Added after the kit's text">${esc(m?.text ?? '')}</textarea></div>
-          <label class="row hint"><input type="checkbox" data-replace="${esc(name)}" style="width:auto" ${m?.mode === 'replace' ? 'checked' : ''}> Replace the kit's text instead of adding to it</label></details>`;
+          <label class="row hint"><input type="checkbox" data-replace="${esc(name)}" ${m?.mode === 'replace' ? 'checked' : ''}> Replace the kit's text instead of adding to it</label></details>`;
       }).join('');
   }
   el.innerHTML = head + (r.enabled ? roleSystemsHtml(ctx, r.slug) : '') + body;
@@ -753,7 +755,7 @@ function openEditor(slug, origin) {
 
 function render() {
   view = derive();
-  if (document.body.dataset.page === 'meetings') { renderIssues(); syncUndo(); meetings?.render(); return; }
+  if (stateEl().dataset.page === 'meetings') { renderIssues(); syncUndo(); meetings?.render(); return; }
   if (editor?.slug) { renderLibrary(); renderIssues(); syncUndo(); editor.draw(); return; }
   renderCanvas();
   renderLibrary();
@@ -761,7 +763,7 @@ function render() {
   renderIssues();
   $('#undo').disabled = !undo.length;
   $('#redo').disabled = !redo.length;
-  if (locked()) for (const el of document.querySelectorAll('#inspector :is(input, select, textarea, button), #library input')) el.disabled = true;
+  if (locked()) for (const el of $$('#inspector :is(input, select, textarea, button), #library input')) el.disabled = true;
   renderTemplateBar();
 }
 
@@ -791,11 +793,32 @@ function diff(a, b) {
   return out;
 }
 
+/** The Studio API (env.js): the data, or an Error with the server's reason, its status and its type (409 stale…). */
 async function api(path, body) {
-  const res = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? res.statusText);
+  // The handler reads the team at the commit the page read (embed spec 4): preview, suggestions and publish send it.
+  if (body && S?.git?.head?.sha && /^\/v1\/team\/(preview|suggestions|publish)$/.test(path)) body = { base: S.git.head.sha, ...body };
+  const { res, data } = await ours(async () => {
+    const res = await requestJson(path, body);
+    let data = {};
+    try { data = await res.json(); } catch { /* not JSON */ }
+    return { res, data };
+  });
+  if (!res.ok) throw Object.assign(new Error(env.embedded && res.status === 401 ? 'You are not signed in to this site any more. Sign in again, then reopen this page.' : data.error ?? data.title ?? (res.statusText || `HTTP ${res.status}`)), { status: res.status, type: data.type });
   return data;
+}
+
+/**
+ * Runs `work` for the mount that started it. If the Studio was destroyed (or destroyed and mounted again, as React
+ * StrictMode and quick route changes do) before it settles, its result or error never comes back: the caller simply
+ * stops, and nothing it would have done touches the new mount's page.
+ */
+async function ours(work) {
+  const mine = life;
+  let out, failed = false, error;
+  try { out = await work(); } catch (e) { failed = true; error = e; }
+  if (life !== mine || !mine) return new Promise(() => {});
+  if (failed) throw error;
+  return out;
 }
 
 /** The roles on in the draft, for hand-off targets (criterion 10: never one that is off). */
@@ -846,11 +869,11 @@ async function previewPublish() {
     const { changes, issues } = await api('/v1/team/preview', { spec: out });
     const errors = issues.filter((i) => i.level === 'error');
     $('#confirm').disabled = !changes.length || errors.length > 0;
-    $('#changes').innerHTML = errors.length ? `<p class="result error" style="padding:10px">Fix ${errors.length} error${errors.length > 1 ? 's' : ''} before publishing.</p>` :
+    $('#changes').innerHTML = errors.length ? `<p class="result error pad">Fix ${errors.length} error${errors.length > 1 ? 's' : ''} before publishing.</p>` :
       changes.length ? changes.map((c) => `<details><summary><span class="st ${c.status}">${c.status}</span>${esc(c.path)}</summary><pre class="diff">${diff(c.before, c.after)}</pre></details>`).join('')
-        : '<p class="muted" style="padding:10px">Nothing to publish: the repository already has this team.</p>';
+        : '<p class="muted pad">Nothing to publish: the repository already has this team.</p>';
   } catch (e) {
-    $('#changes').innerHTML = `<p class="result error" style="padding:10px">${esc(e.message)}</p>`;
+    $('#changes').innerHTML = `<p class="result error pad">${esc(e.message)}</p>`;
     $('#confirm').disabled = true;
   }
 }
@@ -860,7 +883,7 @@ async function openPublish() {
   const dlg = $('#publish-dialog');
   $('#publish-result').textContent = '';
   $('#publish-result').className = 'result';
-  $('#changes').innerHTML = '<p class="muted" style="padding:10px">Working out what changes…</p>';
+  $('#changes').innerHTML = '<p class="muted pad">Working out what changes…</p>';
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
   $('#branch').value ||= `agent-team/publish-${stamp}`;
   $('#message').value ||= 'Update the agent team (Agent Team Studio)';
@@ -882,13 +905,20 @@ async function confirmPublish() {
     const message = plan ? `${$('#message').value.trim()}\n\n${plan}` : $('#message').value;
     const r = await api('/v1/team/publish', { spec: toPublish, branch: $('#branch').value.trim(), message });
     out.className = 'result ok';
-    out.textContent = r.commit ? `Committed ${r.commit} on ${r.branch} (${r.files.length} files). Push it and open a pull request: git push -u origin ${r.branch}` : `Nothing changed on ${r.branch}.`;
+    if (r.pr?.url && /^https:\/\//.test(r.pr.url)) {
+      // Mounted in a host (and gh locally): the pull request is open. The link is set through the DOM, never markup.
+      out.textContent = `Opened a pull request for ${r.files.length} file${r.files.length === 1 ? '' : 's'} on ${r.branch}: `;
+      const a = document.createElement('a');
+      a.href = r.pr.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.textContent = r.pr.number ? `#${r.pr.number}` : r.pr.url;
+      out.append(a, '. Review and merge it as usual.');
+    } else out.textContent = r.commit ? `Committed ${r.commit} on ${r.branch} (${r.files.length} files). Push it and open a pull request: git push -u origin ${r.branch}` : r.branch ? `Nothing changed on ${r.branch}.` : 'Nothing changed: the repository already has this team.';
     const fresh = await api('/v1/team');
     const wasNew = !!S.noTeam;
     S = fresh;
     published = structuredClone(fresh.spec);
     // The first publish of a new team: from here on it is the repository's team, with its board.
-    if (wasNew) { made = null; document.body.classList.remove('no-team'); loadBoard(); }
+    if (wasNew) { made = null; stateEl().classList.remove('no-team'); loadBoard(); }
     // A deferred move stays in the draft, so the next publish carries it; the checks remind until then (criterion 11).
     spec = deferred.length ? draft : fresh.spec;
     followUps = [...followUps.filter((f) => !deferred.some((d) => d.path === f.path)), ...deferred];
@@ -899,8 +929,8 @@ async function confirmPublish() {
     render();
   } catch (e) {
     out.className = 'result error';
-    out.textContent = e.message;
-    $('#confirm').disabled = false;
+    out.textContent = e.type === 'stale' ? 'The team changed in the repository since this page read it. Reload the page to get the latest, then publish again; your changes here are not kept.' : e.message;
+    $('#confirm').disabled = e.type === 'stale';
   }
 }
 
@@ -916,15 +946,30 @@ export function parsePage(raw) {
   return { page, params: new URLSearchParams(q) };
 }
 
-function setPage(raw) {
+/** The page shown: in the URL's hash locally, here when the Studio is mounted in a host page (urlState false). */
+let page = 'team';
+const pageFromUrl = () => (env.urlState ? location.hash.slice(1) : page);
+/** Says where the Studio is: the hash locally, onNavigate to the host otherwise. Never both. */
+function showPage(p) {
+  const was = page;
+  page = p;
+  if (env.urlState) {
+    const want = p === 'team' || p === 'gallery' ? '' : `#${p}`;
+    if (location.hash !== want) history.replaceState(null, '', want || location.pathname + location.search);
+  } else if (was !== p) {
+    try { env.onNavigate?.(p); } catch { /* the host's callback */ }
+  }
+}
+
+async function setPage(raw) {
   if (!spec) return showGallery();
-  const { page, params } = parsePage(raw);
-  const p = ['chat', 'meetings'].includes(page) && !(page === 'chat' && S.noTeam) && !previewing ? page : 'team';
-  if (meetings?.dirty && document.body.dataset.page === 'meetings' && p !== 'meetings' && !confirm('Discard the changes to this meeting?')) { history.replaceState(null, '', '#meetings'); return; }
-  document.body.dataset.page = p;
-  for (const b of document.querySelectorAll('#pages [data-page]')) b.setAttribute('aria-pressed', String(b.dataset.page === p));
+  const { page: asked, params } = parsePage(raw);
+  const p = (asked === 'meetings' || (asked === 'chat' && !S.noTeam && feature('chat', S.features))) && !previewing ? asked : 'team';
+  if (meetings?.dirty && stateEl().dataset.page === 'meetings' && p !== 'meetings' && !(await ask('Discard the changes to this meeting?', { ok: 'Discard', cancel: 'Keep editing' }))) { if (env.urlState) history.replaceState(null, '', '#meetings'); return; }
+  stateEl().dataset.page = p;
+  for (const b of $$('#pages [data-page]')) b.setAttribute('aria-pressed', String(b.dataset.page === p));
   if (p === 'chat') {
-    chat ??= createChat({ root: $('#chat-page') });
+    chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features) });
     if (params.has('card') || params.has('budget')) chat.focus({ card: params.get('card'), budget: params.has('budget') });
     chat.open();
   } else {
@@ -937,7 +982,7 @@ function setPage(raw) {
     if (shown === 'missing') flash('That meeting is not in this team any more.');
     if (shown === 'dirty') flash('Save or cancel the meeting you are editing, then open the link again.');
   }
-  if (location.hash !== `#${p}`) history.replaceState(null, '', p === 'team' ? location.pathname : `#${p}`);
+  showPage(p);
 }
 
 /** What the Meetings view reads from the team and how it edits the draft. */
@@ -952,20 +997,79 @@ const meetingsCtx = {
   timezone: () => spec.values?.TIMEZONE || 'UTC',
 };
 
+/** What the host turned off, and what the server does not offer, as classes the stylesheet hides by. */
+function applyFeatures() {
+  for (const f of ['publish', 'chat', 'runs', 'live']) stateEl().classList.toggle(`no-${f}`, !feature(f, S.features));
+}
+
+/** The view a failed start shows, inside the Studio's own root (never the host's body). */
+function fatal(message) {
+  env.root.innerHTML = `<main class="fatal"><h1>Agent Team Studio</h1><p role="alert"></p></main>`;
+  env.root.querySelector('.fatal p').textContent = message;
+}
+
 async function start() {
   try {
     S = await api('/v1/team');
   } catch (e) {
-    document.body.innerHTML = `<main style="padding:24px"><h1>Agent Team Studio</h1><p>${esc(e.message)}</p></main>`;
+    fatal(e.status === 503 ? `${e.message}. Ask whoever runs this site to connect it.` : e.message);
     return;
   }
-  fetch('/model-prices.json').then((r) => (r.ok ? r.json() : null)).then((t) => { prices = t; if (document.body.dataset.page === 'meetings') meetings?.render(); }).catch(() => {});
-  small.addEventListener('change', () => { document.body.classList.toggle('small', small.matches); if (spec) render(); });
-  document.body.classList.toggle('small', small.matches);
+  applyFeatures();
+  // Next to this module wherever it is served: /model-prices.json locally, /assets/<kit version>/ in a host.
+  ours(() => fetch(new URL('./model-prices.json', import.meta.url)).then((r) => (r.ok ? r.json() : null))).then((t) => { prices = t; if (stateEl()?.dataset.page === 'meetings') meetings?.render(); }).catch(() => {});
+  small.addEventListener('change', () => { stateEl().classList.toggle('small', small.matches); if (spec) render(); }, { signal: life.signal });
+  stateEl().classList.toggle('small', small.matches);
   wireTemplates();
   if (S.noTeam) return showGallery();
   load(S.spec);
-  setPage(location.hash.slice(1));
+  setPage(initialPage ?? pageFromUrl());
+}
+
+// ------------------------------------------------------------------------------------------------ mount
+
+let life = null; // AbortController for every listener outside the root; null when not mounted
+let initialPage = null;
+let boardStream = null;
+
+/**
+ * Mounts the Studio in `el` (docs/specs/studio-embed.md section 4). One Studio per page.
+ *   api, headers, features, embedded, urlState, onNavigate: see env.js. page: the page to open first ('chat?card=…').
+ * Returns { destroy(), navigate(page) }.
+ */
+export function mount(el, opts = {}) {
+  if (!el || typeof el.append !== 'function') throw new Error('AgentTeamStudio.mount needs an element');
+  if (life) throw new Error('the Studio is already mounted on this page; destroy() it first');
+  configure({ ...opts, root: el });
+  life = new AbortController();
+  initialPage = typeof opts.page === 'string' ? opts.page : null;
+  el.classList.add('ats');
+  if (env.embedded) el.classList.add('ats-embedded');
+  el.innerHTML = SHELL;
+  start();
+  return {
+    destroy,
+    /** Opens a page, as a link would ('team', 'meetings', 'chat?card=ID', 'team?role=SLUG'). */
+    navigate: (raw) => (spec ? setPage(String(raw ?? '')) : undefined),
+  };
+}
+
+/** Takes the Studio off the page: its listeners, streams and markup. The element is left as it was given. */
+function destroy() {
+  if (!life) return;
+  life.abort();
+  life = null;
+  boardStream?.close(); boardStream = null;
+  live?.es?.close(); live = null;
+  chat?.close?.();
+  clearTimeout(flashTimer); clearTimeout(flowTimer); flowTimer = null;
+  const el = env.root;
+  el.innerHTML = '';
+  el.classList.remove('ats', 'ats-embedded', 'small', 'no-team', 'previewing', 'editing', 'no-publish', 'no-chat', 'no-runs', 'no-live');
+  delete el.dataset.page; delete el.dataset.mode;
+  S = spec = selected = selectedSystem = view = sugg = chat = meetings = editor = gallery = previewing = made = published = board = pop = null;
+  query = ''; undo.length = 0; redo.length = 0; zoom = 'fit'; mode = 'org'; scale = 1; page = 'team'; initialPage = null;
+  flow = { key: '', edges: [], unresolved: [] }; picks = new Map(); followUps = []; booted = false; lastEdit = { key: '', at: 0 };
 }
 
 // ------------------------------------------------------------------------------------------------ templates
@@ -973,13 +1077,13 @@ async function start() {
 /** The gallery: a repository with no team starts here (templates story D32). */
 function showGallery() {
   previewing = null;
-  document.body.classList.remove('previewing');
-  document.body.classList.add('no-team');
-  document.body.dataset.page = 'gallery';
-  $('#project').textContent = `${S.root}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
+  stateEl().classList.remove('previewing');
+  stateEl().classList.add('no-team');
+  stateEl().dataset.page = 'gallery';
+  $('#project').textContent = `${where()}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
   gallery ??= createGallery({ root: $('#gallery-page'), ctx: { cards: () => S.templates ?? [], groups: () => S.groups ?? {}, onPick: pickTemplate, onAlmostEmpty: () => useTemplate('almost-empty') } });
   gallery.render();
-  if (location.hash) history.replaceState(null, '', location.pathname);
+  showPage('gallery');
 }
 
 const cardOf = (id) => (S.templates ?? []).find((c) => c.id === id) ?? null;
@@ -989,7 +1093,7 @@ async function pickTemplate(id) {
   try {
     const { spec: sp } = await api('/v1/team/from-template', { id });
     previewing = cardOf(id);
-    document.body.classList.add('previewing');
+    stateEl().classList.add('previewing');
     load(sp);
     selected = null;
     setPage('team');
@@ -1001,7 +1105,7 @@ function useTemplate(id) {
   if (small.matches) return flash('Create the team on a larger screen.');
   const card = id === 'almost-empty' ? null : cardOf(id);
   const dlg = $('#create-dialog');
-  const folder = S.root.split(/[\\/]/).filter(Boolean).at(-1) ?? '';
+  const folder = where().split(/[\\/]/).filter(Boolean).at(-1) ?? '';
   let zone = 'UTC';
   try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { /* keep UTC */ }
   $('#create-title').textContent = card ? `Use the ${card.title} template` : 'Start almost empty';
@@ -1026,7 +1130,7 @@ async function createTeam() {
     const { spec: sp } = await api('/v1/team/from-template', { id, project, owner: $('#c-owner').value.trim() || undefined, timezone: zone });
     made = id === 'almost-empty' ? null : cardOf(id);
     previewing = null;
-    document.body.classList.remove('previewing');
+    stateEl().classList.remove('previewing');
     dlg.close();
     load(sp);
     selected = null;
@@ -1070,10 +1174,12 @@ function wireTemplates() {
     if (!b) return;
     if (b.id === 'tb-use') return useTemplate(b.dataset.template);
     if (b.id === 'tb-back') {
-      if (!previewing && undo.length && !confirm('Discard this team? Nothing has been written yet.')) return;
-      made = null;
-      spec = null;
-      return showGallery();
+      return (async () => {
+        if (!previewing && undo.length && !(await ask('Discard this team? Nothing has been written yet.', { ok: 'Discard', cancel: 'Keep it', danger: true }))) return;
+        made = null;
+        spec = null;
+        showGallery();
+      })();
     }
   });
   $('#create-form').addEventListener('submit', (e) => { e.preventDefault(); createTeam(); });
@@ -1086,24 +1192,24 @@ function load(initial) {
   published = structuredClone(initial);
   undo.length = 0; redo.length = 0;
   sugg = null; selected = null; selectedSystem = null; pop = null; picks = new Map();
-  document.body.classList.toggle('no-team', !!S.noTeam);
-  $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${S.root}${S.git.branch ? ` · ${S.git.branch}` : ''}`;
+  stateEl().classList.toggle('no-team', !!S.noTeam);
+  $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${where()}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
   if (booted) return;
   booted = true;
   loadFollowUps();
   // A move published to happen after its open work merges lives on in the draft, even across a reload or a restart.
   for (const f of followUps) reapplyFollowUp(spec, f);
   wireImpact();
-  if (!S.noTeam) {
+  if (!S.noTeam && feature('live', S.features)) {
     loadBoard();
-    try { new EventSource('/v1/team/board/stream').addEventListener('changed', loadBoard); } catch { /* no stream: the first read stands */ }
+    try { boardStream = new EventSource(apiUrl('/v1/team/board/stream')); boardStream.addEventListener('changed', loadBoard); } catch { /* no stream: the first read stands */ }
   }
   wireCanvas();
   wireLibrary();
   $('#zoom-in').onclick = () => { zoom = Math.min(1.5, scale + 0.1); renderCanvas(); };
   $('#zoom-out').onclick = () => { zoom = Math.max(0.3, scale - 0.1); renderCanvas(); };
   $('#zoom-fit').onclick = () => { zoom = zoom === 'fit' ? 1 : 'fit'; renderCanvas(); };
-  addEventListener('resize', () => zoom === 'fit' && renderCanvas());
+  addEventListener('resize', () => zoom === 'fit' && renderCanvas(), { signal: life.signal });
   $('#undo').onclick = () => step(undo, redo);
   $('#redo').onclick = () => step(redo, undo);
   $('#publish').onclick = openPublish;
@@ -1138,13 +1244,13 @@ function load(initial) {
   });
   $('#views').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setMode(b.dataset.view); });
   $('#pages').addEventListener('click', (e) => { const b = e.target.closest('[data-page]'); if (b) setPage(b.dataset.page); });
-  addEventListener('hashchange', () => setPage(location.hash.slice(1)));
+  if (env.urlState) addEventListener('hashchange', () => setPage(location.hash.slice(1)), { signal: life.signal });
+  // Keys only when the Studio has focus or nothing does: a host page's own fields keep their Ctrl+Z.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && (selected || selectedSystem) && !document.querySelector('dialog[open]') && $('#agent-editor').hidden && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return select(null);
+    if (env.embedded && !env.root.contains(document.activeElement) && document.activeElement !== document.body) return;
+    if (e.key === 'Escape' && (selected || selectedSystem) && !$('dialog[open]') && $('#agent-editor').hidden && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return select(null);
     if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
     e.preventDefault();
     if (e.shiftKey) step(redo, undo); else step(undo, redo);
-  });
+  }, { signal: life.signal });
 }
-
-start();

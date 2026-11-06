@@ -12,15 +12,18 @@ const ENV = { GIT_AUTHOR_NAME: 'Studio App', GIT_AUTHOR_EMAIL: 'app@example.com'
 
 /**
  * Starts the fake. `bare` is a bare repository (the "GitHub" copy). Options: `token` the installation token it accepts,
- * `latency` ms per call, `repos` what GET /installation/repositories lists, `permissions` what a minted token gets.
+ * `latency` ms per call, `repos` what GET /installation/repositories lists, `permissions` what a minted token gets,
+ * `installation` the id GET /repos/{repo}/installation answers.
  * Returns { url, calls, close, git, pulls, setLatency }.
  */
-export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, token = 'ghs_fake', latency = 0, repos = null, permissions = null, appKey = null } = {}) {
+export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, installation = 77, token = 'ghs_fake', latency = 0, repos = null, permissions = null, appKey = null } = {}) {
   const git = (args, opts = {}) => execFileSync('git', ['--git-dir', bare, ...args], { encoding: 'utf8', env: { ...process.env, ...ENV, ...(opts.env ?? {}) }, input: opts.input, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   const calls = [];
   const pulls = [];
   const minted = [];
   let delay = latency;
+  let inflight = 0;
+  let peak = 0;
   const prefix = `/repos/${repo}`;
   const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(body === undefined ? '' : JSON.stringify(body)); };
 
@@ -29,7 +32,10 @@ export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, token = 
     for await (const c of req) raw += c;
     const url = new URL(req.url, 'http://x');
     calls.push({ method: req.method, path: url.pathname + url.search, auth: req.headers.authorization ?? '' });
+    // How many calls are waiting on the fake at once: the client's parallelism, independent of how busy the machine is.
+    inflight++; peak = Math.max(peak, inflight);
     if (delay) await new Promise((r) => setTimeout(r, delay));
+    inflight--;
     const body = raw ? JSON.parse(raw) : null;
     try {
       // App endpoints: a JWT mints an installation token.
@@ -38,6 +44,11 @@ export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, token = 
         if (!/^Bearer [\w-]+\.[\w-]+\.[\w-]+$/.test(req.headers.authorization ?? '')) return json(res, 401, { message: 'A JSON web token could not be decoded' });
         minted.push({ installation: mint[1], jwt: req.headers.authorization.slice(7), body });
         return json(res, 201, { token, expires_at: new Date(Date.now() + 3600_000).toISOString(), permissions: permissions ?? body?.permissions ?? {}, repositories: (repos ?? [repo]).map((full) => ({ id, full_name: full, name: full.split('/')[1] })) });
+      }
+      // Which installation holds the repository: asked with the app's JWT (the hosted Studio, before every write).
+      if (url.pathname === `${prefix}/installation` && req.method === 'GET') {
+        if (!/^Bearer [\w-]+\.[\w-]+\.[\w-]+$/.test(req.headers.authorization ?? '')) return json(res, 401, { message: 'A JSON web token could not be decoded' });
+        return json(res, 200, { id: installation, account: { login: repo.split('/')[0] } });
       }
       if (req.headers.authorization !== `Bearer ${token}`) return json(res, 401, { message: 'Bad credentials' });
       if (url.pathname === '/installation/repositories') return json(res, 200, { total_count: (repos ?? [repo]).length, repositories: (repos ?? [repo]).map((full) => ({ id, full_name: full })) });
@@ -111,7 +122,9 @@ export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, token = 
   return {
     url: `http://127.0.0.1:${server.address().port}`,
     calls, pulls, minted, git,
+    setInstallation: (v) => { installation = v; },
     setLatency: (ms) => { delay = ms; },
+    get peak() { return peak; },
     close: () => new Promise((r) => server.close(r)),
   };
 }

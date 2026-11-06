@@ -94,7 +94,7 @@ export function renderSystemInspector(el, ctx, id) {
   if (!r) { el.innerHTML = '<p class="muted">That system was removed.</p>'; return; }
   const bound = (spec.resources.bindings ?? []).filter((b) => b.resource === id);
   const config = Object.entries(r.config ?? {}).map(([k, v]) => `${k}=${v}`).join('\n');
-  el.innerHTML = `<div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(r.name || r.id)}</h2><span class="badge">system</span></div>
+  el.innerHTML = `<div class="row between"><h2 class="flush">${esc(r.name || r.id)}</h2><span class="badge">system</span></div>
     <div class="field"><span>Name</span><input id="s-name" value="${esc(r.name)}"></div>
     <div class="field"><span>Id (how roles and files refer to it)</span><input id="s-id" value="${esc(r.id)}" pattern="[a-z0-9-]+"></div>
     <div class="field"><span>Type</span><select id="s-type">${SYSTEM_TYPES.map(([k, v]) => `<option value="${k}" ${k === r.type ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
@@ -102,7 +102,7 @@ export function renderSystemInspector(el, ctx, id) {
     <div class="field"><span>Secret names (set the values in the environment, never here)</span><input id="s-secrets" value="${esc((r.secrets ?? []).join(', '))}" placeholder="DATABASE_URL, SUPABASE_SERVICE_KEY"></div>
     <h2>Who may use it</h2>
     ${bound.length ? `<ul class="bindings">${bound.map((b) => bindingRow(ctx, b, 'role')).join('')}</ul>` : '<p class="hint">No role yet. Drag this system onto a role on the canvas.</p>'}
-    <div class="row" style="justify-content:flex-end;margin-top:14px"><button type="button" id="s-remove">Remove system</button></div>`;
+    <div class="row end spaced"><button type="button" id="s-remove">Remove system</button></div>`;
   const update = (fn) => ctx.change((s) => fn(s.resources.resources.find((x) => x.id === id), s));
   el.querySelector('#s-name').onchange = (e) => update((x) => { x.name = e.target.value.trim(); });
   el.querySelector('#s-type').onchange = (e) => update((x) => { x.type = e.target.value; });
@@ -178,7 +178,7 @@ export function renderAreas(el, ctx, sugg) {
   const noArea = team.filter((r) => r.group !== 'executive' && !r.dormant && !rows.some((x) => x.writer === r.slug));
   el.innerHTML = `<div class="panel"><h1>Owned areas</h1>
     <p class="hint">One writer per area. A role changes only what it owns; anything else is a request to the owner.</p>
-    ${unowned.length ? `<div class="callout"><div class="row" style="justify-content:space-between"><strong>${unowned.length} folder${unowned.length > 1 ? 's have' : ' has'} no owner yet</strong>
+    ${unowned.length ? `<div class="callout"><div class="row between"><strong>${unowned.length} folder${unowned.length > 1 ? 's have' : ' has'} no owner yet</strong>
         <button type="button" id="a-accept-all" ${unowned.some((u) => u.writer) ? '' : 'disabled'}>Accept all suggestions</button></div>
       <ul class="suggest">${unowned.map((u, i) => `<li><code>${esc(u.path)}</code> <span class="grow hint">${esc(u.why)}</span>
         <select data-sugg="${i}">${writers(u.writer)}</select> <button type="button" data-accept="${i}">Add</button></li>`).join('')}</ul></div>` : ''}
@@ -224,11 +224,11 @@ export function renderChecks(el, ctx, sugg) {
   const fresh = (sugg?.checks ?? []).filter((c) => !have.has(c.run));
   el.innerHTML = `<div class="panel"><h1>Checks</h1>
     <p class="hint">What must pass before a change merges. The merge gate runs the sets that are switched on; a role can run one set with <code>scripts/agent-team/merge-gate.sh &lt;set&gt;</code>.</p>
-    ${fresh.length ? `<div class="callout"><div class="row" style="justify-content:space-between"><strong>Found in the build files: ${fresh.map((c) => `<code>${esc(c.run)}</code>`).join(', ')}</strong>
+    ${fresh.length ? `<div class="callout"><div class="row between"><strong>Found in the build files: ${fresh.map((c) => `<code>${esc(c.run)}</code>`).join(', ')}</strong>
       <button type="button" id="c-add-found">Add them</button></div></div>` : ''}
     ${Object.entries(g.targets ?? {}).map(([t, steps]) => `<section class="set">
-      <div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(t)}</h2>
-        <span class="row"><label class="row hint"><input type="checkbox" data-all="${esc(t)}" style="width:auto" ${(g.all ?? []).includes(t) ? 'checked' : ''}> Runs on every merge</label>
+      <div class="row between"><h2 class="flush">${esc(t)}</h2>
+        <span class="row"><label class="row hint"><input type="checkbox" data-all="${esc(t)}" ${(g.all ?? []).includes(t) ? 'checked' : ''}> Runs on every merge</label>
         <button type="button" class="icon" data-del-set="${esc(t)}" aria-label="Remove set">×</button></span></div>
       <table class="grid"><thead><tr><th>Check</th><th>Command</th><th>Machine slot</th><th></th></tr></thead><tbody>
       ${steps.map((s, i) => `<tr><td><input data-step="${esc(t)}|${i}" data-k="name" value="${esc(s.name)}"></td>
@@ -236,11 +236,11 @@ export function renderChecks(el, ctx, sugg) {
         <td><select data-step="${esc(t)}|${i}" data-k="pool">${poolOpts(s.pool)}</select></td>
         <td><button type="button" class="icon" data-del-step="${esc(t)}|${i}" aria-label="Remove">×</button></td></tr>`).join('')}
       </tbody></table><button type="button" data-add-step="${esc(t)}">+ Add a check</button></section>`).join('')}
-    <div class="row"><input id="c-new-set" placeholder="New set, e.g. web" style="max-width:220px"><button type="button" id="c-add-set">+ Add a set</button></div>
+    <div class="row"><input id="c-new-set" placeholder="New set, e.g. web" class="narrow"><button type="button" id="c-add-set">+ Add a set</button></div>
     <h2>Machine slots</h2><p class="hint">How many checks of each kind may run at the same time on this machine (builds, browsers, a shared backend).</p>
     <table class="grid narrow"><tbody>${pools.map(([p, n]) => `<tr><td><code>${esc(p)}</code></td><td><input type="number" min="1" data-pool="${esc(p)}" value="${n}"></td>
       <td><button type="button" class="icon" data-del-pool="${esc(p)}" aria-label="Remove">×</button></td></tr>`).join('')}</tbody></table>
-    <div class="row"><input id="c-new-pool" placeholder="New slot, e.g. browser" style="max-width:220px"><button type="button" id="c-add-pool">+ Add a slot</button></div></div>`;
+    <div class="row"><input id="c-new-pool" placeholder="New slot, e.g. browser" class="narrow"><button type="button" id="c-add-pool">+ Add a slot</button></div></div>`;
   const edit = (fn) => ctx.change((s) => fn(s.gates));
   const key = (v) => { const [t, i] = v.split('|'); return [t, +i]; };
   for (const inp of el.querySelectorAll('[data-step]')) inp.onchange = () => { const [t, i] = key(inp.dataset.step); edit((x) => { x.targets[t][i][inp.dataset.k] = inp.value.trim(); if (!x.targets[t][i].pool) delete x.targets[t][i].pool; }); };

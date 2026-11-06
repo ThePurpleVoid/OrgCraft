@@ -21,8 +21,16 @@
       "path": "apps/studio/public/auth.js",
       "type": "text/javascript; charset=utf-8"
     },
+    "boot.js": {
+      "path": "apps/studio/public/boot.js",
+      "type": "text/javascript; charset=utf-8"
+    },
     "chat.js": {
       "path": "apps/studio/public/chat.js",
+      "type": "text/javascript; charset=utf-8"
+    },
+    "env.js": {
+      "path": "apps/studio/public/env.js",
       "type": "text/javascript; charset=utf-8"
     },
     "gallery.js": {
@@ -51,6 +59,14 @@
     },
     "safety.js": {
       "path": "apps/studio/public/safety.js",
+      "type": "text/javascript; charset=utf-8"
+    },
+    "shell.js": {
+      "path": "apps/studio/public/shell.js",
+      "type": "text/javascript; charset=utf-8"
+    },
+    "studio.js": {
+      "path": "apps/studio/public/studio.js",
       "type": "text/javascript; charset=utf-8"
     },
     "team-model.mjs": {

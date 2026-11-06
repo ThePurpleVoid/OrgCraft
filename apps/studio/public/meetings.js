@@ -5,6 +5,7 @@
 // A meeting is edited in a form and goes into the draft with "Save to the draft" (D27); Publish writes
 // .agent-team/meetings.json with the rest of the team. The shape is the kit's (packages/team-model, meetings 0.11).
 import { checkMeetings, meetingAttendees, meetingEstimate, meetingWhen } from './team-model.mjs';
+import { ask, askText, tell } from './env.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
@@ -277,12 +278,13 @@ export function createMeetings({ root, ctx }) {
 
   // ---------------------------------------------------------------- events
 
-  root.addEventListener('click', (e) => {
+  const discard = () => ask('Discard the changes to this meeting?', { ok: 'Discard', cancel: 'Keep editing' });
+  root.addEventListener('click', async (e) => {
     const b = e.target.closest('button, a');
     if (!b) return;
-    if (b.dataset.meeting) { if (dirty && !confirm('Discard the changes to this meeting?')) return; return open(b.dataset.meeting); }
+    if (b.dataset.meeting) { if (dirty && !(await discard())) return; return open(b.dataset.meeting); }
     if (b.dataset.starter) {
-      if (dirty && !confirm('Discard the changes to this meeting?')) return;
+      if (dirty && !(await discard())) return;
       b.closest('details')?.removeAttribute('open');
       selected = 'new'; form = fresh(b.dataset.starter === 'blank' ? null : b.dataset.starter); autoCap = true; fitCap(); dirty = true; note = '';
       render();
@@ -294,13 +296,18 @@ export function createMeetings({ root, ctx }) {
     if (b.dataset.removeLane) return edit((f) => { f.attendees.lanes = f.attendees.lanes.filter((s) => s !== b.dataset.removeLane); }, { redraw: true });
     if (b.id === 'm-cancel') { if (selected === 'new') { selected = null; form = null; dirty = false; return render(); } return open(selected); }
     if (b.id === 'm-delete') {
-      if (!confirm(`Delete "${form.title || selected}"? It leaves the draft; Publish removes it from the team.`)) return;
+      if (!(await ask(`Delete "${form.title || selected}"? It leaves the draft; Publish removes it from the team.`, { ok: 'Delete', danger: true }))) return;
       const id = selected;
       ctx.change((spec) => { spec.meetings.meetings = spec.meetings.meetings.filter((m) => m.id !== id); });
       selected = null; form = null; dirty = false;
       return render();
     }
-    if (b.id === 'm-tz') { e.preventDefault(); const z = prompt('The team\'s time zone (an IANA name such as Europe/Lisbon or America/New_York):', ctx.timezone()); if (z && validZone(z)) { ctx.change((spec) => { spec.values = { ...(spec.values ?? {}), TIMEZONE: z }; }); render(); } else if (z) alert(`"${z}" is not a time zone this browser knows.`); return; }
+    if (b.id === 'm-tz') {
+      e.preventDefault();
+      const z = (await askText('The team\'s time zone (an IANA name such as Europe/Lisbon or America/New_York):', ctx.timezone()))?.trim();
+      if (z && validZone(z)) { ctx.change((spec) => { spec.values = { ...(spec.values ?? {}), TIMEZONE: z }; }); render(); } else if (z) await tell(`"${z}" is not a time zone this browser knows.`);
+      return;
+    }
     if (b.id === 'm-tz-browser') { e.preventDefault(); ctx.change((spec) => { spec.values = { ...(spec.values ?? {}), TIMEZONE: b.dataset.tz }; }); return render(); }
   });
   root.addEventListener('input', (e) => {

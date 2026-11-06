@@ -69,9 +69,13 @@ export function readDir(dir) {
   return out;
 }
 
-/** Runs `fn(dir)` in a fresh temp dir holding the read set, and always removes it. */
-function scratch(files, fn) {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-team-studio-'));
+/**
+ * Runs `fn(dir)` in a fresh temp dir holding the read set, and always removes it. `tmpRoot` puts it under a folder of
+ * its own (hosted mode keeps one per customer, S3); it is made 0700 when missing.
+ */
+function scratch(files, fn, tmpRoot = null) {
+  if (tmpRoot) mkdirSync(tmpRoot, { recursive: true, mode: 0o700 });
+  const dir = mkdtempSync(join(tmpRoot ?? tmpdir(), 'agent-team-studio-'));
   try { materialize(dir, files); return fn(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -109,7 +113,7 @@ function extras(dir, layer) {
  * What publishing `spec` changes in the read set: [{ path, content (null = delete), mode, before }], sorted by path.
  * Throws a CoreError when the spec has errors, sync fails or a change breaks a limit.
  */
-export function plan(read, spec, { strict = true } = {}) {
+export function plan(read, spec, { strict = true, tmpRoot = null } = {}) {
   const kit = loadKit(KIT);
   const files = filesOf(read);
   kitVersionOf(files);
@@ -123,7 +127,7 @@ export function plan(read, spec, { strict = true } = {}) {
     try { rc = sync(dir, { quiet: true }); } catch (e) { throw new CoreError(422, e.message, { issues }); }
     if (rc !== 0 && strict) throw new CoreError(422, 'sync reported roster errors; nothing would be published', { issues });
     return readDir(dir);
-  });
+  }, tmpRoot);
   const changes = [];
   for (const path of new Set([...files.keys(), ...after.keys()])) {
     const a = files.get(path), b = after.get(path);
@@ -164,9 +168,9 @@ export function code(changes) {
 }
 
 /** The preview the page shows: [{ path, status, before, after }], the issues, the commands and the kit upgrade. */
-export function preview(read, spec) {
+export function preview(read, spec, { tmpRoot = null } = {}) {
   const files = filesOf(read);
-  const p = plan(read, spec, { strict: false });
+  const p = plan(read, spec, { strict: false, tmpRoot });
   return {
     changes: p.changes.map((c) => ({ path: c.path, status: c.before === null ? 'added' : c.content === null ? 'removed' : 'changed', before: c.before, after: c.content })),
     issues: p.issues, commands: p.commands, needsCode: p.needsCode, kitUpgrade: kitVersionOf(files).upgrade,
