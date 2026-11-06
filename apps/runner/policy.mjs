@@ -66,20 +66,46 @@ export function owns(areas, path) {
 /** Split an ownership row's path cell (`bin/, presets/, tools/`) into patterns. */
 export const areasOf = (cells) => (Array.isArray(cells) ? cells : [cells]).flatMap((c) => String(c).split(/,\s*/)).map((s) => s.trim()).filter(Boolean);
 
-const SHA = '([0-9a-f]{7,64})';
-/** The pull request number and head commit a merge names, or null when it does not name both. */
+// A full commit id: 40 hex (SHA-1) or 64 hex (SHA-256). An abbreviation could be made to collide.
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+// Flags a pinned merge may carry: how to merge, and whether to delete the branch. Nothing that names another
+// repository, bypasses protection (--admin) or takes a free-text value.
+const MERGE_FLAGS = new Set(['--squash', '-s', '--merge', '-m', '--rebase', '-r', '--delete-branch', '-d']);
+// Merge tools whose structured input names the pull request and the expected head.
+const MERGE_TOOLS = { mcp__github__merge_pull_request: { pr: 'pullNumber', sha: 'expectedHeadSha' } };
+
+/**
+ * The pull request number and full head commit a merge names, or null (security V1). A shell merge must be exactly
+ * one simple command: `gh pr merge <N> [--squash|--merge|--rebase|--delete-branch] --match-head-commit <sha>`,
+ * with no shell metacharacters, quotes, comments or second command, so the pin read here is the pin gh enforces.
+ * Any other merge (REST, curl, other CLIs, a compound command) is refused. A tool merge must be a known merge tool
+ * with both structured fields.
+ */
 export function mergeTarget(tool, input = {}, text = '') {
   let pr = null, headSha = null;
   if (tool === 'Bash') {
-    pr = (/\bgh\s+pr\s+merge\s+(?:-\S+\s+)*#?(\d+)\b/.exec(text) ?? /\/pulls\/(\d+)\/merge\b/.exec(text) ?? /\bglab\s+mr\s+merge\s+(?:-\S+\s+)*!?(\d+)\b/.exec(text) ?? [])[1] ?? null;
-    headSha = (new RegExp(`--match-head-commit[= ]\\s*${SHA}\\b`).exec(text) ?? new RegExp(`\\bsha["']?\\s*[=:]\\s*["']?${SHA}\\b`).exec(text) ?? new RegExp(`--sha[= ]\\s*${SHA}\\b`).exec(text) ?? [])[1] ?? null;
+    if (!/^[A-Za-z0-9 ._:=@+\/-]+$/.test(text)) return null;
+    const t = text.trim().split(/ +/);
+    if (t[0] !== 'gh' || t[1] !== 'pr' || t[2] !== 'merge') return null;
+    for (let i = 3; i < t.length; i++) {
+      const w = t[i];
+      if (/^\d+$/.test(w)) { if (pr !== null) return null; pr = w; continue; }
+      if (w === '--match-head-commit' || w.startsWith('--match-head-commit=')) {
+        if (headSha !== null) return null;
+        headSha = w.includes('=') ? w.slice(w.indexOf('=') + 1) : t[++i];
+        continue;
+      }
+      if (!MERGE_FLAGS.has(w)) return null;
+    }
   } else {
-    pr = input.pullNumber ?? input.pull_number ?? input.number ?? null;
-    headSha = input.expectedHeadSha ?? input.expected_head_sha ?? input.sha ?? input.headSha ?? null;
-    if (headSha !== null && !new RegExp(`^${SHA}$`).test(String(headSha))) headSha = null;
+    const f = MERGE_TOOLS[tool];
+    if (!f) return null;
+    pr = input[f.pr] ?? null;
+    headSha = input[f.sha] ?? null;
   }
+  if (typeof headSha !== 'string' || !FULL_SHA.test(headSha)) return null;
   const n = Number(pr);
-  return Number.isInteger(n) && n > 0 && headSha ? { pr: n, headSha: String(headSha) } : null;
+  return Number.isSafeInteger(n) && n > 0 && headSha ? { pr: n, headSha: String(headSha) } : null;
 }
 
 /**
@@ -113,7 +139,7 @@ export function decide({ tool, input = {}, cwd, areas = [], also = [], rules = D
       // push cannot ride along. Anything accepted without them (a push straight to the main line) is refused.
       if (r.action === 'accept') {
         const m = mergeTarget(tool, input, text);
-        if (!m) return { decision: 'refused', rule: 'match-head-commit', target: isShell ? text : tool, why: 'a merge must name the pull request and the commit it merges (for example gh pr merge 12 --match-head-commit <sha of the head that was reviewed>); the main line is never pushed to directly' };
+        if (!m) return { decision: 'refused', rule: 'match-head-commit', target: isShell ? text : tool, why: 'a merge must name the pull request and the commit it merges (exactly gh pr merge <N> --squash --match-head-commit <full sha of the head that was reviewed>, as one command on its own); the main line is never pushed to directly' };
         return { decision: 'needs-approval', rule: r.action, why: r.why, target: isShell ? text : tool, ...m };
       }
       return { decision: 'needs-approval', rule: r.action, why: r.why, target: isShell ? text : tool };

@@ -106,9 +106,9 @@ test('the runner pauses a merge until approval.result, and refuses it on deny', 
   const adapter = stubAdapter({
     'release-manager': async (t) => {
       order.push('asking');
-      const merged = await t.use('Bash', { command: 'gh pr merge 12 --squash --match-head-commit abc1234' }, () => order.push('merged'));
+      const merged = await t.use('Bash', { command: 'gh pr merge 12 --squash --match-head-commit 0123456789abcdef0123456789abcdef01234567' }, () => order.push('merged'));
       assert.ok(merged.ok);
-      const again = await t.use('Bash', { command: 'gh pr merge 13 --squash --match-head-commit abc1234' }, () => order.push('merged 13'));
+      const again = await t.use('Bash', { command: 'gh pr merge 13 --squash --match-head-commit 0123456789abcdef0123456789abcdef01234567' }, () => order.push('merged 13'));
       assert.match(again.refused, /did not approve this \(denied\): checked/);
       const asked = await t.call('request_approval', { action: 'deploy-production', call: 'deploy.sh --production', why: 'the release is signed off' });
       assert.match(asked.text, /"decision":"approved"/);
@@ -122,8 +122,8 @@ test('the runner pauses a merge until approval.result, and refuses it on deny', 
     await cp.until(() => cp.events.some((e) => e.type === 'session.idle'));
     assert.deepEqual(order, ['asking', 'merged'], 'the merge ran only after the approval, and the denied one never ran');
     assert.deepEqual(cp.approvals.map((a) => `${a.via}:${a.via === 'policy' ? a.approval.action : a.input.action}`), ['policy:accept', 'policy:accept', 'tool:deploy-production']);
-    assert.equal(cp.approvals[0].approval.call, 'gh pr merge 12 --squash --match-head-commit abc1234');
-    assert.deepEqual([cp.approvals[0].approval.pr, cp.approvals[0].approval.headSha], [12, 'abc1234'], 'D1: the approval names the PR and head');
+    assert.equal(cp.approvals[0].approval.call, 'gh pr merge 12 --squash --match-head-commit 0123456789abcdef0123456789abcdef01234567');
+    assert.deepEqual([cp.approvals[0].approval.pr, cp.approvals[0].approval.headSha], [12, '0123456789abcdef0123456789abcdef01234567'], 'D1: the approval names the PR and head');
     const decisions = cp.events.filter((e) => e.type === 'session.tool').map((e) => `${e.data.decision}:${e.data.rule}`);
     assert.deepEqual(decisions, ['needs-approval:accept', 'allowed:accept', 'needs-approval:accept', 'refused:accept']);
     noFailedTurns(cp);
@@ -293,7 +293,7 @@ test('a stop ends a wait for approval: the turn finishes and the work is pushed'
   const adapter = stubAdapter({
     'release-manager': async (t) => {
       writeFileSync(join(t.cwd, 'notes.txt'), 'ready\n');
-      refused = await t.use('Bash', { command: 'gh pr merge 12 --squash --match-head-commit abc1234' });
+      refused = await t.use('Bash', { command: 'gh pr merge 12 --squash --match-head-commit 0123456789abcdef0123456789abcdef01234567' });
       return {};
     },
   });
@@ -318,7 +318,7 @@ test('an approval decided while the link was down is asked for again after the r
   let answer;
   const cp = await fakeControlPlane({ decide: () => new Promise((r) => (answer = r)) });
   let merged = false;
-  const adapter = stubAdapter({ 'release-manager': async (t) => { const r = await t.use('Bash', { command: 'gh pr merge 12 --match-head-commit abc1234' }, () => (merged = true)); assert.ok(r.ok); return {}; } });
+  const adapter = stubAdapter({ 'release-manager': async (t) => { const r = await t.use('Bash', { command: 'gh pr merge 12 --match-head-commit 0123456789abcdef0123456789abcdef01234567' }, () => (merged = true)); assert.ok(r.ok); return {}; } });
   const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
   try {
     await runner.ready;
