@@ -14,9 +14,30 @@ ANTHROPIC_API_KEY=… node bin.mjs start
 ```
 
 `register` trades the code for a runner key, kept in `~/.agent-team/runner/runner.json` (readable only by you).
-`start` connects with it. A deployment sets `AGENT_TEAM_SERVER` and `AGENT_TEAM_RUNNER_KEY` instead. In M3 the model
-key is in the runner's own environment; nothing else from that environment reaches a session but the toolchain
-(`PATH`, `HOME`, proxies).
+`start` connects with it. A deployment sets `AGENT_TEAM_SERVER` and `AGENT_TEAM_RUNNER_KEY` instead.
+
+**Run it in a container** (`Dockerfile`), as its own user. That is the supported deployment. On a bare machine the
+sessions share the runner's OS user, which no process can fully wall off.
+
+## What a session can reach
+
+The agent is the untrusted part: it reads repository content, issues and web pages, so the runner assumes its shell
+may be under someone else's control.
+
+- **No credentials.** Each session gets its own empty `HOME` and an allowlisted environment (`PATH`, locale, `TERM`;
+  more only by the runner's `sessionEnv`). The model key stays in the runner: sessions reach the model through a
+  loopback proxy, with a token of their own that dies with the session (`modelproxy.mjs`). The runner key and the
+  session's tool token never enter it.
+- **No pushing.** The session's environment holds nothing that can push. The runner pushes at checkpoints, with its
+  own credential (`AGENT_TEAM_RUNNER_GITCONFIG`, a token that can push branches but not the default branch), and only
+  after it has checked every changed path against the owned areas (writes from the shell included), refused symlinks
+  that leave the copy, and scanned for secrets (`worktree.mjs`, `secrets.mjs`). Settings that steer agents or CI
+  (`.claude/`, `.mcp.json`, `.github/workflows/`, `.git*`) leave only when an area names them.
+- **No planted code.** Each session has its own clone, sharing nothing with other sessions. Before every git command
+  the runner runs there, it rewrites `.git/config` from its own template and clears the hooks, and it runs git with
+  hooks and fsmonitor off and no user or system config. The branch's own `.claude` settings are not loaded.
+- **Approvals.** `policy.mjs` holds the steps the owner keeps (a merge must name `--match-head-commit`). It is a
+  convenience, not the security line: what makes those steps safe is that the session has no credential for them.
 
 ## What a session is
 
@@ -50,7 +71,9 @@ sessions `welcome` lists.
 ## Adapters
 
 `adapters/agent-sdk.mjs` is the runtime (`agent-sdk`). `adapters/stub.mjs` is a scripted stand-in for the model:
-it calls the tools through the same checks, policy and tool server, so the tests exercise the runner itself.
+it calls the tools through the same checks, policy and tool server, so the tests exercise the runner itself. Before a HANDOFF, BUG, SIGNOFF or
+BLOCKED, the runner checkpoints and pushes the branch, so the next role finds the work there; if the branch holds
+something that may not leave, the message is not sent and the session is told why.
 
 ## Tests
 
@@ -68,5 +91,7 @@ the machine happens to have.
 
 ## Not yet
 
-Sandboxes beyond a local process (Docker, microVMs), `secret.get` (M4, with the GitHub App), the subagents run
-mode, and the long-poll transport.
+Sessions as a separate OS user inside the container (today they share the runner's user, so a hostile shell could
+still read the runner's process environment), microVM sandboxes, merging and opening pull requests with the runner's
+own credential after an approval, `secret.get` (M4, with the GitHub App), the subagents run mode, and the long-poll
+transport.

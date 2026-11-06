@@ -106,9 +106,9 @@ test('the runner pauses a merge until approval.result, and refuses it on deny', 
   const adapter = stubAdapter({
     'release-manager': async (t) => {
       order.push('asking');
-      const merged = await t.use('Bash', { command: 'gh pr merge 12 --squash' }, () => order.push('merged'));
+      const merged = await t.use('Bash', { command: 'gh pr merge 12 --squash --match-head-commit abc1234' }, () => order.push('merged'));
       assert.ok(merged.ok);
-      const again = await t.use('Bash', { command: 'gh pr merge 13 --squash' }, () => order.push('merged 13'));
+      const again = await t.use('Bash', { command: 'gh pr merge 13 --squash --match-head-commit abc1234' }, () => order.push('merged 13'));
       assert.match(again.refused, /did not approve this \(denied\): checked/);
       const asked = await t.call('request_approval', { action: 'deploy-production', call: 'deploy.sh --production', why: 'the release is signed off' });
       assert.match(asked.text, /"decision":"approved"/);
@@ -122,7 +122,7 @@ test('the runner pauses a merge until approval.result, and refuses it on deny', 
     await cp.until(() => cp.events.some((e) => e.type === 'session.idle'));
     assert.deepEqual(order, ['asking', 'merged'], 'the merge ran only after the approval, and the denied one never ran');
     assert.deepEqual(cp.approvals.map((a) => `${a.via}:${a.via === 'policy' ? a.approval.action : a.input.action}`), ['policy:accept', 'policy:accept', 'tool:deploy-production']);
-    assert.equal(cp.approvals[0].approval.call, 'gh pr merge 12 --squash');
+    assert.equal(cp.approvals[0].approval.call, 'gh pr merge 12 --squash --match-head-commit abc1234');
     const decisions = cp.events.filter((e) => e.type === 'session.tool').map((e) => `${e.data.decision}:${e.data.rule}`);
     assert.deepEqual(decisions, ['needs-approval:accept', 'allowed:accept', 'needs-approval:accept', 'refused:accept']);
     noFailedTurns(cp);
@@ -279,6 +279,86 @@ test('a reconnect resumes the sessions in welcome and resends what was not ackno
     const ids = cp.events.map((e) => e.id);
     assert.equal(new Set(ids).size, ids.length, 'each event stored once');
     noFailedTurns(cp);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
+
+test('a stop ends a wait for approval: the turn finishes and the work is pushed', async () => {
+  const { bare, root } = origin();
+  const cp = await fakeControlPlane({ decide: () => new Promise(() => {}) }); // nobody answers
+  let refused;
+  const adapter = stubAdapter({
+    'release-manager': async (t) => {
+      writeFileSync(join(t.cwd, 'notes.txt'), 'ready\n');
+      refused = await t.use('Bash', { command: 'gh pr merge 12 --squash --match-head-commit abc1234' });
+      return {};
+    },
+  });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  try {
+    await runner.ready;
+    const f = cp.start({ role: 'release-manager', run: 'run_8', repo: { url: bare }, worktree: 'rel/8', areas: ['notes.txt'] });
+    await cp.until(() => cp.approvals.length === 1);
+    cp.send('session.stop', { session: f.body.session, mode: 'now', reason: 'owner' });
+    await cp.until(() => cp.events.some((e) => e.type === 'session.ended'), 5000);
+    assert.match(refused.refused, /\(stopped\)/);
+    assert.equal(cp.events.find((e) => e.type === 'session.ended').data.pushed, true);
+    assert.equal(sh(bare, 'show', 'rel/8:notes.txt'), 'ready');
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
+
+test('an approval decided while the link was down is asked for again after the reconnect', async () => {
+  const { bare, root } = origin();
+  let answer;
+  const cp = await fakeControlPlane({ decide: () => new Promise((r) => (answer = r)) });
+  let merged = false;
+  const adapter = stubAdapter({ 'release-manager': async (t) => { const r = await t.use('Bash', { command: 'gh pr merge 12 --match-head-commit abc1234' }, () => (merged = true)); assert.ok(r.ok); return {}; } });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  try {
+    await runner.ready;
+    cp.start({ role: 'release-manager', run: 'run_9', repo: { url: bare } });
+    await cp.until(() => answer);
+    cp.drop();
+    answer({ decision: 'approved', by: 'owner' }); // sent into a closed link: lost
+    await cp.until(() => cp.resent.length === 1, 15_000);
+    await cp.until(() => cp.events.some((e) => e.type === 'session.idle'), 5000);
+    assert.equal(merged, true);
+    assert.equal(cp.resent[0].approval.action, 'accept');
+    noFailedTurns(cp);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
+
+test('a HANDOFF is not sent while the branch holds a change outside the owned areas', async () => {
+  const { bare, root } = origin();
+  const cp = await fakeControlPlane();
+  const results = [];
+  const adapter = stubAdapter({
+    'web-dev': async (t) => {
+      mkdirSync(join(t.cwd, 'web'), { recursive: true });
+      writeFileSync(join(t.cwd, 'web', 'page.txt'), 'mine\n');
+      writeFileSync(join(t.cwd, 'server.txt'), 'from the shell\n');
+      execFileSync('git', ['add', '-A'], { cwd: t.cwd, env: { PATH: process.env.PATH, HOME: t.env.HOME } });
+      execFileSync('git', ['-c', 'user.name=a', '-c', 'user.email=a@a', 'commit', '-qm', 'x'], { cwd: t.cwd, env: { PATH: process.env.PATH, HOME: t.env.HOME } });
+      results.push(await t.call('handoff', { to: 'qa-web', task: 'Page', changed: 'page', verify: 'look', doneWhen: 'signed off' }));
+      return {};
+    },
+  });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  try {
+    await runner.ready;
+    cp.start({ role: 'web-dev', run: 'run_10', repo: { url: bare }, worktree: 'web/10', areas: ['web/'] });
+    await cp.until(() => results.length === 1);
+    assert.equal(results[0].isError, true);
+    assert.match(results[0].text, /^Not sent: not pushed: the branch's commits change paths outside this role's owned areas \(server.txt\)/);
+    assert.equal(cp.toolCalls.length, 0, 'nothing reached the control plane');
   } finally {
     await runner.close();
     await cp.close();

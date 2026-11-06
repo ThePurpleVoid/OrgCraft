@@ -1,8 +1,13 @@
-// What a session may do before a tool runs. Two rules from docs/team/protocols.md, enforced here instead of being
-// left to the prompt:
+// What a session may do before a tool runs. Two rules from docs/team/protocols.md:
 //   - one writer per path: a write outside the role's owned areas is refused;
 //   - when the owner steps in: a call the policy classifies (data that cannot be undone, a secret, money, anything
 //     leaving the company, accepting a change, a deploy) pauses the session until a person approves it.
+//
+// This classifier is a convenience layer, not the security line (security review R6). A shell can reach the same
+// effect in ways no pattern sees (an encoded command, a script file, a raw API call). What holds the line is what
+// the session cannot do at all: its environment has no credential that can push, merge or deploy, the runner
+// pushes only at checkpoints after checking every changed path and scanning for secrets (worktree.mjs), and the
+// default branch is protected so only the runner's own credential, after a person's approval, can merge.
 // Pure: no I/O, so the same checks run under the Agent SDK, the stub model and the tests.
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
@@ -23,6 +28,8 @@ export const DEFAULT_RULES = [
   { action: 'accept', why: 'merges a proposal into the main line',
     command: [/\bgh\s+pr\s+merge\b/i, /\bgit\s+push\b[^\n]*\s(\S*:)?(refs\/heads\/)?(main|master)(\s|$)/i],
     call: [/merge_pull_request$/i, /(^|_)merge$/i] },
+  { action: 'accept', why: 'merges a proposal into the main line',
+    command: [/\/pulls\/\d+\/merge\b/i, /\bgh\s+api\b[^\n]*\bmerges?\b/i, /\bglab\s+mr\s+merge\b/i] },
   { action: 'deploy-production', why: 'deploys to production',
     command: [/\b(deploy|release|publish)\b[^\n]*\b(--prod(uction)?|prod(uction)?)\b/i, /\bvercel\b[^\n]*--prod\b/i, /\bnpm\s+publish\b/i, /\bterraform\s+(apply|destroy)\b/i, /\bkubectl\s+(apply|delete)\b[^\n]*\bprod/i] },
   { action: 'secret-write', why: 'adds or changes a secret',
@@ -46,6 +53,16 @@ export function matchArea(pattern, path) {
   return new RegExp(`^${re}$`).test(path);
 }
 
+/** Paths that steer agents, CI or git itself: written only by a role whose area names them explicitly (R3). */
+const GUARDED = [/^\.claude(\/|$)/, /^\.mcp\.json$/, /^\.github\/workflows(\/|$)/, /^\.git(attributes|modules|config)?$/, /(^|\/)\.git(\/|$)/];
+
+/** May a role with these owned areas write this path (relative to the working copy)? */
+export function owns(areas, path) {
+  if (!areas.some((a) => matchArea(a, path))) return false;
+  if (!GUARDED.some((g) => g.test(path))) return true;
+  return areas.some((a) => GUARDED.some((g) => g.test(a.trim().replace(/[*?].*$/, '').replace(/\/$/, ''))) && matchArea(a, path));
+}
+
 /** Split an ownership row's path cell (`bin/, presets/, tools/`) into patterns. */
 export const areasOf = (cells) => (Array.isArray(cells) ? cells : [cells]).flatMap((c) => String(c).split(/,\s*/)).map((s) => s.trim()).filter(Boolean);
 
@@ -64,7 +81,8 @@ export function decide({ tool, input = {}, cwd, areas = [], also = [], rules = D
     const rel = relative(cwd, abs).split(sep).join('/');
     if (!raw || rel.startsWith('..') || isAbsolute(rel)) return { decision: 'refused', rule: 'outside-worktree', why: `${raw || 'that path'} is outside this session's working copy`, target: raw };
     if (/^\.git(\/|$)/.test(rel)) return { decision: 'refused', rule: 'git-internals', why: 'the session does not write inside .git', target: rel };
-    if (!areas.some((a) => matchArea(a, rel))) {
+    if (areas.some((a) => matchArea(a, rel)) && !owns(areas, rel)) return { decision: 'refused', rule: 'guarded', why: `${rel} steers agents, CI or git; only a role that owns it by name writes it`, target: rel };
+    if (!owns(areas, rel)) {
       return { decision: 'refused', rule: 'ownership', target: rel,
         why: areas.length ? `${rel} is not in this role's owned areas (${areas.join(', ')}). Send a request to its owner instead.` : 'this role owns no paths, so it writes nothing. Send a request to the owner of the path instead.' };
     }
@@ -75,6 +93,10 @@ export function decide({ tool, input = {}, cwd, areas = [], also = [], rules = D
   for (const r of rules) {
     const pats = isShell ? r.command : tool.startsWith('mcp__') ? r.call : null;
     if (pats?.some((re) => re.test(isShell ? text : tool))) {
+      // A merge is approved for one head commit (R5): the command must pin it, so a later push cannot ride along.
+      if (r.action === 'accept' && isShell && /\bgh\s+pr\s+merge\b/.test(text) && !/--match-head-commit[= ]\s*[0-9a-f]{7,40}\b/.test(text)) {
+        return { decision: 'refused', rule: 'match-head-commit', why: 'a merge must name the commit it merges: add --match-head-commit <sha of the head that was reviewed>', target: text };
+      }
       return { decision: 'needs-approval', rule: r.action, why: r.why, target: isShell ? text : tool };
     }
   }

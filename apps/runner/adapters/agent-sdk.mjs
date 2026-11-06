@@ -16,14 +16,16 @@ export function teamToolDefinitions(tool, tools, callTool) {
   }));
 }
 
-export function agentSdkAdapter({ effort, settingSources = ['project'], executable } = {}) {
+export function agentSdkAdapter({ effort, settingSources = [], executable, sdk: given } = {}) {
+  // settingSources is empty by default (security review R3): a branch's own .claude settings, hooks, env and
+  // .mcp.json could otherwise run code or redirect the model key outside the runner's policy.
   return {
     runtime: 'agent-sdk',
     async turn(o) {
       // The model key comes only from the runner's own environment (passed in o.env). Without one, refuse rather
       // than let the SDK fall back on whatever credentials the machine happens to have: spending is the owner's call.
-      if (!o.env?.ANTHROPIC_API_KEY) throw new Error('no model key: set ANTHROPIC_API_KEY in the runner\'s environment');
-      const { query, createSdkMcpServer, tool } = await load();
+      if (!o.env?.ANTHROPIC_API_KEY || !o.env?.ANTHROPIC_BASE_URL) throw new Error('no model key: set ANTHROPIC_API_KEY in the runner\'s environment (sessions reach the model through the runner\'s proxy)');
+      const { query, createSdkMcpServer, tool } = given ?? (await load());
       // Tool names reach the model as mcp__team__<name>; policy.mjs lets that prefix through to the field checks.
       const team = createSdkMcpServer({
         name: 'team',

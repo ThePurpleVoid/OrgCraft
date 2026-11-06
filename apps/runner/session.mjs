@@ -6,15 +6,19 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
-import { checkpoint as saveWork, prepare } from './worktree.mjs';
+import { redactSecrets } from './secrets.mjs';
+import { checkpoint as saveWork, outOfArea, prepare, release } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
 export const DEFAULT_TIERS = { deep: 'claude-opus-5-5', standard: 'claude-opus-5-5', routine: 'claude-sonnet-5-5', light: 'claude-haiku-5-5' };
 /**
- * The only parts of the runner's environment a session inherits: the toolchain, and the model key (M3 keeps it in
- * the runner's environment). The runner key and the session token are never among them.
+ * The only parts of the runner's environment a session inherits (security review R1). Not HOME: each session
+ * gets its own empty one. Not the model key: the session gets the loopback proxy's address and a token of its
+ * own. Never the runner key or the session token. A runner can add names with `sessionEnv` (a proxy, say).
  */
-const PASS_ENV = ['PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'TZ', 'SHELL', 'TERM', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'];
+const PASS_ENV = ['PATH', 'LANG', 'LC_ALL', 'TZ', 'TERM', 'SHELL', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE'];
+/** Tools whose message the next role acts on: the branch is checkpointed and pushed first, so it is there. */
+const PUSH_FIRST = new Set(['handoff', 'bug', 'signoff', 'blocked']);
 const HEARTBEAT_MS = 5 * 60_000;
 const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 80);
 
@@ -72,6 +76,7 @@ export class Session {
     this.resume = body.runtimeSession ?? null; // the runtime's own conversation id, kept between turns
     this.woken = new Set();
     this.ended = new Promise((r) => (this._ended = r));
+    this.stopped = new Promise((r) => (this._stopped = r));
     this.memoryPath = join(deps.root, 'memory', safe(this.id), `${safe(this.role)}.md`);
     const brief = body.prompt?.brief ?? '';
     this.frontDoor = body.frontDoor ?? /\*\*Reports to:\*\*\s*owner\b/i.test(brief);
@@ -95,10 +100,20 @@ export class Session {
     try {
       this.copy = await prepare({ root: this.deps.root, repo: b.repo, worktree: b.worktree, session: this.id });
       mkdirSync(dirname(this.memoryPath), { recursive: true });
+      // A home of its own, with no credentials in it: nothing of the runner user's (ssh, gh, git, the runner key).
+      this.home = join(this.deps.root, 'homes', safe(this.id));
+      mkdirSync(join(this.home, 'tmp'), { recursive: true });
       const memory = b.checkpoint?.memory ?? b.prompt?.memory;
       if (memory !== undefined && memory !== null) writeFileSync(this.memoryPath, String(memory));
       else if (!existsSync(this.memoryPath)) writeFileSync(this.memoryPath, '');
-      this.env = { ...Object.fromEntries(PASS_ENV.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]])), AGENT_TEAM_ROLE: this.role, AGENT_TEAM_RUN: b.run ?? '', AGENT_TEAM_SESSION: this.id };
+      const pass = [...PASS_ENV, ...(this.deps.sessionEnv ?? [])];
+      this.env = { ...Object.fromEntries(pass.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]])), HOME: this.home, TMPDIR: join(this.home, 'tmp'), AGENT_TEAM_ROLE: this.role, AGENT_TEAM_RUN: b.run ?? '', AGENT_TEAM_SESSION: this.id };
+      if (this.deps.modelProxy && process.env.ANTHROPIC_API_KEY) {
+        await this.deps.modelProxy.ready;
+        const p = this.deps.modelProxy.register(this.id);
+        this.proxyToken = p.token;
+        Object.assign(this.env, { ANTHROPIC_BASE_URL: p.baseUrl, ANTHROPIC_API_KEY: p.token });
+      }
       if (b.instance) this.env.AGENT_TEAM_INSTANCE = String(b.instance);
     } catch (e) {
       await this.emit('session.ended', { role: this.role, reason: 'failed', detail: `could not start: ${e.message}` });
@@ -197,6 +212,13 @@ export class Session {
       await this.emit('session.tool', { tool: `team.${name}`, decision: 'refused', rule: 'tools/1', detail: local.problems.join(' ') });
       return { text: `Refused. ${local.problems.join('. ')}. Fix the call and try again.`, isError: true };
     }
+    if (PUSH_FIRST.has(name) && this.copy?.branch) {
+      const saved = await this.save(`before ${name}`);
+      if (saved.refused) {
+        await this.emit('session.tool', { tool: `team.${name}`, decision: 'refused', rule: saved.refused.rule, detail: saved.error });
+        return { text: `Not sent: ${saved.error}. Fix that first (undo or move the change, or send a request to the path's owner), then send the ${name} again.`, isError: true };
+      }
+    }
     let r;
     try {
       r = await this.deps.tools.call(name, local.input);
@@ -206,7 +228,7 @@ export class Session {
     if (r.problems) return { text: `Refused by the control plane. ${r.problems.join('. ')}. Fix the call and try again.`, isError: true };
     if (name === 'request_approval') {
       this.state = 'waiting';
-      const d = await this.deps.awaitApproval(r.result.approval);
+      const d = await this.untilStopped(this.deps.awaitApproval(r.result.approval, this.id));
       if (this.state === 'waiting') this.state = 'working';
       const ok = d.decision === 'approved';
       return { text: JSON.stringify({ approval: r.result.approval, decision: d.decision, note: d.note }) + (ok ? ' Approved: go ahead with exactly that call.' : ' Not approved: do not take the step.'), isError: !ok };
@@ -214,14 +236,28 @@ export class Session {
     return { text: JSON.stringify(r.result) };
   }
 
+  /** A wait for a person that ends when the session is stopped, so a stop never hangs on an open approval. */
+  untilStopped(wait) {
+    return Promise.race([wait, this.stopped.then(() => ({ decision: 'stopped', note: 'the session was stopped' }))]);
+  }
+
   async preToolUse(tool, input) {
+    // Writes made from the shell skip the file tools' check, so nothing that touches paths outside the owned areas
+    // leaves the working copy: a push or a pull request is refused until those changes are undone.
+    if (tool === 'Bash' && /\bgit\s+push\b|\bgh\s+pr\s+create\b/.test(String(input.command ?? '')) && this.copy?.branch) {
+      const o = await outOfArea({ cwd: this.copy.cwd, base: this.copy.base, areas: this.body.areas ?? [] }).catch(() => ({ committed: [], uncommitted: [] }));
+      if (o.committed.length) {
+        await this.emit('session.tool', { tool, target: String(input.command).slice(0, 500), decision: 'refused', rule: 'ownership', detail: o.committed.slice(0, 20).join(', ') });
+        return { allow: false, reason: `This branch's commits change paths outside your owned areas (${o.committed.slice(0, 10).join(', ')}). Undo those changes, and send a request to the owner of each path instead.` };
+      }
+    }
     const d = decide({ tool, input, cwd: this.copy.cwd, areas: this.body.areas ?? [], also: [this.memoryPath], rules: this.deps.rules ?? DEFAULT_RULES });
     if (d.rule === 'team-tool') return { allow: true };
     if (d.decision === 'needs-approval') {
       await this.emit('session.tool', { tool, target: String(d.target).slice(0, 500), decision: 'needs-approval', rule: d.rule });
       this.state = 'waiting';
       const call = tool === 'Bash' ? String(input.command ?? '') : JSON.stringify({ tool, input });
-      const a = await this.deps.approve({ action: d.rule, call, why: `The team policy keeps this for a person: it ${d.why}.` });
+      const a = await this.untilStopped(this.deps.approve({ action: d.rule, call, why: `The team policy keeps this for a person: it ${d.why}.` }));
       if (this.state === 'waiting') this.state = 'working';
       const ok = a.decision === 'approved';
       await this.emit('session.tool', { tool, target: String(d.target).slice(0, 500), decision: ok ? 'allowed' : 'refused', rule: d.rule, by: a.by });
@@ -234,9 +270,11 @@ export class Session {
   /** session.checkpoint: at the next turn boundary, push the branch and hand back the head and the memory file. */
   checkpoint(reason = 'checkpoint') {
     const go = async () => {
-      const r = await saveWork({ cwd: this.copy.cwd, branch: this.copy.branch, role: this.role, reason }).catch((e) => ({ pushed: false, error: e.message }));
-      const memory = existsSync(this.memoryPath) ? readFileSync(this.memoryPath, 'utf8').slice(0, 64 * 1024) : '';
-      await this.emit('session.idle', { role: this.role, reason: 'checkpoint', branch: this.copy.branch, commit: r.commit, pushed: r.pushed, ...(r.error ? { detail: r.error } : {}) });
+      const r = await this.save(reason);
+      // The memory file goes to the control plane, so it gets the same secret scan; hits are redacted.
+      const raw = existsSync(this.memoryPath) ? readFileSync(this.memoryPath, 'utf8').slice(0, 64 * 1024) : '';
+      const memory = redactSecrets(raw, this.secretValues());
+      await this.emit('session.idle', { role: this.role, reason: 'checkpoint', branch: this.copy.branch, commit: r.commit, pushed: r.pushed, ...(r.error ? { detail: r.error } : {}), ...(memory !== raw ? { redacted: true } : {}) });
       return { commit: r.commit, pushed: r.pushed, memory, ...(r.error ? { problem: r.error } : {}) };
     };
     if (!this.copy) return Promise.resolve({ pushed: false, problem: 'the session has no working copy' });
@@ -244,11 +282,21 @@ export class Session {
     return new Promise((resolve) => this.afterTurn.push(async () => resolve(await go())));
   }
 
+  /** Values that must never leave in a push or the memory file: the session's proxy token and the real key. */
+  secretValues() { return [this.proxyToken, process.env.ANTHROPIC_API_KEY].filter(Boolean); }
+
+  /** Checkpoint and push through the runner's checks (ownership, symlinks, secrets); never throws. */
+  save(reason) {
+    return saveWork({ cwd: this.copy.cwd, branch: this.copy.branch, base: this.copy.base, role: this.role, reason, areas: this.body.areas ?? [], secrets: this.secretValues() })
+      .catch((e) => ({ pushed: false, error: e.message }));
+  }
+
   /** session.stop: `now` aborts the turn in flight, `finish-step` lets it end first. Either way the work is pushed. */
   stop(mode = 'finish-step', reason = 'stopped') {
     if (this.state === 'ended' || this.finished) return this.ended;
     this.stopReason = reason;
     this.state = 'stopping';
+    this._stopped();
     if (mode === 'now') this.abort?.abort('stop');
     if (!this.running) this.finish(reason);
     return this.ended;
@@ -258,7 +306,9 @@ export class Session {
     if (this.finished) return this.ended;
     this.finished = true;
     let saved = {};
-    if (this.copy) saved = await saveWork({ cwd: this.copy.cwd, branch: this.copy.branch, role: this.role, reason }).catch((e) => ({ error: e.message }));
+    if (this.copy) saved = await this.save(reason);
+    if (this.copy) release(this.copy.cwd, this.id);
+    this.deps.modelProxy?.unregister(this.id);
     await this.record({}, { last: true });
     await this.emit('report.heartbeat', { status: 'idle', detail: reason === 'budget' ? 'stopped: the session reached its budget' : `stopped (${reason})`, source: 'hook' }, { via: 'hook' });
     await this.emit('session.ended', { role: this.role, reason, branch: this.copy?.branch, commit: saved.commit, pushed: saved.pushed ?? false, ...(saved.error ? { detail: saved.error } : {}) });

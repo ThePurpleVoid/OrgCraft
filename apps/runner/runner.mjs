@@ -6,6 +6,7 @@ import { checkEvent, SPEC, VERSION } from '../../packages/events/index.mjs';
 import { connect, ulid } from './link.mjs';
 import { Session } from './session.mjs';
 import { toolServer } from './toolserver.mjs';
+import { startModelProxy } from './modelproxy.mjs';
 
 export const PROTOCOL = 'runner/1';
 const RUNNER_VERSION = '0.1.0';
@@ -18,9 +19,12 @@ const RENEW_BEFORE_MS = 2 * 60_000;
  * clones, worktrees and memory files, `adapter` the runtime (agentSdkAdapter() or stubAdapter(...)).
  * Returns { sessions, link, ready, close() }; ready resolves with the first welcome.
  */
-export function startRunner({ server, key, root, adapter, id = 'runner', maxSessions = 8, tiers, rules, log = () => {}, fetch, link: makeLink = connect }) {
+export function startRunner({ server, key, root, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
+  // The model key stays in this process; sessions reach the model through the loopback proxy (modelproxy.mjs).
+  const proxy = modelProxy === undefined ? startModelProxy({ log }) : modelProxy;
   const sessions = new Map();
-  const approvals = new Map(); // approval id -> { resolve, early }
+  const approvals = new Map(); // approval id -> { resolve, session, approval } or { early }
+  let welcomed = false;
   const renewals = new Map(); // session id -> resolve of a pending session.renew
   let tenant = null;
   let readyResolve;
@@ -33,7 +37,7 @@ export function startRunner({ server, key, root, adapter, id = 'runner', maxSess
 
   /** Values that must never leave the runner in an event: the model key and the session's tool token. */
   const scrub = (s, event) => {
-    const values = [process.env.ANTHROPIC_API_KEY, s.token].filter((v) => typeof v === 'string' && v.length >= 8);
+    const values = [process.env.ANTHROPIC_API_KEY, s.token, s.proxyToken].filter((v) => typeof v === 'string' && v.length >= 8);
     let json = JSON.stringify(event), hit = false;
     for (const v of values) if (json.includes(v)) { json = json.split(v).join('[redacted]'); hit = true; }
     const out = JSON.parse(json);
@@ -58,18 +62,22 @@ export function startRunner({ server, key, root, adapter, id = 'runner', maxSess
     return Promise.resolve();
   }
 
-  /** Wait for approval.result on an approval id; a result that arrived first is kept. */
-  function awaitApproval(approvalId) {
+  /**
+   * Wait for approval.result on an approval id; a result that arrived first is kept. Open waits are sent again
+   * after every reconnect (approval.wait with the approval's id), so a result lost while the link was down is
+   * asked for again rather than waited on forever.
+   */
+  function awaitApproval(approvalId, session, approval = { id: approvalId }) {
     const got = approvals.get(approvalId);
     if (got?.early) { approvals.delete(approvalId); return Promise.resolve(got.early); }
-    return new Promise((resolve) => approvals.set(approvalId, { resolve }));
+    return new Promise((resolve) => approvals.set(approvalId, { resolve, session, approval: { ...approval, id: approvalId } }));
   }
 
   /** The policy path: approval.wait, whose ack names the approval the control plane minted. */
   async function approve(s, req) {
     const ack = await link.send('approval.wait', { session: s.id, approval: { action: req.action, call: req.call, why: req.why } });
     if (ack.nack || !ack.approval) return { decision: 'denied', note: ack.nack ?? 'the control plane did not record the approval' };
-    return awaitApproval(ack.approval);
+    return awaitApproval(ack.approval, s.id, { action: req.action, call: req.call, why: req.why });
   }
 
   function renew(s) {
@@ -98,12 +106,13 @@ export function startRunner({ server, key, root, adapter, id = 'runner', maxSess
     }
     let s;
     const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
-    s = new Session(body, { adapter, root, tiers, rules, log, tools, emit, approve: (r) => approve(s, r), awaitApproval });
+    s = new Session(body, { adapter, root, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval });
     s.tools = tools;
     setToken(s, body.token, body.tokenExpires);
     sessions.set(body.session, s);
     s.ended.then(() => {
       clearTimeout(s.renewTimer);
+      for (const [k, a] of approvals) if (a.session === s.id) approvals.delete(k);
       setTimeout(() => sessions.get(body.session) === s && sessions.delete(body.session), 60_000).unref?.();
     });
     s.start();
@@ -111,6 +120,8 @@ export function startRunner({ server, key, root, adapter, id = 'runner', maxSess
 
   link.on('welcome', (w) => {
     tenant = w.tenant ?? tenant ?? 'local';
+    if (welcomed) for (const [, a] of approvals) if (a.resolve && sessions.get(a.session)?.state !== 'ended') link.send('approval.wait', { session: a.session, approval: a.approval, resend: true });
+    welcomed = true;
     // Sessions to resume after a reconnect: ids this runner still runs are kept; full bodies are (re)started.
     for (const a of w.sessions ?? w.assignments ?? []) if (a && typeof a === 'object') startSession({ resume: true, ...a });
     readyResolve(w);
@@ -154,6 +165,7 @@ export function startRunner({ server, key, root, adapter, id = 'runner', maxSess
       // Let the last events reach the control plane before the link goes.
       for (let i = 0; i < 50 && link.pending?.() > 0; i++) await new Promise((r) => setTimeout(r, 100));
       link.close();
+      await proxy?.close();
     },
   };
 }

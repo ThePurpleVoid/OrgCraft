@@ -11,7 +11,7 @@ const TOOL_EVENT = { report: 'report.status', handoff: 'message.handoff', bug: '
 
 export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decide = () => ({ decision: 'approved', by: 'owner' }), sessionDefaults = () => ({}), tokenTtlMs = 15 * 60_000 } = {}) {
   const wss = new WebSocketServer({ noServer: true });
-  const events = [], frames = [], approvals = [], toolCalls = [], nacks = [];
+  const events = [], frames = [], approvals = [], toolCalls = [], nacks = [], resent = [];
   const live = new Map(); // role -> session id
   const tokens = new Map(); // token -> { session, role, run, instance }
   let sock = null, n = 0;
@@ -22,8 +22,9 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
   const mint = (s) => { const t = `st_${randomBytes(12).toString('hex')}`; tokens.set(t, s); return { token: t, tokenExpires: new Date(Date.now() + tokenTtlMs).toISOString() }; };
   const sessionOf = {}; // session id -> { role, run, instance }
 
+  const decided = new Map(); // approval id -> decision, so a resent approval.wait gets its answer again
   function decideLater(approvalId, req) {
-    setTimeout(() => Promise.resolve(decide(req)).then((d) => { send('approval.result', { approval: approvalId, ...d }); check(); }), 50).unref();
+    setTimeout(() => Promise.resolve(decide(req)).then((d) => { decided.set(approvalId, d); send('approval.result', { approval: approvalId, ...d }); check(); }), 50).unref();
   }
 
   const http = createServer(async (req, res) => {
@@ -71,6 +72,11 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
           if (bad) { nacks.push(bad); send('nack', { ref: f.id, problem: `a runner key may not send ${bad.type}` }, f.id); check(); return; }
           send('ack', {}, f.id);
           for (const e of f.body.events) onEvent(e);
+        } else if (f.op === 'approval.wait' && f.body.approval?.id) {
+          // A wait sent again after a reconnect: the same approval, answered again if it was decided meanwhile.
+          resent.push(f.body);
+          send('ack', { approval: f.body.approval.id }, f.id);
+          if (decided.has(f.body.approval.id)) send('approval.result', { approval: f.body.approval.id, ...decided.get(f.body.approval.id) });
         } else if (f.op === 'approval.wait') {
           const a = id('apr');
           approvals.push({ approval: a, via: 'policy', ...f.body });
@@ -101,7 +107,7 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
   await new Promise((r) => http.listen(0, '127.0.0.1', r));
   const plane = {
     url: `http://127.0.0.1:${http.address().port}`,
-    key, events, frames, approvals, toolCalls, nacks, tokens,
+    key, events, frames, approvals, toolCalls, nacks, tokens, resent,
     /** Session bodies to hand back in the next welcome (a reconnect resumes them). */
     resumeOnWelcome: [],
     body(b) {

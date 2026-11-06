@@ -29,33 +29,54 @@ test('the team tools become an in-process MCP server whose calls go through the 
 test('without a model key in the runner\'s environment the adapter refuses, and never falls back on ambient credentials', async () => {
   let loaded = false;
   const a = agentSdkAdapter();
-  await assert.rejects(a.turn({ env: { PATH: process.env.PATH }, signal: new AbortController().signal, tools: [], callTool: () => {}, preToolUse: () => {}, get prompt() { loaded = true; return ''; } }), /no model key/);
+  await assert.rejects(a.turn({ env: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'x' }, signal: new AbortController().signal, tools: [], callTool: () => {}, preToolUse: () => {}, get prompt() { loaded = true; return ''; } }), /no model key/);
   assert.equal(loaded, false, 'nothing was started');
 });
 
-test('a session gets the model key only from the runner\'s own environment, and nothing else of it but the toolchain', async () => {
+test('a session\'s shell sees neither the real model key nor the runner\'s HOME, and reaches the model only through the proxy (R1)', async () => {
   const { Session } = await import('../session.mjs');
+  const { startModelProxy } = await import('../modelproxy.mjs');
+  const { createServer } = await import('node:http');
   const saved = { ...process.env };
+  // A stand-in model API that records what reaches it.
+  const seen = [];
+  const upstream = createServer((req, res) => { seen.push({ url: req.url, key: req.headers['x-api-key'] }); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}'); });
+  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+  const proxy = startModelProxy({ upstream: `http://127.0.0.1:${upstream.address().port}` });
   try {
-    process.env.ANTHROPIC_API_KEY = 'sk-test-runner-own';
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'ambient';
-    process.env.AGENT_TEAM_RUNNER_KEY = 'rk_secret';
-    process.env.GITHUB_TOKEN = 'ghp_ambient';
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-runner-own-key-0123456789';
+    for (const [k, v] of Object.entries({ CLAUDE_CODE_OAUTH_TOKEN: 'ambient', AGENT_TEAM_RUNNER_KEY: 'rk_secret', GITHUB_TOKEN: 'ghp_ambient', GH_TOKEN: 'gh_ambient', SSH_AUTH_SOCK: '/tmp/agent.sock' })) process.env[k] = v;
     const { origin } = await import('./helpers.mjs');
     const { bare, root } = origin();
-    const s = new Session({ session: 'ses_env', role: 'web-dev', team: 't', repo: { url: bare } }, { root, emit: async () => {}, adapter: { turn: async () => ({}) } });
+    const s = new Session({ session: 'ses_env', role: 'web-dev', team: 't', repo: { url: bare } }, { root, modelProxy: proxy, emit: async () => {}, adapter: { turn: async () => ({}) } });
     s.pump = () => {};
     await s.start();
-    assert.equal(s.env.ANTHROPIC_API_KEY, 'sk-test-runner-own');
-    for (const k of ['CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_TEAM_RUNNER_KEY', 'GITHUB_TOKEN']) assert.equal(s.env[k], undefined, k);
+    const env = JSON.stringify(s.env);
+    assert.ok(!env.includes('sk-ant-test-runner-own'), 'no real model key');
+    assert.ok(s.env.HOME.startsWith(root) && s.env.HOME !== saved.HOME, 'a home of its own');
+    for (const k of ['CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_TEAM_RUNNER_KEY', 'GITHUB_TOKEN', 'GH_TOKEN', 'SSH_AUTH_SOCK']) assert.equal(s.env[k], undefined, k);
+    assert.match(s.env.ANTHROPIC_BASE_URL, /^http:\/\/127\.0\.0\.1:\d+\/s\/ses_env$/);
+    // The session's token works through the proxy, which swaps in the real key; any other token does not.
+    const ok = await fetch(`${s.env.ANTHROPIC_BASE_URL}/v1/messages`, { method: 'POST', headers: { 'x-api-key': s.env.ANTHROPIC_API_KEY, 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(seen, [{ url: '/v1/messages', key: 'sk-ant-test-runner-own-key-0123456789' }]);
+    const bad = await fetch(`${s.env.ANTHROPIC_BASE_URL}/v1/messages`, { method: 'POST', headers: { 'x-api-key': 'guess' }, body: '{}' });
+    assert.equal(bad.status, 401);
+    await s.stop('now', 'test');
+    const after = await fetch(`${s.env.ANTHROPIC_BASE_URL}/v1/messages`, { method: 'POST', headers: { 'x-api-key': s.env.ANTHROPIC_API_KEY }, body: '{}' });
+    assert.equal(after.status, 401, 'the token dies with the session');
+    // With no key in the runner's environment, a session gets no model access at all.
     delete process.env.ANTHROPIC_API_KEY;
-    const t = new Session({ session: 'ses_env2', role: 'web-dev', team: 't', repo: { url: bare } }, { root, emit: async () => {}, adapter: { turn: async () => ({}) } });
+    const t = new Session({ session: 'ses_env2', role: 'web-dev', team: 't', repo: { url: bare } }, { root, modelProxy: proxy, emit: async () => {}, adapter: { turn: async () => ({}) } });
     t.pump = () => {};
     await t.start();
     assert.equal(t.env.ANTHROPIC_API_KEY, undefined);
+    assert.equal(t.env.ANTHROPIC_BASE_URL, undefined);
   } finally {
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
     Object.assign(process.env, saved);
+    await proxy.close();
+    await new Promise((r) => upstream.close(r));
   }
 });
 
