@@ -1,0 +1,44 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Change rollout</title><link rel="stylesheet" href="mock.css">
+<style>
+.ro { display: grid; grid-template-columns: 1fr 420px; height: calc(100vh - 53px); }
+.main { overflow: auto; padding: 18px 26px; }
+.side { background: var(--panel); border-left: 1px solid var(--line); overflow: auto; padding: 14px; }
+.lane { display: grid; grid-template-columns: 170px 1fr 170px; gap: 14px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.track { position: relative; height: 26px; border-radius: 6px; background: var(--off); display: flex; overflow: hidden; }
+.v7 { background: repeating-linear-gradient(135deg, #d6def9, #d6def9 6px, #e3e9fc 6px, #e3e9fc 12px); color: var(--accent); display: flex; align-items: center; padding: 0 8px; font-weight: 600; font-size: 11.5px; white-space: nowrap; }
+.v8 { background: var(--accent); color: #fff; display: flex; align-items: center; padding: 0 8px; font-weight: 600; font-size: 11.5px; white-space: nowrap; }
+.gone { color: var(--muted); display: flex; align-items: center; padding: 0 8px; font-size: 11.5px; }
+.now { position: absolute; top: 0; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--ink); transform: translateX(-5px); }
+.axis { display: grid; grid-template-columns: 170px 1fr 170px; gap: 14px; font-size: 11.5px; color: var(--muted); }
+.axis div { display: flex; justify-content: space-between; }
+.ev { font-size: 12.5px; padding: 7px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 50px 1fr; gap: 8px; }
+.ev .t { color: var(--muted); }
+</style></head><body>
+<header class="bar"><div class="brand"><strong>Agent Team Studio</strong>&nbsp;<span class="muted">My App</span>
+<nav class="tabs"><a class="on">Team</a><a>Meetings</a><a>Notifications</a><a>Chat</a></nav></div>
+<div class="bar-actions"><span class="pill live">Live v8 merged · 2 roles still on v7</span><button>Pause the rollout</button></div></header>
+<main class="ro">
+<section class="main">
+<div class="row" style="justify-content:space-between"><div><h1>Rolling out v8</h1><p class="muted" style="margin:4px 0 0">PR #156 merged at 12:02. Each role moves to v8 at the point you chose. New sessions start on v8.</p></div><span class="pill">3 of 5 roles on v8</span></div>
+<div style="margin-top:18px">
+<div class="axis"><span></span><div><span>12:02 merge</span><span>▼ now 12:16</span><span>13:00</span></div><span></span></div>
+<div class="lane"><strong>Backend dev</strong><div class="track"><div class="v7" style="width:46%">v7 · finishing #153</div><div class="gone">off</div><span class="now" style="left:24%"></span></div><span class="hint">Let it finish · no new work</span></div>
+<div class="lane"><strong>Web dev</strong><div class="track"><div class="v7" style="width:64%">v7 · owns a11y/ until #142 merges</div><div class="v8" style="flex:1">v8</div><span class="now" style="left:24%"></span></div><span class="hint">Path moves on merge</span></div>
+<div class="lane"><strong>QA web</strong><div class="track"><div class="v7" style="width:12%">v7</div><div class="v8" style="flex:1">v8 · next task started 12:09</div><span class="now" style="left:24%"></span></div><span class="hint">At the next task · done</span></div>
+<div class="lane"><strong>Shared core dev</strong><div class="track"><div class="v8" style="flex:1">v8 · owns supabase/, apps/api/ · 2 HANDOFFs received</div><span class="now" style="left:24%"></span></div><span class="hint">Idle at merge · done</span></div>
+<div class="lane"><strong>Accessibility auditor</strong><div class="track"><div class="v8" style="flex:1">v8 · #151 moves here when #142 merges</div><span class="now" style="left:24%"></span></div><span class="hint">Idle at merge · done</span></div>
+</div>
+<h2>Still waiting on</h2>
+<ul class="issues"><li class="warning">Backend dev: #153 needs your approval for the production backfill before it can finish. <a href="#">Open the card</a></li><li class="warning">Web dev: #142 needs QA web's SIGNOFF before it merges and the path moves.</li></ul>
+</section>
+<aside class="side">
+<h2 style="margin-top:0">What happened</h2>
+<div class="ev"><span class="t">12:02</span><span>PR #156 merged. Team is now v8 (<code>a41c9e2</code>).</span></div>
+<div class="ev"><span class="t">12:02</span><span>Shared core dev and Accessibility auditor were idle: moved to v8.</span></div>
+<div class="ev"><span class="t">12:02</span><span>2 HANDOFFs re-routed from Backend dev to Shared core dev. Their senders were told.</span></div>
+<div class="ev"><span class="t">12:02</span><span>Backend dev marked "finishing": it gets no new work. Tomorrow's standup updated.</span></div>
+<div class="ev"><span class="t">12:09</span><span>QA web started a new task on v8. Its session got a note with the rule changes.</span></div>
+<div class="ev"><span class="t">12:14</span><span>Something new: CTO sent Backend dev a HANDOFF on v7. Re-routed to Shared core dev by the v8 plan; CTO told.</span></div>
+<p class="hint" style="margin-top:12px">If a role stays on an old version more than 24 hours, you get a notification and a card to choose again.</p>
+</aside>
+</main></body></html>

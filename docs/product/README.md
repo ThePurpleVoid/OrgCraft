@@ -9,4 +9,5 @@ The plan for turning Agent Team Kit into a visual product. You lay out your team
 | [Deployment](deployment.md) | Local, self-hosted, hosted; how the Studio itself ships | infra, secrets and on-call |
 | [Delivery plan](delivery-plan.md) | Phases, exits, who builds what | CTO |
 | [Our own team](team.md) | How this repository's kit-defined team builds the Studio | CTO |
-| [ADRs](../adr/) | 0001 repository is the source of truth; 0002 runtime | architect |
+| [Mockups](mockups/) | Screens for custom agents, meetings, notifications and changing a running team | design director |
+| [ADRs](../adr/) | 0001 repository is the source of truth; 0002 runtime; 0003 local Studio without a build; 0004 team versions and transitions | architect |

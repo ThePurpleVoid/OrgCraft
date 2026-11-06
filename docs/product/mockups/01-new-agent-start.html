@@ -1,0 +1,69 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>New agent: start</title><link rel="stylesheet" href="mock.css">
+<style>
+.starts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.start { border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.start.on { border: 2px solid var(--accent); padding: 13px; background: var(--accent-bg); }
+.start h3 { margin-bottom: 4px; }
+.pick { margin-top: 10px; display: grid; gap: 4px; }
+.pick div { display: flex; justify-content: space-between; padding: 5px 8px; border-radius: 6px; font-size: 13px; }
+.pick div.sel { background: var(--panel); outline: 1px solid var(--accent); }
+.mini-canvas { position: absolute; inset: 49px 0 0 0; }
+.node { position: absolute; width: 190px; height: 58px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 8px 16px; font-size: 13px; }
+.node b { display: block; }
+.node .m { color: var(--muted); font-size: 11.5px; }
+.node::before { content: ""; position: absolute; left: 7px; top: 9px; bottom: 9px; width: 4px; border-radius: 2px; background: var(--c, var(--g-engineering)); }
+</style></head><body>
+<header class="bar"><div class="brand"><strong>Agent Team Studio</strong>&nbsp;<span class="muted">My App · ~/code/my-app · main</span>
+<nav class="tabs"><a class="on">Team</a><a>Meetings</a><a>Notifications</a><a>Chat</a></nav></div>
+<div class="bar-actions"><span class="pill live">Live v7 · 4 working</span><span class="pill ok">Checks pass</span><button>Undo</button><button>Redo</button><button class="primary">Publish…</button></div></header>
+<main class="layout">
+<aside class="palette">
+<div class="row"><input type="search" placeholder="Search"><button class="primary">New agent</button></div>
+<div class="group-title"><span class="dot" style="background:var(--g-custom)"></span>Your agents</div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Accessibility auditor</span><span class="tag">custom</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Data pipeline dev</span><span class="tag">custom</span></div>
+<div class="lib-role"><input type="checkbox"><span class="name">Localization lead</span><span class="tag">imported</span></div>
+<div class="group-title"><span class="dot" style="background:var(--g-executive)"></span>Executive</div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Chief of staff</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">CTO</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Chief product officer</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Head of quality</span></div>
+<div class="group-title"><span class="dot" style="background:var(--g-engineering)"></span>Engineering</div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">AI engineer</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Backend dev</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Code reviewer</span></div>
+<div class="lib-role"><input type="checkbox"><span class="name">Mobile dev</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Web dev</span></div>
+</aside>
+<section class="canvas-wrap"><div class="canvas-head"><span class="muted">24 roles on · 2 custom · kit 0.6.0</span><span class="hint">Drag a card onto another to change who it reports to.</span></div>
+<div class="mini-canvas">
+<div class="node" style="left:330px;top:30px;--c:var(--g-executive)"><b>Chief of staff</b><span class="m">deep</span></div>
+<div class="node" style="left:150px;top:130px;--c:var(--g-executive)"><b>CTO</b><span class="m">deep</span></div>
+<div class="node" style="left:510px;top:130px;--c:var(--g-executive)"><b>Chief product officer</b><span class="m">standard</span></div>
+<div class="node" style="left:40px;top:230px"><b>Web dev</b><span class="m">standard</span></div>
+<div class="node" style="left:260px;top:230px"><b>Backend dev</b><span class="m">standard</span></div>
+<div class="node" style="left:510px;top:230px;--c:var(--g-custom)"><b>Accessibility auditor</b><span class="m">standard · custom</span></div>
+</div></section>
+<aside class="inspector"><p class="muted">Pick a role on the canvas or in the library.</p></aside>
+</main>
+<div class="overlay"><div class="sheet" style="width:900px">
+<div class="sheet-head"><h1>New agent</h1><p class="muted" style="margin:4px 0 0">An agent is a role on this team with its own brief. Pick where to start; you can change everything on the next screen.</p></div>
+<div class="sheet-body">
+<div class="starts">
+<div class="start"><h3>Blank</h3><p class="hint">Start from the kit's role template: identity, owns, tools, wakes on, hands to, rules.</p></div>
+<div class="start on"><h3>Copy a kit role</h3><p class="hint">Start from a role close to what you need. Your agent is a separate role; the kit role stays as it is.</p>
+<input type="search" value="qa" style="margin-top:8px">
+<div class="pick"><div class="sel"><span>QA web</span><span class="muted">quality</span></div><div><span>QA mobile</span><span class="muted">quality</span></div><div><span>Backend tester</span><span class="muted">quality</span></div></div></div>
+<div class="start"><h3>Import a file</h3><p class="hint">A brief another team shared: a <code>.md</code> role file or a role pack folder. Checked before it is added.</p></div>
+</div>
+<div class="field" style="margin-top:18px"><span>Name</span><input value="Accessibility auditor"></div>
+<div class="row" style="align-items:flex-start;gap:16px">
+<div class="field grow" style="margin:0"><span>Slug (file name and board name)</span><input class="mono" value="accessibility-auditor"></div>
+<div class="field grow" style="margin:0"><span>Group</span><select><option>Quality</option></select></div>
+<div class="field grow" style="margin:0"><span>Reports to</span><select><option>Head of quality</option></select></div>
+</div>
+<ul class="issues" style="margin-top:12px"><li class="ok">The slug is free. No kit role uses it in 0.6.0.</li></ul>
+</div>
+<div class="sheet-foot"><span class="hint">Saved as <code>.agent-team/roles/accessibility-auditor.md</code> when you publish.</span><span class="row"><button>Cancel</button><button class="primary">Continue to the brief</button></span></div>
+</div></div>
+</body></html>

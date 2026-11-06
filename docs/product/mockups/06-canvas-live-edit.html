@@ -1,0 +1,69 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Editing a live team</title><link rel="stylesheet" href="mock.css">
+<style>
+.cv { position: absolute; inset: 49px 0 0 0; }
+.node { position: absolute; width: 200px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 8px 18px; font-size: 13px; }
+.node b { display: block; }
+.node .m { color: var(--muted); font-size: 11.5px; display: block; }
+.node::before { content: ""; position: absolute; left: 7px; top: 9px; bottom: 9px; width: 4px; border-radius: 2px; background: var(--c, var(--g-engineering)); }
+.node .live { margin-top: 5px; font-size: 11.5px; }
+.node.off { opacity: .55; border-style: dashed; }
+.node.sel { border: 2px solid var(--accent); padding: 7px 11px 7px 17px; }
+.node.touch { box-shadow: 0 0 0 3px #f3dc9b; }
+svg.e { position: absolute; inset: 0; pointer-events: none; }
+svg.e path { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.pop { position: absolute; width: 330px; background: var(--panel); border: 1px solid #e7c96f; border-radius: 10px; box-shadow: 0 10px 30px rgb(20 24 34 / .16); padding: 12px 14px; font-size: 13px; }
+.pop::before { content: ""; position: absolute; left: -7px; top: 22px; width: 12px; height: 12px; background: var(--panel); border-left: 1px solid #e7c96f; border-bottom: 1px solid #e7c96f; transform: rotate(45deg); }
+.pop ul { margin: 6px 0 8px; padding-left: 18px; }
+.inflight { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 6px 0; font-size: 12.5px; }
+</style></head><body>
+<header class="bar"><div class="brand"><strong>Agent Team Studio</strong>&nbsp;<span class="muted">My App · ~/code/my-app · main</span>
+<nav class="tabs"><a class="on">Team</a><a>Meetings</a><a>Notifications</a><a>Chat</a></nav></div>
+<div class="bar-actions"><span class="pill live">Live v7 · 4 working</span><span class="pill warn">3 changes · 2 touch work in progress</span><button>Undo</button><button>Redo</button><button class="primary">Publish…</button></div></header>
+
+<main class="layout">
+<aside class="palette">
+<input type="search" placeholder="Search roles and agents">
+<div class="group-title"><span class="dot" style="background:var(--g-custom)"></span>Your agents</div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Accessibility auditor</span><span class="tag">custom</span></div>
+<div class="group-title"><span class="dot" style="background:var(--g-executive)"></span>Executive</div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Chief of staff</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">CTO</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Head of quality</span></div>
+<div class="group-title"><span class="dot" style="background:var(--g-engineering)"></span>Engineering</div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">AI engineer</span></div>
+<div class="lib-role selected"><input type="checkbox"><span class="name">Backend dev</span><span class="tag" style="color:var(--work)">working</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Shared core dev</span></div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">Web dev</span><span class="tag" style="color:var(--work)">working</span></div>
+<div class="group-title"><span class="dot" style="background:var(--g-quality)"></span>Quality</div>
+<div class="lib-role"><input type="checkbox" checked><span class="name">QA web</span><span class="tag" style="color:var(--wait)">waiting</span></div>
+</aside>
+<section class="canvas-wrap"><div class="canvas-head"><span class="muted">Editing a draft of v8 · the team keeps running v7 until you publish</span><span class="hint">Cards show live status. Amber outline: your change touches this role's current work.</span></div>
+<div class="cv">
+<svg class="e" width="100%" height="100%"><path d="M410 78 V108 H190 V138"/><path d="M410 78 V108 H630 V138"/><path d="M190 196 V226 H80 V256"/><path d="M190 196 V226 H300 V256"/><path d="M190 196 V226 H80 V350"/><path d="M630 196 V256"/></svg>
+<div class="node" style="left:310px;top:20px;--c:var(--g-executive)"><b>Chief of staff</b><span class="m">deep</span><span class="status working live">in a meeting</span></div>
+<div class="node" style="left:90px;top:138px;--c:var(--g-executive)"><b>CTO</b><span class="m">deep</span><span class="status live">idle</span></div>
+<div class="node" style="left:530px;top:138px;--c:var(--g-executive)"><b>Head of quality</b><span class="m">standard</span><span class="status live">idle</span></div>
+<div class="node touch" style="left:-20px;top:256px;left:0"><b>Web dev</b><span class="m">standard · path moves away</span><span class="status working live">#142 dark mode</span></div>
+<div class="node off sel touch" style="left:220px;top:256px"><b>Backend dev</b><span class="m">switched off in this draft</span><span class="status working live">#153 theme backfill</span></div>
+<div class="node" style="left:0;top:350px"><b>Shared core dev</b><span class="m">standard</span><span class="status live">idle</span></div>
+<div class="node" style="left:530px;top:256px;--c:var(--g-quality)"><b>QA web</b><span class="m">standard · rules changed</span><span class="status waiting live">waiting on preview</span></div>
+<div class="node" style="left:530px;top:350px;--c:var(--g-custom)"><b>Accessibility auditor</b><span class="m">standard · custom</span><span class="status live">idle</span></div>
+<div class="pop" style="left:440px;top:440px">
+<strong>Backend dev is working right now.</strong>
+<ul><li>Task #153, branch <code>backend/153-theme-default</code>, PR open</li><li>An approval waiting for you (production backfill)</li><li>2 HANDOFFs queued for it</li><li>Holds the <code>backend</code> lock</li></ul>
+<p class="hint">Nothing changes for it yet. When you publish, you choose what happens to this work.</p>
+<div class="row"><button>Undo switch off</button><button class="primary">Review the impact</button></div>
+</div>
+</div></section>
+<aside class="inspector">
+<div class="row" style="justify-content:space-between"><h3 style="margin:0">Backend dev</h3><span class="badge">kit role</span></div>
+<label class="row" style="margin:10px 0"><input type="checkbox" style="width:auto">On this team <span class="badge warn">changed</span></label>
+<h2>Now, on v7</h2>
+<div class="inflight"><span class="status working">working · 34 min</span><br><strong>#153 Backfill theme default</strong><br><span class="muted">branch pushed 4 min ago · PR #153 draft · gate not run</span></div>
+<div class="inflight"><span class="status waiting">approval pending</span><br>Run backfill on production · asked 11:44</div>
+<div class="inflight"><span class="status">queued</span><br>HANDOFF from AI engineer: rate limit for <code>/api/theme</code><br>HANDOFF from CTO: index on <code>profiles.email</code></div>
+<div class="inflight"><span class="status">scheduled</span><br>Daily standup, tomorrow 09:00</div>
+<h2>Checks</h2>
+<ul class="issues"><li class="warning"><code>supabase/</code> loses its owner. Pick a new owner before publishing.</li><li class="warning">2 roles hand work to Backend dev. Their briefs will point to the new owner.</li></ul>
+</aside>
+</main></body></html>

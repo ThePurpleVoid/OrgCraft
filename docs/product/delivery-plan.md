@@ -6,9 +6,9 @@ Owner: CTO. Status: draft 1, 2026-11-05. Each phase ends with a demo checkpoint 
 | --- | --- | --- | --- | --- |
 | 0 | Plan and our own team | none (this repository runs its own team) | none | none |
 | 1 | Team model and lossless round trip | 7, 8 from the CLI | G1, G2 (with the kit thread) | 0.4 |
-| 2 | Local editor, publish, live board | 1 to 8, 13 | G1 on the canvas | 0.4.x |
-| 3 | Runner and chief-of-staff chat | 9 to 12: **the full demo, locally** | G2 run modes, G4 evals harness | 0.5 |
-| 4 | Systems and parallel roles | 5 and 6 with real connectors, parallel work in 10 | G3 Node scripts and Windows | 0.5.x |
+| 2 | Local editor, publish, live board, custom agents | 1 to 8, 13, 14 | G1 on the canvas | 0.4.x |
+| 3 | Runner and chief-of-staff chat, safe changes while running, meetings, email | 9 to 12: **the full demo, locally**, plus 15 to 17 | G2 run modes, G4 evals harness | 0.5 |
+| 4 | Systems and parallel roles, discussion meetings, Slack | 5 and 6 with real connectors, parallel work in 10 | G3 Node scripts and Windows | 0.5.x |
 | 5 | Self-hosted, multi-user | the demo on a shared server | G3 adapters for other agents (first one) | 0.6 |
 | 6 | Hosted beta (only if wanted) | the demo with no install | none | none |
 
@@ -39,8 +39,11 @@ Roles: web dev (lead), design director and style threads (canvas visual language
 - Import any repository's `.agent-team/`; ownership table with suggestions from the repository tree; gates read from `config.sh` (read-only) and `gates.json` (editable).
 - Publish: diff preview, local commit on a branch, PR through `gh`.
 - Live board on the canvas from hook and role events (the kit dashboard's event model).
+- **Custom agents** (PRD 6.6, A1 to A7; mockups 01 and 02): the New agent sheet (blank, copy a kit role, import a file), the guided editor with the live brief preview, path-conflict choices, "Your agents" in the library, role pack export and import, and the kit-upgrade shadowing check. Kit side: `## Sign-off evidence` and structured `## Wakes on` sections, `pack.json`.
+- **Change safety, part 1** (PRD 6.9 X1, X5, X9; mockup 06): `diffTeams` and `impact` in `packages/team-model`; live status on canvas cards from board events; amber marks and the in-place explanation when a change touches a working role; the impact step in Publish in board-only form (warnings and the "data may be stale" note, choices recorded in the PR body).
+- **Meeting definitions** (PRD 6.7 M8; mockup 03, editor half): the Meetings view edits `meetings.json`, with checks and the cost estimate. Running them is phase 3.
 - Progress: kit 0.6.0 shipped `agent-team studio` with the library, the org canvas (drag to re-parent), the inspector, live checks, undo/redo and publish (diff preview, commit on a branch). It is plain ES modules with no build ([ADR 0003](../adr/0003-studio-local-mode-without-a-build.md)). Still to do: Flow and Systems views, ownership and gates editors, PR through `gh`, and the live board on the canvas.
-- **Exit:** demo steps 1 to 8 and 13 on a sample repository, walked by QA web with screenshots; a usability test with 3 people.
+- **Exit:** demo steps 1 to 8, 13 and 14 on a sample repository, walked by QA web with screenshots; a usability test with 3 people that includes making one custom agent.
 
 ## Phase 3: runner and chief-of-staff chat (the MVP)
 
@@ -50,8 +53,12 @@ Roles: AI engineer (lead), backend dev (bus, approvals, storage), web dev (chat 
 - Team tool server (report, handoff, bug, signoff, blocked, ask_owner, request_approval, memory, open_issue, merge) with field checks.
 - Message bus with wake-on-message; ownership-enforcing pre-tool hook; approval gates for the owner-steps-in list; budgets, caps, pause and stop; audit log.
 - Chat: verbatim owner messages, decision and approval cards, daily digest, cost line.
+- **Change safety, part 2** (PRD 6.9 X2 to X8, X10; architecture 12.4; mockups 07 and 08): sessions pinned to a team version; the live in-flight inventory; the impact step with per-item choices and recommendations; transition plans applied on merge; `checkpoint()`; temporary ownership rules; the invariants; the rollout view; impact cards for `.agent-team/` changes merged outside the Studio. Owned by the AI engineer (runner) and web dev (dialogs); security reviewer reviews the invariants.
+- **Meetings** (PRD 6.7 M1 to M7, written round only; architecture 12.2; mockup 04): scheduler, recurring and ad hoc meetings (from the Meetings view and from the chat), busy-attendee handling, `meeting_reply` and `meeting_close`, minutes and action items in the chat, caps and skip-if-quiet.
+- **Notifications** (PRD 6.8 O1 to O7 with email and webhook; architecture 12.3; mockup 05): the notifier, rules, quiet hours, delivery log, test sends, signed decision links. Slack waits for phase 4.
+- **Try it on a task** for custom agents (PRD A8).
 - Evals harness v1 on one sample repository: single agent vs subagents vs Studio runner, same model and budget.
-- **Exit:** the full demo (steps 1 to 12) live on a fresh sample repository, three times in a row; first evals report published in the repository, whatever it shows.
+- **Exit:** the full demo (steps 1 to 12) live on a fresh sample repository, three times in a row; steps 15 to 17 walked once with no work lost (every stopped session's branch and memory checked); first evals report published in the repository, whatever it shows.
 
 ## Phase 4: systems and parallel roles
 
@@ -60,6 +67,7 @@ Roles: backend dev (connectors, vault), AI engineer (parallel sessions, worktree
 - Connectors: GitHub App, Supabase, Postgres, Vercel, generic MCP server; the Systems view with bindings; secrets in the OS keychain.
 - Parallel role sessions with worktrees and hardware pools; concurrency cap.
 - Kit 0.5: Node equivalents of `team-status`, `team-board`, `merge-gate`, `with-lock`, `janitor`; Windows CI.
+- Discussion-format meetings and event-triggered meetings; Slack as a notification channel with buttons on decision cards; "freeze the team" (PRD X8).
 - Evals on three sample repositories.
 - **Exit:** demo steps 5 and 6 with real connectors; two builders working in parallel during step 10; the kit's tests green on Windows.
 
@@ -68,6 +76,7 @@ Roles: backend dev (connectors, vault), AI engineer (parallel sessions, worktree
 Roles: infra (lead), backend dev (Postgres driver, auth, workspaces), security reviewer, release manager, docs keeper.
 
 - Docker images, Compose stack, GitHub App manifest flow, `studio doctor`, GitHub OAuth, workspace roles, Postgres driver, S3 evidence storage.
+- Notification settings and channels per workspace member; Microsoft Teams, Discord and push channels.
 - First adapter for another coding agent (an `AGENTS.md`-style export of the briefs and protocols), with governance kept by CI and, where the agent supports it, the runner.
 - **Exit:** the demo on a fresh Compose install by someone who did not build it, following only the docs.
 

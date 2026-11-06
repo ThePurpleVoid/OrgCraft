@@ -8,6 +8,8 @@ Owner: product manager. Status: draft 1, 2026-11-05. Working name: **Agent Team 
 
 > The downfalls and cons you listed in the thread, account for those and build for these gaps.
 
+> There should be a way to define custom agents and add new ones that are not predefined. There should be a way for the owner to schedule meetings with select team members, sort of like daily standup, ad hoc meetings. There should be a way to connect emails/communication systems with the owner so if they want to receive emails for certain triggers or team members they can. When making changes to the team structure/details/or any team member actively working on something or in its lane, we need to be sure that the new changes don't break any ongoing work. If something is ongoing there should be explicit UI asking the user how they want to handle the ongoing work. (2026-11-06; sections 6.6 to 6.9)
+
 ## 1. Vision
 
 Today Agent Team Kit is a text product: you pick a preset, write `.agent-team/` files, sync, paste the instructions into a Claude project and open threads by hand. It works, and it has run a real product. But only someone who already knows Claude Code projects, worktrees, bash and markdown briefs can set it up.
@@ -38,6 +40,10 @@ Positioning, from the comparison work: **the operating manual and control room f
 - When I ask for something, I want one conversation (the chief of staff) and a live picture of who is doing what, so I don't babysit ten threads.
 - When the team finishes something, I want proof (a screenshot, a preview link, test logs) before I trust it.
 - When I change my mind about the team, I want to change it visually and publish again, and see exactly what changed.
+- When the kit's library has no role for what I need, I want to make my own agent in the same editor, so my team is not limited to the presets.
+- When I want the team to sync up, I want to call a meeting (a daily standup or an ad hoc one about a problem) with the roles I choose, and get minutes and action items, not a transcript.
+- When something needs me, I want to hear about it where I already am (email, Slack), for the triggers and roles I care about, and nothing else.
+- When I change the team while it is working, I want to know exactly which work my change touches and decide what happens to it, so no task, branch or hand-off is lost.
 - When I evaluate the product, I want evidence that a governed team does better than one agent, so I can justify the cost.
 
 ## 4. The customer demo (the end-to-end acceptance test)
@@ -59,6 +65,15 @@ This is the script for the demo the owner wants to give. Every story in the back
 | 11. A decision | The chief of staff asks in the chat: "The setting needs a new column on `profiles`. Approve the migration? I recommend yes: additive and reversible." The presenter taps **Approve** | A decision card with a recommendation; nothing irreversible ran before the tap | The owner-steps-in rule is enforced by the runner as an approval gate |
 | 12. Done | The chief of staff posts: "Dark mode is Ready to try", with the preview link | The PR merged with approval, SIGNOFF and a green gate; the digest line; the usage and cost line | Merge gate, separation of duties and evidence: the kit's governance, visible |
 | 13. Change the team | Back on the canvas, switches on **Performance tester** and publishes again | A one-file diff (`team.json`) and a second PR | Publishing is cheap and reviewable |
+
+Stretch steps for the team operations features (sections 6.6 to 6.9), shown after step 12 or in a second demo:
+
+| Step | The presenter does | The customer sees |
+| --- | --- | --- |
+| 14. Custom agent | Clicks **New agent**, copies QA web, names it "Accessibility auditor", gives it `tests/a11y/` and a sign-off rule | A live brief preview, a path conflict caught and resolved in the editor, the new card on the canvas |
+| 15. Meetings | Opens **Meetings**, sets a daily standup for the CTO lane, then in the chat asks for "backend dev and payments engineer on the checkout errors, now" | The schedule with a cost estimate; an ad hoc meeting starts, a busy role joins after its current step, minutes and action items land in the chat |
+| 16. Notifications | Adds an email address, verifies it, turns on "approval needed" and "ready to try from web dev", sends a test | The test email, then a real one when the next approval comes up |
+| 17. Change while running | Switches off a role that is mid-task, and moves a path a working role has a branch on. Clicks **Publish** | The "your change touches work in progress" step with per-item choices and a recommendation; after merge, the rollout view as each role moves to the new version |
 
 Stretch steps for a technical audience: export the same team to Claude Code's built-in agent teams and run it in a terminal; open the same team in another runtime (see 6.3); show the evals page comparing this team with a single agent on the same task set.
 
@@ -116,6 +131,59 @@ The comparison of the kit with other agent-team projects (README "How this compa
 - N4. Security: least privilege per role, a full audit log of tool calls and approvals, prompt-injection defences on anything read from issues, PRs and web pages (see architecture §8).
 - N5. Platforms: macOS, Linux and Windows (native, without WSL) for the Studio and the CLI.
 
+### 6.6 Custom agents
+
+The kit already supports project roles (`.agent-team/roles/<slug>.md`, `source: "project"` in the TeamSpec). Today you write that markdown by hand. The Studio makes a custom agent a first-class thing to build. Mockups: [01](mockups/01-new-agent-start.png), [02](mockups/02-custom-agent-editor.png).
+
+- A1. **New agent** in the library, with three starts: blank (the kit's role template), copy a kit role (a new, separate role; the kit role is untouched), or import a file (a role `.md` or a role pack folder another team shared).
+- A2. A guided editor with the same sections as every brief: identity, model tier, status (on or dormant), place in the team (group, reports to), work and paths, tools and systems, wakes on, hands to, rules, and sign-off evidence. A live preview shows the exact file publish will write.
+- A3. Live checks, the same as for kit roles, plus: the slug is unique and does not shadow a kit role (unless you choose "replace the kit role", which is `project-replaces-kit`); every path has one writer; "hands to" names roles on the team; the evidence list is not empty for a role that signs off; no secrets in text.
+- A4. **Path conflicts are resolved in place**, never by allowing two writers. Options: read only (send fixes to the owner as BUG), take a narrower sub-path, or move the path (which goes through the change-safety step in 6.9 if the current owner has work on it).
+- A5. Custom groups: a custom agent may use a new group name; the library shows it as its own section with its own colour.
+- A6. **Your agents** section in the library: custom roles in this team, and imported ones not yet switched on. Export any custom agent as a role pack (a folder with the `.md` and a `pack.json` listing what it needs: tools, systems, the paths it expects).
+- A7. Kit upgrades: if a newer kit adds a role with the same slug as a custom agent, the upgrade check says so and offers to rename yours or switch to the kit's. Your role is never silently replaced.
+- A8. **Try it on a task** (with the runner, phase 3): run the agent on one sample task in a throwaway worktree, with no write access outside it and a small cost cap, and see its output and SIGNOFF before adding it.
+
+### 6.7 Meetings
+
+A meeting is a structured conversation the runner holds between chosen roles, run by a facilitator (the chief of staff by default), that ends with minutes, action items and decisions. Mockups: [03](mockups/03-meetings.png), [04](mockups/04-chat-minutes-adhoc.png).
+
+- M1. **Recurring meetings** (daily standup, weekly planning, release readiness, retro) with a schedule in the team's time zone, and **event-triggered meetings** (for example a design review when a PR gets the `design` label).
+- M2. **Ad hoc meetings** from the Meetings view or by asking in the chat ("get backend dev and payments engineer on the checkout errors, now"). The chief of staff proposes attendees and an agenda, and starts it.
+- M3. Attendees by name, by lane, or by rule ("everyone who worked since the last standup"). Dormant roles are never woken for a meeting unless named. The owner can attend: receive the minutes only, or join and speak.
+- M4. Two formats. **Written round**: each attendee answers the agenda once from its board and memory file; cheap, no cross-talk; the default for standups. **Discussion**: attendees read each other and reply, up to N rounds, for planning and trade-offs.
+- M5. **Meetings never break running work.** If an attendee is mid-task, the default is that the question waits until its current step ends. Other choices: the facilitator answers for it from its board reports (marked as such in the minutes, no cost), or it is left out.
+- M6. Outputs: minutes in the chat; each action item becomes an issue or a HANDOFF to its owner; anything that needs the owner becomes a decision or approval card. Nothing a meeting decides skips the normal gates.
+- M7. Cost: an estimate before saving, a per-meeting cap (the meeting ends and writes partial minutes at the cap), and meetings count toward the run and daily budgets. A recurring meeting is skipped when nothing changed since the last one.
+- M8. Meeting definitions are part of the team (`.agent-team/meetings.json`), published and reviewed like any change. Minutes are run data, kept by the Studio and in the chat, not committed.
+
+### 6.8 Notifications and owner channels
+
+The owner chooses where the team reaches them and for what. Mockup: [05](mockups/05-notifications.png).
+
+- O1. Channels: email first (verified by a code), then Slack, a generic webhook, and later Microsoft Teams, Discord and phone push. Each channel shows its health; a failing channel falls back to the next one and says so.
+- O2. Rules: **when** (approval needed, decision waiting, ongoing work needs a choice, ready to try, blocked longer than N minutes, stuck or silent role, gate failed, budget at 80% and 100%, run failed, meeting minutes, daily digest, team version published or rolled out), **about** (anyone, a lane, specific roles), **to** (channels), **how** (at once, batched every N minutes, hourly or daily summary).
+- O3. Quiet hours in the owner's time zone; approvals and budget stops can break through, everything else waits for the digest.
+- O4. Replies: a reversible decision card can be answered by replying to the email or with Slack buttons. **An approval is never taken from an email reply**: the message links to the Studio, which asks the owner to sign in. Links expire.
+- O5. Agents cannot send notifications or add recipients. The Studio sends them from team events, only to verified addresses. A notification never contains secrets, and text from outside the team (issue titles, PR comments) is quoted and shortened.
+- O6. A delivery log with status and retries, and "send a test" for each rule.
+- O7. Notification settings belong to a person, not to the team: they are kept by the Studio (local: next to the board in `~/.agent-team/<project>/`; hosted: per member), never in the repository.
+
+### 6.9 Changing a team that is working
+
+A published team version is a commit. The runner knows which version every live session started on. A change to the team never takes effect in the middle of someone's work without the owner choosing how. Mockups: [06](mockups/06-canvas-live-edit.png), [07](mockups/07-ongoing-work-dialog.png), [08](mockups/08-applying-change.png).
+
+- X1. **Live status while editing.** When the team is running, the canvas shows each role's live state. A change that touches a working role marks the card and explains in place what is in flight: task, branch, PR, queued hand-offs, pending approvals, locks, scheduled meetings. Editing is a draft; the team keeps running the published version.
+- X2. **Impact step in Publish.** Between the checks and the file review, Publish lists every piece of in-flight work the change affects, grouped by role, with a recommended choice for each.
+- X3. Choices for a role's current task: **let it finish** (keeps its current version until SIGNOFF, HANDOFF or idle, takes no new work if it is being removed), **hand off now** (push, HANDOFF to a chosen role, stop), **pause** (push, stop, wait for reassignment), **apply now** (push, restart the session on the new version, resume from memory), **stop and drop** (closes the PR; the branch is kept 30 days; typed confirmation). For path moves: **move after the PR merges**, **move now with a one-time exception for the files already changed**, or **move now and hand the files over**.
+- X4. Linked items get their own small choices: queued hand-offs (re-route to whom), pending approvals (keep, cancel), held locks (release on stop), meeting invitations (removed automatically), assigned issues (move with the path).
+- X5. **Safe changes need no choice.** Wording changes, a new role, a tier change on an idle role, or a rule change apply at each role's next task. They are listed so the owner sees them.
+- X6. **Invariants the runner enforces whatever is chosen**: nothing is lost (push and memory write before any stop); every path has exactly one writer at every moment; no hand-off is left addressed to a role that no longer exists; a secret binding is revoked only between tool calls; a pending approval for a removed role is never run by nobody.
+- X7. The plan takes effect when the publish PR merges. Work that started between the preview and the merge gets "let it finish". The **rollout view** shows each role moving to the new version and what each is still waiting on; a role still on an old version after 24 hours raises a notification.
+- X8. "Apply only when idle" applies the whole change when none of the affected roles has work in progress. "Freeze the team" pauses new work for a large restructure.
+- X9. Without the runner (threads mode, or the CLI only) the Studio has no live sessions. It uses board reports and open PRs to warn, says that the data can be stale, and the new briefs take effect when each thread next resumes.
+- X10. The same rules apply when the change does not come from the Studio: a commit that edits `.agent-team/` directly (by the owner or by a role like kit core dev) is detected on merge, and the runner raises the same impact card in the chat before it applies.
+
 ## 7. MVP scope and later
 
 **MVP = the demo, steps 1 to 12, locally, on GitHub, with Claude Code.**
@@ -129,6 +197,10 @@ The comparison of the kit with other agent-team projects (README "How this compa
 | Run modes: subagents and Studio runner (chief of staff + on-demand role sessions); built-in agent teams export | Other coding agents as adapters; remote run machines |
 | Hook-based reporting, approvals, budgets, cost line | Per-role usage optimisation suggestions |
 | Evals harness, internal only, on 3 sample repositories | Public leaderboard, customer-defined eval sets |
+| Custom agents: new, copy a kit role, import a file; live checks; path conflicts | Role pack sharing site, "try it on a task" in the hosted service |
+| Meetings: written round, recurring and ad hoc, minutes and action items | Discussion format beyond 3 rounds, voice, calendar sync (ICS) |
+| Notifications: email and webhook, rules, quiet hours, delivery log | Slack, Teams, Discord, push, SMS; reply-to-decide in Slack |
+| Change safety: live status on the canvas, impact step in Publish, rollout view | Freeze mode, policy ("never apply now to a role with an open migration") |
 | Node equivalents of the core scripts (Windows) | |
 
 **Non-goals:** a general workflow engine (Zapier, n8n), a new LLM SDK, hosting customers' production apps, or replacing GitHub as the place where code is reviewed.
@@ -151,6 +223,10 @@ The comparison of the kit with other agent-team projects (README "How this compa
 | Agents with database or deploy access cause damage | Bindings with least privilege, read-only database roles by default, migrations only through the repository and CI, approval gates in the runner |
 | Prompt injection through issues, PR comments and web content | Content from outside is marked untrusted in role prompts, tools that act outside the repository need approval, egress allowlist per run |
 | Dependence on one model vendor's features (hooks, agent teams) | Adapters (G3); the team model is neutral; the runner enforces governance itself |
+| Meetings multiply cost and noise | Written round by default, skip when nothing changed, caps per meeting, dormant roles never woken |
+| Notifications become spam, or a phishing vector | Few defaults (approvals, decisions, ongoing work), batching and quiet hours; agents cannot send them; approvals never by reply |
+| A team change corrupts in-flight work | Sessions pinned to a version, the impact step, the runner's invariants (6.9 X6), and "let it finish" as the default |
+| Custom agents weaken governance (two writers, no evidence) | The same checks as kit roles, path conflicts must be resolved, sign-off evidence required |
 | The demo looks good but the team underdelivers on real work | Evals (G4), and this repository built by its own team in the open |
 
 ## 10. Open questions
@@ -158,3 +234,5 @@ The comparison of the kit with other agent-team projects (README "How this compa
 1. ~~Runtime for the MVP's "let it run".~~ **Decided 2026-11-05: our own runner on the Claude Agent SDK.** The reasoning: our own runner on the Claude Agent SDK, with built-in agent teams and subagents as zero-infrastructure modes. The other option, driving claude.ai projects and cloud sessions as today, can't be controlled from our own app. See [ADR 0002](../adr/0002-runtime-agent-sdk-runner.md). The owner chose it.
 2. Hosted service: whether, when and how to charge. Not needed for the MVP; [deployment](deployment.md) keeps the door open.
 3. Name: "Agent Team Studio" is a working name.
+4. Notification sending in local mode: the owner's own SMTP or a provider key (Resend, Postmark, SES). Proposed: provider key in the vault, SMTP as an option; no hosted relay until a hosted service exists.
+5. Should meeting minutes ever be committed (for example a weekly planning record under `docs/team/meetings/`)? Proposed: off by default, a per-meeting switch.

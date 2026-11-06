@@ -1,0 +1,89 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ongoing work detected</title><link rel="stylesheet" href="mock.css">
+<style>
+body { background: #a9adb6; }
+.overlay { position: relative; inset: auto; padding: 28px 0 40px; background: transparent; }
+.sheet { width: 1060px; }
+.item { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+.item-head { display: grid; grid-template-columns: 1fr 330px; gap: 16px; padding: 12px 14px; background: var(--panel); }
+.item.big .item-head { border-bottom: 1px solid var(--line); }
+.item-body { padding: 12px 14px; display: grid; grid-template-columns: 1fr 330px; gap: 16px; background: #fbfbfd; }
+.what { font-size: 13px; }
+.what ul { margin: 4px 0 0; padding-left: 18px; }
+.what li { margin-bottom: 2px; }
+.choice { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; background: var(--panel); }
+.choice.on { border-color: var(--accent); background: var(--accent-bg); }
+.choice .c { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--muted); margin-top: 3px; flex: none; }
+.choice.on .c { border: 4px solid var(--accent); }
+.choice b { font-size: 13px; display: block; }
+.choice span.d { font-size: 12.5px; color: var(--muted); display: block; }
+.choice .rec { font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 6px; margin-left: 6px; font-weight: 400; }
+.choice select { margin-top: 6px; width: auto; font-size: 12.5px; padding: 3px 6px; }
+.choice.danger b { color: var(--error); }
+/* the timeline: where the change lands for this role */
+.tl { display: grid; gap: 4px; font-size: 11.5px; color: var(--muted); }
+.tl .cap { display: flex; justify-content: space-between; }
+.track { position: relative; height: 22px; border-radius: 6px; background: var(--off); overflow: hidden; display: flex; }
+.seg-v7 { background: repeating-linear-gradient(135deg, #d6def9, #d6def9 6px, #e3e9fc 6px, #e3e9fc 12px); color: var(--accent); display: flex; align-items: center; padding: 0 8px; font-weight: 600; white-space: nowrap; }
+.seg-v8 { background: var(--accent); color: #fff; display: flex; align-items: center; padding: 0 8px; font-weight: 600; white-space: nowrap; }
+.seg-gone { background: var(--off); color: var(--muted); display: flex; align-items: center; padding: 0 8px; white-space: nowrap; }
+.now { position: absolute; top: 0; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--ink); transform: translateX(-5px); }
+.sev { font-size: 11px; border-radius: 999px; padding: 1px 8px; }
+.sev.hi { background: var(--error-bg); color: var(--error); }
+.sev.mid { background: var(--warn-bg); color: var(--warn); }
+.sev.lo { background: var(--ok-bg); color: var(--ok); }
+.sub { border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 8px; font-size: 12.5px; display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; }
+.sub select { width: auto; font-size: 12.5px; padding: 3px 6px; }
+.compact { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; font-size: 13px; }
+.summary { display: flex; gap: 22px; font-size: 13px; padding: 10px 14px; background: var(--off); border-radius: 8px; margin-bottom: 14px; }
+.summary b { font-size: 18px; display: block; }
+</style></head><body>
+<header class="bar"><div class="brand"><strong>Agent Team Studio</strong>&nbsp;<span class="muted">My App · ~/code/my-app · main</span>
+<nav class="tabs"><a class="on">Team</a><a>Meetings</a><a>Notifications</a><a>Chat</a></nav></div>
+<div class="bar-actions"><span class="pill live">Live v7 · 4 working</span><span class="pill warn">3 changes · 2 touch work in progress</span><button>Undo</button><button>Redo</button><button class="primary">Publish…</button></div></header>
+<div class="overlay"><div class="sheet">
+<div class="sheet-head">
+<div class="row" style="justify-content:space-between"><h1>Your change touches work in progress</h1><span class="hint">Publish v8 · step 2 of 3: checks, ongoing work, review files</span></div>
+<p class="muted" style="margin:6px 0 0">The team is running v7. Choose what happens to each piece of work your change affects. Nothing is lost whatever you pick: work in progress is pushed to its branch and written to the role's memory before anything stops.</p>
+</div>
+<div class="sheet-body">
+<div class="summary"><div><b>2</b>need a choice</div><div><b>1</b>applies at the next task</div><div><b>1</b>adjusted for you</div><div class="grow"></div><div class="hint" style="align-self:center;max-width:380px">Live state from the runner, 5 seconds ago. Changes take effect when the publish PR merges; anything new that starts before then gets "Let it finish".</div></div>
+
+<div class="item big">
+<div class="item-head"><div><div class="row"><strong>Backend dev is switched off</strong><span class="sev hi">working now</span></div>
+<p class="hint" style="margin:3px 0 0">Owns <code>supabase/</code> and <code>apps/api/</code>. In v8 those move to Shared core dev.</p></div>
+<div class="tl"><div class="track"><div class="seg-v7" style="width:62%">v7 · finishes #153</div><div class="seg-gone" style="flex:1">off</div><span class="now" style="left:30%"></span></div><div class="cap"><span>▲ now</span><span>about 40 min left, then no new work</span></div></div></div>
+<div class="item-body">
+<div class="what"><strong>In flight</strong><ul>
+<li>Task #153 Backfill theme default, 34 min in. Branch <code>backend/153-theme-default</code> pushed 4 min ago; draft PR #153.</li>
+<li>Approval waiting for you: run the backfill on production.</li>
+<li>2 HANDOFFs queued for it, from AI engineer and CTO.</li>
+<li>Holds the <code>backend</code> lock. Invited to tomorrow's standup.</li></ul>
+<div class="sub"><span>Queued HANDOFFs go to</span><select><option>Shared core dev (new owner of the paths)</option></select>
+<span>The pending approval</span><select><option>Keep it; whoever finishes #153 runs it</option></select>
+<span>Tomorrow's standup</span><span class="hint">removed from attendees</span></div></div>
+<div>
+<div class="choice on"><span class="c"></span><div><b>Let it finish #153, then switch off<span class="rec">recommended</span></b><span class="d">Keeps working on v7 until SIGNOFF or HANDOFF, takes no new work, then stops. #153 is small and nearly done.</span></div></div>
+<div class="choice"><span class="c"></span><div><b>Hand off #153 now</b><span class="d">It pushes, writes a HANDOFF with what is done and what is left, then stops.</span><select><option>to Shared core dev</option></select></div></div>
+<div class="choice"><span class="c"></span><div><b>Pause #153</b><span class="d">It pushes and stops. The task waits on its branch until you reassign it.</span></div></div>
+<div class="choice danger"><span class="c"></span><div><b>Stop now and drop #153</b><span class="d">Closes PR #153. The branch is kept for 30 days. You type the task number to confirm.</span></div></div>
+</div></div></div>
+
+<div class="item big">
+<div class="item-head"><div><div class="row"><strong><code>apps/web/src/components/a11y/</code> moves from Web dev to Accessibility auditor</strong><span class="sev mid">branch touches it</span></div>
+<p class="hint" style="margin:3px 0 0">Web dev's branch <code>web/142-dark-mode</code> changes 2 files under that path. PR #142 is waiting on QA.</p></div>
+<div class="tl"><div class="track"><div class="seg-v7" style="width:52%">Web dev until #142 merges</div><div class="seg-v8" style="flex:1">auditor owns it</div><span class="now" style="left:22%"></span></div><div class="cap"><span>▲ now</span><span>one writer at every moment</span></div></div></div>
+<div class="item-body">
+<div class="what"><strong>In flight</strong><ul><li><code>ThemeMenu.tsx</code> and <code>FocusTrap.tsx</code> changed on <code>web/142-dark-mode</code>.</li><li>Issue #151 (focus trap fix) is assigned to Web dev and sits in the same path.</li></ul>
+<div class="sub"><span>Issue #151</span><select><option>Move to Accessibility auditor with the path</option></select></div></div>
+<div>
+<div class="choice on"><span class="c"></span><div><b>Move the path after PR #142 merges<span class="rec">recommended</span></b><span class="d">Web dev finishes with the files it already changed. The move happens on merge, by itself.</span></div></div>
+<div class="choice"><span class="c"></span><div><b>Move now, with a one-time exception</b><span class="d">The auditor owns the path at once; Web dev may still finish these 2 files on #142 only.</span></div></div>
+<div class="choice"><span class="c"></span><div><b>Move now and hand the 2 files over</b><span class="d">Web dev reverts them on its branch and sends a HANDOFF to the auditor. #142 waits for that.</span></div></div>
+</div></div></div>
+
+<div class="item"><div class="compact"><div><strong>QA web: rules changed</strong> <span class="sev lo">safe</span><br><span class="hint">Waiting on a preview for #142. The new rules apply when it starts its next task.</span></div><div class="row"><span class="hint">Apply at the next task</span><button>Apply now (restart session)</button></div></div></div>
+<div class="item"><div class="compact"><div><strong>Daily standup</strong> <span class="sev lo">adjusted for you</span><br><span class="hint">Backend dev is no longer on the team, so it leaves the attendee list from tomorrow.</span></div><button class="ghost">See meeting</button></div></div>
+</div>
+<div class="sheet-foot"><label class="row small"><input type="checkbox" style="width:auto">Instead, apply everything only when none of these roles has work in progress</label><span class="row"><button>Back to editing</button><button class="primary">Continue to review files</button></span></div>
+</div></div>
+</body></html>

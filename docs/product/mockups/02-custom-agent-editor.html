@@ -1,0 +1,111 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Custom agent editor</title><link rel="stylesheet" href="mock.css">
+<style>
+.ed { display: grid; grid-template-columns: 220px 1fr 420px; height: calc(100vh - 53px); }
+.nav { background: var(--panel); border-right: 1px solid var(--line); padding: 14px 10px; }
+.nav a { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-radius: 6px; color: var(--ink); text-decoration: none; font-size: 13.5px; }
+.nav a.on { background: var(--off); font-weight: 600; }
+.nav a .s { font-size: 11px; }
+.nav a .s.done { color: var(--ok); } .nav a .s.todo { color: var(--muted); } .nav a .s.warn { color: var(--warn); }
+.form { overflow: auto; padding: 18px 26px 40px; }
+.form h2:first-child { margin-top: 0; }
+.prev { background: var(--panel); border-left: 1px solid var(--line); overflow: auto; padding: 14px; }
+.brief { font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--off); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; color: var(--ink); }
+.brief .h { color: var(--accent); font-weight: 600; }
+.path { display: grid; grid-template-columns: 1fr 120px auto; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.conflict { background: var(--warn-bg); border: 1px solid #ecd59a; border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+.opts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.opt { border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font-size: 12.5px; background: var(--panel); }
+.opt.on { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.check { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 13px; }
+.check input { width: auto; margin-top: 3px; }
+</style></head><body>
+<header class="bar"><div class="brand"><strong>Agent Team Studio</strong>&nbsp;<span class="muted">My App · New agent</span></div>
+<div class="bar-actions"><span class="pill warn">1 warning</span><button>Back to the team</button><button>Try it on a task…</button><button class="primary">Add to the team</button></div></header>
+<main class="ed">
+<nav class="nav">
+<div class="row" style="padding:4px 10px 12px"><span class="dot" style="background:var(--g-custom)"></span><strong>Accessibility auditor</strong></div>
+<a><span>Identity</span><span class="s done">done</span></a>
+<a><span>Place in the team</span><span class="s done">done</span></a>
+<a class="on"><span>Work and paths</span><span class="s warn">1 to fix</span></a>
+<a><span>Tools and systems</span><span class="s done">done</span></a>
+<a><span>Wakes on</span><span class="s done">done</span></a>
+<a><span>Hands to</span><span class="s done">done</span></a>
+<a><span>Rules</span><span class="s todo">optional</span></a>
+<a><span>Sign-off evidence</span><span class="s done">done</span></a>
+<p class="hint" style="padding:16px 10px 0">Copied from QA web. Sections you have not changed still read like QA web; the preview marks what differs.</p>
+</nav>
+<section class="form">
+<h2>Identity</h2>
+<div class="field"><span>What this agent owns and how it is judged</span>
+<textarea style="min-height:84px">You keep the product usable by everyone. You audit every UI change for WCAG 2.2 AA: keyboard paths, focus order, contrast, screen-reader names and reduced motion. You are judged on accessibility regressions that reach main: the target is none.</textarea></div>
+<div class="cols">
+<div class="field"><span>Model tier</span><div class="seg"><span>light</span><span>routine</span><span class="on">standard</span><span>deep</span></div><p class="hint" style="margin-top:4px">Standard fits review work. Deep costs about 3× per task.</p></div>
+<div class="field"><span>When it starts</span><div class="seg"><span class="on">On</span><span>Dormant until asked</span></div></div>
+</div>
+
+<h2>Work and paths</h2>
+<p class="hint">Paths this agent writes. Every path has exactly one owner; everyone else asks the owner.</p>
+<div class="path"><code>tests/a11y/</code><select><option>writes</option></select><button class="ghost">Remove</button></div>
+<div class="path"><code>docs/accessibility.md</code><select><option>writes</option></select><button class="ghost">Remove</button></div>
+<div class="path"><code>apps/web/src/components/</code><select><option>writes</option></select><button class="ghost">Remove</button></div>
+<div class="conflict">
+<strong>Web dev already owns <code>apps/web/src/components/</code>.</strong>
+<p class="small" style="margin:4px 0 0">Two writers on one path breaks the one-writer rule. Web dev also has a branch open there right now (<code>web/142-dark-mode</code>), so moving ownership would affect work in flight.</p>
+<div class="opts"><span class="opt on">Read only, send fixes to web dev as BUG</span><span class="opt">Take <code>components/a11y/</code> only</span><span class="opt">Move the whole path to this agent…</span></div>
+</div>
+<button class="ghost" style="margin-top:6px">Add a path</button>
+
+<h2>Tools and systems</h2>
+<div class="row wrap"><span class="chip on">playwright</span><span class="chip on">axe-core CLI</span><span class="chip on">browser (screenshots)</span><span class="chip">Add a skill or MCP server</span></div>
+<p class="hint" style="margin-top:8px">Systems: <span class="badge">GitHub · read</span> <span class="badge">Vercel previews · read</span>. Without a binding it gets no tools and no secrets for that system.</p>
+
+<h2>Wakes on</h2>
+<div class="cols">
+<div><label class="check"><input type="checkbox" checked>A HANDOFF to this agent</label>
+<label class="check"><input type="checkbox" checked>A pull request that changes <code>apps/web/**</code></label>
+<label class="check"><input type="checkbox">A label on an issue: <code>a11y</code></label></div>
+<div><label class="check"><input type="checkbox" checked>A meeting it is invited to</label>
+<label class="check"><input type="checkbox">A schedule: <span class="muted">weekly full audit, Fri 14:00</span></label></div>
+</div>
+<h2>Sign-off evidence</h2>
+<p class="hint">A SIGNOFF from this agent is rejected without these.</p>
+<div class="row wrap"><span class="chip on">axe report path</span><span class="chip on">keyboard walk-through notes</span><span class="chip on">screenshot, light and dark</span></div>
+</section>
+<aside class="prev">
+<div class="row" style="justify-content:space-between"><h2 style="margin:0">Brief preview</h2><span class="badge custom">custom role</span></div>
+<p class="hint" style="margin:6px 0 8px"><code>.agent-team/roles/accessibility-auditor.md</code>. Exactly the file publish writes.</p>
+<div class="brief"><span class="h"># Accessibility auditor</span>
+
+**Model:** standard
+**Group:** quality
+**Reports to:** head-of-quality
+**Status:** on
+
+<span class="h">## Identity</span>
+You keep the product usable by everyone. You audit every UI change for WCAG 2.2 AA…
+
+<span class="h">## Owns (writes)</span>
+- tests/a11y/
+- docs/accessibility.md
+- reads apps/web/src/components/ (fixes go to web-dev as BUG)
+
+<span class="h">## Tools</span>
+playwright, axe-core CLI, browser
+
+<span class="h">## Wakes on</span>
+- a HANDOFF to accessibility-auditor
+- a PR that changes apps/web/**
+- a meeting it is invited to
+
+<span class="h">## Hands to</span>
+web-dev (BUG), qa-web (SIGNOFF)</div>
+<h2>Checks</h2>
+<ul class="issues">
+<li class="warning">Path <code>apps/web/src/components/</code> has two writers. Pick an option above.</li>
+<li class="ok">Reports to an installed manager; no loop.</li>
+<li class="ok">Hands to roles that are on this team.</li>
+<li class="ok">No secrets in the text.</li>
+</ul>
+</aside>
+</main></body></html>

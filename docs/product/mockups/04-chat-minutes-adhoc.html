@@ -1,0 +1,62 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Chat: minutes and ad hoc meeting</title><link rel="stylesheet" href="mock.css">
+<style>
+.ch { display: grid; grid-template-columns: 1fr 440px; height: calc(100vh - 53px); }
+.conv { overflow: auto; padding: 18px 0 90px; position: relative; }
+.col { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+.msg { margin-bottom: 16px; }
+.who { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.me { margin-left: 120px; background: var(--accent-bg); border-radius: 10px; padding: 9px 12px; }
+.cos { }
+.mins h4 { margin: 10px 0 4px; font-size: 13px; }
+.mins ul { margin: 0; padding-left: 18px; font-size: 13px; }
+.mins li { margin-bottom: 3px; }
+.ai { display: grid; grid-template-columns: 1fr 130px 90px; gap: 8px; font-size: 13px; padding: 6px 0; border-top: 1px solid var(--line); }
+.composer { position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 24px; background: linear-gradient(transparent, var(--bg) 30%); }
+.composer .col div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--muted); }
+.room { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+.room-head { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.turns { flex: 1; overflow: auto; padding: 12px 14px; }
+.turn { margin-bottom: 12px; font-size: 13px; }
+.turn .n { font-weight: 600; display: flex; gap: 6px; align-items: center; }
+.turn .n .r { color: var(--muted); font-weight: 400; font-size: 12px; }
+.turn.owner { background: var(--accent-bg); border-radius: 8px; padding: 8px 10px; }
+.turn.proxy .n::after { content: "written from reports"; font-size: 11px; color: var(--warn); border: 1px solid var(--warn); border-radius: 999px; padding: 0 6px; font-weight: 400; }
+.room-foot { border-top: 1px solid var(--line); padding: 10px 14px; }
+</style></head><body>
+<header class="bar"><div class="brand"><strong>Agent Team Studio</strong>&nbsp;<span class="muted">My App</span>
+<nav class="tabs"><a>Team</a><a>Meetings</a><a>Notifications</a><a class="on">Chat</a></nav></div>
+<div class="bar-actions"><span class="pill live">Live v7 · 4 working</span><span class="pill">Today $6.20 of $50</span><button>Pause the team</button></div></header>
+<main class="ch">
+<section class="conv"><div class="col">
+<div class="msg cos"><div class="who">Chief of staff · 09:12</div>
+<div class="card mins"><div class="row" style="justify-content:space-between"><strong>Daily standup, Tue 6 Nov</strong><span class="hint">7 of 7 answered · 11 min · $0.38</span></div>
+<h4>Done since Monday</h4><ul><li>Web dev: dark mode toggle, PR #142, waiting on QA.</li><li>Backend dev: <code>profiles.theme</code> migration, approved by you yesterday, merged.</li><li>Accessibility auditor: audit of settings page, 2 issues filed to web dev.</li></ul>
+<h4>Blockers</h4><ul><li>QA web needs a preview deploy of #142. Release manager can unblock: action item 1.</li></ul>
+<h4>Action items</h4>
+<div class="ai"><span>1. Preview deploy for #142</span><span class="muted">release manager</span><span class="badge accent">HANDOFF sent</span></div>
+<div class="ai"><span>2. Fix focus trap in theme menu</span><span class="muted">web dev</span><span class="badge accent">issue #151</span></div>
+<div class="ai"><span>3. Decide: keep the old theme cookie?</span><span class="muted">you</span><span class="badge warn">card below</span></div>
+</div></div>
+<div class="msg"><div class="who" style="text-align:right">You · 11:18</div><div class="me">Checkout is throwing errors for some users. Get backend dev and the payments engineer together on it now, I want to listen in.</div></div>
+<div class="msg cos"><div class="who">Chief of staff · 11:18</div>
+<p>I set up an ad hoc meeting and started it, since you asked for it now. Payments engineer was idle. Backend dev was in the middle of a migration test, so it joins when that step ends, in about 2 minutes. Nothing it was doing is lost.</p>
+<div class="card"><div class="row" style="justify-content:space-between"><strong>Ad hoc: checkout errors</strong><span class="pill live">live</span></div>
+<p class="hint" style="margin:6px 0">Discussion, up to 3 rounds · cap $2.00 · you can speak · run by chief of staff</p>
+<div class="row wrap"><span class="chip on">You</span><span class="chip on">Payments engineer</span><span class="chip">Backend dev · joining after its current step</span></div>
+<p class="small" style="margin:8px 0 0">Agenda: what fails, since when, who is affected, a fix or a rollback, and who owns the next step.</p></div></div>
+</div>
+<div class="composer"><div class="col"><div>Message the chief of staff…</div></div></div>
+</section>
+<aside class="room">
+<div class="room-head"><div class="row" style="justify-content:space-between"><strong>Ad hoc: checkout errors</strong><span class="hint">round 1 of 3 · $0.41</span></div><p class="hint" style="margin:2px 0 0">Started 11:18 · minutes go to the chat when it ends</p></div>
+<div class="turns">
+<div class="turn"><div class="n">Chief of staff <span class="r">runs it</span></div>Payments engineer, start with what the logs show. Backend dev joins after its migration test.</div>
+<div class="turn"><div class="n">Payments engineer</div>Since 10:52, 4% of checkouts fail with a 409 from the payment intent call. All failures are on accounts created after yesterday's <code>profiles.theme</code> migration. Proposal: the webhook handler reads a column that new rows have as null.</div>
+<div class="turn owner"><div class="n">You</div>Is anyone charged twice?</div>
+<div class="turn"><div class="n">Payments engineer</div>No. The 409 happens before capture, so no charge. I checked 30 failed sessions against the provider.</div>
+<div class="turn"><div class="n">Backend dev <span class="r">joined 11:21</span></div>Confirmed: the default for <code>theme</code> is missing on inserts from the signup function. Fix: set the default and backfill nulls. Additive and reversible. I can have a PR in 20 minutes.</div>
+<div class="turn"><div class="n">Chief of staff <span class="r">runs it</span></div>Proposed outcome: backend dev opens the fix PR, payments engineer verifies against the 30 failed sessions and signs off. The backfill touches production data, so it comes to you as an approval card.</div>
+</div>
+<div class="room-foot"><div class="row"><input placeholder="Say something in the meeting"><button>End meeting</button></div></div>
+</aside>
+</main></body></html>

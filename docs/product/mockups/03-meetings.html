@@ -1,0 +1,88 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Meetings</title><link rel="stylesheet" href="mock.css">
+<style>
+.mt { display: grid; grid-template-columns: 300px 1fr 360px; height: calc(100vh - 53px); }
+.list { background: var(--panel); border-right: 1px solid var(--line); overflow: auto; padding: 12px; }
+.mtg { padding: 9px 10px; border-radius: 8px; margin-bottom: 4px; }
+.mtg.on { background: var(--accent-bg); outline: 1px solid var(--accent); }
+.mtg b { display: block; font-size: 13.5px; }
+.mtg .w { font-size: 12px; color: var(--muted); }
+.form { overflow: auto; padding: 18px 26px 40px; }
+.side { background: var(--panel); border-left: 1px solid var(--line); overflow: auto; padding: 14px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.radio { display: flex; gap: 8px; align-items: flex-start; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; background: var(--panel); }
+.radio.on { border-color: var(--accent); background: var(--accent-bg); }
+.radio .c { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--muted); margin-top: 3px; flex: none; }
+.radio.on .c { border: 4px solid var(--accent); }
+.radio b { font-size: 13px; display: block; }
+.radio span { font-size: 12.5px; color: var(--muted); }
+.steps { list-style: none; margin: 0; padding: 0; position: relative; }
+.steps li { padding: 0 0 14px 22px; position: relative; font-size: 13px; }
+.steps li::before { content: ""; position: absolute; left: 4px; top: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.steps li::after { content: ""; position: absolute; left: 7.5px; top: 16px; bottom: 0; width: 1px; background: var(--line); }
+.steps li:last-child::after { display: none; }
+.steps .t { color: var(--muted); font-size: 12px; display: block; }
+.days { display: flex; gap: 4px; }
+.days span { width: 34px; text-align: center; padding: 4px 0; border: 1px solid var(--line); border-radius: 6px; font-size: 12.5px; }
+.days span.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+</style></head><body>
+<header class="bar"><div class="brand"><strong>Agent Team Studio</strong>&nbsp;<span class="muted">My App</span>
+<nav class="tabs"><a>Team</a><a class="on">Meetings</a><a>Notifications</a><a>Chat</a></nav></div>
+<div class="bar-actions"><span class="pill live">Live v7 · 4 working</span><button>Start a meeting now…</button><button class="primary">Save to the team</button></div></header>
+<main class="mt">
+<aside class="list">
+<div class="row" style="justify-content:space-between"><h2 style="margin:4px 0 8px">Recurring</h2><button class="ghost">New meeting</button></div>
+<div class="mtg on"><b>Daily standup</b><span class="w">Weekdays 09:00 · 7 roles · written round</span></div>
+<div class="mtg"><b>Weekly planning</b><span class="w">Mon 10:00 · executives · discussion</span></div>
+<div class="mtg"><b>Release readiness</b><span class="w">Thu 15:00 · release, QA, security · discussion</span></div>
+<div class="mtg"><b>Design review</b><span class="w">When a PR is labelled <code>design</code> · CPO lane</span></div>
+<h2>Today</h2>
+<div class="mtg"><b>Daily standup</b><span class="w">09:00 · done · 4 action items · $0.38</span></div>
+<div class="mtg"><b>Ad hoc: checkout errors</b><span class="w">11:20 · you, backend dev, payments engineer · live now</span></div>
+<h2>Earlier</h2>
+<div class="mtg"><b>Weekly planning</b><span class="w">Mon 10:00 · 6 decisions · $1.12</span></div>
+<div class="mtg"><b>Daily standup</b><span class="w">Fri 09:00 · skipped: nothing changed since Thu</span></div>
+</aside>
+<section class="form">
+<div class="field" style="margin-top:0"><span>Name</span><input value="Daily standup" style="font-size:16px;font-weight:600"></div>
+<div class="cols">
+<div class="field"><span>When</span><div class="row"><div class="days"><span class="on">M</span><span class="on">T</span><span class="on">W</span><span class="on">T</span><span class="on">F</span><span>S</span><span>S</span></div><input value="09:00" style="width:80px"></div><p class="hint" style="margin-top:4px">Team time zone: Europe/Lisbon. Skipped when nothing changed since the last one.</p></div>
+<div class="field"><span>Run by</span><select><option>Chief of staff</option></select><p class="hint" style="margin-top:4px">Asks each attendee, writes the minutes, files action items.</p></div>
+</div>
+<div class="field"><span>Who attends</span>
+<div class="row wrap"><span class="chip on"><span class="dot" style="background:var(--g-executive)"></span>CTO</span><span class="chip on"><span class="dot" style="background:var(--g-engineering)"></span>Web dev</span><span class="chip on"><span class="dot" style="background:var(--g-engineering)"></span>Backend dev</span><span class="chip on"><span class="dot" style="background:var(--g-engineering)"></span>AI engineer</span><span class="chip on"><span class="dot" style="background:var(--g-quality)"></span>QA web</span><span class="chip on"><span class="dot" style="background:var(--g-custom)"></span>Accessibility auditor</span><span class="chip on"><span class="dot" style="background:var(--g-product)"></span>Product manager</span><span class="chip">Add roles or a whole lane</span></div>
+<p class="hint" style="margin-top:6px">Dormant roles are never woken for a meeting. Or invite by rule: <code>everyone who worked since the last standup</code>.</p></div>
+<div class="field"><span>Format</span>
+<div class="cols">
+<div class="radio on"><span class="c"></span><div><b>Written round</b><span>Each attendee answers once, from its board and memory file. Cheapest; no cross-talk.</span></div></div>
+<div class="radio"><span class="c"></span><div><b>Discussion</b><span>Attendees read each other and reply, up to 3 rounds. For planning and trade-offs.</span></div></div>
+</div></div>
+<div class="field"><span>Agenda each attendee answers</span><textarea>1. What you finished since the last standup, with links.
+2. What you are doing next.
+3. What blocks you, and who could unblock it.</textarea></div>
+<div class="field"><span>If an attendee is in the middle of a task</span>
+<div class="radio on"><span class="c"></span><div><b>Answer at its next pause</b><span>The question waits until the current step ends. Its work is never interrupted. Late answers go into the minutes as an addendum.</span></div></div>
+<div class="radio"><span class="c"></span><div><b>Run by answers for it from the board</b><span>No wake-up and no cost; the minutes mark the answer as written from reports.</span></div></div>
+<div class="radio"><span class="c"></span><div><b>Leave it out this time</b></div></div>
+</div>
+<div class="cols">
+<div class="field"><span>You</span>
+<label class="row small"><span class="toggle on"></span>Send me the minutes</label>
+<label class="row small" style="margin-top:6px"><span class="toggle"></span>I join and can speak</label></div>
+<div class="field"><span>Limits</span><div class="row"><input value="$1.00" style="width:90px"><span class="hint">per meeting · stops and writes partial minutes at the cap</span></div></div>
+</div>
+</section>
+<aside class="side">
+<h2 style="margin-top:0">Next: tomorrow 09:00</h2>
+<ol class="steps">
+<li><span class="t">09:00</span>Chief of staff opens the meeting and sends the agenda to 7 attendees.</li>
+<li><span class="t">09:00 to 09:10</span>Idle attendees answer now. Web dev is working on #142 and answers when its current step ends.</li>
+<li><span class="t">about 09:12</span>Minutes in the chat: done, next, blockers. Each blocker names who can unblock it.</li>
+<li><span class="t">after</span>Action items become issues or HANDOFFs to their owners. Anything that needs you becomes a decision card.</li>
+</ol>
+<h2>Estimate</h2>
+<table class="t"><tr><td>7 answers × standard tier</td><td style="text-align:right">$0.31</td></tr><tr><td>Minutes (chief of staff, deep)</td><td style="text-align:right">$0.09</td></tr><tr><td><strong>Per meeting</strong></td><td style="text-align:right"><strong>$0.40</strong></td></tr><tr><td class="muted">Per month, weekdays</td><td class="muted" style="text-align:right">about $8.80</td></tr></table>
+<h2>Saved as</h2>
+<p class="hint"><code>.agent-team/meetings.json</code>, published with the team like any other change. Minutes stay in the Studio and the chat, not in the repository.</p>
+<ul class="issues"><li class="ok">All 7 attendees are on the team.</li><li class="ok">No other meeting for these roles at 09:00.</li></ul>
+</aside>
+</main></body></html>
