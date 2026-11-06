@@ -8,7 +8,7 @@
 // It drops every inheritable capability and sets no_new_privs, so nothing the agent runs can gain privileges.
 // Files the session writes are group-readable and group-writable (umask 007), in folders the runner made with the
 // shared group, so the runner can commit and check them at checkpoints.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, closeSync, constants as C, fchmodSync, fchownSync, fstatSync, ftruncateSync, mkdirSync, openSync, readSync, realpathSync, writeSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 
@@ -38,8 +38,9 @@ export function sandboxSpawn(sandbox, { grace = 5000 } = {}) {
       // When the leader exits, whatever it left in its group (a background command that ignored TERM, or one still
       // running at a normal end) is killed too.
       child.on('exit', () => { closed = true; clearTimeout(timer); groupKill('SIGKILL'); });
+      // The shell's own kill: the slim image has no /bin/kill.
       const groupKill = (sig) => {
-        const k = spawn(sandbox.exec ?? 'setpriv', [`--reuid=${sandbox.uid}`, `--regid=${sandbox.gid}`, '--clear-groups', '--inh-caps=-all', '--no-new-privs', '--', 'kill', `-${String(sig).replace(/^SIG/, '')}`, '--', `-${child.pid}`], { stdio: 'ignore' });
+        const k = spawn(sandbox.exec ?? 'setpriv', [`--reuid=${sandbox.uid}`, `--regid=${sandbox.gid}`, '--clear-groups', '--inh-caps=-all', '--no-new-privs', '--', '/bin/sh', '-c', 'kill -s "$1" -- "-$2"', 'kill', String(sig).replace(/^SIG/, ''), String(child.pid)], { stdio: 'ignore' });
         k.on('error', () => {});
       };
       child.kill = (sig = 'SIGTERM') => {
@@ -107,7 +108,7 @@ export function sharedDir(path, sandbox, { leaf = false } = {}) {
     if (!st.isDirectory()) throw new Error(`${path} is not a folder`);
     if (process.getuid && st.uid !== process.getuid()) throw new Error(`${path} is not the runner's`);
     if (!sandbox) return;
-    if (process.getuid?.() === 0) fchownSync(fd, 0, sandbox.gid); // only in tests run as root
+    if (st.gid !== sandbox.gid) fchownSync(fd, st.uid, sandbox.gid); // the runner is in that group
     fchmodSync(fd, leaf ? 0o2770 : 0o2750);
   } finally { closeSync(fd); }
 }
@@ -116,4 +117,28 @@ export function sharedDir(path, sandbox, { leaf = false } = {}) {
 export function privateDir(path) {
   mkdirSync(path, { recursive: true, mode: 0o700 });
   chmodSync(path, 0o700);
+}
+
+/**
+ * The runner's startup self-check (security review): as the agent, try to read the runner's environment and list
+ * its own folder, and read the agent's capabilities. Platforms differ (Fly, Docker Desktop, CI), so the runner
+ * checks the sandbox it actually got before it takes any session. Returns { ok, problems }.
+ */
+export function selfCheck(sandbox, { pid = process.pid, data }) {
+  const script = [
+    'if cat "/proc/$1/environ" >/dev/null 2>&1; then echo "problem: the runner environment is readable"; fi',
+    'if ls "$2" >/dev/null 2>&1; then echo "problem: the runner data folder is readable"; fi',
+    'grep "^CapEff:" /proc/self/status',
+    'id -u',
+  ].join('\n');
+  const pre = asAgent(sandbox);
+  const r = spawnSync(pre[0], [...pre.slice(1), '/bin/sh', '-c', script, 'check', String(pid), data], { encoding: 'utf8', timeout: 10000 });
+  const out = `${r.stdout ?? ''}`;
+  const problems = out.split('\n').filter((l) => l.startsWith('problem: ')).map((l) => l.slice(9));
+  if (r.error || r.status !== 0) problems.push(`the switch to the agent user failed (${r.error?.message ?? (r.stderr || `exit ${r.status}`).trim()})`);
+  const cap = /^CapEff:\s*([0-9a-f]+)/m.exec(out);
+  if (!cap || /[1-9a-f]/.test(cap[1])) problems.push(`the agent has capabilities (${cap?.[1] ?? 'unknown'})`);
+  const uid = /^(\d+)$/m.exec(out)?.[1];
+  if (Number(uid) !== sandbox.uid) problems.push(`the agent runs as uid ${uid ?? "unknown"}, not ${sandbox.uid}`);
+  return { ok: problems.length === 0, problems };
 }

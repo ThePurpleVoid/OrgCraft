@@ -22,6 +22,7 @@ import { ownershipFromMarkdown, suggestAreas, suggestChecks } from './suggest.mj
 import { loadKit, readLayer, writeLayer } from '../../packages/team-model/node.mjs';
 import { liveSource } from './live.mjs';
 import { chatSource } from './chat.mjs';
+import { runRequest, RunRefused } from './runs.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(HERE, 'public');
@@ -140,6 +141,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
     if (!chat.connected) return send(res, 503, { connected: false, error: 'connect a control plane: set AGENT_TEAM_SERVER, AGENT_TEAM_SERVER_TOKEN and AGENT_TEAM_SERVER_TEAM' });
     try { return send(res, 200, await fn()); } catch (e) {
       if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(e.status === 409 && e.body?.id ? { card: e.body } : {}) });
+      if (e instanceof RunRefused) return send(res, 409, { error: e.message, type: 'not-published' });
       return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
     }
   };
@@ -175,6 +177,20 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (!chat.connected) return send(res, 200, { connected: false });
         return relay(res, async () => ({ connected: true, ...(await chat.run()) }));
       }
+      // The caps a run needs (a daily one first), and what "Start" would send: the published team, or why it cannot.
+      if (req.method === 'GET' && url.pathname === '/v1/team/budget') {
+        if (!chat.connected) return send(res, 200, { connected: false });
+        return relay(res, async () => ({ connected: true, ...(await chat.budget()) }));
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/team/run/plan') {
+        try {
+          const { team } = runRequest(root, { dirty: gitState(root).dirty });
+          return send(res, 200, { ok: true, version: team.version, repo: team.repo ?? null, summary: team.summary, roles: team.roles.length, frontDoor: team.roles.find((r) => r.reportsTo === 'owner').slug });
+        } catch (e) {
+          if (e instanceof RunRefused) return send(res, 200, { ok: false, error: e.message });
+          throw e;
+        }
+      }
       if (req.method === 'GET' && url.pathname === '/v1/team/board/stream') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write('retry: 3000\n\n');
@@ -208,6 +224,12 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (card) return relay(res, () => chat.answer({ card: decodeURIComponent(card[1]), kind: input.kind, subject: input.subject, option: input.option, version: input.version, key: input.key }));
         const action = /^\/v1\/team\/run\/(pause|resume|stop)$/.exec(url.pathname);
         if (action) return relay(res, () => chat.control(action[1], input.key, input.run));
+        // Built here from the repository, never from the page: a run starts on what was published, not on the canvas.
+        if (url.pathname === '/v1/team/run/start') return relay(res, () => chat.start(runRequest(root, { dirty: gitState(root).dirty }), typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
+        if (url.pathname === '/v1/team/budget') {
+          for (const k of ['perDay', 'perRun']) if (input[k] !== undefined && input[k] !== null && !(Number.isInteger(input[k]) && input[k] >= 0)) throw new HttpError(400, `${k} is a whole number of cents, or null`);
+          return relay(res, () => chat.setBudget(input, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
+        }
         if (url.pathname === '/v1/team/step-up') {
           if (typeof input.secret !== 'string' || !input.secret) throw new HttpError(400, 'send the secret');
           return relay(res, () => chat.stepUp(input.secret));
