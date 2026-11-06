@@ -7,7 +7,8 @@
 //   oidc-provider). A deployment has fixed first-party clients only, so registration is switched on here alone.
 // - PKCE is required for public clients (every client a deployment has) but not for the suite's confidential ones,
 //   because the Basic OP plan sends most requests without it. The plan's PKCE module still checks a valid S256 pair.
-// - Registered clients get the refresh_token grant by default, so the refresh rotation module runs.
+// - Registered clients get the refresh_token grant by default, so the refresh rotation module runs, and RS256 ID
+//   tokens, Registration's default (the deployment's own clients are pinned to ES256).
 // - The Studio's /sign-in page is a one-button page here, and the stand-in GitHub signs the owner in at once, so the
 //   suite's browser clicks once per sign-in (and takes its screenshot there for prompt=login and max_age).
 // - Error pages are wrapped in HTML for the suite's browser.
@@ -39,7 +40,8 @@ const identity = await createIdentity({
   clientIp: () => randomUUID(),
   configure: (config) => ({
     ...config,
-    clientDefaults: { ...config.clientDefaults, grant_types: ['authorization_code', 'refresh_token'] },
+    // Registration's own default ID token algorithm is RS256 (OpenID Connect Registration 2); our clients pin ES256.
+    clientDefaults: { ...config.clientDefaults, id_token_signed_response_alg: 'RS256', grant_types: ['authorization_code', 'refresh_token'] },
     pkce: { ...config.pkce, required: (_ctx, client) => client.clientAuthMethod === 'none' },
     features: { ...config.features, registration: { enabled: true }, registrationManagement: { enabled: true } },
     // The suite's browser reads pages as HTML; the deployment's error answer is the same text as plain text.

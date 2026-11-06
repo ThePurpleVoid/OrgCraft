@@ -230,6 +230,8 @@ OpenID-Certified library: `identity.mjs` holds its storage adapter and our polic
   with a stand-in GitHub; it alone switches on client registration, so the suite can register its own confidential
   clients, and asks PKCE of public clients only (every deployment client is public). Run it on a laptop with docker:
   `npm ci && conformance/run.sh`. Accepted deviations, each with its reason, live in `conformance/expected-failures.json`.
+  The issuer has two signing keys, rotated together: P-256 (ES256, which every client of ours is pinned to) and
+  RSA-2048 (RS256, offered for ID tokens only, because OpenID Connect requires every OP to support it).
 
 ## Host it in another server
 

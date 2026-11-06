@@ -30,6 +30,8 @@ const IDLE_MS = 12 * 3600_000;
 const ABSOLUTE_MS = 7 * 86400_000;
 const KEY_ROTATE_MS = 90 * 86400_000;
 const KEY_OVERLAP_MS = 86400_000;
+/** ES256 for the deployment's own clients; RS256 because OpenID Connect requires every OP to offer it (conformance). */
+const SIGNING_ALGS = ['ES256', 'RS256'];
 const FLOW_SECONDS = 600;
 const UID = /^[A-Za-z0-9_-]{1,128}$/;
 const ROLES = new Set(['owner', 'admin', 'editor', 'viewer', 'approver']);
@@ -109,17 +111,29 @@ export async function issuerKeys(db, key, now = () => new Date()) {
   return db.systemTx(async ({ q }) => {
     await q('select pg_advisory_xact_lock(4852)');
     const t = now().getTime();
-    let rows = await q('select kid, sealed, created_at, retired_at from issuer_keys where retired_at is null or retired_at > $1 order by created_at desc', [new Date(t - KEY_OVERLAP_MS)]);
-    const current = rows.find((r) => !r.retired_at);
-    if (!current || t - new Date(current.created_at).getTime() > KEY_ROTATE_MS) {
-      const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const live = async () => (await q('select kid, sealed, created_at, retired_at from issuer_keys where retired_at is null or retired_at > $1 order by created_at desc, kid', [new Date(t - KEY_OVERLAP_MS)]))
+      .map((r) => ({ ...r, jwk: JSON.parse(unseal(key, '_issuer', r.kid, r.sealed)) }));
+    const add = async (alg) => {
+      const { privateKey } = alg === 'ES256' ? generateKeyPairSync('ec', { namedCurve: 'P-256' }) : generateKeyPairSync('rsa', { modulusLength: 2048 });
       const kid = rid('k_', 12);
-      const jwk = { ...privateKey.export({ format: 'jwk' }), kid, alg: 'ES256', use: 'sig' };
-      await q('update issuer_keys set retired_at = $1 where retired_at is null', [new Date(t)]);
+      const jwk = { ...privateKey.export({ format: 'jwk' }), kid, alg, use: 'sig' };
       await q('insert into issuer_keys(kid, sealed, created_at) values ($1, $2, $3)', [kid, seal(key, '_issuer', kid, JSON.stringify(jwk)), new Date(t)]);
-      rows = await q('select kid, sealed, created_at, retired_at from issuer_keys where retired_at is null or retired_at > $1 order by created_at desc', [new Date(t - KEY_OVERLAP_MS)]);
+    };
+    let rows = await live();
+    const current = (alg) => rows.find((r) => !r.retired_at && (r.jwk.alg ?? 'ES256') === alg);
+    const es = current('ES256');
+    if (!es || t - new Date(es.created_at).getTime() > KEY_ROTATE_MS) {
+      // Both keys rotate together; the old ones stay in the JWKS for the overlap.
+      await q('update issuer_keys set retired_at = $1 where retired_at is null', [new Date(t)]);
+      for (const alg of SIGNING_ALGS) await add(alg);
+      rows = await live();
+    } else if (!current('RS256')) {
+      // A deployment from before RS256 gets its RSA key next to the current EC key, on the same rotation from then on.
+      await add('RS256');
+      rows = await live();
     }
-    return rows.map((r) => JSON.parse(unseal(key, '_issuer', r.kid, r.sealed)));
+    // ES256 first: the library signs with the first key of an algorithm, and our own clients ask for ES256.
+    return rows.map((r) => r.jwk).sort((a, b) => (a.alg === b.alg ? 0 : a.alg === 'ES256' ? -1 : b.alg === 'ES256' ? 1 : 0));
   });
 }
 
@@ -266,8 +280,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     return grant;
   }
 
-  const web = { client_id: WEB_CLIENT, token_endpoint_auth_method: 'none', redirect_uris: [webRedirect], grant_types: ['authorization_code'], response_types: ['code'] };
-  const natives = (clients ?? nativeClients(origin)).map((c) => ({ token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], application_type: 'native', dpop_bound_access_tokens: true, require_auth_time: true, ...c }));
+  const web = { client_id: WEB_CLIENT, token_endpoint_auth_method: 'none', redirect_uris: [webRedirect], grant_types: ['authorization_code'], response_types: ['code'], id_token_signed_response_alg: 'ES256' };
+  const natives = (clients ?? nativeClients(origin)).map((c) => ({ token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], application_type: 'native', dpop_bound_access_tokens: true, require_auth_time: true, ...c, id_token_signed_response_alg: 'ES256' }));
   let provider, callback, kids = '';
   /** (Re)builds the library around the current signing keys: at start, and when the tick rotates them. */
   const build = (keys) => {
@@ -279,9 +293,9 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     const config = {
       adapter: adapterFor(db),
       clients: [web, ...natives],
-      // ES256 only: the issuer's key is P-256 (section 2, step 4).
+      // ES256 for our own clients (the issuer's P-256 key, section 2, step 4); RS256 is offered, never the default.
       clientDefaults: { id_token_signed_response_alg: 'ES256', grant_types: ['authorization_code'], response_types: ['code'] },
-      enabledJWA: { idTokenSigningAlgValues: ['ES256'], dPoPSigningAlgValues: ['ES256', 'EdDSA'] },
+      enabledJWA: { idTokenSigningAlgValues: SIGNING_ALGS, dPoPSigningAlgValues: ['ES256', 'EdDSA'] },
       jwks: { keys },
       cookies: {
         keys: [createHmac('sha256', key).update('agent-team/oidc-cookies/v1').digest('base64url')],
