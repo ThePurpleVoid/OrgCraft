@@ -3,23 +3,26 @@
 // team already runs accepts, so connecting a team to the product never takes its own board away.
 import { toKitRow } from '../../packages/events/index.mjs';
 import { readSecret } from './store.mjs';
+import { deliver } from './email.mjs';
 
 const BATCH = 50;
 const backoff = (failures) => Math.min(5 * 2 ** Math.max(failures - 1, 0), 3600);
 
 /** One pass over every sink that is due. Returns how many events the sinks moved past. */
-export async function drain(db, key, { fetch: send = fetch, timeoutMs = 15_000 } = {}) {
-  const due = await db.system('select id, tenant, team from sinks where next_at <= now() order by next_at limit 100');
+export async function drain(db, key, { fetch: send = fetch, timeoutMs = 15_000, email = {} } = {}) {
+  const due = await db.system(`select id, tenant, team, next_at, false as email from sinks where next_at <= now()
+    union all select id, tenant, team, next_at, true as email from email_sinks where next_at <= now() order by next_at limit 100`);
   let moved = 0;
-  for (const s of due) moved += await drainOne(db, key, s, send, timeoutMs);
+  for (const s of due) moved += await drainOne(db, key, s, send, timeoutMs, email);
   return moved;
 }
 
-async function drainOne(db, key, { id, tenant, team }, send, timeoutMs) {
-  const [sink] = await db.tenant(tenant, ({ q }) => q('select * from sinks where id = $1', [id]));
+async function drainOne(db, key, { id, tenant, team, email: isEmail }, send, timeoutMs, email) {
+  const [sink] = await db.tenant(tenant, ({ q }) => q(`select *${isEmail ? ", 'email' as format" : ''} from ${isEmail ? 'email_sinks' : 'sinks'} where id = $1`, [id]));
   if (!sink) return 0;
   const rows = await db.tenant(tenant, ({ q }) => q('select seq, envelope from events where team = $1 and seq > $2 order by seq limit $3', [team, sink.cursor, BATCH]));
   if (!rows.length) return 0;
+  if (sink.format === 'email') return settle(db, tenant, sink, ...(await emailRows(db, key, sink, rows, { readSecret, fetch: send, ...email })));
   const headers = { 'content-type': 'application/json' };
   if (sink.header && sink.secret) {
     const value = await readSecret(db, key, tenant, sink.secret);
@@ -38,9 +41,26 @@ async function drainOne(db, key, { id, tenant, team }, send, timeoutMs) {
     cursor = Number(r.seq);
     moved++;
   }
+  return settle(db, tenant, sink, cursor, moved, error);
+}
+
+/** An email sink: each event goes to the team's opted-in, verified addresses (email.mjs deliver). */
+async function emailRows(db, key, sink, rows, opts) {
+  let cursor = Number(sink.cursor), moved = 0, error = null;
+  for (const r of rows) {
+    error = await deliver(db, key, sink, r, { ...opts, now: new Date() });
+    if (error) break;
+    cursor = Number(r.seq);
+    moved++;
+  }
+  return [cursor, moved, error];
+}
+
+async function settle(db, tenant, sink, cursor, moved, error) {
+  const table = sink.format === 'email' ? 'email_sinks' : 'sinks';
   await db.tenant(tenant, ({ q }) => (error
-    ? q("update sinks set cursor = $2, failures = failures + 1, last_error = $3, next_at = now() + make_interval(secs => $4) where id = $1", [id, cursor, error, backoff(Number(sink.failures) + 1)])
-    : q('update sinks set cursor = $2, failures = 0, last_error = null, next_at = now() where id = $1', [id, cursor])));
+    ? q(`update ${table} set cursor = $2, failures = failures + 1, last_error = $3, next_at = now() + make_interval(secs => $4) where id = $1`, [sink.id, cursor, error, backoff(Number(sink.failures) + 1)])
+    : q(`update ${table} set cursor = $2, failures = 0, last_error = null, next_at = now() where id = $1`, [sink.id, cursor])));
   return moved;
 }
 
