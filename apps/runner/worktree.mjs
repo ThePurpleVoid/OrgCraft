@@ -92,7 +92,10 @@ export function harden(cwd) {
  * Copies are keyed by the repository and the exact branch (or, read-only, the session), so two repositories with
  * one branch name, or branches that differ only in punctuation, never share a folder.
  */
-/** Where the working copy for this repository and branch (or, read-only, this session) lives under `work`. */
+/**
+ * Where the working copy for this repository and branch (or, read-only, this session) lives under `work`.
+ * Before a runner serves more than one customer, this path and the repository cache must include the tenant and team.
+ */
 export function copyPath({ work, repo, worktree, session }) {
   const branch = typeof worktree === 'string' ? worktree : worktree?.branch ?? null;
   return join(work, 'worktrees', short(repo?.url ?? ''), branch ? `${safe(branch)}-${short(branch)}` : `read-${safe(session)}-${short(session)}`);
@@ -106,7 +109,7 @@ export async function prepare({ root, work = root, repo, worktree, session, sand
   if (branch && !BRANCH.test(branch)) throw new Error(`"${branch}" is not a branch name the runner will create`);
   if (!BRANCH.test(base)) throw new Error(`"${base}" is not a branch name`);
   const repoKey = short(repo.url);
-  const cache = join(root, 'repos', `${repoKey}.git`);
+  const cache = join(root, 'repos', `${repoKey}.git`); // keyed by tenant and team too before a runner serves more than one customer
   const cwd = copyPath({ work, repo, worktree, session });
   const holder = holders.get(cwd);
   if (holder && holder !== session) throw new Error(`the working copy for ${branch ?? 'that checkout'} is in use by session ${holder}`);
