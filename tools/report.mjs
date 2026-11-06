@@ -4,7 +4,7 @@
 //
 //   node report.mjs <role>[#instance] <kind> [<status>|-] [--task "..."] [--issue N] [--pr N] [--branch b]
 //                   [--commit sha] [--platform p] [--to role] [--severity 1-4] [--evidence a,b] [--detail "..."]
-//                   [--session id]
+//                   [--session id] [--team-version sha]
 //       The same arguments and the same event as team-status.sh (which hands over to this when jq is missing).
 //
 //   node report.mjs hook
@@ -27,6 +27,11 @@ const HEARTBEAT_MS = 5 * 60_000;
 const git = (cwd, args) => {
   try { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; }
 };
+/**
+ * The team version a checkout runs: the last commit that changed .agent-team (team.json, roles, meetings), 12
+ * characters, or '' outside git. The rollout view compares it with the version a publish merged.
+ */
+export const teamVersionAt = (cwd) => git(cwd, ['log', '-1', '--format=%H', '--', '.agent-team']).slice(0, 12);
 const slugify = (s) => String(s).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
 
 /** KEY=value lines of a shell file (config.sh, team.env), without running it. Later lines win. */
@@ -212,6 +217,7 @@ export async function hook(input, env = process.env) {
       const branch = git(input?.cwd || ctx.root, ['rev-parse', '--abbrev-ref', 'HEAD']);
       if (branch && branch !== 'HEAD') fields.branch = branch;
     }
+    fields.team_version = teamVersionAt(input?.cwd || ctx.root);
     const event = makeEvent(fields);
     await send(event, ctx, { timeoutMs: 5_000 });
     return event;
@@ -236,10 +242,10 @@ export function parseArgs(argv, role = '') {
   if (status && !STATUSES.includes(status)) throw new Error(`status must be ${STATUSES.slice(0, -1).join(', ')} or ${STATUSES.at(-1)}`);
   if (kind === 'status' && !status) throw new Error('a status report needs a status');
   const f = { role: agent, kind, status, session: process.env.AGENT_TEAM_SESSION ?? '' };
-  const names = ['task', 'issue', 'pr', 'branch', 'commit', 'platform', 'to', 'severity', 'evidence', 'detail', 'session'];
+  const names = ['task', 'issue', 'pr', 'branch', 'commit', 'platform', 'to', 'severity', 'evidence', 'detail', 'session', 'team_version'];
   while (args.length) {
     const a = args.shift();
-    const name = a.replace(/^--/, '');
+    const name = a.replace(/^--/, '').replace(/-/g, '_');
     if (a.startsWith('--') && names.includes(name)) f[name] = args.shift() ?? '';
     else process.stderr.write(`team-status: unknown option ${a}\n`);
   }
@@ -265,6 +271,7 @@ async function cli(argv) {
   try { fields = parseArgs(argv, ctx.role); } catch (e) { process.stderr.write(`team-status: not reported (${e.message})\n`); return; }
   if (!fields.branch) { const b = git(process.cwd(), ['rev-parse', '--abbrev-ref', 'HEAD']); if (b !== 'HEAD') fields.branch = b; }
   if (!fields.commit) fields.commit = git(process.cwd(), ['rev-parse', '--short=12', 'HEAD']);
+  if (!fields.team_version) fields.team_version = teamVersionAt(process.cwd());
   let event;
   try { event = makeEvent({ ...fields, source: 'team-status.sh' }); } catch (e) { process.stderr.write(`team-status: not reported (${e.message})\n`); return; }
   for (const p of await send(event, ctx)) process.stderr.write(`team-status: ${p}\n`);

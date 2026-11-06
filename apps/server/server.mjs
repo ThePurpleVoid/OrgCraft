@@ -540,6 +540,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         const { seq, ...body } = await store.board(db, t, team, { days, role, now: now() });
         return send(res, 200, body, { etag: tag });
       }
+      // The rollout view after a publish merges (demo step 17): which roles have picked up the new team version.
+      if (b === 'rollout' && !c && m === 'GET') return send(res, 200, await store.rollout(db, t, team, { version: url.searchParams.get('version') ?? '', publishedAt: url.searchParams.get('publishedAt') ?? '', now: now() }));
       if (b === 'report-tokens' && !c && m === 'POST') {
         const tok = await store.mintReportToken(db, t, team);
         const base = publicUrl || `http://${req.headers.host}`;

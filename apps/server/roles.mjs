@@ -42,6 +42,7 @@ export const ROUTES = [
   ['GET', '/teams/{team}/chat', 'viewer'],
   ['POST', '/teams/{team}/chat', 'editor'],
   ['GET', '/teams/{team}/board', 'viewer'],
+  ['GET', '/teams/{team}/rollout', 'viewer'],
   ['POST', '/teams/{team}/report-tokens', 'admin'],
   ['DELETE', '/teams/{team}/report-tokens/{token}', 'admin'],
   ['GET', '/teams/{team}/sinks', 'admin'],

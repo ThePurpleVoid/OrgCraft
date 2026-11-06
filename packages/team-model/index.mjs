@@ -868,6 +868,52 @@ export function versionName(sha, publishedAt) {
 }
 
 /**
+ * The rollout of a published team version (demo step 17, CPO copy "Rollout view after a publish", D61 to D63): which
+ * roles have picked it up, from the board (summarize() output, whose rows carry the team_version each role last
+ * reported). Read-only: it describes, nothing here acts.
+ *
+ *   version      the commit the publish merged (any length from 7); newer: later versions that also count as moved
+ *   publishedAt  when it merged. A role counts as moved only when a report after this names the new version (D61).
+ *   roles        the slugs the published team runs; off: slugs the publish switched off, removed or made dormant
+ *   plan         the change step's choices, { [role]: { choice: 'finish' | 'handoff' | 'pause' | ..., to? } }
+ *
+ * Each role gets one state: moved, next-task (idle on the old version, picks it up at its next task), finishing
+ * (mid-task on the old version, with its plan), off-finishing, off, no-report (nothing since the publish; lastAt when
+ * older reports exist) or unknown (reports without a version: an older kit or another coding agent). Unknown roles
+ * stay outside "n of m" (D62).
+ */
+export function rollout({ version, publishedAt = null, newer = [], roles = [], off = [], plan = {}, board = { current: [] } } = {}) {
+  const v = String(version ?? '');
+  if (!/^[0-9a-f]{7,40}$/.test(v)) return { version: null, name: null, roles: [], summary: null };
+  const same = (a, b) => !!a && !!b && (a.startsWith(b) || b.startsWith(a));
+  const isNew = (tv) => same(tv, v) || newer.some((n) => same(tv, String(n)));
+  const since = publishedAt ? Date.parse(publishedAt) : NaN;
+  const after = (at) => Number.isNaN(since) || (!!at && Date.parse(at) >= since);
+  const rows = new Map((board?.current ?? []).filter((c) => !c.instance).map((c) => [c.role, c]));
+  const offSet = new Set(off);
+  const slugs = [...new Set([...roles, ...off])].sort();
+  const out = slugs.map((role) => {
+    const c = rows.get(role);
+    const base = { role, teamVersion: c?.team_version ?? null, status: c?.status ?? null, task: c?.task ?? '', lastAt: c?.last_at ?? null, stale: !!c?.stale };
+    const working = !!c && BUSY.has(c.status);
+    if (offSet.has(role)) return { ...base, state: working && after(c.last_at) ? 'off-finishing' : 'off' };
+    if (!c || !after(c.last_at)) return { ...base, state: 'no-report' };
+    if (c.team_version && isNew(c.team_version) && after(c.team_version_at)) return { ...base, state: 'moved' };
+    if (!c.team_version) return { ...base, state: 'unknown' };
+    if (working) return { ...base, state: 'finishing', plan: plan[role] ?? { choice: 'finish' } };
+    return { ...base, state: 'next-task' };
+  });
+  const count = (st) => out.filter((r) => r.state === st).length;
+  const counted = out.filter((r) => !['off', 'off-finishing', 'unknown'].includes(r.state)).length;
+  const moved = count('moved');
+  return {
+    version: v, name: versionName(v, publishedAt), publishedAt,
+    roles: out,
+    summary: { moved, of: counted, finishing: count('finishing'), offFinishing: count('off-finishing'), unknown: count('unknown'), noReport: count('no-report'), allMoved: counted > 0 && moved === counted },
+  };
+}
+
+/**
  * Each change joined with the work in flight: [{ id, kind, role, detail, severity: 'safe' | 'choice' | 'blocking',
  * inFlight, choices, recommended, stale }]. Choices are ids the runner knows (architecture section 12.4).
  *

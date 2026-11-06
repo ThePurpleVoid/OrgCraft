@@ -3,6 +3,7 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { summarize, toRow } from '../../tools/board.mjs';
 import { checkEvent, fromKitRow, toKitRow } from '../../packages/events/index.mjs';
+import { rollout as rolloutOf } from '../../packages/team-model/index.mjs';
 import { seal, unseal } from './vault.mjs';
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -142,6 +143,26 @@ export async function board(db, tenant, team, { days = 7, role = '', now = new D
        and time >= $2::timestamptz order by time, seq limit 50000`,
     [team, new Date(now.getTime() - 30 * 86_400_000).toISOString()]));
   return { ...summarize(rows.map((r) => toKitRow(r.envelope)).filter(Boolean), { now, days: Number(days) || 7, role }), asOf: last.id, seq: last.seq };
+}
+
+/**
+ * The rollout of a published team version (demo step 17): which roles have picked it up, from the board. The version
+ * is the latest team.published event's unless the caller names one (`version`, with `publishedAt`); the event can also
+ * name the team's roles, the ones switched off and the change step's plan. Read-only.
+ */
+export async function rollout(db, tenant, team, { version = '', publishedAt = '', now = new Date() } = {}) {
+  await getTeam(db, tenant, team);
+  const [ev] = version ? [] : await db.tenant(tenant, ({ q }) => q("select envelope from events where team = $1 and type = 'team.published' order by seq desc limit 1", [team]));
+  const d = ev?.envelope?.data ?? {};
+  const v = String(version || d.version || '').toLowerCase();
+  if (v && !/^[0-9a-f]{7,40}$/.test(v)) throw new Problem(400, 'version is a commit SHA (7 to 40 hex characters)');
+  const at = publishedAt || d.publishedAt || ev?.envelope?.time || null;
+  if (at && Number.isNaN(Date.parse(at))) throw new Problem(400, 'publishedAt is an ISO date and time');
+  const b = await board(db, tenant, team, { now, days: 30 });
+  const list = (x) => (Array.isArray(x) ? x.map(String).filter((r) => /^[a-z0-9][a-z0-9_-]{0,59}$/.test(r)) : null);
+  const roles = (!version && list(d.roles)) || b.current.filter((c) => !c.instance).map((c) => c.role);
+  const plan = !version && d.plan && typeof d.plan === 'object' ? d.plan : {};
+  return { ...rolloutOf({ version: v, publishedAt: at, roles, off: (!version && list(d.off)) || [], plan, board: b }), pr: version ? null : d.pr ?? null, asOf: b.asOf };
 }
 
 export async function putSecret(db, key, tenant, name, value) {

@@ -6,7 +6,7 @@ export const SPEC = '1.0';
 export const VERSION = 1;
 const MESSAGES = new Set(['handoff', 'bug', 'signoff', 'blocked']);
 /** report fields that live in the envelope rather than in data */
-const LIFTED = new Set(['id', 'at', 'role', 'instance', 'session', 'source', 'kind', 'to_role']);
+const LIFTED = new Set(['id', 'at', 'role', 'instance', 'session', 'source', 'kind', 'to_role', 'team_version']);
 const VIA = { hook: 'hook', 'team-status.sh': 'script', 'report.mjs': 'script' };
 
 /** The event type for a kit report kind. */
@@ -37,6 +37,8 @@ export function fromKitRow(row, { tenant, team }) {
     subject: `role/${row.role}`,
     data,
   };
+  // The team version the role runs is the envelope's teamVersion (events.md), as for a runner's sessions.
+  if (row.team_version) event.teamVersion = row.team_version;
   // The kit's own source label (team-status.sh, hook, or anything a team sends) is kept verbatim for sinks.
   if (row.source) event.data.source = row.source;
   return event;
@@ -66,6 +68,7 @@ export function toKitRow(event) {
     detail: d.detail ?? null,
     source: d.source ?? 'team-status.sh',
     session: event.actor.session ?? null,
+    team_version: event.teamVersion ?? null,
   };
 }
 
