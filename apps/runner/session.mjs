@@ -251,7 +251,7 @@ export class Session {
 
   /** usage.recorded in whole minor units, the fraction carried to the next report (rounded up on the last one). */
   async record(u, { last = false, meeting } = {}) {
-    const cost = (u.costUsd ?? 0) * 100;
+    const cost = Number.isFinite(u.costUsd) && u.costUsd > 0 ? u.costUsd * 100 : 0;
     this.spent += cost;
     const whole = last ? Math.ceil(this.spent - 1e-9) : Math.floor(this.spent + 1e-9);
     const due = whole - this.reported;

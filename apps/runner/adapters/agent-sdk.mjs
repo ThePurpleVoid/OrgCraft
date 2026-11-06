@@ -13,6 +13,23 @@ const PRICES = loadPrices();
 const DEAREST = Object.entries(PRICES.models).sort(([, a], [, b]) => b.outputPerMTok - a.outputPerMTok || b.inputPerMTok - a.inputPerMTok)[0][0];
 const HOOK_TIMEOUT_S = 7 * 24 * 3600;
 
+/**
+ * What a turn cost, in USD, for the budget; never zero for a turn that used tokens (the budget must not fail open).
+ * The SDK's reported cost is what was spent, for a model the shared table lists. When the SDK reports none, or
+ * zero for a turn that used tokens, the list price from the table. A model the table does not list is counted at
+ * the dearest listed model, and at least that even when the SDK reports a cost (it may not know the model's price
+ * either, and report it as free).
+ */
+export function turnCost(model, result) {
+  const u = result?.usage ?? {};
+  const counts = { inputTokens: u.input_tokens ?? 0, outputTokens: u.output_tokens ?? 0, cacheReadTokens: u.cache_read_input_tokens ?? 0, cacheWriteTokens: u.cache_creation_input_tokens ?? 0 };
+  const listed = estimate({ model, ...counts }, PRICES).usd;
+  const list = listed ?? estimate({ model: DEAREST, ...counts }, PRICES).usd;
+  const sdk = typeof result?.total_cost_usd === 'number' && Number.isFinite(result.total_cost_usd) && result.total_cost_usd > 0 ? result.total_cost_usd : null;
+  if (sdk === null) return list;
+  return listed === null ? Math.max(sdk, list) : sdk;
+}
+
 /** The team tools as Agent SDK tool definitions; each call goes to the session's checked `callTool`. */
 export function teamToolDefinitions(tool, tools, callTool) {
   return tools.map((t) => tool(t.name, t.description, t.shape, async (args) => {
@@ -81,11 +98,7 @@ export function agentSdkAdapter({ effort, settingSources = [], executable, sdk: 
           if (m.type === 'assistant' && !m.parent_tool_use_id) for (const c of m.message?.content ?? []) if (c.type === 'text' && c.text) await o.onText?.(c.text);
           if (m.type === 'result') {
             resume = m.session_id ?? resume;
-            // The SDK's reported cost is what was spent; only when it reports none, the list price from the shared table.
-            // A model the table does not list is priced at its dearest model, so the budget never counts it as free.
-            const counts = { inputTokens: m.usage?.input_tokens ?? 0, outputTokens: m.usage?.output_tokens ?? 0, cacheReadTokens: m.usage?.cache_read_input_tokens ?? 0, cacheWriteTokens: m.usage?.cache_creation_input_tokens ?? 0 };
-            const fallback = () => estimate({ model: o.model, ...counts }, PRICES).usd ?? estimate({ model: DEAREST, ...counts }, PRICES).usd;
-            usage = { inputTokens: (m.usage?.input_tokens ?? 0) + (m.usage?.cache_read_input_tokens ?? 0) + (m.usage?.cache_creation_input_tokens ?? 0), outputTokens: m.usage?.output_tokens ?? 0, costUsd: typeof m.total_cost_usd === 'number' ? m.total_cost_usd : fallback() };
+            usage = { inputTokens: (m.usage?.input_tokens ?? 0) + (m.usage?.cache_read_input_tokens ?? 0) + (m.usage?.cache_creation_input_tokens ?? 0), outputTokens: m.usage?.output_tokens ?? 0, costUsd: turnCost(o.model, m) };
             if (m.subtype === 'success') result = m.result ?? '';
             else { stop = m.subtype === 'error_max_budget_usd' ? 'budget' : 'error'; error = m.subtype; }
           }

@@ -10,6 +10,7 @@
   - **Team channels (owners and admins only):** add one by name and ID. Budget and minutes start on, and approval and BLOCKED start off. Each switch saves at once, and "Stop posting here" removes the channel.
   - **No workspace yet:** owners see "Add to Slack" with the setup steps and this deployment's redirect URL; members are told to ask an owner.
   - **Server:** the Slack status now marks `suggested` kinds.
+- **Budget never fails open on an unpriced model (#99, security sev 3).** The runner's turn cost (`turnCost` in the Agent SDK adapter) ignores an SDK-reported cost of zero, below zero or not a number for a turn that used tokens and uses the list price. For a model the price table does not list, it counts at least the dearest listed model, even when the SDK reports a smaller cost (the SDK may not know that model's price either). Tested through to `usage.recorded`.
 
 ## 0.19.0
 

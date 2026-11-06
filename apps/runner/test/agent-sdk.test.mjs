@@ -132,6 +132,23 @@ test('the tier map and the cost fallback come from the shared price table; the S
   assert.ok(unlisted.usage.costUsd >= none.usage.costUsd && Math.abs(unlisted.usage.costUsd - dearest) < 1e-12, 'at the dearest listed model');
   const reported = await agentSdkAdapter({ sdk: sdkWith({ usage, total_cost_usd: 0.1234 }) }).turn(o);
   assert.equal(reported.usage.costUsd, 0.1234);
+  // The SDK may not know an unlisted model's price either and report it as free: still the dearest listed price.
+  const free = await agentSdkAdapter({ sdk: sdkWith({ usage, total_cost_usd: 0 }) }).turn({ ...o, model: 'claude-not-in-the-table' });
+  assert.ok(Math.abs(free.usage.costUsd - dearest) < 1e-12, 'an SDK-reported zero for an unlisted model is not taken');
+  const cheap = await agentSdkAdapter({ sdk: sdkWith({ usage, total_cost_usd: 0.000001 }) }).turn({ ...o, model: 'claude-not-in-the-table' });
+  assert.ok(Math.abs(cheap.usage.costUsd - dearest) < 1e-12, 'nor a reported cost below the dearest list price');
+  const zero = await agentSdkAdapter({ sdk: sdkWith({ usage, total_cost_usd: 0 }) }).turn(o);
+  assert.equal(zero.usage.costUsd, none.usage.costUsd, 'a zero reported for a turn that used tokens: the list price');
+  for (const bad of [NaN, -1, Infinity]) assert.equal((await agentSdkAdapter({ sdk: sdkWith({ usage, total_cost_usd: bad }) }).turn(o)).usage.costUsd, none.usage.costUsd);
+  // End to end to the budget: the unlisted model's turn reaches usage.recorded with a cost above zero.
+  const sent = [];
+  const s = new Session({ session: 's_u', role: 'r', team: 't', prompt: { brief: '**Model:** light' } }, { root: '/nonexistent', tiers: { light: 'claude-not-in-the-table' }, emit: async (_s, type, data) => sent.push({ type, data }) });
+  assert.equal(s.model, 'claude-not-in-the-table');
+  await s.record(free.usage, { last: true });
+  const rec = sent.find((e) => e.type === 'usage.recorded');
+  assert.equal(rec.data.model, 'claude-not-in-the-table');
+  assert.equal(rec.data.cost, Math.ceil(dearest * 100 - 1e-9), 'counted in whole cents at the dearest listed price');
+  assert.ok(rec.data.cost > 0);
 
   const model = (brief, deps = {}) => new Session({ session: 's', role: 'r', team: 't', prompt: { brief } }, { root: '/nonexistent', ...deps }).model;
   assert.equal(model('**Model:** light'), PRICES.tiers.light);
