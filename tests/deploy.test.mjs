@@ -1,7 +1,7 @@
 // The hosted deploy path's pure parts: the destructive-migration guard and the Vercel site config.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { destructiveStatements } from '../deploy/server/guard.mjs';
 import { siteConfig, STATUS_PAGE, STATUS_SCRIPT, CSP, MIDDLEWARE } from '../deploy/vercel/build.mjs';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -105,4 +105,12 @@ test('every path the site rewrites to the control plane runs through the edge mi
   const m = JSON.parse(matcher);
   const covered = (src) => m.some((x) => x === src || (x.endsWith('/:path*') && (src === x.slice(0, -7) || src.startsWith(x.slice(0, -6)))));
   for (const { source } of siteConfig('https://api.example').rewrites) assert.ok(covered(source), `${source} is rewritten but not in the middleware matcher`);
+});
+
+test('with the Studio, the site serves the Notifications page and sends every other team link to link.html', async () => {
+  const { STUDIO_REWRITES } = await import('../deploy/vercel/build.mjs');
+  const c = siteConfig('https://api.example.org', { studio: true });
+  assert.deepEqual(c.rewrites.slice(3), STUDIO_REWRITES, 'after the API rewrites, so /v1 is never shadowed');
+  for (const r of STUDIO_REWRITES) assert.ok(existsSync(`apps/studio/public${r.destination}`), r.destination);
+  assert.equal(siteConfig('https://api.example.org').rewrites.length, 3, 'the status site has only the API rewrites');
 });

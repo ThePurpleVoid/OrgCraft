@@ -164,7 +164,7 @@ paths:
     delete: { x-min-role: admin, tags: [connectors], summary: Stop forwarding, responses: { "200": { description: Removed } } }
   /teams/{team}/emails:
     parameters: [ { $ref: "#/components/parameters/team" } ]
-    get: { x-min-role: viewer, tags: [notifications], summary: "The caller's own email addresses for this team, and the kinds they can switch on", responses: { "200": { description: "{ kinds, emails }" } } }
+    get: { x-min-role: viewer, tags: [notifications], summary: "The caller's own email addresses for this team, and the kinds they can switch on", responses: { "200": { description: "{ teamName, ready, kinds, emails }: ready is false until the team has an email sink with its provider key stored, so the page can say emails are not set up instead of offering a code" } } }
     post:
       x-min-role: viewer
       tags: [notifications]
