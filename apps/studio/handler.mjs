@@ -57,6 +57,8 @@ const BRANCH = /^[A-Za-z0-9._/-]{1,100}$/;
  *   branchPrefix         every Studio branch starts with it (default "agent-team/", E4)
  *   limiter(key, { limit, windowSeconds }) → true to allow (optional; a shared store, S6, E8)
  *   logger(entry)        the host's logger for the audit line (E9); default console.info
+ *   tmpRoot              the folder publishes are planned in (default the system temp folder)
+ *   cache                a blobCache() to share across handlers of one customer (default: one per handler)
  *   api, fetch           GitHub's API and fetch (tests use a fake)
  */
 /**
@@ -74,6 +76,8 @@ export function createStudioHandler(opts = {}) {
   const { repo, authorize, getInstallationToken, limiter = null, logger = (e) => console.info(JSON.stringify(e)), api = 'https://api.github.com', fetch: fetchImpl = globalThis.fetch } = opts;
   const basePath = String(opts.basePath ?? '').replace(/\/+$/, '');
   const branchPrefix = opts.branchPrefix ?? 'agent-team/';
+  // Where publishes are planned: the system temp folder, or one of the host's own (hosted mode: one per customer, S3).
+  const tmpRoot = opts.tmpRoot ?? null;
   const allowedOrigins = new Set(opts.allowedOrigins ?? []);
   if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repo ?? '')) throw new TypeError('createStudioHandler: repo is "owner/name"');
   if (!basePath.startsWith('/')) throw new TypeError('createStudioHandler: basePath is the path the host mounts it at, e.g. "/api/agent-team/studio"');
@@ -85,7 +89,7 @@ export function createStudioHandler(opts = {}) {
 
   const assets = loadAssets();
   const version = core.VERSION;
-  const cache = blobCache();
+  const cache = opts.cache ?? blobCache();
   // Tokens whose reach was checked (S7), by token value, until they expire; in memory only.
   const checked = new Map();
 
@@ -182,7 +186,7 @@ export function createStudioHandler(opts = {}) {
       if (path === '/v1/team/preview') {
         await gate(request, 'read');
         const read = await backend.readTeam(baseOf(input.base));
-        return json(200, core.preview(read, specOf(input.spec)));
+        return json(200, core.preview(read, specOf(input.spec), { tmpRoot }));
       }
       if (path === '/v1/team/graph') { await gate(request, 'read'); return json(200, core.graph(specOf(input.spec))); }
       if (path === '/v1/team/suggestions') {
@@ -217,7 +221,7 @@ export function createStudioHandler(opts = {}) {
     }
     const info = await backend.info();
     const read = await backend.readTeam(base);
-    const p = core.plan(read, spec);
+    const p = core.plan(read, spec, { tmpRoot });
     if (p.changes.some((c) => !core.inReadSet(c.path))) throw new HttpError(500, 'a change outside the team\'s files was refused');
     if (!p.changes.length) return json(200, { branch: null, commit: null, files: [], note: 'nothing changed', pr: null });
     // S1: a plan that changes what runs needs the narrower permission too.
