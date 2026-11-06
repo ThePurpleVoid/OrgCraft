@@ -23,6 +23,7 @@ const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 /** The JSON body for a Problem: { error }, plus RFC 9457 type, title and status when it has a type, plus any body
  *  it carries (a 409 for a changed card carries the current card itself, as api-v1.yaml says). */
 const problemBody = (e) => ({ ...(e.body ?? {}), error: e.message, ...(e.type ? { type: e.type, title: e.message, status: e.status } : {}) });
+const PROBLEM_JSON = { 'content-type': 'application/problem+json; charset=utf-8' };
 const MAX_BODY = 2 * 1024 * 1024;
 
 /**
@@ -187,7 +188,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (claim.state === 'replay') {
       const { shownOnce, ...rest } = claim.response && typeof claim.response === 'object' ? claim.response : { body: claim.response };
       if (shownOnce) return send(res, 409, { error: `this request already succeeded; its ${shownOnce.join(' and ')} was shown once and is not kept`, ...rest }, { 'idempotent-replayed': 'true' });
-      return send(res, claim.status, claim.response, { 'idempotent-replayed': 'true' });
+      return send(res, claim.status, claim.response, { 'idempotent-replayed': 'true', ...(claim.response?.type ? PROBLEM_JSON : {}) });
     }
     res.hold = true;
     let answer;
@@ -195,7 +196,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       await fn();
       answer = res.answer;
     } catch (e) {
-      answer = e instanceof Problem ? { status: e.status, body: problemBody(e) } : e?.code === '23505' ? { status: 409, body: { error: 'already exists' } } : undefined;
+      answer = e instanceof Problem ? { status: e.status, body: problemBody(e), headers: e.type ? PROBLEM_JSON : {} } : e?.code === '23505' ? { status: 409, body: { error: 'already exists' } } : undefined;
       if (!answer) { res.hold = false; await store.settleIdempotency(db, t, principal, String(key)); throw e; }
     }
     // A secret is never written to the idempotency table: only the answer without it, marked as shown once.
@@ -348,7 +349,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   return (req, res) => route(req, res).catch((e) => {
     res.hold = false;
     if (res.headersSent) { res.end(); return; }
-    if (e instanceof Problem) return send(res, e.status, problemBody(e), e.type ? { 'content-type': 'application/problem+json; charset=utf-8' } : {});
+    if (e instanceof Problem) return send(res, e.status, problemBody(e), e.type ? PROBLEM_JSON : {});
     if (e?.code === '23505') return send(res, 409, { error: 'already exists' });
     console.error(e);
     send(res, 500, { error: 'something went wrong on the server' });

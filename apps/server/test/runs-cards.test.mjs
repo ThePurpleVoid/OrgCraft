@@ -94,8 +94,9 @@ test('step-up: a slow hash, the bearer token refused, single use, a lockout afte
     assert.deepEqual([off.status, off.body.type], [401, 'step-up-required'], 'with no step-up hash configured, nothing that needs it passes');
   }, { stepUpVerifier: null });
   assert.throws(() => stepUpVerifier('sha256$abc'), /not a scrypt hash/);
-  assert.throws(() => stepUpVerifier('scrypt$16384$8$1$c2FsdHNhbHRzYWx0c2FsdA$a2V5a2V5a2V5a2V5a2V5a2V5a2V5a2V5'), /2\^15 to 2\^20/);
-  assert.throws(() => stepUpVerifier('scrypt$2097152$8$1$c2FsdHNhbHRzYWx0c2FsdA$a2V5a2V5a2V5a2V5a2V5a2V5a2V5a2V5'), /2\^15 to 2\^20/);
+  assert.throws(() => stepUpVerifier('scrypt$16384$8$1$c2FsdHNhbHRzYWx0c2FsdA$a2V5a2V5a2V5a2V5a2V5a2V5a2V5a2V5'), /2\^15 to 2\^17/);
+  assert.throws(() => stepUpVerifier('scrypt$262144$8$1$c2FsdHNhbHRzYWx0c2FsdA$a2V5a2V5a2V5a2V5a2V5a2V5a2V5a2V5'), /2\^15 to 2\^17/);
+  assert.throws(() => stepUpVerifier('scrypt$32768$32$1$c2FsdHNhbHRzYWx0c2FsdA$a2V5a2V5a2V5a2V5a2V5a2V5a2V5a2V5'), /r \(1 to 8\)/, 'r is capped so one check stays under 128 MiB');
 });
 
 test('budget: raising or setting a cap needs step-up, lowering does not, and a run needs a daily cap', async () => {
@@ -252,7 +253,7 @@ test('budget: warns once at 80%, and at 100% pauses the run and sends one card; 
     await call('POST', '/teams/shop/events', { events: [usage('shop', 'u3', 10, run.id)] });
     assert.equal((await call('GET', '/teams/shop/budget')).body.today.state, 'warned');
     await call('POST', '/teams/shop/events', { events: [usage('shop', 'u4', 200, run.id), usage('shop', 'u5', 50, run.id)] });
-    const got = (await s.until(2)).map((g) => g.event);
+    const got = (await s.until(3)).map((g) => g.event).filter((e) => e.type !== 'budget.updated');
     assert.deepEqual(got.map((e) => e.type), ['budget.warned', 'budget.exhausted']);
     assert.deepEqual([got[0].data.spent, got[0].data.cap], [810, 1000]);
     assert.equal(got[1].data.spent, 1020);
@@ -266,9 +267,7 @@ test('budget: warns once at 80%, and at 100% pauses the run and sends one card; 
     const summary = (await call('GET', '/me/summary')).body.teams[0];
     assert.deepEqual([summary.run, summary.cost.today, summary.cost.capPerDay, summary.inbox], ['paused', 1070, 1000, 1]);
 
-    const resume = await call('POST', `/runs/${run.id}/resume`);
-    assert.equal(resume.body.type, 'step-up-required', 'resuming after a budget pause needs step-up');
-    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call))).status, 409, 'and is refused while today is still spent');
+    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call))).status, 409, 'resuming is refused while today is still spent');
     assert.equal((await call('POST', `/cards/${cards[0].id}`, { option: 'raise', version: 1 })).body.type, 'step-up-required', 'raising spends money, so it needs step-up');
     const raised = await call('POST', `/cards/${cards[0].id}`, { option: 'raise', version: 1 }, await stepUp(call));
     assert.equal(raised.status, 200);

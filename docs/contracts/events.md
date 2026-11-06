@@ -65,6 +65,7 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | `session.tool` | `tool`, `target` (path, command or MCP server and tool), `decision` (allowed, refused, needs-approval), `rule` |
 | `usage.recorded` | `inputTokens`, `outputTokens`, `cost` (in the currency's minor unit), `currency` |
 | `budget.warned`, `budget.exhausted` | `scope` (day, run), `day` (UTC date), `spent`, `cap` (minor units), `currency`, `cardId` (string: the budget card's id, on exhausted) |
+| `budget.updated` | `currency`, `perDay`, `perRun` (minor units, or null), `sessions`, `by` (member): the team's caps after a change |
 
 ### Owner, chat and approvals
 

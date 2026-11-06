@@ -52,6 +52,7 @@ const isInt = (v) => Number.isSafeInteger(v);
  */
 export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   now ??= () => new Date();
+  const checking = new Set();
   const base = String(publicUrl || '').replace(/\/+$/, '');
 
   async function tx(tenant, fn) {
@@ -123,6 +124,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
                    sessions = excluded.sessions, updated_by = excluded.updated_by, updated_at = now()`,
         [tenant, team, next.currency, next.perDay, next.perRun, next.sessions, by]);
       await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'budget', target: team, decision: 'allowed', detail: { from: old, to: next, stepUp: raising } });
+      await ctx.emit(team, 'budget.updated', { ...next, by }, { actor: personActor(by), subject: 'budget' });
       return { ...next, today: await today(ctx.q, team, ctx.now) };
     });
   }
@@ -144,19 +146,33 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (spent >= cap && !d.exhausted_at) {
         await q('update budget_days set exhausted_at = now(), warned_at = coalesce(warned_at, now()) where team = $1 and day = $2::date', [team, day]);
         await exhaust(ctx, team, { scope: 'day', day, spent, cap, currency: b.currency });
+      } else if (spent >= cap) {
+        // Already spent today and the card is out: anything still running stops spending too (issue #28 U2).
+        for (const r of await q("select id from runs where team = $1 and state = 'running'", [team])) await setRunState(ctx, team, r.id, 'paused', 'budget', SYSTEM);
       } else if (spent >= Math.ceil(cap * 0.8) && !d.warned_at && !d.exhausted_at) {
         await q('update budget_days set warned_at = now() where team = $1 and day = $2::date', [team, day]);
         await ctx.emit(team, 'budget.warned', { scope: 'day', day, spent, cap, currency: b.currency });
       }
     }
-    // The per-run cap, scoped to the run the usage belongs to.
-    if (event.run && b?.perRun !== null && b?.perRun !== undefined) {
+    // The run's own caps: costPerRun (or the team's perRun) over the whole run, and costPerDay over the UTC day.
+    if (event.run) {
       const [r] = await q("select id, state, caps from runs where id = $1 and team = $2", [event.run, team]);
-      const cap = Math.min(b.perRun, isInt(r?.caps?.costPerRun) ? r.caps.costPerRun : Infinity);
-      if (r?.state === 'running') {
-        const [{ spent }] = await q(`select coalesce(sum(case when jsonb_typeof(envelope->'data'->'cost') = 'number' then (envelope->'data'->>'cost')::numeric else 0 end), 0) as spent
-                                     from events where team = $1 and type = 'usage.recorded' and envelope->>'run' = $2`, [team, r.id]);
-        if (Number(spent) >= cap) await exhaust(ctx, team, { scope: 'run', run: r.id, day, spent: Math.round(Number(spent)), cap, currency: b.currency });
+      if (r?.state !== 'running') return;
+      const caps = r.caps ?? {};
+      const raised = isInt(caps.raised) ? caps.raised : 0;
+      const runCap = Math.min(b?.perRun ?? Infinity, isInt(caps.costPerRun) ? caps.costPerRun : Infinity);
+      const usage = async (sinceDay) => Math.round(Number((await q(`select coalesce(sum(case when jsonb_typeof(envelope->'data'->'cost') = 'number' then (envelope->'data'->>'cost')::numeric else 0 end), 0) as spent
+                                     from events where team = $1 and type = 'usage.recorded' and envelope->>'run' = $2 ${sinceDay ? "and substr(envelope->>'time', 1, 10) = $3" : ''}`,
+        sinceDay ? [team, r.id, day] : [team, r.id]))[0].spent));
+      const currency = b?.currency ?? 'USD';
+      if (runCap !== Infinity) {
+        const spent = await usage(false);
+        if (spent >= runCap + raised) return exhaust(ctx, team, { scope: 'run', run: r.id, day, spent, cap: runCap + raised, currency });
+      }
+      if (isInt(caps.costPerDay)) {
+        const spent = await usage(true);
+        const cap = caps.costPerDay + (caps.raisedDay?.day === day && isInt(caps.raisedDay.amount) ? caps.raisedDay.amount : 0);
+        if (spent >= cap) await exhaust(ctx, team, { scope: 'run', run: r.id, day, spent, cap, currency, perDay: true });
       }
     }
   }
@@ -227,8 +243,11 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       const t = await today(ctx.q, team, ctx.now);
       if (t.state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it or start tomorrow");
       const rid = id('run');
-      const [row] = await ctx.q(`insert into runs(id, tenant, team, mode, state, caps, roster, team_version, started_by) values ($1, $2, $3, $4, 'running', $5, $6, $7, $8) returning ${RUN_COLS}`,
+      // runs_one_going decides when two starts race; the loser gets the same 409 as the check above.
+      const [row] = await ctx.q(`insert into runs(id, tenant, team, mode, state, caps, roster, team_version, started_by) values ($1, $2, $3, $4, 'running', $5, $6, $7, $8)
+                                 on conflict (team) where state <> 'stopped' do nothing returning ${RUN_COLS}`,
         [rid, tenant, team, mode, JSON.stringify(caps), JSON.stringify(roster), roster.version, by]);
+      if (!row) throw new Problem(409, 'another run of this team started just now; stop it first');
       await ctx.emit(team, 'run.started', { mode, by, caps, frontDoor: roster.frontDoor, roles: roster.roles.length }, { actor: personActor(by), subject: `run/${rid}`, run: rid, teamVersion: roster.version ?? undefined });
       await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'start', mode } });
       hooks.runStarted && ctx.after.push(() => hooks.runStarted(tenant, team, rid));
@@ -272,10 +291,9 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
         return runView(row);
       }
       if (r.state !== 'paused') throw new Problem(409, `the run is ${r.state}`);
-      if (r.reason === 'budget') {
-        if (!(await useStepUp(ctx, by, stepUp))) throw new StepUpRequired('Resuming a run the budget paused');
-        if ((await today(ctx.q, r.team, ctx.now)).state === 'exhausted') throw new Problem(409, "today's budget is still spent; raise it (the budget card) or wait for tomorrow");
-      }
+      // Whoever paused it, nothing resumes while today's budget is spent (issue #28 U2).
+      if ((await today(ctx.q, r.team, ctx.now)).state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it (the budget card) or wait for tomorrow");
+      if (r.reason === 'budget' && !(await useStepUp(ctx, by, stepUp))) throw new StepUpRequired('Resuming a run the budget paused');
       const row = await setRunState(ctx, r.team, rid, 'running', 'owner', actor);
       await ctx.audit({ team: r.team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'resume', stepUp: r.reason === 'budget' } });
       return runView(row);
@@ -327,6 +345,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     if (!row) throw new Problem(404, 'no such card');
     if (row.state !== 'open') throw new Problem(409, `this card is ${row.state}`, { body: row.card });
     if (version !== undefined && version !== null && Number(version) !== Number(row.version)) throw new Problem(409, 'this card changed since you saw it', { body: row.card });
+    if (row.card.expires && Date.parse(row.card.expires) <= ctx.now.getTime()) throw new Problem(409, 'this card expired', { body: { ...row.card, state: 'expired' } });
     return row;
   }
 
@@ -364,7 +383,15 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     // raise: half the daily cap again for today, then the budget-paused runs carry on.
     const b = await budgetRow(ctx.q, row.team);
     if (info.scope === 'run') {
-      await ctx.q('update budgets set per_run = per_run + $2 where team = $1', [row.team, Math.ceil((b?.perRun ?? 0) / 2)]);
+      // Only this run gets more: the team's caps stay as the owner set them.
+      const add = Math.ceil((info.cap ?? b?.perRun ?? 0) / 2);
+      if (info.perDay) {
+        const [r] = await ctx.q('select caps from runs where id = $1', [info.run]);
+        const prev = r?.caps?.raisedDay?.day === info.day && isInt(r.caps.raisedDay.amount) ? r.caps.raisedDay.amount : 0;
+        await ctx.q(`update runs set caps = caps || jsonb_build_object('raisedDay', $2::jsonb) where id = $1`, [info.run, JSON.stringify({ day: info.day, amount: prev + add })]);
+      } else {
+        await ctx.q(`update runs set caps = caps || jsonb_build_object('raised', coalesce((caps->>'raised')::bigint, 0) + $2::bigint) where id = $1`, [info.run, add]);
+      }
     } else {
       await ctx.q(`insert into budget_days(tenant, team, day, raised) values ($1, $2, $3::date, $4)
                    on conflict (team, day) do update set raised = budget_days.raised + excluded.raised, exhausted_at = null, warned_at = null`,
@@ -415,8 +442,9 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   async function decideIn(ctx, apr, { decision, note, version }, by, stepUp) {
     if (!decision) throw new Problem(400, 'option is approve or deny');
-    const [a] = await ctx.q('select id, team, run, session, card, state from approvals where id = $1 for update', [apr]);
+    const [a] = await ctx.q('select id, team, run, session, card, state, expires_at from approvals where id = $1 for update', [apr]);
     if (!a) throw new Problem(404, 'no such approval');
+    if (a.state === 'pending' && new Date(a.expires_at).getTime() <= ctx.now.getTime()) throw new Problem(409, 'this approval expired', { body: { ...(await currentCard(ctx, a.card)), state: 'expired' } });
     await lockOpenCard(ctx, a.card, version);
     if (a.state !== 'pending') throw new Problem(409, `this approval is ${a.state}`, { body: await currentCard(ctx, a.card) });
     let stepUpId = null;
@@ -452,19 +480,35 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
    */
   async function stepUp(tenant, by, secret, { verifier, bearer }) {
     if (!verifier) throw new Problem(401, 'step-up is not set up on this server (AGENT_TEAM_STEP_UP_SECRET_HASH), so nothing that needs it can be done', { type: 'step-up-required' });
-    if (typeof secret !== 'string' || !secret) throw new Problem(400, 'send { secret }');
-    const [{ n }] = await db.tenant(tenant, ({ q }) => q(`select count(*)::int as n from step_up_failures where at > now() - make_interval(mins => $1)`, [STEP_UP_LOCKOUT.minutes]));
-    if (n >= STEP_UP_LOCKOUT.failures) {
-      await db.tenant(tenant, ({ q }) => q("insert into audit(tenant, actor_kind, actor_id, action, decision, rule) values ($1, 'person', $2, 'step-up', 'refused', 'lockout')", [tenant, by]));
-      throw new Problem(429, `too many wrong step-up secrets; try again in ${STEP_UP_LOCKOUT.minutes} minutes`);
-    }
-    const sameAsBearer = bearer && secret.length === bearer.length && timingSafeEqual(Buffer.from(secret), Buffer.from(bearer));
-    if (sameAsBearer || !(await verifier(secret))) {
-      await db.tenant(tenant, async ({ q }) => {
-        await q('insert into step_up_failures(tenant) values ($1)', [tenant]);
-        await q("insert into audit(tenant, actor_kind, actor_id, action, decision, rule) values ($1, 'person', $2, 'step-up', 'refused', $3)", [tenant, by, sameAsBearer ? 'bearer-token-is-not-the-secret' : 'wrong-secret']);
+    if (typeof secret !== 'string' || !secret || secret.length > 1024) throw new Problem(400, 'send { secret }');
+    // One slow check per tenant at a time on this instance; the others wait their turn by retrying (issue #28 U1).
+    if (checking.has(tenant)) throw new Problem(429, 'a step-up check is already running; try again in a moment');
+    checking.add(tenant);
+    try {
+      // The attempt is written before the check, under a per-tenant lock, so parallel guesses (on any instance) are
+      // counted before any of them is checked: at most five get through in the window.
+      const attempt = id('sua');
+      const allowed = await db.tenant(tenant, async ({ q }) => {
+        await q('select pg_advisory_xact_lock(4850, hashtext($1))', [tenant]);
+        const [{ n }] = await q('select count(*)::int as n from step_up_failures where at > now() - make_interval(mins => $1)', [STEP_UP_LOCKOUT.minutes]);
+        if (n >= STEP_UP_LOCKOUT.failures) {
+          await q("insert into audit(tenant, actor_kind, actor_id, action, decision, rule) values ($1, 'person', $2, 'step-up', 'refused', 'lockout')", [tenant, by]);
+          return false;
+        }
+        await q('insert into step_up_failures(id, tenant) values ($1, $2)', [attempt, tenant]);
+        return true;
       });
-      throw new Problem(401, sameAsBearer ? 'that is the sign-in token, not the step-up secret' : 'that is not the step-up secret', { type: 'step-up-failed' });
+      if (!allowed) throw new Problem(429, `too many wrong step-up secrets; try again in ${STEP_UP_LOCKOUT.minutes} minutes`);
+      // Compared as hashes, so the lengths always match whatever characters were typed.
+      const sameAsBearer = Boolean(bearer) && timingSafeEqual(Buffer.from(sha(secret), 'hex'), Buffer.from(sha(String(bearer)), 'hex'));
+      const right = !sameAsBearer && (await verifier(secret).catch(() => false));
+      if (!right) {
+        await db.tenant(tenant, ({ q }) => q("insert into audit(tenant, actor_kind, actor_id, action, decision, rule) values ($1, 'person', $2, 'step-up', 'refused', $3)", [tenant, by, sameAsBearer ? 'bearer-token-is-not-the-secret' : 'wrong-secret']));
+        throw new Problem(401, sameAsBearer ? 'that is the sign-in token, not the step-up secret' : 'that is not the step-up secret', { type: 'step-up-failed' });
+      }
+      await db.tenant(tenant, ({ q }) => q('delete from step_up_failures where id = $1', [attempt]));
+    } finally {
+      checking.delete(tenant);
     }
     const tid = id('su');
     const raw = randomBytes(24).toString('base64url');
@@ -492,7 +536,14 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     };
     const prior = await db.tenant(tenant, ({ q }) => found(q));
     if (prior) return { result: { created: false, event: prior }, stored: [] };
-    return tx(tenant, async (ctx) => {
+    return tx(tenant, write).catch(async (e) => {
+      // Two sends of one clientId at once: the second loses on the unique index and answers like a resend.
+      if (e?.code !== '23505' || !clientId) throw e;
+      const first = await db.tenant(tenant, ({ q }) => found(q));
+      if (!first) throw e;
+      return { result: { created: false, event: first }, stored: [] };
+    });
+    async function write(ctx) {
       const again = await found(ctx.q);
       if (again) return { created: false, event: again };
       const data = { from: by, text, ...(replyTo ? { replyTo } : {}), ...(clientId ? { clientId } : {}) };
@@ -501,7 +552,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
         [tenant, team, e.id, clientId ?? null, 'person', by, text, replyTo ?? null, e.time]);
       hooks.chatPosted && ctx.after.push(() => hooks.chatPosted(tenant, team, e));
       return { created: true, event: { ...e, team } };
-    });
+    }
   }
 
   /** The chat page (api-v1.yaml ChatPage): newest page first, items oldest first, the cards they mention, the run, cost. */
@@ -620,12 +671,14 @@ export function stepUpVerifier(stored) {
   if (!m) throw new Error('AGENT_TEAM_STEP_UP_SECRET_HASH is not a scrypt hash (make one with: agent-team-server --hash-step-up)');
   const [, N, r, p, salt, hash] = m;
   const n = Number(N), rr = Number(r), pp = Number(p);
-  if (n < 2 ** 15 || n > 2 ** 20 || (n & (n - 1)) !== 0) throw new Error('the step-up hash must use scrypt N, a power of two from 2^15 to 2^20');
-  if (rr < 1 || rr > 32 || pp < 1 || pp > 16) throw new Error('the step-up hash has an out-of-range scrypt r or p');
+  // Bounded both ways: slow enough to guess, and at most 128 MiB a check (N 2^17, r 8), so a check cannot exhaust memory.
+  if (n < 2 ** 15 || n > 2 ** 17 || (n & (n - 1)) !== 0) throw new Error('the step-up hash must use scrypt N, a power of two from 2^15 to 2^17');
+  if (rr < 1 || rr > 8 || pp < 1 || pp > 4) throw new Error('the step-up hash has an out-of-range scrypt r (1 to 8) or p (1 to 4)');
   const want = Buffer.from(hash, 'base64url');
   if (want.length < 16 || Buffer.from(salt, 'base64url').length < 16) throw new Error('the step-up hash needs a salt and a key of at least 16 bytes');
   const maxmem = 128 * n * rr * pp + 32 * 1024 * 1024;
   return async (typed) => {
+    if (typeof typed !== 'string' || typed.length > 1024) return false;
     const got = await scrypt(String(typed), Buffer.from(salt, 'base64url'), want.length, { N: n, r: rr, p: pp, maxmem });
     return got.length === want.length && timingSafeEqual(got, want);
   };

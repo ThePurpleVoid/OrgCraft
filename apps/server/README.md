@@ -92,7 +92,9 @@ different request is a `422`. Report intake needs none: the kit's report ids alr
 | `GET /v1/me/inbox` | Every open card across teams, approvals first, with `asOf` and an `ETag` |
 
 At 80% of the daily cap the team gets `budget.warned`; at 100% its runs pause and one `budget` card asks the owner
-to resume tomorrow or add half the cap again.
+to resume tomorrow or add half the cap again. While the day is spent no run resumes, whoever paused it. A run's own
+`caps.costPerRun` and `caps.costPerDay` pause just that run, and raising one gives that run more without changing the
+team's caps. Every budget change is a `budget.updated` event. One run per team at a time is held by a unique index.
 
 **Step-up.** Approving, raising or clearing a cap, resuming a run the budget paused, and adding to the budget need a
 fresh step-up: `POST /v1/auth/step-up` with `{ "secret": "…" }` returns a token for `x-step-up`, valid 5 minutes and
@@ -103,7 +105,9 @@ refused); the server keeps only its scrypt hash, from `AGENT_TEAM_STEP_UP_SECRET
 printf '%s' 'a secret of 12 characters or more' | node bin.mjs --hash-step-up   # → scrypt$32768$8$1$…
 ```
 
-Five wrong secrets in 15 minutes lock step-up for the tenant (`429`), and every try is audited. With no hash set,
+Five wrong secrets in 15 minutes lock step-up for the tenant (`429`), and every try is audited. Each try is
+counted, under a per-tenant lock, before the slow check runs, and one check per tenant runs at a time (`429` while one
+does), so parallel guesses gain nothing. The hash may use scrypt N from 2^15 to 2^17 and r up to 8: at most 128 MiB a check. With no hash set,
 step-up is refused (`401 step-up-required`), never passed. A notification to the owner on lockout comes with the
 notification channels (M4). Local mode makes a
 secret in `--data/step-up.secret`. M4's sign-in replaces the secret; the header stays.

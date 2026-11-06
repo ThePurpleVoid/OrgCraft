@@ -23,6 +23,8 @@ create table runs (
   version int not null default 1
 );
 create index runs_team_state on runs(team, state);
+-- One run per team that is not stopped: two starts at once cannot both win.
+create unique index runs_one_going on runs(team) where state <> 'stopped';
 
 create table sessions (
   id text primary key,
@@ -166,7 +168,10 @@ create table step_up_tokens (
   created_at timestamptz not null default now()
 );
 
+-- Step-up attempts: a row is written before the slow check runs and deleted when the secret was right, so the
+-- rows left in the window are the wrong (or still running) tries that the lockout counts.
 create table step_up_failures (
+  id text primary key,
   tenant text not null references tenants(id),
   at timestamptz not null default now()
 );
@@ -180,5 +185,6 @@ do $$ declare t text; begin
 end $$;
 
 grant select, insert, update on runs, sessions, deliveries, cards, approvals, budgets, budget_days, step_up_tokens to agent_team_app;
-grant select, insert on chat_messages, audit, step_up_failures to agent_team_app;
+grant select, insert on chat_messages, audit to agent_team_app;
+grant select, insert, delete on step_up_failures to agent_team_app;
 grant usage on sequence audit_seq_seq to agent_team_app;
