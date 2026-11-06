@@ -125,6 +125,10 @@ test('D1: an accept approval needs pr and headSha, and approval.result carries t
     const card = (await p.call('GET', `/cards/${r.body.card}`)).body;
     assert.equal(card.title, 'chief-of-staff asks to merge #7 at abc1234', 'the person sees the PR and the head they approve');
     assert.ok(card.links.some((l) => l.url === 'https://github.com/example/shop/pull/7'));
+    // QA (M3 exit pass A): the body is the role's words; the held call is data, for the client to show as code.
+    assert.equal(card.body, 'tests pass\n\nIt will merge pull request #7 at commit abc1234.');
+    assert.equal(typeof card.data.call, 'string');
+    assert.ok(!card.data.call.includes('ghp_'), 'the card shows the redacted call');
     const [a] = await p.db.system('select call from approvals where id = $1', [r.body.approval]);
     assert.deepEqual([a.call.pr, a.call.headSha], [7, 'abc1234'.padEnd(40, '0')]);
     assert.ok(!a.call.command.includes('ghp_'), 'a token in the command is redacted before it is stored');
@@ -154,8 +158,11 @@ test('D1: proposal.failed head-moved supersedes the approval and asks nothing it
     assert.equal((await runner.request('events', { events: [failed] })).op, 'ack');
     const rows = await p.db.system("select id, state from approvals where session = $1", [s.session]);
     assert.deepEqual(rows.map((a) => [a.id, a.state]), [[r.body.approval, 'expired']], 'exactly one approval, expired; no second one pinned to the stale head');
-    const [card] = await p.db.system('select state from cards where id = $1', [r.body.card]);
-    assert.equal(card.state, 'answered', 'a card already answered keeps its answer; an open one would be marked superseded');
+    const [card] = await p.db.system('select state, answer, card from cards where id = $1', [r.body.card]);
+    // QA (M3 exit pass A): an approved card must stop reading as approved once the head moved. Its answer is kept.
+    assert.equal(card.state, 'superseded');
+    assert.equal(card.card.state, 'superseded');
+    assert.ok(card.answer, 'the answer is kept, for the record');
     const decided = (await p.call('GET', '/teams/shop/events?type=approval.decided')).body.events.filter((e) => e.data.approval === r.body.approval).map((e) => e.data.decision);
     assert.ok(decided.includes('superseded'), JSON.stringify(decided));
     const [{ n }] = await p.db.system("select count(*)::int as n from cards where kind = 'approval'");

@@ -82,6 +82,8 @@ Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD
 
 - **Roles, members and invitations** (spec section 4). Every person route has a minimum role (`roles.mjs`, `x-min-role` in api-v1.yaml), and a route without one is refused. New: `GET /v1/members`, `PATCH`/`DELETE /v1/members/{member}`, `GET`/`POST /v1/invitations`, `DELETE /v1/invitations/{invitation}`, with step-up, audit, and last-owner protection. A person removed from their last workspace is signed out everywhere. With sign-in on, the admin token is retired once anyone owns the deployment; `agent-team-server admin reset-owner <github-user-id>` is the host's way back in. `deploy/fly/register-runner.mjs` takes a runner code minted in the Studio. Passkey and step-up writes honour `Idempotency-Key` (review of #82). Each card kind has a least role (a budget card needs an admin), and `GET /v1/me` lists the person's recent security changes as `notices` (S5, until notifications deliver them) (security review of #91).
 
+- **M3 exit test fixes** (qa-web, pass A): an approval superseded after a head move marks its card superseded even when it was already answered; an approval card's body says in words what the call will do, with the exact call in the card's `data.call`; a budget card's text shows money ("$6.14 of $5.00"), its data keeps minor units.
+
 - **M3 design fix:** `run.resumed` now restarts every session a pause stopped, from its last checkpoint, after an owner's resume or the budget's next-day resume. Pause and resume handlers act only if the run's state and version still match (found in review of #54).
 
 ### Runner
