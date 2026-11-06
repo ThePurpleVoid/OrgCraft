@@ -94,20 +94,23 @@ export function fromTemplate(root, { id, project, owner, timezone } = {}) {
   return { spec, card: id === ALMOST_EMPTY.id ? null : templateCard(files, kit) };
 }
 
-/** What a first publish may touch, as it was before: which paths existed, and .gitignore's text. */
-function snapshot(root) {
+/**
+ * What a first publish may touch, as it was before: which of `paths` (publishedPaths) existed, and .gitignore's
+ * text. Only the paths the dirty check guarded, so a repository's own AGENTS.md is never part of it.
+ */
+function snapshot(root, paths) {
   const gi = join(root, '.gitignore');
-  const parents = [...new Set(PUBLISHED.filter((p) => p.includes('/')).map((p) => dirname(p)))];
-  return { existed: PUBLISHED.filter((p) => existsSync(join(root, p))), parents: parents.filter((d) => !existsSync(join(root, d))), gitignore: existsSync(gi) ? readFileSync(gi, 'utf8') : null };
+  const parents = [...new Set(paths.filter((p) => p.includes('/')).map((p) => dirname(p)))];
+  return { paths, existed: paths.filter((p) => existsSync(join(root, p))), parents: parents.filter((d) => !existsSync(join(root, d))), gitignore: existsSync(gi) ? readFileSync(gi, 'utf8') : null };
 }
 
 /**
  * Undoes a failed first publish. The publish starts only when the team's paths have no changes, so a path that
  * existed goes back to what git has, and one that did not is removed.
  */
-function restore(root, { existed, parents, gitignore }) {
-  tryGit(root, 'reset', '-q', '--', ...PUBLISHED, '.gitignore');
-  for (const p of PUBLISHED) {
+function restore(root, { paths, existed, parents, gitignore }) {
+  tryGit(root, 'reset', '-q', '--', ...paths, '.gitignore');
+  for (const p of paths) {
     if (existed.includes(p)) { tryGit(root, 'checkout', '-q', '--', p); tryGit(root, 'clean', '-fdq', '--', p); }
     else rmSync(join(root, p), { recursive: true, force: true });
   }
@@ -180,7 +183,7 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
   // The first publish of a team: team.json is not in git yet (decided from git, not the disk, so a retry after a
   // failed first publish is still the first).
   const fresh = !tryGit(root, 'ls-files', '--', '.agent-team/team.json');
-  const before = fresh ? snapshot(root) : null;
+  const before = fresh ? snapshot(root, paths) : null;
   // sync may add lines to .gitignore (a first team, or AGENTS.md's memory folder): commit them, unless the owner
   // already had their own uncommitted changes there.
   // An untracked .gitignore counts as clean on a first publish, so the first team commit has the local.env line.

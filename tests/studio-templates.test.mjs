@@ -173,3 +173,19 @@ test('uncommitted edits to the repository\'s own AGENTS.md block a publish only 
     assert.match(on.body.error, /AGENTS\.md/);
   });
 });
+
+test('a failed first publish leaves the repository\'s own untracked AGENTS.md alone (review of #119, sev 2)', async () => {
+  const root = emptyRepo('shop');
+  const { writeFileSync, chmodSync } = await import('node:fs');
+  writeFileSync(join(root, 'AGENTS.md'), '# Shop\n\nHand-written.\n');
+  const hook = join(root, '.git/hooks/pre-commit');
+  writeFileSync(hook, '#!/bin/sh\necho refused >&2\nexit 1\n');
+  chmodSync(hook, 0o755);
+  await serve(root, async (call) => {
+    const { body: { spec } } = await call('/v1/team/from-template', { id: 'customer-support-team', project: 'Shop' });
+    const res = await call('/v1/team/publish', { spec, message: 'Start the team' });
+    assert.ok(res.status >= 400, 'the hook refused the commit');
+    assert.equal(readFileSync(join(root, 'AGENTS.md'), 'utf8'), '# Shop\n\nHand-written.\n');
+    assert.deepEqual(readdirSync(root).sort(), ['.git', 'AGENTS.md']);
+  });
+});
