@@ -1,8 +1,8 @@
 # What .github/workflows/deploy.yml reads. Names only. Set them in GitHub: Settings → Environments → production.
 
 # Secrets (environment "production" → Environment secrets)
-FLY_API_TOKEN=            # Fly.io token: an org token for the first deploy (it creates the app), then an app-scoped deploy token
-FLY_RUNNER_API_TOKEN=     # optional, a deploy token scoped to <FLY_APP>-runner; the runner job uses it instead of FLY_API_TOKEN
+FLY_API_TOKEN=            # `fly tokens create deploy --app <FLY_APP>`: scoped to the control plane app, never an org token
+FLY_RUNNER_API_TOKEN=     # `fly tokens create deploy --app <FLY_APP>-runner`: scoped to the runner app
 VERCEL_TOKEN=             # Vercel account token (Account Settings → Tokens)
 DATABASE_URL=             # see deploy/env/server.env.example
 AGENT_TEAM_MASTER_KEY=    # see deploy/env/server.env.example
@@ -15,7 +15,6 @@ AGENT_TEAM_RUNNER_KEY=    # runner only; from `node deploy/fly/register-runner.m
 AGENT_TEAM_DEPLOY=on              # the switch: the workflow does nothing until this is "on"
 AGENT_TEAM_RUNNER=on              # the runner's switch, after the M3 exit (deploys <FLY_APP>-runner)
 FLY_APP=                          # globally unique Fly app name, e.g. <you>-agent-team (the API is https://<FLY_APP>.fly.dev)
-FLY_ORG=personal                  # optional, the Fly organization slug
 FLY_REGION=iad                    # optional, next to the Supabase region (iad = us-east-1)
 VERCEL_PROJECT=                   # Vercel project name; created by the workflow if missing
 VERCEL_SCOPE=                     # optional, a Vercel team slug (leave empty for a personal account)
