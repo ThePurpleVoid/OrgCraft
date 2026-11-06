@@ -63,7 +63,7 @@ async function readFiles(list) {
 
 /**
  * Opens the New agent dialog. `app` gives the editor's state and actions:
- * { spec(), kit, kitVersion (the team's pinned kit), roles(): the derived roles, change(fn), select(slug) }.
+ * { spec(), kit, kitVersion (the team's pinned kit), roles(): the derived roles, change(fn), select(slug), edit(slug, origin) }.
  */
 export function openNewAgent(app) {
   const dlg = document.getElementById('agent-dialog');
@@ -255,7 +255,10 @@ export function openNewAgent(app) {
     app.change((s) => { for (const a of add) { addAgent(s, a.slug, a.md); if (off) s.roles[a.slug].enabled = false; } });
     if (off) for (const a of add) imported.add(a.slug);
     dlg.close();
-    app.select(add[0].slug);
+    if (add.length > 1) return app.select(add[0].slug);
+    // One agent: straight into its editor. A copy remembers what it started from, so the preview can mark what differs.
+    const src = st.start === 'copy' ? roleBy(st.from) : null;
+    app.edit(add[0].slug, src ? { from: src.slug, title: src.title, md: src.md } : undefined);
   };
 
   // Defaults: the group and manager of whoever the owner is likely adding to (the first lane under the top role).
