@@ -276,7 +276,7 @@ function nodeSvg(r, p, extra = '') {
   // The reason replaces the tier on an amber card: it is what the owner needs to read there (criterion 3).
   const tier = three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : ''].filter(Boolean).join(' · '))
     : l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}${replaces ? ' · replaces kit' : ''}` : '';
-  const state = three ? (own ? [stateWord(own), taskOf(own)].filter(Boolean).join(' · ') : 'no reports') : '';
+  const state = three ? (own ? [stateWord(own), taskOf(own)].filter(Boolean).join(' · ') : '') : '';
   const flag = view.issues.some((i) => i.level === 'error' && i.where === `roles/${r.slug}`) ? ' ⚠' : r.changed ? ' •' : '';
   const tip = three && own ? `${r.title}: ${stateWord(own)}${taskOf(own) ? ` · ${taskOf(own)}` : ''}${own.branch ? ` · branch ${own.branch}` : ''}${own.pr ? ` · PR #${own.pr}` : ''}${hot ? ` · ${hot.map(reasonOf).join(', ')}` : ''}` : '';
   return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${extra}" data-slug="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}${hot ? `, ${esc(hot.map(reasonOf).join(', '))}, work in progress` : ''}">
@@ -284,7 +284,7 @@ function nodeSvg(r, p, extra = '') {
     <rect class="stripe" width="4" height="${H - 16}" x="8" y="8" fill="${groupColor(r.group)}"></rect>
     <text class="title" x="20" y="23">${esc(r.title.length > 21 ? r.title.slice(0, 20) + '…' : r.title)}${flag}</text>
     <text class="meta" x="20" y="41">${esc(tier.length > 28 ? tier.slice(0, 27) + '…' : tier)}</text>
-    ${three ? `<circle class="dot" cx="24" cy="${H - 15}" r="4"></circle><text class="state" x="33" y="${H - 11}">${esc(state.length > 25 ? state.slice(0, 24) + '…' : state)}</text>${tip ? `<title>${esc(tip)}</title>` : ''}`
+    ${three ? `${state ? `<circle class="dot" cx="24" cy="${H - 15}" r="4"></circle><text class="state" x="33" y="${H - 11}">${esc(state.length > 25 ? state.slice(0, 24) + '…' : state)}</text>` : ''}${tip ? `<title>${esc(tip)}</title>` : ''}`
     : `${replaces && !l ? `<title>${esc(view.issues.find((i) => i.where === `roles/${r.slug}` && /replaces the kit/.test(i.message))?.message ?? 'Replaces the kit role of this name on this team')}</title>` : ''}
     ${l ? `<circle class="dot" cx="${W - 14}" cy="16" r="5"></circle>${l.threads > 1 ? `<text class="threads" x="${W - 24}" y="20" text-anchor="end">${l.threads}</text>` : ''}<title>${esc(`${r.title}: ${liveLine(l)}${l.pr ? ` · PR #${l.pr}` : ''}${l.issue ? ` · issue #${l.issue}` : ''}`)}</title>` : ''}`}
   </g>`;
@@ -623,7 +623,11 @@ function renderPopover() {
   const el = canvas.querySelector('.impact-pop');
   const c = card.getBoundingClientRect(), b = canvas.getBoundingClientRect();
   el.style.left = `${Math.min(c.right - b.left + canvas.scrollLeft + 10, canvas.scrollWidth - 340)}px`;
-  el.style.top = `${c.top - b.top + canvas.scrollTop}px`;
+  // Flip up when it would run past the bottom of the visible canvas, then bring it into view.
+  const top = c.top - b.top + canvas.scrollTop;
+  const up = c.bottom - b.top + canvas.scrollTop - el.offsetHeight;
+  const bottom = Math.min(b.bottom, window.innerHeight);
+  el.style.top = `${Math.max(0, c.top + el.offsetHeight > bottom && up >= 0 ? up : top)}px`;
 }
 
 function renderIssues() {

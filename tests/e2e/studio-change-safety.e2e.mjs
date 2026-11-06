@@ -72,13 +72,14 @@ test('a running team: states on cards, an amber mark with its reason, the popove
   await page.locator('#library .lib-role[data-slug="web-dev"] .state', { hasText: 'working' }).waitFor();
   assert.match(await card('qa-web').locator('.state').textContent(), /^last heard 3 h ago/);
   assert.match(await card('qa-web').getAttribute('class'), /\bquiet\b/);
+  assert.equal(await card('architect').locator('.state').count(), 0, 'a role with no reports shows no state line');
   assert.equal(await page.locator('#impact-pill').isHidden(), true, 'nothing changed yet');
   assert.equal(await page.locator('#draft-banner').isHidden(), true);
 
   // Criteria 2 to 4: switching a working role off keeps its card, greyed and amber, explains itself, and counts.
   await page.locator('#library .lib-role[data-slug="web-dev"] input').uncheck();
   const popover = page.locator('.impact-pop');
-  await popover.getByText('Web dev is working right now.').waitFor();
+  await popover.getByText('Web dev is working right now, and this draft switches it off.').waitFor();
   await popover.getByText('#142 Dark mode').waitFor();
   await popover.getByText('web/142-dark-mode').waitFor();
   await popover.getByText('Based on board reports; may be out of date.').waitFor();

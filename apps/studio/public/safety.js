@@ -38,6 +38,16 @@ export function reasonOf(item) {
   })[item.kind] ?? 'changed in this draft';
 }
 
+/** The same reason as the end of a sentence about the role, for the popover heading (CPO copy review of #97). */
+export function clauseOf(item) {
+  return ({
+    'role-off': 'this draft switches it off', 'role-removed': 'this draft removes it', 'role-dormant': 'this draft makes it dormant',
+    'path-moved': 'this draft moves an area it works in away from it', 'path-removed': 'this draft leaves an area it works in without a writer',
+    'brief': 'this draft changes its rules', 'tier': 'this draft changes its tier', 'reports-to': 'this draft changes who it reports to',
+    'binding-removed': 'this draft takes away a system it uses', 'binding-narrowed': 'this draft narrows its access to a system',
+  })[item.kind] ?? 'this draft changes it';
+}
+
 /** "Undo switch off" and the like, for the popover's first button. */
 export function undoLabel(item) {
   return ({
@@ -87,11 +97,17 @@ export function staleNote(newest) {
   return `Based on board reports; may be out of date. Newest report ${Number.isNaN(t.getTime()) ? newest : t.toLocaleString('en', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}.`;
 }
 
+/** "a, b and c" from the items' clauses, each said once. */
+function clauses(items) {
+  const c = [...new Set(items.map(clauseOf))];
+  return c.length > 1 ? `${c.slice(0, -1).join(', ')} and ${c.at(-1)}` : c[0];
+}
+
 /** The popover by an amber card (criterion 4): what is in flight, and Undo / Review the impact. */
 export function popoverHtml({ slug, title, items, row, spec, roles, newest }) {
   const first = items[0];
   return `<div class="impact-pop" role="dialog" aria-label="${esc(title)} is working right now" data-slug="${esc(slug)}">
-    <p><strong>${esc(title)} ${row && (row.age_s ?? 0) <= QUIET_S ? 'is working right now' : 'has work in flight'}.</strong> ${esc(items.map((i) => reasonOf(i)).join(', '))}.</p>
+    <p><strong>${esc(title)} ${row && (row.age_s ?? 0) <= QUIET_S ? 'is working right now' : 'has work in flight'}, and ${esc(clauses(items))}.</strong></p>
     <ul>${inFlightList(row, spec, roles, slug).map((l) => `<li>${l}</li>`).join('')}</ul>
     <p class="hint">Nothing changes for it yet. When you publish, you choose what happens to this work. ${esc(staleNote(newest))}</p>
     <div class="row"><button type="button" data-pop="undo" data-item="${esc(first.id)}">${esc(undoLabel(first))}</button><button type="button" class="primary" data-pop="review">Review the impact</button><button type="button" class="link" data-pop="close">Close</button></div>
