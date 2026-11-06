@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.11.0
+
+Meeting definitions, kit side (PRD 6.7 M8, CPO story criteria 11 and 12, issue #30), and one shared model price table. Additive: a team without `meetings.json` behaves as before.
+
+- **`.agent-team/meetings.json`** ([customizing](docs/customizing.md#meetings-meetingsjson)) is part of the team model as `spec.meetings` and round-trips through `importLayer`/`compileLayer`. `sync` adds a **Meetings** table to the project instructions and `- meeting` to the `Wakes on` of every role a meeting names (attendees, whole lanes without their dormant roles, and the facilitator).
+- **`validate` checks meetings:** attendees and the facilitator on the team, unique ids, valid days and times, an agenda, a cap above zero and within the daily cap (`validate(spec, kit, { dailyCapUsd })`, or `team.json` `budgets.dailyUsd`), discussion rounds 2 to 5. It warns on two meetings with a shared role at the same time and on a meeting with fewer than two attendees.
+- New in `packages/team-model`: `meetingAttendees`, `meetingWhen`, `renderMeetings`, `applyMeetings`, `checkMeetings`, `meetingEstimate`.
+- **`packages/model-prices`:** `prices.json` (`agent-team/model-prices@1`, prices as of 2026-10-06) is the one table of model prices and of the model each tier runs on, for Studio estimates and the runner. `tierModel`, `priceOf`, `estimate`, `checkPrices`; `node.mjs` has `loadPrices`. The SDK's reported cost stays the source of truth for money spent.
+- **The role template is industry-neutral and ready to publish:** one-line placeholders that talk about areas and tools, not paths and CLIs, and a `Wakes on` of `- handoff` and `- meeting`, so a new agent drafted from it starts with no warnings. The line forms the runner reads are documented in [customizing](docs/customizing.md#wakes-on-and-sign-off-evidence).
+- **What existing teams see on sync:** `docs/team/role-template.md` changes and the version stamps change. A team that adds `meetings.json` gets the Meetings section and the wake lines.
+
+## 0.10.0
+
+Custom agents, kit side (PRD 6.6, issue #30), and the change-safety library (PRD 6.9 part 1). Everything is additive: a layer without the new sections or files behaves as before.
+
+- **`## Sign-off evidence` and a structured `## Wakes on`** in briefs ([customizing](docs/customizing.md#wakes-on-and-sign-off-evidence)). Wakes lines the runner reads: `handoff`, `meeting`, `pr-paths: …`, `label: …`, `issue-label: …`, `schedule: <days> HH:MM`; anything else stays free text. The role template documents both. `validate` warns on a malformed wake line for any role, and on lines the runner does not read for custom agents only. The sign-off check now counts only `- ` lines of evidence.
+- **Role packs** ([customizing](docs/customizing.md#share-an-agent-role-packs)): `pack.json` stays `agent-team/role-pack@1`, with optional `kit` and `needs.wakes`. New in `packages/team-model`: `checkPack`, `renameRole`, `checkUpgrade`, `signoffEvidence`/`setSignoffEvidence`, `wakesOn`/`setWakesOn`, `scheduleProblem`.
+- **A new kit role never silently replaces your custom agent.** `kit.lock.json` now records the kit's roles (`kitRoles`). When a later kit adds a role with the same name as one of your `.agent-team/roles/<slug>.md`, `sync` stops with an error that says how to fix it and `check` reports it. Keep yours on purpose with `"replaces": ["<slug>"]` in `team.json`.
+- **Change safety library:** `diffTeams`, `impact`, `inventoryFromBoard` and `versionName` in `packages/team-model`, for the Studio's amber marks and the impact step in Publish. They describe; they never act or block a publish. From board data they offer only what a thread can do itself (let it finish, hand off now, pause; for a moved area, move after its PR merges or hand the files over) and mark every item as possibly stale.
+- **What existing teams see on sync:** `docs/team/role-template.md` gains the two sections, `kit.lock.json` gains `kitRoles`, and the version stamps change. No brief or team file changes. `validate` may show new warnings for custom agents whose `Wakes on` is free text.
+
 ## Unreleased
 
 - **M3 design fix:** `run.resumed` now restarts every session a pause stopped, from its last checkpoint, after an owner's resume or the budget's next-day resume. Pause and resume handlers act only if the run's state and version still match (found in review of #54).

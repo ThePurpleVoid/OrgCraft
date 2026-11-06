@@ -25,3 +25,13 @@ agent-team compile team-spec.json               # the TeamSpec back to .agent-te
 **The contract:** building the team from `compileLayer(importLayer(layer))` writes the same generated files as building it from `layer`. `tests/team-model.test.mjs` checks this for every preset, every example and this repository's own team. A change that breaks it does not merge.
 
 The optional data files are part of the model as `spec.ownership`, `spec.gates`, `spec.resources` and `spec.canvas` (`ownership.json`, `gates.json`, `resources.json`, `studio.json`). `validate(spec, kit)` (or `agent-team validate`) checks the whole team. `config.sh`, a hand-written `ownership.md` and the lane files are not part of a TeamSpec; they are carried through untouched.
+
+## Custom agents and change safety (kit 0.10)
+
+- Briefs as data: `signoffEvidence` / `setSignoffEvidence` for `## Sign-off evidence`; `wakesOn` / `setWakesOn` for the structured `## Wakes on` lines (`WAKE_TYPES`, `scheduleProblem`); `checkBriefData` for their checks.
+- Agents: `checkSlug`, `draftRole`, `addAgent`, `renameRole`, `rolePack` (`pack.json`, `agent-team/role-pack@1`), `readPack`, `checkPack` (issues in `validate`'s shape) and `checkUpgrade` (custom agents a new kit would shadow).
+- Change safety, describe only: `diffTeams(published, draft, kit)` lists what a draft changes (role off, removed or dormant, reporting, tier, brief sections, areas, bindings, gates, meetings, rules, values). `impact(changes, inventory)` joins those changes with the work in flight and gives each item a severity, its choices and a recommended one. `inventoryFromBoard(summarize(...))` builds an inventory from board reports; its items are marked `stale`. `versionName(sha, publishedAt)` names a team version by its commit. None of these act, and no impact item stops a publish.
+
+## Meetings (kit 0.11)
+
+`spec.meetings` is `.agent-team/meetings.json` (`{ "meetings": [...] }`, shape in [customizing](../../docs/customizing.md#meetings-meetingsjson)). `checkMeetings(meetings, roles, { dailyCapUsd })` runs inside `validate`; `meetingAttendees(meeting, roles)` resolves roles and lanes; `meetingEstimate(meeting, roles, prices)` gives `{ perMeetingUsd, perMonthUsd, asOf, turns }` from each role's tier and [the price table](../model-prices); `renderMeetings` and `applyMeetings` are what sync writes.
