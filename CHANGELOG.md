@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.1
+
+- **A custom agent switched off keeps its definition.** Switching off a project role (`.agent-team/roles/<slug>.md`, including one that replaces a kit role) in the Studio, or through `compileLayer` in `packages/team-model`, used to delete its file on publish. Now the file stays and the role is listed in `team.json` `exclude`; switching it back on gives the identical brief. Import and compile round-trip a switched-off role unchanged.
+- **What existing teams see on sync:** `exclude` now also applies to the project's own roles. Before, a role with a file in `.agent-team/roles/` was installed even when `exclude` listed it; now it is not. A team that lists none of its own roles in `exclude` sees no change.
+
 ## 0.9.0
 
 Running a team from project threads, where every thread has its own machine (issue #29). Existing teams see these changes on their next sync:
