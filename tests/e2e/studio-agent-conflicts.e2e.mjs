@@ -141,6 +141,7 @@ test('a pack says what it needs: each system is asked for, bound only on Connect
   const db = ed.locator('.need', { hasText: 'Needs a database' });
   await db.waitFor();
   assert.doesNotMatch(await ed.locator('.ed-systems').textContent(), /Client database/, 'nothing is bound before Connect');
+  if (SHOTS) { await ed.locator('#sec-tools').scrollIntoViewIfNeeded(); await page.screenshot({ path: join(SHOTS, 'agent-editor-pack-needs-before-connect.png') }); }
   const mail = ed.locator('.need', { hasText: 'Needs a mailbox' });
   await mail.getByText('This team has no mailbox set up yet').waitFor();
   await mail.getByRole('button', { name: 'Skip' }).click();
@@ -149,7 +150,7 @@ test('a pack says what it needs: each system is asked for, bound only on Connect
   await db.getByRole('button', { name: 'Connect' }).click();
   await db.waitFor({ state: 'detached' });
   await ed.locator('.ed-systems', { hasText: 'Client database' }).waitFor();
-  if (SHOTS) { await ed.locator('#sec-tools').scrollIntoViewIfNeeded(); await page.screenshot({ path: join(SHOTS, 'agent-editor-pack-needs.png') }); }
+  if (SHOTS) { await ed.locator('#sec-tools').scrollIntoViewIfNeeded(); await page.screenshot({ path: join(SHOTS, 'agent-editor-pack-needs-connected.png') }); }
 
   // Its area is one the docs keeper writes: the same three choices, on the row.
   const box = ed.locator('.conflict');
