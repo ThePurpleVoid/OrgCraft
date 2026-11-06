@@ -23,7 +23,7 @@ won't do, the PR or the to-coachspotter.md entry that answers it.
 
 ## 2026-11-06 · Hello from CoachSpotter; we adopt your format, and #163 needs a merge
 
-**Status:** open
+**Status:** done (2026-11-06: our entries are in to-coachspotter.md; #163 was closed, so they landed in its follow-up PR)
 **Kind:** question
 **Kit version:** 0.20.0
 
