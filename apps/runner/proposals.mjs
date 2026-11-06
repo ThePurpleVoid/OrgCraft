@@ -34,6 +34,10 @@ const need = (sha) => { if (!FULL_SHA.test(String(sha ?? ''))) throw new Proposa
 // The long lines of a PEM key: any one of them in a commit is a leak (a whole key rarely survives copy and paste).
 const pemLines = (pem) => String(pem).split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length >= 40 && !l.startsWith('-----'));
 
+/** The hosts' GitHub Apps whose deployment statuses a preview link may come from (configurable per runner). */
+export const PREVIEW_CREATORS = ['vercel[bot]', 'netlify[bot]'];
+const NEVER_PREVIEW_CREATORS = ['github-actions[bot]'];
+
 /** A deployment's link, if it is one a person may be sent to: https, no user or password, at most 2000 characters. */
 export function previewUrl(u) {
   if (typeof u !== 'string' || u.length > 2000) return null;
@@ -55,8 +59,19 @@ export function appJwt(appId, privateKey, now = Date.now()) {
  * GitHub, through the merger app. `fetch` is injectable for the tests; nothing here runs without an app id and key.
  * Tokens are per repository installation and kept until five minutes before they expire.
  */
-export function githubProposals({ appId, privateKey, api = 'https://api.github.com', fetch = globalThis.fetch, method = 'squash' }) {
+export function githubProposals({ appId, privateKey, api = 'https://api.github.com', fetch = globalThis.fetch, method = 'squash', previewCreators = PREVIEW_CREATORS, previewHosts = null }) {
   if (!appId || !privateKey) throw new Error('the merger app needs an app id and a private key');
+  // Who may write the status a preview link is read from: the host's own app, never Actions (agent code can run
+  // there with deployments write, and could put any link on a trusted card).
+  const creators = new Set(previewCreators.map((c) => String(c).trim().toLowerCase()).filter((c) => c && !NEVER_PREVIEW_CREATORS.includes(c)));
+  const hosts = previewHosts?.length ? previewHosts.map((h) => String(h).trim().toLowerCase().replace(/^\.+/, '')).filter(Boolean) : null;
+  const trusted = (status, url) => {
+    const c = status?.creator;
+    if (!c || c.type !== 'Bot' || !creators.has(String(c.login ?? '').toLowerCase())) return false;
+    if (!hosts) return true;
+    const host = new URL(url).hostname.toLowerCase();
+    return hosts.some((h) => host === h || host.endsWith(`.${h}`));
+  };
   const tokens = new Map(); // slug -> { token, until }
   async function call(path, { token, ...init } = {}) {
     const res = await fetch(`${api}${path}`, { ...init, headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'agent-team-runner', authorization: `Bearer ${token}`, ...(init.body ? { 'content-type': 'application/json' } : {}) } });
@@ -102,7 +117,8 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
     },
     /**
      * The newest successful deployment of `sha` with an https link (GitHub deployment statuses, which hosts such as
-     * Vercel and Netlify write). Needs the app's Deployments read permission; without it, null (no link, no error).
+     * Vercel and Netlify write), written by a host app on `previewCreators` (and, if set, on a `previewHosts` domain).
+     * Needs the app's Deployments read permission; without it, null (no link, no error).
      */
     async preview({ repo, sha }) {
       if (!FULL_SHA.test(String(sha ?? ''))) return null;
@@ -115,7 +131,7 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
         const st = await call(`/repos/${slug}/deployments/${Number(d.id)}/statuses?per_page=1`, { token });
         const last = st.status === 200 && Array.isArray(st.body) ? st.body[0] : null;
         const url = previewUrl(last?.environment_url);
-        if (last?.state === 'success' && url) return { deployment: Number(d.id), environment: String(d.environment ?? 'Preview').slice(0, 100), url };
+        if (last?.state === 'success' && url && trusted(last, url)) return { deployment: Number(d.id), environment: String(d.environment ?? 'Preview').slice(0, 100), url };
       }
       return null;
     },

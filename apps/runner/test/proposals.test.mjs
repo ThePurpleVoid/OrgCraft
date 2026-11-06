@@ -109,20 +109,34 @@ test('GitHub previews: the newest successful https deployment of the commit, rea
   const S = 'c'.repeat(40);
   const calls = [];
   let grant = 201;
-  const statuses = { 7: [{ state: 'failure', environment_url: 'https://broken.example.app' }], 6: [{ state: 'success', environment_url: 'https://user:pw@shop.example.app' }], 5: [{ state: 'success', environment_url: 'https://shop-abc.vercel.app' }] };
+  const vercel = { login: 'vercel[bot]', type: 'Bot' };
+  const statuses = {
+    9: [{ state: 'success', environment_url: 'https://login-acme.example.com', creator: { login: 'github-actions[bot]', type: 'Bot' } }],
+    8: [{ state: 'success', environment_url: 'https://phish.example.com', creator: { login: 'vercel[bot]', type: 'User' } }],
+    7: [{ state: 'failure', environment_url: 'https://broken.example.app', creator: vercel }],
+    6: [{ state: 'success', environment_url: 'https://user:pw@shop.example.app', creator: vercel }],
+    5: [{ state: 'success', environment_url: 'https://shop-abc.vercel.app', creator: vercel }],
+  };
   const fetch = async (url, init = {}) => {
     const path = url.replace('https://api.github.com', '');
     calls.push({ path, body: init.body ? JSON.parse(init.body) : undefined });
     const json = (status, body) => ({ status, json: async () => body });
     if (path === '/repos/acme/shop/installation') return json(200, { id: 77 });
     if (path === '/app/installations/77/access_tokens') return grant === 201 ? json(201, { token: 'ghs_read', expires_at: new Date(Date.now() + 3600_000).toISOString() }) : json(grant, { message: 'The permissions requested are not granted to this installation.' });
-    if (path === `/repos/acme/shop/deployments?sha=${S}&per_page=10`) return json(200, [{ id: 7, environment: 'Preview' }, { id: 6, environment: 'Preview' }, { id: 5, environment: 'Preview' }]);
+    if (path === `/repos/acme/shop/deployments?sha=${S}&per_page=10`) return json(200, [9, 8, 7, 6, 5].map((id) => ({ id, environment: 'Preview' })));
     const m = /^\/repos\/acme\/shop\/deployments\/(\d+)\/statuses\?per_page=1$/.exec(path);
     if (m) return json(200, statuses[m[1]] ?? []);
     return json(404, {});
   };
   const g = githubProposals({ appId: 1, privateKey, fetch });
-  assert.deepEqual(await g.preview({ repo: 'https://github.com/acme/shop', sha: S }), { deployment: 5, environment: 'Preview', url: 'https://shop-abc.vercel.app/' }, 'a failed one and one with a password in its link are passed over');
+  assert.deepEqual(await g.preview({ repo: 'https://github.com/acme/shop', sha: S }), { deployment: 5, environment: 'Preview', url: 'https://shop-abc.vercel.app/' }, 'a status from Actions, from a user named like a bot, a failed one and a link with a password are passed over');
+  // Configured: github-actions[bot] is never trusted, even when listed; a host allowlist narrows it further.
+  const actions = githubProposals({ appId: 1, privateKey, fetch, previewCreators: ['github-actions[bot]'] });
+  assert.equal(await actions.preview({ repo: 'https://github.com/acme/shop', sha: S }), null);
+  const other = githubProposals({ appId: 1, privateKey, fetch, previewHosts: ['netlify.app'] });
+  assert.equal(await other.preview({ repo: 'https://github.com/acme/shop', sha: S }), null, 'a vercel.app link is not on a netlify.app allowlist');
+  const ok = githubProposals({ appId: 1, privateKey, fetch, previewHosts: ['vercel.app'] });
+  assert.equal((await ok.preview({ repo: 'https://github.com/acme/shop', sha: S }))?.deployment, 5);
   assert.deepEqual(calls.find((c) => c.body)?.body, { repositories: ['shop'], permissions: { deployments: 'read' } }, 'the preview token reads deployments and nothing else');
   assert.equal(await g.preview({ repo: 'https://github.com/acme/shop', sha: 'abc' }), null, 'only a full commit');
   const g2 = githubProposals({ appId: 1, privateKey, fetch });
