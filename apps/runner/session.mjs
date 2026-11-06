@@ -2,16 +2,20 @@
 // It owns the session's working copy, its queue of messages, its budget and its liveness. The runner key's events
 // (session.*, usage.recorded, report.heartbeat, and the front door's chat.message) go out through `emit`; role
 // messages go through the team tool server, so the control plane mints them (docs/product/m3-design.md).
+import { tierModel } from '../../packages/model-prices/index.mjs';
+import { loadPrices } from '../../packages/model-prices/node.mjs';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
 import { safeRead, safeWrite, sharedDir } from './sandbox.mjs';
-import { checkpoint as saveWork, onBranch, outOfArea, prepare, release } from './worktree.mjs';
+import { checkHead, checkpoint as saveWork, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
 
 /** Model per brief tier. The runner's config or the session.start body can override it. */
-export const DEFAULT_TIERS = { deep: 'claude-opus-5-5', standard: 'claude-opus-5-5', routine: 'claude-sonnet-5-5', light: 'claude-haiku-5-5' };
+// Which model each tier runs on comes from the kit's one price table (packages/model-prices), not a copy here.
+export const PRICES = loadPrices();
+export const DEFAULT_TIERS = { ...PRICES.tiers };
 /**
  * The only parts of the runner's environment a session inherits (security review R1). Not HOME: each session
  * gets its own empty one. Not the model key: the session gets the loopback proxy's address and a token of its
@@ -91,9 +95,8 @@ export class Session {
   }
 
   get model() {
-    const tiers = { ...DEFAULT_TIERS, ...this.deps.tiers };
     const tier = (/\*\*Model:\*\*\s*([a-z]+)/i.exec(this.body.prompt?.brief ?? '') ?? [])[1]?.toLowerCase();
-    return this.body.model ?? tiers[this.body.tier ?? tier] ?? tiers.standard;
+    return this.body.model ?? tierModel(this.body.tier ?? tier, PRICES, this.deps.tiers);
   }
 
   /** What this session may still spend, in minor units: the smaller of today's and the run's remaining budget. */
@@ -329,7 +332,8 @@ export class Session {
   async save(reason) {
     const r = await saveWork({ cwd: this.copy.cwd, branch: this.copy.branch, base: this.copy.base, role: this.role, reason, areas: this.body.areas ?? [], secrets: this.secretValues() })
       .catch((e) => ({ pushed: false, error: e.message }));
-    if (r.pushed && this.proposes()) await this.propose(r.commit).catch((e) => { r.proposalError = e.message; this.deps.log?.(`proposal for ${this.copy.branch}: ${e.message}`); });
+    // A branch that changes nothing against its base has nothing to propose (a role that only talked).
+    if (r.pushed && this.proposes() && (r.changes || this.proposal)) await this.propose(r.commit).catch((e) => { r.proposalError = e.message; this.deps.log?.(`proposal for ${this.copy.branch}: ${e.message}`); });
     return r;
   }
 
@@ -359,7 +363,8 @@ export class Session {
   async acceptFlow(input) {
     const saved = await this.save('before accept');
     if (!saved.pushed || !this.proposal) {
-      return { text: `Not asked: the branch could not be pushed and proposed (${saved.error ?? saved.proposalError ?? 'no proposal'}). Fix that first, then ask again.`, isError: true };
+      const why = saved.error ?? saved.proposalError ?? (saved.pushed && !saved.changes ? 'the branch changes nothing against its base' : 'no proposal');
+      return { text: `Not asked: the branch could not be pushed and proposed (${why}). Fix that first, then ask again.`, isError: true };
     }
     let headSha = saved.commit;
     // A head that moves after the approval (someone pushed to the pull request) is not merged: the runner asks
@@ -383,13 +388,28 @@ export class Session {
       try {
         const m = await this.deps.proposals.accept({ repo: this.body.repo.url, ref: this.proposal.ref, branch: this.copy.branch, base: this.copy.base, headSha: approved, approval });
         await this.emit('proposal.accepted', { ...base, result: m.result });
-        return { text: JSON.stringify({ approval, decision: 'approved', merged: m.result, pr: this.proposal.ref, headSha: approved }) + ' Approved and merged by the runner.' };
+        // The base has it now (squashed): later work starts from there, on a fresh pull request.
+        // Only when the remote branch is gone: otherwise the next push onto it would be refused (not a fast-forward).
+        this.proposal = null;
+        if (m.deleted) await restart(this.copy.cwd, approved).catch((e) => this.deps.log?.(`restart ${this.copy.branch} on ${this.copy.base}: ${e.message}`));
+        else this.deps.log?.(`${this.copy.branch} was merged but not deleted on the remote; the session stays on it`);
+        return { text: JSON.stringify({ approval, decision: 'approved', merged: m.result, pr: base.ref, headSha: approved }) + ' Approved and merged by the runner.' };
       } catch (e) {
         const reason = ['head-moved', 'checks', 'conflict'].includes(e.reason) ? e.reason : 'checks';
         await this.emit('proposal.failed', { ...base, reason, detail: String(e.message).slice(0, 500) });
         if (reason === 'head-moved' && round < MAX_REASKS) {
           const now = await this.deps.proposals.head({ repo: this.body.repo.url, ref: this.proposal.ref }).catch(() => null);
           if (now && now !== approved) {
+            // Commits the runner did not push have not been through its checks: they must pass the same ones
+            // (ownership against the bases the runner fetched, symlinks, large files, the secret scan over every
+            // commit in the range) before any card can name them. If they fail, no card.
+            const c = await checkHead(this.copy.cwd, { branch: this.copy.branch, sha: now, areas: this.body.areas ?? [], secrets: this.secretValues() })
+              .catch((err) => ({ ok: false, problem: { rule: 'history', items: [], text: `not asked: ${err.message}` } }));
+            if (!c.ok) {
+              const moved = c.problem.rule === 'head-moved';
+              await this.emit('proposal.failed', { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: now, approval, reason: moved ? 'head-moved' : 'checks', detail: c.problem.text.slice(0, 500) });
+              return { text: JSON.stringify({ approval, decision: 'approved', merged: false, reason: moved ? 'head-moved' : 'checks', rule: c.problem.rule }) + ` Approved, but not merged: the pull request's head moved to ${now}, which this session did not push, and it was not asked again (${c.problem.text}). Tell your manager; do not merge another way.`, isError: true };
+            }
             headSha = now;
             this.proposal.headSha = now;
             await this.emit('proposal.updated', { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: now });

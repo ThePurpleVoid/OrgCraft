@@ -202,7 +202,7 @@ test('start a run: the published team, a daily cap first, step-up to set it, and
       assert.equal(plane.budget.perDay, 2000);
       assert.equal(plane.started.length, 1);
       assert.equal(plane.started[0].team.version, execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim());
-      await page.getByText('The team started a run').waitFor();
+      await page.getByText('A run started').waitFor();
       await page.getByRole('button', { name: 'Pause' }).waitFor();
       // Stop it, so the phone pass finds no run going until the one "started elsewhere".
       page.once('dialog', (d) => d.accept());

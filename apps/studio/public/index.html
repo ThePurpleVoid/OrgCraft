@@ -15,6 +15,7 @@
     </nav>
     <div class="bar-actions team-only">
       <span id="checks" class="pill" role="status"></span>
+      <button id="impact-pill" type="button" class="pill warn" hidden></button>
       <button id="undo" type="button" title="Undo (Ctrl+Z)">Undo</button>
       <button id="redo" type="button" title="Redo (Ctrl+Shift+Z)">Redo</button>
       <button id="publish" type="button" class="primary">Publish…</button>
@@ -40,6 +41,7 @@
         <button id="live" class="canvas-only live-toggle" type="button" aria-pressed="false" title="Show where every role stands, from the team's reports">Live</button>
         <span class="row zoom canvas-only"><button id="zoom-out" type="button" aria-label="Zoom out">−</button><button id="zoom-fit" type="button" title="Fit or actual size"><span id="zoom-level">100%</span></button><button id="zoom-in" type="button" aria-label="Zoom in">+</button></span>
       </div>
+      <p id="draft-banner" class="draft-banner" hidden></p>
       <p class="mode-hint hint" data-for="org"><span class="edit-only">Drag a card onto another to change who it reports to. Click a card to edit it.</span><span class="small-only">Who reports to whom. Tap a card to see the role.</span></p>
       <p class="mode-hint hint" data-for="flow">Who hands work to whom, from each role's "Hands to". Click a role to see its hand-offs: blue goes out, green comes in.</p>
       <div id="systems-strip" class="systems-strip" data-for="systems"></div>

@@ -176,6 +176,28 @@ agent; the budget stops a session offline; reconnects resume. The real-model smo
 key in the runner's own environment the SDK adapter refuses to start a turn, so it never falls back on credentials
 the machine happens to have.
 
+## The M3 dry run
+
+The whole M3 exit test on one machine with no model and no key (Pass A): the control plane, the Studio, and this
+runner with the scripted fake model in `adapters/dryrun.mjs` (a chief of staff, a builder and QA), against a fresh team
+whose remote is a bare repository on disk. The chief of staff asks you one decision card (step 7) and says back what you chose; the
+builder's change goes through QA's SIGNOFF to an approval card and a merge pinned to its head. Use `--runner docker`
+to exercise the sandbox (D2, D9) as well.
+
+```bash
+npm ci --prefix apps/server && npm ci --prefix apps/runner
+node tools/dry-run/m3.mjs up --dir /tmp/m3          # prints the Studio link and the step-up secret
+node tools/dry-run/m3.mjs signoff --dir /tmp/m3     # QA's SIGNOFF, when QA waits for it (step 6)
+node tools/dry-run/m3.mjs hold --dir /tmp/m3        # then approve: the merge waits ...
+node tools/dry-run/m3.mjs move-head --dir /tmp/m3   # ... someone pushes to the pull request (step 9b) ...
+node tools/dry-run/m3.mjs release --dir /tmp/m3     # ... it fails head-moved, and a new card asks again
+node tools/dry-run/m3.mjs spend 6 --dir /tmp/m3     # the next turn costs $6 (step 11)
+node tools/dry-run/m3.mjs status --dir /tmp/m3      # pull requests, heads, merge results and the step log
+```
+
+`--runner docker` runs the runner image instead (build it first, see the top of the Dockerfile). CI runs both through
+`tests/e2e/m3-dry-run.e2e.mjs`.
+
 ## Not yet
 
 A user per session (today all sessions share `agent`, so one session could change another's working copy before

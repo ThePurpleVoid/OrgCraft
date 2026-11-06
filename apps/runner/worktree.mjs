@@ -187,6 +187,71 @@ async function refreshBase(cwd) {
   }
 }
 
+/**
+ * After the branch was merged (squashed) into its base: start the working copy again from the new base, so later work
+ * does not carry commits the base already has in another form (they would conflict with their own squash). Only when
+ * everything here was merged (`merged` is the head that was, and the copy's HEAD must be in it) and nothing is left
+ * uncommitted. Returns the new HEAD, or null when it left the copy as it was.
+ */
+export async function restart(cwd, merged) {
+  const m = meta.get(cwd);
+  if (!m) throw new Error('no recorded base for this working copy');
+  try { await git(cwd, 'merge-base', '--is-ancestor', 'HEAD', merged); } catch { return null; }
+  // Files left uncommitted (outside the role's areas, waiting on their owner) are the agent's work: never reset them away.
+  if (await git(cwd, 'status', '--porcelain', '--untracked-files=all')) return null;
+  await refreshBase(cwd);
+  await git(cwd, 'reset', '--quiet', '--hard', `refs/remotes/origin/${m.base}`);
+  return git(cwd, 'rev-parse', 'HEAD');
+}
+
+/**
+ * The checks every commit leaving through the runner passes, from `head` back to the bases the runner fetched itself:
+ * ownership, symlinks, large files and the secret scan. Returns { h } (the history) or { problem: { rule, items, text } }.
+ * `lead` starts the text ("not pushed", "not asked"). Any git failure is a problem (F1: fail closed).
+ */
+async function checkRange(cwd, head, areas, secrets, lead) {
+  let h;
+  try { h = await history(cwd, head); } catch (e) {
+    const why = String(e.stderr || e.message).trim().split('\n').pop();
+    const text = e.refresh
+      ? `${lead}: the runner could not reach the remote to check the branch against ${meta.get(cwd).base} (${why}). Do not push another way; report BLOCKED if it persists`
+      : `${lead}: the runner could not read the branch's history (${why})`;
+    return { problem: { rule: e.refresh ? 'remote-unreachable' : 'history', items: [], text } };
+  }
+  const outside = h.names.filter((p) => !owns(areas, p));
+  if (outside.length) return { problem: { rule: 'ownership', items: outside.slice(0, 20), text: `${lead}: the branch's commits change paths outside this role's owned areas (${outside.slice(0, 10).join(', ')})` } };
+  const links = h.links.filter((l) => leaves(cwd, l.path, l.target)).map((l) => l.path);
+  if (links.length) return { problem: { rule: 'symlink', items: links, text: `${lead}: symlinks point outside the working copy (${links.join(', ')})` } };
+  if (h.large.length) return { problem: { rule: 'large-file', items: h.large, text: `${lead}: files over 20 MB are not pushed from a session (${h.large.slice(0, 5).join(', ')})` } };
+  const hits = [...new Set(findSecrets({ files: [...h.names.map((path) => ({ path, text: '' })), ...h.added, ...h.binaries, { path: 'commit message', text: h.messages }], values: secrets }))];
+  if (hits.length) return { problem: { rule: 'secret-scan', items: hits.slice(0, 20), text: `${lead}: the branch's commits look like they hold a secret (${hits.slice(0, 5).join(', ')})` } };
+  return { h };
+}
+
+/**
+ * A head on the remote that the runner did not push (someone pushed to the pull request after an approval): fetched
+ * by the runner from the URL it holds, then put through the same checks as a checkpoint, over every commit from it
+ * back to the bases. Returns { ok: true } or { ok: false, moved?, problem }. Nothing is checked out.
+ */
+export async function checkHead(cwd, { branch, sha, areas = [], secrets = [] }) {
+  const m = meta.get(cwd);
+  if (!m) return { ok: false, problem: { rule: 'history', items: [], text: 'not asked: no recorded base for this working copy' } };
+  const ref = 'refs/agent-team/incoming';
+  try {
+    await git(cwd, 'fetch', '--quiet', '--no-tags', m.url, `+refs/heads/${branch}:${ref}`);
+  } catch (e) {
+    return { ok: false, problem: { rule: 'remote-unreachable', items: [], text: `not asked: the runner could not fetch ${branch} (${String(e.stderr || e.message).trim().split('\n').pop()})` } };
+  }
+  try {
+    const got = await git(cwd, 'rev-parse', '--verify', `${ref}^{commit}`);
+    if (got !== sha) return { ok: false, moved: got, problem: { rule: 'head-moved', items: [got], text: `not asked: ${branch} moved again, to ${got}` } };
+    const { problem } = await checkRange(cwd, sha, areas, secrets, 'not asked');
+    return problem ? { ok: false, problem } : { ok: true };
+  } finally {
+    await git(cwd, 'update-ref', '-d', ref).catch(() => {});
+  }
+}
+
 /** The lines a patch adds, per file. */
 function addedLines(patch) {
   const added = new Map();
@@ -205,20 +270,20 @@ function addedLines(patch) {
   return [...added].map(([path, text]) => ({ path, text }));
 }
 
-async function history(cwd) {
+async function history(cwd, head = 'HEAD') {
   const { bases } = meta.get(cwd) ?? {};
   if (!bases?.length) throw new Error('no recorded base for this working copy');
   await refreshBase(cwd).catch((e) => { e.refresh = true; throw e; });
-  const range = ['HEAD', '--not', ...bases];
+  const range = [head, '--not', ...bases];
   const names = new Set([
     ...(await git(cwd, 'log', '--format=', '--name-only', '--no-renames', '--cc', ...range)).split('\n'),
-    ...(await git(cwd, 'diff', '--name-only', '--no-renames', `${bases.at(-1)}...HEAD`)).split('\n'),
+    ...(await git(cwd, 'diff', '--name-only', '--no-renames', `${bases.at(-1)}...${head}`)).split('\n'),
   ].filter(Boolean));
   const patch = await git(cwd, 'log', '--format=', '-p', '--cc', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', ...range);
   const added = addedLines(patch);
   const messages = await git(cwd, 'log', '--format=%B%x00', ...range);
   const links = [];
-  for (const l of (await git(cwd, 'diff', '--raw', '--no-renames', '--no-abbrev', `${bases.at(-1)}...HEAD`)).split('\n')) {
+  for (const l of (await git(cwd, 'diff', '--raw', '--no-renames', '--no-abbrev', `${bases.at(-1)}...${head}`)).split('\n')) {
     const m = /^:\d+ 120000 \S+ (\S+) \S+\t(.+)$/.exec(l);
     if (m) links.push({ path: m[2], target: await git(cwd, 'cat-file', 'blob', m[1]) });
   }
@@ -298,24 +363,12 @@ export async function checkpoint({ cwd, branch, role, reason, areas = [], secret
   const commit = await git(cwd, 'rev-parse', 'HEAD');
   // What the agent committed itself, from the shell, is checked the same way, commit by commit, before anything
   // is pushed. Any git failure here refuses the push (F1: fail closed).
-  let h;
-  try { h = await history(cwd); } catch (e) {
-    const why = String(e.stderr || e.message).trim().split('\n').pop();
-    const text = e.refresh
-      ? `not pushed: the runner could not reach the remote to check the branch against ${meta.get(cwd).base} (${why}). Do not push another way; report BLOCKED if it persists`
-      : `not pushed: the runner could not read the branch's history (${why})`;
-    return { ...stop(e.refresh ? 'remote-unreachable' : 'history', [], text), commit };
-  }
-  const outside = h.names.filter((p) => !owns(areas, p));
-  if (outside.length) return { ...stop('ownership', outside, `not pushed: the branch's commits change paths outside this role's owned areas (${outside.slice(0, 10).join(', ')})`), commit };
-  const links = h.links.filter((l) => leaves(cwd, l.path, l.target)).map((l) => l.path);
-  if (links.length) return { ...stop('symlink', links, `not pushed: symlinks point outside the working copy (${links.join(', ')})`), commit };
-  if (h.large.length) return { ...stop('large-file', h.large, `not pushed: files over 20 MB are not pushed from a session (${h.large.slice(0, 5).join(', ')})`), commit };
-  const hits = findSecrets({ files: [...h.names.map((path) => ({ path, text: '' })), ...h.added, ...h.binaries, { path: 'commit message', text: h.messages }], values: secrets });
-  if (hits.length) return { ...stop('secret-scan', [...new Set(hits)], `not pushed: the branch's commits look like they hold a secret (${[...new Set(hits)].slice(0, 5).join(', ')})`), commit };
+  const { h, problem } = await checkRange(cwd, 'HEAD', areas, secrets, 'not pushed');
+  if (problem) return { ...stop(problem.rule, problem.items, problem.text), commit };
   try {
     await git(cwd, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`);
-    return { commit, pushed: true, held, ...(held.length ? { error: `left uncommitted, outside the owned areas: ${held.slice(0, 10).join(', ')}` } : {}) };
+    // `changes`: the paths the branch changes against its base (none: there is nothing to propose yet).
+    return { commit, pushed: true, changes: h.names.length, held, ...(held.length ? { error: `left uncommitted, outside the owned areas: ${held.slice(0, 10).join(', ')}` } : {}) };
   } catch (e) {
     return { commit, pushed: false, held, error: String(e.stderr || e.message).trim().split('\n').pop() };
   }

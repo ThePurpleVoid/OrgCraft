@@ -38,12 +38,13 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
 .inspector { border-left: 1px solid var(--line); }
 .group-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin: 14px 0 4px; display: flex; align-items: center; gap: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
-.lib-role { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: grab; }
-.lib-role:hover { background: var(--off); }
-.lib-role.selected { outline: 2px solid var(--accent); }
+.lib-ref { width: 100%; background: none; border: 0; font: inherit; color: inherit; text-align: left; }
+:is(.lib-role, .lib-ref) { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: grab; }
+:is(.lib-role, .lib-ref):hover { background: var(--off); }
+:is(.lib-role, .lib-ref).selected { outline: 2px solid var(--accent); }
 .lib-role input { width: auto; margin: 0; }
-.lib-role .name { flex: 1; }
-.lib-role .tag { font-size: 11px; color: var(--muted); }
+:is(.lib-role, .lib-ref) .name { flex: 1; }
+:is(.lib-role, .lib-ref) .tag { font-size: 11px; color: var(--muted); }
 
 .canvas-wrap { display: flex; flex-direction: column; min-width: 0; }
 .zoom button { padding: 2px 9px; min-width: 30px; }
@@ -220,7 +221,7 @@ a { color: var(--accent); }
   .chat-head { padding: 8px 12px; }
   .chat-title, .meter { display: none; }
   /* touch targets: 44px tall, and the run controls stay on one line */
-  .pages button, .chat-run button { min-height: 44px; }
+  .pages button, .chat-run button, .chat-form button { min-height: 44px; }
   .chat-head { flex-wrap: nowrap; }
   .chat-run { flex-wrap: nowrap; width: 100%; justify-content: flex-end; gap: 6px; }
   .chat-run .cost { margin-right: auto; white-space: normal; }
@@ -375,3 +376,29 @@ body.editing .layout, body.editing .readonly-note { display: none; }
 .ed-checks li.warning { border-left-color: var(--warn); }
 .ed-checks li.error { border-left-color: var(--error); }
 @media (max-width: 1100px) { .ed { grid-template-columns: 180px 1fr 320px; } }
+
+/* Change safety part 1 (mockup 06): the board state on each card, amber where the draft touches work in flight. */
+.node .state { fill: var(--ink); font-size: 11.5px; }
+.node.quiet .dot { fill: var(--muted); }
+.node.quiet .state { fill: var(--muted); }
+.node.live.none .state { fill: var(--muted); font-style: italic; }
+.node.amber rect.card { stroke: var(--warn); stroke-width: 3; }
+.node.amber .meta { fill: var(--warn); }
+.node.ghost { opacity: .55; }
+.node.ghost rect.card { stroke-dasharray: 5 3; }
+.draft-banner { margin: 0; padding: 6px 12px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); background: var(--panel); }
+.pill.warn { border-color: var(--warn); color: var(--warn); background: none; cursor: pointer; }
+.impact-pop { position: absolute; z-index: 5; width: 320px; background: var(--panel); border: 1px solid var(--warn); border-radius: 10px; padding: 12px 14px; box-shadow: 0 6px 24px rgb(0 0 0 / .15); font-size: 13px; }
+.impact-pop p { margin: 0 0 8px; }
+.impact-pop ul { margin: 0 0 8px; padding-left: 18px; }
+.impact-pop .row { gap: 8px; flex-wrap: wrap; }
+.now-live { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0 12px; font-size: 13px; }
+.now-live.amber { border-color: var(--warn); border-left-width: 3px; }
+.now-live h2 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.now-live ul { margin: 0 0 6px; padding-left: 18px; }
+.now-live .reason { color: var(--warn); margin: 0 0 6px; }
+.now-live .hint { margin: 0; }
+.lib-role .state { font-size: 11px; color: var(--ok); }
+.lib-role .state.s-waiting, .lib-role .state.s-review { color: var(--accent); }
+.lib-role .state.s-blocked { color: var(--error); }
+.lib-role .state.quiet, .lib-role .state.s-idle, .lib-role .state.s-done { color: var(--muted); }

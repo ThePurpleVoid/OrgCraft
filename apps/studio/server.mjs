@@ -40,14 +40,19 @@ class HttpError extends Error { constructor(status, message) { super(message); t
 export function gitState(root) {
   const branch = tryGit(root, 'branch', '--show-current');
   const dirty = tryGit(root, 'status', '--porcelain', '--', ...PUBLISHED).split('\n').filter(Boolean);
-  return { repo: !!tryGit(root, 'rev-parse', '--git-dir'), branch, dirty };
+  // The live version: the last commit that changed the team (change safety names versions by commit, D16).
+  const [sha, at] = tryGit(root, 'log', '-1', '--format=%H%n%cI', '--', '.agent-team').split('\n');
+  return { repo: !!tryGit(root, 'rev-parse', '--git-dir'), branch, dirty, head: sha ? { sha, at: at ?? null } : null };
 }
 
 /** Everything the page needs to start: the team as a TeamSpec, the kit's library, and where it lives. */
 export function state(root) {
   if (!existsSync(join(root, '.agent-team/team.json'))) throw new HttpError(404, `no .agent-team/team.json in ${root}. Run "agent-team init" first.`);
   const kit = loadKit(KIT);
-  return { root, kitVersion: VERSION, spec: importLayer(readLayer(root), kit), kit, git: gitState(root) };
+  // The kit roles the team last synced with: a custom agent whose name a newer kit now ships is a clash (A7).
+  let kitRoles = null;
+  try { kitRoles = JSON.parse(readFileSync(join(root, '.agent-team/kit.lock.json'), 'utf8')).kitRoles ?? null; } catch { /* never synced */ }
+  return { root, kitVersion: VERSION, spec: importLayer(readLayer(root), kit), kit, kitRoles, git: gitState(root) };
 }
 
 /** The files a publish would write, compared with the repository as it is: [{ path, status, before, after }]. */
