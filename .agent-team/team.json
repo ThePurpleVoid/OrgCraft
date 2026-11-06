@@ -16,8 +16,8 @@
   "values": {
     "PROJECT_NAME": "Agent Team Kit",
     "OWNER": "the owner",
-    "TIMEZONE": "UTC",
-    "DIGEST_TIME": "08:00"
+    "TIMEZONE": "America/Los_Angeles",
+    "DIGEST_TIME": "07:00"
   },
   "subagents": false,
   "hooks": true
