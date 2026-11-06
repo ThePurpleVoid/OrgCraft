@@ -251,7 +251,7 @@ paths:
     post: { tags: [notifications], security: [], summary: "unsubscribe: turns off one kind for one team (also RFC 8058 one-click); resubscribe: Turn it back on", responses: { "200": { description: A page } } }
   /teams/{team}/slack:
     parameters: [ { $ref: "#/components/parameters/team" } ]
-    get: { x-min-role: viewer, tags: [notifications], summary: "Is Slack connected and working (health), the kinds, and the caller's own link", responses: { "200": { description: "{ connected, ready, canLink, health, kinds, me }" } } }
+    get: { x-min-role: viewer, tags: [notifications], summary: "Is Slack connected and working (health), the kinds, and the caller's own link", responses: { "200": { description: "{ connected, ready, canLink, health, kinds: [{ id, label, suggested, channelDefault }], me }: suggested kinds are ticked, not saved, the first time a person sees the DM switches" } } }
   /teams/{team}/slack/connect:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post: { x-min-role: viewer, tags: [notifications], summary: "Start Connect Slack: the Sign in with Slack URL (identity only), with a state bound to the caller and team for 10 minutes", responses: { "200": { description: "{ url }" }, "409": { description: Slack is not connected for this team } } }

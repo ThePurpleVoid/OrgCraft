@@ -136,3 +136,128 @@ test('a member who is not an owner is told to ask one', () => {
   assert.match(html, /Emails aren't set up for this team yet\. Ask an owner to connect one\./);
   assert.doesNotMatch(html, /id="email-add"/);
 });
+
+// ------------------------------------------------------------------------------------------------ Slack
+
+test('Slack: the callback reads what Slack sent back, and says what to do when it cannot link', async () => {
+  const { callbackOf, linkError } = await import('../../apps/studio/public/slack-callback.js');
+  assert.deepEqual(callbackOf('?code=abc&state=sls_1', 'sample-app'), { team: 'sample-app', code: 'abc', state: 'sls_1' });
+  assert.match(callbackOf('?error=access_denied&state=x', 'sample-app').error, /You cancelled the sign-in with Slack/);
+  assert.match(callbackOf('?code=abc&state=x', null).error, /does not know which team/);
+  assert.match(callbackOf('?code=abc&state=x', '../evil').error, /does not know which team/);
+  assert.match(callbackOf('?state=x', 'sample-app').error, /did not send back/);
+  assert.match(linkError(410), /more than 10 minutes/);
+  assert.match(linkError(400), /started somewhere else/);
+  assert.equal(linkError(409, 'sign in to the Acme Slack workspace, the one this team is connected to'), 'sign in to the Acme Slack workspace, the one this team is connected to');
+  const { slackSignInUrl, slackHealth, slackHtml } = await import('../../apps/studio/public/notifications.js');
+  assert.equal(slackSignInUrl('https://slack.com/openid/connect/authorize?x=1'), 'https://slack.com/openid/connect/authorize?x=1');
+  for (const bad of ['http://slack.com/x', 'https://slack.com.evil.example/x', 'javascript:alert(1)', 'https://evil.example/slack.com']) assert.equal(slackSignInUrl(bad), null, bad);
+  assert.equal(slackHealth({ status: 'failing', since: '2026-11-06T10:00:00Z' }, () => '10:00'), 'Slack · failing since 10:00, sending by email instead');
+  assert.equal(slackHealth({ status: 'working' }), 'Slack · working');
+  const member = slackHtml({ slack: { connected: false }, owner: false, notes: new Map() });
+  assert.match(member, /Slack isn't connected for this team yet\. Ask an owner to add it\./);
+  assert.doesNotMatch(member, /Add to Slack/);
+  const owner = slackHtml({ slack: { connected: false }, owner: true, notes: new Map(), redirectUrl: 'https://studio.example/slack/callback' });
+  assert.match(owner, /Connect your Slack workspace so the team can message you there\./);
+  assert.match(owner, /Add to Slack/);
+  assert.match(owner, /https:\/\/studio\.example\/slack\/callback/);
+});
+
+test('Slack: connect by signing in to Slack, save the suggested DMs, pick a channel, and disconnect', { skip }, async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: SHOTS ? 2 : 1 });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('dialog', (d) => d.accept());
+  // "Slack": signs octo in at once and sends the browser back to the Studio's callback with a code and the state.
+  let asked = null;
+  await page.route('https://slack.com/**', (route) => {
+    asked = new URL(route.request().url());
+    return route.fulfill({ status: 302, headers: { location: `${asked.searchParams.get('redirect_uri')}?code=slack-code-1&state=${encodeURIComponent(asked.searchParams.get('state'))}` } });
+  });
+  await page.goto(`${iss.origin}/teams/sample-app/notifications`);
+  await page.getByRole('link', { name: 'Continue with GitHub' }).click();
+  const slack = page.locator('section[aria-labelledby="slack-title"]');
+  await slack.getByRole('heading', { name: 'Slack' }).waitFor();
+  await slack.getByText('Slack · working').waitFor();
+  await slack.getByText('Get messages as a Slack DM.').waitFor();
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'slack-not-linked-light.png'), fullPage: true });
+
+  await slack.getByRole('button', { name: 'Connect Slack' }).click();
+  await slack.getByText('Connected as @octo.cat. Choose what to get in Slack, then save.').waitFor();
+  assert.equal(new URL(page.url()).pathname, '/teams/sample-app/notifications');
+  assert.equal(asked.searchParams.get('scope'), 'openid profile', 'identity only (D56)');
+  assert.equal(asked.searchParams.get('redirect_uri'), `${iss.origin}/slack/callback`);
+  assert.equal(iss.slack.states.size, 0, 'the state was used once');
+  // As for email (D49): the suggested two are ticked, nothing is saved until Save.
+  const box = (label) => slack.locator('.n-slack-me').getByLabel(label, { exact: true });
+  for (const [label, on] of [['Approval needed', true], ['Budget at 80%', false], ['Budget at 100%', true], ['A role is blocked', false], ['Meeting minutes', false]]) assert.equal(await box(label).isChecked(), on, label);
+  await slack.getByText('The message links to the Studio. You always approve there, never in Slack.').waitFor();
+  const link = () => iss.slack.links.get('sample-app:per_octo');
+  assert.deepEqual(link().kinds, []);
+  await slack.getByRole('button', { name: 'Save' }).click();
+  await slack.getByText('Saved. You will get these Slack messages.').waitFor();
+  assert.deepEqual(link().kinds, ['approval', 'budget100']);
+  await box('Meeting minutes').check();
+  await slack.locator('.n-slack-me').getByText('Saved.', { exact: true }).waitFor();
+  assert.deepEqual(link().kinds.sort(), ['approval', 'budget100', 'minutes']);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'slack-linked-light.png'), fullPage: true });
+
+  // Team channels (owners and admins): budget and minutes start on, approval and BLOCKED off (D58).
+  await slack.getByText('Post updates to a channel everyone on it can read. Channels get less detail than DMs.').waitFor();
+  await slack.getByRole('button', { name: 'Add a channel' }).click();
+  const add = slack.locator('#channel-add');
+  await add.getByLabel('Channel name').fill('#Team-Updates');
+  await add.getByLabel('Channel ID').fill('C0123ABCD');
+  for (const [label, on] of [['Approval needed', false], ['Budget at 80%', true], ['Budget at 100%', true], ['A role is blocked', false], ['Meeting minutes', true]]) assert.equal(await add.getByLabel(label, { exact: true }).isChecked(), on, label);
+  await add.getByRole('button', { name: 'Add the channel' }).click();
+  await slack.getByText('Added. A first post in #team-updates says who chose it.').waitFor();
+  assert.deepEqual(iss.slack.channels.map((c) => [c.channel, c.name, c.kinds]), [['C0123ABCD', 'team-updates', ['budget80', 'budget100', 'minutes']]]);
+  const ch = slack.locator('.n-channel', { hasText: '#team-updates' });
+  await ch.getByLabel('A role is blocked', { exact: true }).check();
+  await ch.getByText('Saved.', { exact: true }).waitFor();
+  assert.deepEqual(iss.slack.channels[0].kinds.sort(), ['blocked', 'budget100', 'budget80', 'minutes']);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'slack-channel-light.png'), fullPage: true });
+  await ch.getByRole('button', { name: 'Stop posting here' }).click();
+  await slack.getByText('Stopped posting to #team-updates.').waitFor();
+  assert.equal(iss.slack.channels.length, 0);
+
+  // Disconnect stops every DM (D60).
+  await slack.getByRole('button', { name: 'Disconnect Slack' }).click();
+  await slack.getByText('Disconnected. No more Slack DMs from this team.').waitFor();
+  assert.equal(link(), undefined);
+  await slack.getByRole('button', { name: 'Connect Slack' }).waitFor();
+
+  // A callback that was not started here, and one the person cancelled.
+  await page.evaluate(() => sessionStorage.setItem('agent-team-slack-team', 'sample-app'));
+  await page.goto(`${iss.origin}/slack/callback?code=x&state=sls_forged`);
+  await page.getByText('This sign-in with Slack was started somewhere else. Choose Connect Slack again from Notifications.').waitFor();
+  assert.equal(new URL(page.url()).search, '', 'the code is taken out of the address bar');
+  await page.goto(`${iss.origin}/slack/callback?error=access_denied`);
+  await page.getByText('You cancelled the sign-in with Slack. Nothing changed.').waitFor();
+  await page.getByRole('link', { name: 'Back to Notifications' }).click();
+  await slack.getByRole('button', { name: 'Connect Slack' }).waitFor();
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test('Slack: failing health says so; a member sees no channels, and with no workspace is told to ask an owner (360px)', { skip }, async () => {
+  const other = await stubIssuer({ members: { octo: { id: 'per_mem', name: 'Mem Ber', workspaces: [{ tenant: 'acme', name: 'Acme', role: 'member' }] } } });
+  try {
+    other.slack.failingSince = '2026-11-06T10:00:00.000Z';
+    const ctx = await browser.newContext({ viewport: { width: 360, height: 780 }, isMobile: true, hasTouch: true, deviceScaleFactor: SHOTS ? 3 : 1 });
+    const page = await ctx.newPage();
+    await page.goto(`${other.origin}/teams/sample-app/notifications`);
+    await page.getByRole('link', { name: 'Continue with GitHub' }).click();
+    const slack = page.locator('section[aria-labelledby="slack-title"]');
+    await slack.getByText(/^Slack · failing since .+, sending by email instead$/).waitFor();
+    assert.equal(await slack.getByText('Team channels').count(), 0, 'channels are for owners and admins');
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 360);
+    other.slack.connected = false;
+    await page.reload();
+    await slack.getByText("Slack isn't connected for this team yet. Ask an owner to add it.").waitFor();
+    assert.equal(await slack.getByText('Add to Slack').count(), 0);
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, 'slack-not-connected-member-phone-light.png'), fullPage: true });
+    await ctx.close();
+  } finally { other.close(); }
+});

@@ -562,3 +562,14 @@
 .ats .ask-dialog { width: min(440px, calc(100vw - 24px)); }
 .ats .ask-dialog .ask-text { margin: 0 0 12px; white-space: pre-line; }
 .ats .ask-dialog .ask-label { display: block; margin-bottom: 12px; }
+
+/* Notifications: Slack section (CPO Slack story) */
+.ats .n-section h3 { font-size: 14px; margin: 18px 0 4px; }
+.ats .n-steps > summary.button { display: inline-block; list-style: none; cursor: pointer; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
+.ats .n-steps > summary.button::-webkit-details-marker { display: none; }
+.ats .n-steps ol { padding-left: 20px; margin: 10px 0; }
+.ats .n-steps li { margin: 6px 0; }
+.ats .n-steps code { overflow-wrap: anywhere; }
+.ats .n-health.error { color: var(--error); }
+.ats .n-channel .hint { margin-left: 4px; }
+@media (max-width: 640px) { .ats .n-steps > summary.button, .ats #slack-connect, .ats #channel-new { min-height: 44px; } }

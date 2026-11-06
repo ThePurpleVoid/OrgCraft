@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Studio: Notifications page, Slack** (CPO Slack story, D55 to D60). Under Emails, a Slack section with the CPO's copy:
+  - **Connecting your account:** "Connect Slack" signs the person in with Slack (identity only). The new `/slack/callback` page (`slack-callback.html`, rewritten by `build.mjs --studio`) links the account and returns to Notifications. A cancelled, forged or expired sign-in says what to do.
+  - **DMs:** the same switches as email, with the suggested two ticked but not saved until Save (D49). After that each switch saves at once.
+  - **Health line:** "Slack · working", or "failing since …, sending by email instead".
+  - **Disconnecting:** "Disconnect Slack" asks to confirm first.
+  - **Team channels (owners and admins only):** add one by name and ID. Budget and minutes start on, and approval and BLOCKED start off. Each switch saves at once, and "Stop posting here" removes the channel.
+  - **No workspace yet:** owners see "Add to Slack" with the setup steps and this deployment's redirect URL; members are told to ask an owner.
+  - **Server:** the Slack status now marks `suggested` kinds.
+
 ## 0.19.0
 
 - **The Studio, hosted mode: the deployment's own Studio page** (issue #123, `docs/specs/studio-embed.md` section 1, the third mode). `apps/server/studio.mjs` mounts `createStudioHandler` under `/v1/teams/{team}/studio/`, signed in by the deployment (ADR 0007): a viewer reads, previews and gets suggestions, an editor publishes, only an admin changes commands the team runs (`publish-code`). It publishes with the deployment's M4 GitHub App, and only on an installation the workspace has proven it owns (S9): the installation that holds the repository is looked up fresh from GitHub before every write (at most five minutes old for a read), one that is not bound to the tenant is refused with `type: "installation"` and an audit row, and no other installation is tried. Tokens are minted for the one repository with contents and pull requests write and metadata read. Each customer has its own blob cache and its own temp folder for planning (S3). A publish honours `Idempotency-Key` and lands in the audit table as `publish`. The deployment's cookie and bearer never reach the handler or GitHub. Off until the M4 app is set up: every route answers 503 "the GitHub App is not connected yet", and a team with no repository answers 409 `no-repo`. The roles are in `apps/server/roles.mjs` and the routes in `api-v1.yaml` (tag `studio`). `createStudioHandler` takes two new options for this, `tmpRoot` and `cache`; a mounted host needs neither.
