@@ -254,7 +254,16 @@ export function createChat({ root, onOpen } = {}) {
     }
     st.pending = st.pending.filter((p) => !seen.has(p.clientId));
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    // A live refresh redraws the log while the person may be typing a step-up secret into a card: keep what they typed
+    // and where the cursor was, or the redraw silently empties the field (and the next Confirm submits nothing).
+    const typing = [...log.querySelectorAll('form[data-stepup] input')].map((i) => ({ card: i.closest('form').dataset.stepup, value: i.value, focused: document.activeElement === i }));
     log.innerHTML = html + [st.error, st.runError].filter(Boolean).map((m) => `<p class="result error">${esc(m)}</p>`).join('');
+    for (const t of typing) {
+      const input = log.querySelector(`form[data-stepup="${CSS.escape(t.card)}"] input`);
+      if (!input) continue;
+      input.value = t.value;
+      if (t.focused) input.focus({ preventScroll: true });
+    }
     if (atBottom) log.scrollTop = log.scrollHeight;
     renderRun();
   }

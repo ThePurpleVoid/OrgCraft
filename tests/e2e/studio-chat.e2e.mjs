@@ -84,6 +84,10 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
   await approval.getByRole('button', { name: 'Confirm' }).click();
   await approval.getByText('That token was not accepted').waitFor();
   await approval.getByLabel('Step-up secret').fill(cp.stepUpSecret);
+  // A live update redraws the chat while the secret is typed in: what was typed must survive it (qa-web, PR #53).
+  cp.say('A note that arrives while you type.');
+  await page.getByText('A note that arrives while you type.').waitFor();
+  assert.equal(await approval.getByLabel('Step-up secret').inputValue(), cp.stepUpSecret, 'the redraw kept the typed secret');
   await approval.getByRole('button', { name: 'Confirm' }).click();
   await approval.locator('.answer').waitFor();
   assert.match(await approval.locator('.answer').textContent(), /^Approve · owner/);
