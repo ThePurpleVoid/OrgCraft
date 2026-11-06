@@ -222,9 +222,10 @@ function limiter(now) {
  * `upstream` is githubUpstream(...) (or a stub with the same two methods). `clients` adds apps and the CLI:
  * [{ client_id, redirect_uris, application_type: 'native' }]. `proxy` is { hops, edgeSecret } (callerIp), and
  * `clientIp(req)` names the caller for rate limits. There is no global cap: one would be a bucket anyone could empty for everyone (security review, #73);
- * floods are for the host's concurrency limits and the edge.
+ * floods are for the host's concurrency limits and the edge. `configure(config)` returns the library configuration
+ * to use instead: only the OpenID conformance harness (conformance/op.mjs) passes it; the server never does.
  */
-export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), proxy = {}, clientIp = (req) => callerIp(req, proxy) }) {
+export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub = null, upstream, clients = null, now = () => new Date(), proxy = {}, clientIp = (req) => callerIp(req, proxy), configure = null }) {
   const issuer = new URL(publicUrl);
   if (issuer.protocol !== 'https:') throw new Error('sign-in needs an https AGENT_TEAM_PUBLIC_URL (the cookie is Secure and __Host-)');
   if (issuer.pathname !== '/' || issuer.search || issuer.hash) throw new Error('AGENT_TEAM_PUBLIC_URL must be an origin with no path for sign-in');
@@ -275,7 +276,7 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     callback = provider.callback();
   };
   const makeProvider = (keys) => {
-    const p = new Provider(origin, {
+    const config = {
       adapter: adapterFor(db),
       clients: [web, ...natives],
       // ES256 only: the issuer's key is P-256 (section 2, step 4).
@@ -316,7 +317,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
         ctx.type = 'text/plain; charset=utf-8';
         ctx.body = `Sign-in failed: ${String(out.error ?? 'error').replace(/[^\w .,:;'()-]/g, '')}${out.error_description ? ` (${String(out.error_description).replace(/[^\w .,:;'()-]/g, '').slice(0, 300)})` : ''}`;
       },
-    });
+    };
+    const p = new Provider(origin, configure ? configure(config) : config);
     // TLS ends at the deployment's proxy, and the issuer is fixed by config: tell the library the scheme ourselves,
     // and never let a request's forwarded host name the issuer.
     p.proxy = true;

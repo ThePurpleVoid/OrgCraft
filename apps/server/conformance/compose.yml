@@ -1,0 +1,20 @@
+# Added to the suite's docker-compose-prebuilt.yml by run.sh: the issuer under test, on the suite's network, by the
+# name its browser and back channel use.
+services:
+  op:
+    image: node:22-bookworm-slim
+    working_dir: /kit/apps/server
+    volumes:
+      - ${KIT_DIR}:/kit:ro
+      - ${CERT_DIR}:/certs:ro
+    environment:
+      OP_ISSUER: https://op.agent-team.test:3000
+      OP_GITHUB_URL: http://op.agent-team.test:3001
+      OP_CERT: /certs/op.crt
+      OP_KEY: /certs/op.key
+    command: ["node", "conformance/op.mjs"]
+    networks:
+      default:
+        aliases: [op.agent-team.test]
+  server:
+    depends_on: [op]

@@ -50,6 +50,35 @@ jobs:
           psql -h localhost -U owner -d postgres -c "create role kit login createrole password 'kit'" -c "create database kit owner kit"
           TEST_DATABASE_URL=postgres://kit:kit@localhost:5432/kit npm test --prefix apps/server
 
+  oidc-conformance:
+    # The OpenID Foundation conformance suite against the server's issuer: Basic OP (with PKCE and refresh token
+    # rotation) and Config OP. Sign-in stays off in deploys until this job is green on main (security review, M4).
+    # apps/server/conformance/run.sh runs the same thing on a laptop with docker.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: npm ci --prefix apps/server
+      - name: Conformance suite
+        env: { CONFORMANCE_WORK: "${{ runner.temp }}/conformance" }
+        run: apps/server/conformance/run.sh
+      - name: Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oidc-conformance-results
+          path: |
+            ${{ runner.temp }}/conformance/results
+            ${{ runner.temp }}/conformance/op.log
+          if-no-files-found: ignore
+
   runner:
     # apps/runner's own tests. Never real model calls: no ANTHROPIC_API_KEY and no RUNNER_SMOKE here. The steps skip
     # until apps/runner exists on the branch.

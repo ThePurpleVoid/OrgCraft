@@ -1,0 +1,21 @@
+{
+  "alias": "agent-team",
+  "description": "Agent Team control plane issuer (apps/server/identity.mjs)",
+  "server": {
+    "discoveryUrl": "https://op.agent-team.test:3000/.well-known/openid-configuration"
+  },
+  "client": { "client_name": "conformance-client-1" },
+  "client2": { "client_name": "conformance-client-2" },
+  "browser": [
+    {
+      "match": "https://op.agent-team.test:3000/oauth/authorize*",
+      "tasks": [
+        {
+          "task": "Verify Complete",
+          "match": "*/test/*/callback*",
+          "commands": [["wait", "id", "submission_complete", 10]]
+        }
+      ]
+    }
+  ]
+}

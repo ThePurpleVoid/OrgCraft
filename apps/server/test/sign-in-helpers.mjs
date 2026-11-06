@@ -9,8 +9,9 @@ import { createIdentity, githubUpstream } from '../identity.mjs';
 export const ORIGIN = 'https://studio.example';
 export const OWNER = '1001';
 
-/** A stand-in GitHub: the user authorization flow with PKCE, /user and /user/emails. Tests set `as`. */
-export async function stubGitHub() {
+/** A stand-in GitHub: the user authorization flow with PKCE, /user and /user/emails. Tests set `as`. The conformance
+ *  harness listens on another host and port, and names the URL the suite's browser reaches it by. */
+export async function stubGitHub({ host = '127.0.0.1', port = 0, url = null } = {}) {
   const codes = new Map(), tokens = new Map();
   const gh = { as: null, issued: [], directory: [] };
   const server = createServer(async (req, res) => {
@@ -50,8 +51,8 @@ export async function stubGitHub() {
     if (url.pathname === '/user/emails') return json(200, user.emails ?? []);
     return json(404, {});
   });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  gh.url = `http://127.0.0.1:${server.address().port}`;
+  await new Promise((r) => server.listen(port, host, r));
+  gh.url = url ?? `http://${host}:${server.address().port}`;
   gh.close = () => { server.closeAllConnections(); server.close(); };
   return gh;
 }

@@ -224,7 +224,12 @@ OpenID-Certified library: `identity.mjs` holds its storage adapter and our polic
   the library oidc-provider uses for its own. Roles apply as for the web. Passkeys are added and removed on the web;
   an app may step up with one. Removing a person's last membership revokes their app tokens at once.
 
-Still to come (order 3): the `oidc-conformance` CI job.
+- **OpenID conformance** (`conformance/`, CI job `oidc-conformance`). The OpenID Foundation's suite runs its Basic
+  OP plan (code flow, ID token, userinfo, prompt, max_age, code reuse, redirect checks, PKCE S256, refresh token
+  rotation) and Config OP plan against this issuer on every PR. `conformance/op.mjs` starts the real issuer on https
+  with a stand-in GitHub; it alone switches on client registration, so the suite can register its own confidential
+  clients, and asks PKCE of public clients only (every deployment client is public). Run it on a laptop with docker:
+  `npm ci && conformance/run.sh`. Accepted deviations, each with its reason, live in `conformance/expected-failures.json`.
 
 ## Host it in another server
 
