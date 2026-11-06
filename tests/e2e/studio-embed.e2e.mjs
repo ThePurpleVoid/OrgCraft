@@ -30,7 +30,7 @@ before(async () => {
 after(async () => { await browser?.close(); host?.close(); });
 
 /** A page that records CSP violations, page errors and console errors from the first byte. */
-async function open(ctx) {
+async function open(ctx, { on = null, query = '' } = {}) {
   const page = await ctx.newPage();
   const problems = [];
   page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
@@ -39,7 +39,7 @@ async function open(ctx) {
     window.cspViolations = [];
     document.addEventListener('securitypolicyviolation', (e) => window.cspViolations.push(`${e.violatedDirective} ${e.blockedURI} ${e.sample ?? ''}`.trim()));
   });
-  await page.goto(`${host.origin}/admin/team`);
+  await page.goto(`${(on ?? host).origin}/admin/team${query}`);
   return { page, problems };
 }
 
@@ -59,7 +59,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   assert.equal(await page.evaluate(() => document.body.className), '', 'no Studio state on the host body');
   // The Studio's state is on its root, and its own #project is the one inside it.
   assert.equal(await ats.getAttribute('data-page'), 'team');
-  assert.match(await ats.locator('#project').textContent(), /Sample app/);
+  assert.equal(await ats.locator('#project').textContent(), 'Sample app · acme/shop · main');
 
   // Step 1 features: no Chat page, no Live board; Publish is there.
   assert.equal(await ats.getByRole('button', { name: 'Chat', exact: true }).isVisible(), false);
@@ -161,6 +161,57 @@ test('in the dark and at 390px the mounted Studio stays inside its element with 
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(250, 240, 230)', 'dark mode stays inside the Studio');
   assert.notEqual(await page.evaluate(() => getComputedStyle(document.getElementById('team')).backgroundColor), 'rgb(250, 240, 230)');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'embedded-phone-dark.png') });
+  assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});
+
+test('mount, destroy and mount again before the first read is back: one Studio, one request per click (React StrictMode)', { skip }, async () => {
+  const empty = await embedHost({ team: false });
+  try {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const { page, problems } = await open(ctx, { on: empty, query: '?race' });
+    const ats = page.locator('#team.ats');
+    await ats.locator('#gallery-page').getByRole('heading', { name: 'Start a team' }).waitFor();
+    assert.equal(empty.seen.filter((r) => r.path === '/v1/team').length, 2, 'both mounts read the team');
+    await ats.locator('.g-card', { hasText: 'Customer support team' }).click();
+    await ats.locator('#template-bar').getByText('Preview: Customer support team').waitFor();
+    await ats.locator('#template-bar').getByRole('button', { name: 'Use this template' }).click();
+    const form = ats.locator('#create-dialog');
+    assert.equal(await form.getByLabel('Project name').inputValue(), 'shop', 'the repository name, as the folder name locally');
+    await form.getByLabel('Project name').fill('Help desk');
+    await form.getByRole('button', { name: 'Open the team' }).click();
+    await ats.locator('#template-bar').getByText('A new team from the Customer support team template.').waitFor();
+    await page.waitForTimeout(300); // a second, doubled request would have been sent by now
+    assert.equal(empty.seen.filter((r) => r.path === '/v1/team/from-template').length, 2, 'one for the preview, one for the team');
+    assert.equal(await ats.locator('.bar').count(), 1);
+    assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
+    assert.deepEqual(problems, []);
+    await ctx.close();
+  } finally { empty.close(); }
+});
+
+test('the Studio\'s own prompt answers OK on Enter, and a destructive question starts on Cancel', { skip }, async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const { page, problems } = await open(ctx);
+  const ats = page.locator('#team.ats');
+  await ats.locator('.lib-role').first().waitFor();
+  await ats.getByRole('button', { name: 'Meetings', exact: true }).click();
+  await ats.locator('summary', { hasText: 'New meeting' }).click();
+  await ats.getByRole('button', { name: 'Daily standup' }).click();
+  await ats.locator('#m-tz').click();
+  const ask = ats.locator('dialog.ask-dialog');
+  await ask.getByRole('textbox').fill('Europe/Lisbon');
+  await page.keyboard.press('Enter');
+  await ask.waitFor({ state: 'detached' });
+  await ats.getByText('Times are in Europe/Lisbon.').waitFor();
+  // Delete starts on Cancel: Enter keeps the meeting.
+  await ats.getByRole('button', { name: 'Save to the draft' }).click();
+  await ats.getByRole('button', { name: 'Delete' }).click();
+  assert.equal(await ask.getByRole('button', { name: 'Cancel' }).evaluate((b) => b === document.activeElement), true);
+  await page.keyboard.press('Enter');
+  await ask.waitFor({ state: 'detached' });
+  await ats.locator('.meeting-row', { hasText: 'Daily standup' }).waitFor();
   assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
   assert.deepEqual(problems, []);
   await ctx.close();

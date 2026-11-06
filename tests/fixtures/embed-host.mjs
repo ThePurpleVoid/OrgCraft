@@ -55,26 +55,28 @@ const opts = {
 };
 window.studio = mount(el, opts);
 window.remount = () => { window.studio = mount(el, opts); };
+// ?race: what React StrictMode does in development, mount, clean up and mount again before the first read is back.
+if (new URLSearchParams(location.search).has('race')) { window.studio.destroy(); window.remount(); }
 `;
 
 const git = (root, ...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-/** A repository with a minimal team, as the bare "GitHub" copy the fake serves. */
-function repository() {
+/** A repository with a minimal team (or none), as the bare "GitHub" copy the fake serves. */
+function repository({ team = true } = {}) {
   const seed = mkdtempSync(join(tmpdir(), 'embed-seed-'));
   git(seed, 'init', '-q', '-b', 'main');
   git(seed, 'config', 'user.email', 's@example.com'); git(seed, 'config', 'user.name', 'Seed'); git(seed, 'config', 'commit.gpgsign', 'false');
   writeFileSync(join(seed, 'README.md'), '# Sample app\n');
-  execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--owner', 'Sam', '--timezone', 'UTC', '--dir', seed], { stdio: 'ignore' });
+  if (team) execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--owner', 'Sam', '--timezone', 'UTC', '--dir', seed], { stdio: 'ignore' });
   git(seed, 'add', '-A'); git(seed, 'commit', '-q', '-m', 'start');
   const bare = mkdtempSync(join(tmpdir(), 'embed-bare-'));
   execFileSync('git', ['clone', '-q', '--bare', seed, bare]);
   return bare;
 }
 
-/** The host. Returns { origin, seen, refused, gh, close }. */
-export async function embedHost() {
-  const gh = await fakeGitHub({ bare: repository() });
+/** The host; `team: false` for a repository with no team yet. Returns { origin, seen, refused, gh, close }. */
+export async function embedHost({ team = true } = {}) {
+  const gh = await fakeGitHub({ bare: repository({ team }) });
   const seen = []; // every API request: { method, path, studioHeader, auth, type }
   const refused = []; // what authorize() turned away
   let api = null;
@@ -83,6 +85,7 @@ export async function embedHost() {
     const send = (status, type, body, extra = {}) => { res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...extra }); res.end(body); };
     if (url.pathname === '/admin/team') return send(200, 'text/html; charset=utf-8', PAGE, { 'content-security-policy': CSP });
     if (url.pathname === '/host.css') return send(200, 'text/css; charset=utf-8', HOST_CSS);
+    if (url.pathname === '/favicon.ico') return send(204, 'image/x-icon', ''); // Chromium asks by itself
     if (url.pathname === '/host.js') return send(200, 'text/javascript; charset=utf-8', HOST_JS);
     if (url.pathname.startsWith(`${BASE_PATH}/`)) {
       if (url.pathname.startsWith(`${BASE_PATH}/v1/`)) seen.push({ method: req.method, path: url.pathname.slice(BASE_PATH.length), studioHeader: req.headers['x-agent-team-studio'] ?? null, auth: req.headers.authorization ?? null, type: req.headers['content-type'] ?? null });

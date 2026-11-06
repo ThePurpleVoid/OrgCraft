@@ -87,12 +87,14 @@ function dialog({ text, ok = 'OK', cancel = 'Cancel', input = null, danger = fal
     <p class="ask-text"></p>
     ${input !== null ? '<label class="ask-label"><input name="answer" autocomplete="off"></label>' : ''}
     <div class="dialog-actions">
-      ${cancel ? `<button type="submit" value="cancel">${escText(cancel)}</button>` : ''}
+      ${cancel ? `<button type="button" value="cancel">${escText(cancel)}</button>` : ''}
       <button type="submit" value="ok" class="${danger ? 'primary danger' : 'primary'}">${escText(ok)}</button>
     </div>
   </form>`;
   dlg.querySelector('.ask-text').textContent = text;
   const field = dlg.querySelector('input[name="answer"]');
+  // OK is the form's only submit button, so Enter in the field answers OK, as prompt() did (QA, #138).
+  dlg.querySelector('button[value="cancel"]')?.addEventListener('click', () => dlg.close('cancel'));
   if (field) { field.value = input; field.setAttribute('aria-label', String(text).slice(0, 120)); }
   (env.root ?? document.body).append(dlg);
   return new Promise((resolve) => {
@@ -102,7 +104,8 @@ function dialog({ text, ok = 'OK', cancel = 'Cancel', input = null, danger = fal
       resolve(input !== null ? (yes ? field.value : null) : cancel ? yes : undefined);
     }, { once: true });
     dlg.showModal();
-    (field ?? dlg.querySelector('button[value="ok"]')).focus();
+    // A destructive question starts on Cancel, so a stray Enter does not delete or stop anything.
+    (field ?? dlg.querySelector(danger && cancel ? 'button[value="cancel"]' : 'button[value="ok"]')).focus();
     field?.select();
   });
 }

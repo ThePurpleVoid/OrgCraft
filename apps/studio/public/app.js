@@ -49,7 +49,9 @@ let board = null; // summarize() output from /v1/team/board, kept fresh by its s
 let pop = null; // the slug whose in-flight popover is open
 let picks = new Map(); // impact step: item id -> { choice, target } (criteria 8 and 10)
 let followUps = []; // areas published with "move after merge": [{ path, from, to, pr }] (criterion 11)
-const followKey = () => `agent-team-followups:${S?.root ?? ''}`;
+/** Where the team lives: the folder locally, owner/name of the repository when mounted in a host (S.repo, a URL). */
+const where = () => S?.root ?? String(S?.repo ?? '').replace(/^https:\/\/[^/]+\//, '');
+const followKey = () => `agent-team-followups:${where()}`;
 function saveFollowUps() { try { localStorage.setItem(followKey(), JSON.stringify(followUps)); } catch { /* private mode: this session only */ } }
 function loadFollowUps() { try { followUps = JSON.parse(localStorage.getItem(followKey()) ?? '[]'); } catch { followUps = []; } }
 /** Phones get the control room (chat, live board) and a read-only team: building the team needs a large screen. */
@@ -369,8 +371,7 @@ function liveSummary() {
 /** The board, for change safety: read at start and on every change the stream reports. */
 async function loadBoard() {
   try {
-    const r = await request('/v1/team/board');
-    const body = await r.json();
+    const { r, body } = await ours(async () => { const r = await request('/v1/team/board'); return { r, body: await r.json() }; });
     const next = r.ok ? body.board ?? null : null;
     const was = !!board?.current?.length;
     board = next;
@@ -384,8 +385,7 @@ async function loadBoard() {
 
 async function loadLive() {
   try {
-    const r = await request('/v1/team/board');
-    const body = await r.json();
+    const { r, body } = await ours(async () => { const r = await request('/v1/team/board'); return { r, body: await r.json() }; });
     Object.assign(live, { source: body.source, where: body.where, board: body.board ?? null, error: r.ok ? null : body.error });
   } catch (e) { live.error = e.message; }
   if (live.on) renderCanvas();
@@ -797,11 +797,28 @@ function diff(a, b) {
 async function api(path, body) {
   // The handler reads the team at the commit the page read (embed spec 4): preview, suggestions and publish send it.
   if (body && S?.git?.head?.sha && /^\/v1\/team\/(preview|suggestions|publish)$/.test(path)) body = { base: S.git.head.sha, ...body };
-  const res = await requestJson(path, body);
-  let data = {};
-  try { data = await res.json(); } catch { /* not JSON */ }
-  if (!res.ok) throw Object.assign(new Error(data.error ?? data.title ?? (res.status === 401 ? 'Sign in again to use the Studio.' : res.statusText || `HTTP ${res.status}`)), { status: res.status, type: data.type });
+  const { res, data } = await ours(async () => {
+    const res = await requestJson(path, body);
+    let data = {};
+    try { data = await res.json(); } catch { /* not JSON */ }
+    return { res, data };
+  });
+  if (!res.ok) throw Object.assign(new Error(env.embedded && res.status === 401 ? 'You are not signed in to this site any more. Sign in again, then reopen this page.' : data.error ?? data.title ?? (res.statusText || `HTTP ${res.status}`)), { status: res.status, type: data.type });
   return data;
+}
+
+/**
+ * Runs `work` for the mount that started it. If the Studio was destroyed (or destroyed and mounted again, as React
+ * StrictMode and quick route changes do) before it settles, its result or error never comes back: the caller simply
+ * stops, and nothing it would have done touches the new mount's page.
+ */
+async function ours(work) {
+  const mine = life;
+  let out, failed = false, error;
+  try { out = await work(); } catch (e) { failed = true; error = e; }
+  if (life !== mine || !mine) return new Promise(() => {});
+  if (failed) throw error;
+  return out;
 }
 
 /** The roles on in the draft, for hand-off targets (criterion 10: never one that is off). */
@@ -998,10 +1015,9 @@ async function start() {
     fatal(e.status === 503 ? `${e.message}. Ask whoever runs this site to connect it.` : e.message);
     return;
   }
-  if (!life) return; // unmounted while loading
   applyFeatures();
   // Next to this module wherever it is served: /model-prices.json locally, /assets/<kit version>/ in a host.
-  fetch(new URL('./model-prices.json', import.meta.url)).then((r) => (r.ok ? r.json() : null)).then((t) => { prices = t; if (stateEl()?.dataset.page === 'meetings') meetings?.render(); }).catch(() => {});
+  ours(() => fetch(new URL('./model-prices.json', import.meta.url)).then((r) => (r.ok ? r.json() : null))).then((t) => { prices = t; if (stateEl()?.dataset.page === 'meetings') meetings?.render(); }).catch(() => {});
   small.addEventListener('change', () => { stateEl().classList.toggle('small', small.matches); if (spec) render(); }, { signal: life.signal });
   stateEl().classList.toggle('small', small.matches);
   wireTemplates();
@@ -1046,7 +1062,7 @@ function destroy() {
   boardStream?.close(); boardStream = null;
   live?.es?.close(); live = null;
   chat?.close?.();
-  clearTimeout(flashTimer);
+  clearTimeout(flashTimer); clearTimeout(flowTimer); flowTimer = null;
   const el = env.root;
   el.innerHTML = '';
   el.classList.remove('ats', 'ats-embedded', 'small', 'no-team', 'previewing', 'editing', 'no-publish', 'no-chat', 'no-runs', 'no-live');
@@ -1064,7 +1080,7 @@ function showGallery() {
   stateEl().classList.remove('previewing');
   stateEl().classList.add('no-team');
   stateEl().dataset.page = 'gallery';
-  $('#project').textContent = `${S.root}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
+  $('#project').textContent = `${where()}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
   gallery ??= createGallery({ root: $('#gallery-page'), ctx: { cards: () => S.templates ?? [], groups: () => S.groups ?? {}, onPick: pickTemplate, onAlmostEmpty: () => useTemplate('almost-empty') } });
   gallery.render();
   showPage('gallery');
@@ -1089,7 +1105,7 @@ function useTemplate(id) {
   if (small.matches) return flash('Create the team on a larger screen.');
   const card = id === 'almost-empty' ? null : cardOf(id);
   const dlg = $('#create-dialog');
-  const folder = S.root.split(/[\\/]/).filter(Boolean).at(-1) ?? '';
+  const folder = where().split(/[\\/]/).filter(Boolean).at(-1) ?? '';
   let zone = 'UTC';
   try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { /* keep UTC */ }
   $('#create-title').textContent = card ? `Use the ${card.title} template` : 'Start almost empty';
@@ -1177,7 +1193,7 @@ function load(initial) {
   undo.length = 0; redo.length = 0;
   sugg = null; selected = null; selectedSystem = null; pop = null; picks = new Map();
   stateEl().classList.toggle('no-team', !!S.noTeam);
-  $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${S.root}${S.git.branch ? ` · ${S.git.branch}` : ''}`;
+  $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${where()}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
   if (booted) return;
   booted = true;
   loadFollowUps();
