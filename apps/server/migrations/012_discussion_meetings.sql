@@ -6,7 +6,7 @@
 --
 -- Rollback: alter table meetings drop column format, drop column rounds, drop column round, drop column done,
 -- drop column timed_out;
--- delete from schema_migrations where name = '011_discussion_meetings.sql'.
+-- delete from schema_migrations where name = '012_discussion_meetings.sql'.
 
 alter table meetings add column format text not null default 'round' check (format in ('round', 'discussion'));
 alter table meetings add column rounds integer not null default 1 check (rounds between 1 and 5);
