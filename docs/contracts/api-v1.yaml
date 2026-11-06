@@ -6,7 +6,10 @@ info:
   description: |
     Versioned in the path. Within /v1/, changes are additive only, and a removal comes with at least 12 months'
     notice (docs/contracts/README.md). Every response that lists things pages with `cursor` and `limit`.
-    Every write accepts an `Idempotency-Key` header.
+    Every write accepts an `Idempotency-Key` header (1 to 255 characters, scoped to the caller). The first answer,
+    errors included, is kept for 24 hours; a retry with the same key and the same method, path and body gets it back
+    with `Idempotent-Replayed: true`. The same key on a different request is `422`; while the first request is still
+    running, a retry gets `409`. Server errors (5xx) are not kept, so a retry runs again.
 
     Authentication:
     - People sign in through OIDC (GitHub first) and send a session cookie or a bearer token.
@@ -192,12 +195,20 @@ paths:
       summary: Register a runner with a one-time code; returns its runner key once
       security: []
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name], properties: { code: { type: string }, name: { type: string }, capabilities: { type: object } } } } } }
-      responses: { "201": { description: Runner id and key } }
+      responses: { "201": { description: "Runner id and key (`<id>.<secret>`, shown once)" }, "401": { description: The code is unknown, used or expired } }
+    get: { tags: [runners], summary: "Registered runners: name, capabilities, version, last seen, revoked (never keys)", responses: { "200": { description: Runners } } }
   /runners/codes:
     post:
       tags: [runners]
-      summary: A one-time registration code for a new runner (one use, 15 minutes)
-      responses: { "201": { description: The code, content: { application/json: { schema: { type: object, properties: { code: { type: string }, expires: { type: string, format: date-time } } } } } } }
+      summary: Mint a one-time registration code (XXXX-XXXX-XXXX, case and separators ignored), valid for 15 minutes and one use
+      requestBody: { content: { application/json: { schema: { type: object, properties: { name: { type: string, description: A label for the runner it is meant for } } } } } }
+      responses: { "201": { description: "The code and when it expires", content: { application/json: { schema: { type: object, properties: { code: { type: string }, expires: { type: string, format: date-time } } } } } } }
+  /runners/{runner}:
+    delete:
+      tags: [runners]
+      summary: Revoke a runner's key. Its connection and sessions end
+      parameters: [ { name: runner, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: Revoked } }
   /sessions/{session}/tools/{tool}:
     post:
       tags: [runs]

@@ -12,3 +12,4 @@ node_modules/
 team.env
 *.env
 !*.env.example
+.vercel-site/
