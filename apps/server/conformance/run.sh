@@ -11,7 +11,7 @@ SUITE_SHA="7d420f716e49d44f8a6b04f0a3e240ad6d68ab55"
 work="${CONFORMANCE_WORK:-$(mktemp -d)}"
 suite="$work/suite"
 certs="$work/certs"
-mkdir -p "$certs"
+mkdir -p "$certs" "$work/results"
 
 if [ ! -d "$suite" ]; then
   git init --quiet "$suite"
