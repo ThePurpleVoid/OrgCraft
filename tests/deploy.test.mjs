@@ -29,12 +29,14 @@ test('the guard flags data-losing statements and nothing in the shipped migratio
   }
 });
 
-test('the site rewrites the API and discovery to one https origin, and nothing else', () => {
+test('the site rewrites the API, sign-in and discovery to one https origin, and nothing else', () => {
   const c = siteConfig('https://api.example.org');
   assert.deepEqual(c.rewrites.map((r) => [r.source, r.destination]), [
     ['/v1', 'https://api.example.org/v1'],
     ['/v1/:path*', 'https://api.example.org/v1/:path*'],
     ['/.well-known/agent-team', 'https://api.example.org/.well-known/agent-team'],
+    ['/oauth/:path*', 'https://api.example.org/oauth/:path*'],
+    ['/.well-known/openid-configuration', 'https://api.example.org/.well-known/openid-configuration'],
   ]);
   assert.equal(c.outputDirectory, 'public');
   assert.equal(c.crons, undefined);
@@ -74,7 +76,7 @@ test('the edge middleware replaces a client x-agent-team-edge with the secret, k
   const file = join(dir, 'middleware.mjs');
   writeFileSync(file, MIDDLEWARE);
   const mw = await import(pathToFileURL(file).href);
-  assert.deepEqual(mw.config.matcher, ['/v1/:path*', '/.well-known/agent-team']);
+  assert.deepEqual(mw.config.matcher, ['/v1/:path*', '/.well-known/agent-team', '/oauth/:path*', '/.well-known/openid-configuration']);
   assert.equal(mw.config.runtime, 'nodejs');
   const req = () => new Request('https://site.example/v1/health?x=1', {
     headers: { host: 'site.example', 'x-agent-team-edge': 'forged', 'x-forwarded-for': '203.0.113.9', authorization: 'Bearer t' },
