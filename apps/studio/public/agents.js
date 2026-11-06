@@ -13,6 +13,8 @@ export const isCustom = (role) => role?.brief !== undefined;
 
 /** Agents imported in this session, tagged "imported" until they are published (CPO story D2). */
 export const imported = new Set();
+/** The kinds of system an imported pack says each agent needs (pack.json needs.resources), until connected or skipped. */
+export const packNeeds = new Map();
 
 /** Why `slug` cannot be switched on: the first error the checks find with it on, or '' (CPO story D2). */
 export function switchOnRefusal(spec, kit, slug) {
@@ -253,7 +255,11 @@ export function openNewAgent(app) {
     const add = p.filter((a) => a.check.ok);
     const off = st.start === 'import';
     app.change((s) => { for (const a of add) { addAgent(s, a.slug, a.md); if (off) s.roles[a.slug].enabled = false; } });
-    if (off) for (const a of add) imported.add(a.slug);
+    if (off) for (const a of add) {
+      imported.add(a.slug);
+      const want = (st.imported?.find((x) => x.slug === a.slug) ?? st.imported?.[0])?.needs?.resources ?? [];
+      if (want.length) packNeeds.set(a.slug, [...new Set(want.map(String))]);
+    }
     dlg.close();
     if (add.length > 1) return app.select(add[0].slug);
     // One agent: straight into its editor. A copy remembers what it started from, so the preview can mark what differs.

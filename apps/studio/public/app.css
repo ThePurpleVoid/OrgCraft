@@ -341,6 +341,15 @@ body.editing .layout, body.editing .readonly-note { display: none; }
 .area-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); }
 .area-row select { width: auto; }
 .conflict { border: 1px solid var(--warn); border-left-width: 3px; border-radius: 8px; padding: 10px 12px; margin: 8px 0; font-size: 13px; }
+.conflict p { margin: 0 0 6px; }
+.conflict .busy { color: var(--warn); font-weight: 600; }
+.conflict .opts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.conflict .opts button { font-size: 12.5px; }
+.conflict .opts button.warn { border-color: var(--warn); color: var(--warn); }
+.area-row.pending code { opacity: .7; }
+.area-note { margin: 2px 0 0; }
+.need { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; }
+.need p { margin: 0 0 6px; }
 .add-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
 .add-row input { flex: 1; min-width: 0; }
 .add-row select { width: auto; }

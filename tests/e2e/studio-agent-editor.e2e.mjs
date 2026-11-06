@@ -122,10 +122,11 @@ test('a Contract reviewer from Blank: every section, live preview, undo per fiel
   assert.match(wakes, /^- schedule: fri 14:00$/m);
 
   // Hands to with SIGNOFF and no evidence: a warning, which the evidence clears.
+  assert.equal(await ed.getByLabel('Role', { exact: true }).inputValue(), '', 'the picker starts on "Choose a role"');
   await ed.getByLabel('Role', { exact: true }).selectOption('chief-of-staff');
   await ed.getByLabel('Message', { exact: true }).selectOption('SIGNOFF');
   await ed.locator('#e-hand-add').click();
-  assert.match(await preview(page).textContent(), /^## Hands to\nchief-of-staff \(SIGNOFF\)$/m, 'the example text is replaced, not added to');
+  assert.match(await preview(page).textContent(), /^## Hands to\nChief of staff \(SIGNOFF\)$/m, 'the example text is replaced, not added to, and by name');
   await ed.locator('#e-checks li.warning', { hasText: 'sends SIGNOFF but lists no sign-off evidence' }).waitFor();
   await ed.locator('.ed-nav [data-state="evidence"]', { hasText: 'to check' }).waitFor();
   await ed.getByLabel('Evidence to add').fill('the signed document, with the changes marked');
@@ -198,7 +199,7 @@ test('a copy marks what differs, and an imported agent with an error cannot be a
 
   // An import with a tier the kit does not know: it arrives off, and "Add to the team" waits for the fix.
   await page.getByRole('button', { name: 'New agent' }).click();
-  await dlg.locator('#a-files').setInputFiles([{ name: 'clerk.md', mimeType: 'text/markdown', buffer: Buffer.from('# Clerk\n\n**Model:** turbo\n**Group:** legal\n**Reports to:** chief-of-staff\n**Status:** active\n\n## Identity\nYou file every signed contract.\n\n## Wakes on\n- handoff\n') }]);
+  await dlg.locator('#a-files').setInputFiles([{ name: 'clerk.md', mimeType: 'text/markdown', buffer: Buffer.from('# Clerk\n\n**Model:** turbo\n**Group:** legal\n**Reports to:** chief-of-staff\n**Status:** active\n\n## Identity\nYou file every signed contract.\n\n## Owns (writes)\n- `filed/`\n\n## Wakes on\n- handoff\n') }]);
   await page.waitForFunction(() => document.querySelector('#a-name').value === 'Clerk');
   await dlg.getByRole('button', { name: 'Add it, switched off' }).click();
   const add = ed.getByRole('button', { name: 'Add to the team' });
