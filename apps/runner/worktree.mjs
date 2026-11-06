@@ -187,6 +187,23 @@ async function refreshBase(cwd) {
   }
 }
 
+/**
+ * After the branch was merged (squashed) into its base: start the working copy again from the new base, so later work
+ * does not carry commits the base already has in another form (they would conflict with their own squash). Only when
+ * everything here was merged (`merged` is the head that was, and the copy's HEAD must be in it) and nothing is left
+ * uncommitted. Returns the new HEAD, or null when it left the copy as it was.
+ */
+export async function restart(cwd, merged) {
+  const m = meta.get(cwd);
+  if (!m) throw new Error('no recorded base for this working copy');
+  try { await git(cwd, 'merge-base', '--is-ancestor', 'HEAD', merged); } catch { return null; }
+  // Files left uncommitted (outside the role's areas, waiting on their owner) are the agent's work: never reset them away.
+  if (await git(cwd, 'status', '--porcelain', '--untracked-files=all')) return null;
+  await refreshBase(cwd);
+  await git(cwd, 'reset', '--quiet', '--hard', `refs/remotes/origin/${m.base}`);
+  return git(cwd, 'rev-parse', 'HEAD');
+}
+
 /** The lines a patch adds, per file. */
 function addedLines(patch) {
   const added = new Map();
@@ -315,7 +332,8 @@ export async function checkpoint({ cwd, branch, role, reason, areas = [], secret
   if (hits.length) return { ...stop('secret-scan', [...new Set(hits)], `not pushed: the branch's commits look like they hold a secret (${[...new Set(hits)].slice(0, 5).join(', ')})`), commit };
   try {
     await git(cwd, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`);
-    return { commit, pushed: true, held, ...(held.length ? { error: `left uncommitted, outside the owned areas: ${held.slice(0, 10).join(', ')}` } : {}) };
+    // `changes`: the paths the branch changes against its base (none: there is nothing to propose yet).
+    return { commit, pushed: true, changes: h.names.length, held, ...(held.length ? { error: `left uncommitted, outside the owned areas: ${held.slice(0, 10).join(', ')}` } : {}) };
   } catch (e) {
     return { commit, pushed: false, held, error: String(e.stderr || e.message).trim().split('\n').pop() };
   }

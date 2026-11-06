@@ -16,6 +16,8 @@
 //                    --data/merger-app.pem (or AGENT_TEAM_MERGER_APP_KEY_FILE).
 //                    With both, the runner opens each session's pull request and merges it after approval.
 //   AGENT_TEAM_PROPOSALS=local  the dry run: pull requests on a stand-in bare repository instead
+//   AGENT_TEAM_RUNNER_ADAPTER=dryrun with AGENT_TEAM_DRYRUN_CONTROL=<folder>  the dry run's scripted fake model
+//                    (adapters/dryrun.mjs; refused with a model key set)
 //   AGENT_TEAM_RUNNER_GITCONFIG  a git config with the runner's push credential (a helper for a token that can push
 //                            branches but not the default branch); sessions never see it
 //
@@ -34,6 +36,7 @@ import { homedir, hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { agentSdkAdapter } from './adapters/agent-sdk.mjs';
+import { dryrunAdapter } from './adapters/dryrun.mjs';
 import { startRunner } from './runner.mjs';
 import { checkServer } from './link.mjs';
 import { githubProposals, localProposals } from './proposals.mjs';
@@ -104,7 +107,10 @@ useGitConfig(process.env.AGENT_TEAM_RUNNER_GITCONFIG ?? join(data, 'gitconfig'))
 // and key are there (M3 on a Mac installs the key into the data folder), or the stand-in remote of the dry run.
 let proposals = null;
 const appKey = process.env.AGENT_TEAM_MERGER_APP_KEY_FILE ?? join(data, 'merger-app.pem');
-if (process.env.AGENT_TEAM_PROPOSALS === 'local') proposals = localProposals();
+const control = process.env.AGENT_TEAM_DRYRUN_CONTROL;
+// The dry run's hold: while <control>/hold-merge exists, an approved merge waits (so a test can move the head first).
+const hold = async () => { while (control && existsSync(join(control, 'hold-merge'))) await new Promise((r) => setTimeout(r, 200)); };
+if (process.env.AGENT_TEAM_PROPOSALS === 'local') proposals = localProposals({ before: hold });
 else if (process.env.AGENT_TEAM_MERGER_APP_ID && (process.env.AGENT_TEAM_MERGER_APP_KEY || existsSync(appKey))) {
   // A hosted runner gets the key as a secret in its environment (sessions cannot read that, F3); on a Mac, a file.
   proposals = githubProposals({ appId: process.env.AGENT_TEAM_MERGER_APP_ID, privateKey: process.env.AGENT_TEAM_MERGER_APP_KEY || readFileSync(appKey, 'utf8') });
@@ -112,9 +118,17 @@ else if (process.env.AGENT_TEAM_MERGER_APP_ID && (process.env.AGENT_TEAM_MERGER_
 else if (process.env.AGENT_TEAM_MERGER_APP_ID) fail(`AGENT_TEAM_MERGER_APP_ID is set but there is no key at ${appKey}`);
 console.error(`[runner] pull requests: ${proposals ? `opened and merged by the runner (${proposals.connector})` : 'not opened by the runner (no merger app configured)'}`);
 
+// The model: the Agent SDK, or the dry run's scripted fake (no model, no key, no cost; the M3 exit test's Pass A).
+let adapter;
+if (process.env.AGENT_TEAM_RUNNER_ADAPTER === 'dryrun') {
+  if (process.env.ANTHROPIC_API_KEY) fail('refusing to start: the dry-run model is for runs with no model key; unset ANTHROPIC_API_KEY');
+  adapter = dryrunAdapter({ control });
+  console.error(`[runner] model: the dry run's scripted fake (control folder ${control})`);
+} else adapter = agentSdkAdapter({ effort: o.effort });
+
 const runner = startRunner({
   server, key, root: data, work, sandbox, proposals, id: saved.id ?? o.name, maxSessions: Number(o['max-sessions']) || 8,
-  adapter: agentSdkAdapter({ effort: o.effort }),
+  adapter,
   log: (m) => console.error(`[runner] ${m}`),
 });
 runner.link.on('open', () => console.error(`[runner] connected to ${server}`));
