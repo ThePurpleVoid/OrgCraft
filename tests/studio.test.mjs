@@ -44,7 +44,7 @@ test('serves the page, the team model and the team as a TeamSpec', async () => {
     assert.match(model.type, /javascript/);
     assert.match(model.body, /export function validate/);
     assert.equal((await call('/../server.mjs')).status, 404);
-    const { status, body } = await call('/api/state');
+    const { status, body } = await call('/v1/team');
     assert.equal(status, 200);
     assert.equal(body.spec.schema, 'agent-team/team-spec@1');
     assert.equal(body.spec.values.PROJECT_NAME, 'Studio');
@@ -56,9 +56,9 @@ test('serves the page, the team model and the team as a TeamSpec', async () => {
 test('previews a change without touching the repository', async () => {
   const root = repo();
   await serve(root, async (call) => {
-    const { spec } = (await call('/api/state')).body;
+    const { spec } = (await call('/v1/team')).body;
     setField(spec, 'web-dev', 'Model', 'deep');
-    const { status, body } = await call('/api/preview', { spec });
+    const { status, body } = await call('/v1/team/preview', { spec });
     assert.equal(status, 200);
     const paths = body.changes.map((c) => c.path);
     assert.ok(paths.includes('.agent-team/roles/web-dev.extend.md'), paths.join(', '));
@@ -67,7 +67,7 @@ test('previews a change without touching the repository', async () => {
     assert.match(brief.after, /\*\*Model:\*\* deep/);
     assert.equal(existsSync(join(root, '.agent-team/roles/web-dev.extend.md')), false);
     assert.equal(git(root, 'status', '--porcelain'), '');
-    const same = await call('/api/preview', { spec: (await call('/api/state')).body.spec });
+    const same = await call('/v1/team/preview', { spec: (await call('/v1/team')).body.spec });
     assert.deepEqual(same.body.changes, []);
   });
 });
@@ -75,18 +75,18 @@ test('previews a change without touching the repository', async () => {
 test('publishes to a new branch, and refuses errors, dirty files and cross-site posts', async () => {
   const root = repo();
   await serve(root, async (call) => {
-    const { spec } = (await call('/api/state')).body;
+    const { spec } = (await call('/v1/team')).body;
     const start = git(root, 'branch', '--show-current');
 
     const broken = structuredClone(spec);
     setField(broken, 'web-dev', 'Reports to', 'web-dev');
-    assert.equal((await call('/api/publish', { spec: broken, branch: 'team/broken' })).status, 422);
+    assert.equal((await call('/v1/team/publish', { spec: broken, branch: 'team/broken' })).status, 422);
 
-    assert.equal((await call('/api/publish', { spec }, { origin: 'https://evil.example' })).status, 403);
-    assert.equal((await call('/api/publish', { spec }, { 'content-type': 'text/plain' })).status, 415);
+    assert.equal((await call('/v1/team/publish', { spec }, { origin: 'https://evil.example' })).status, 403);
+    assert.equal((await call('/v1/team/publish', { spec }, { 'content-type': 'text/plain' })).status, 415);
 
     setEnabled(spec, 'design-director', true);
-    const ok = await call('/api/publish', { spec, branch: 'team/add-design', message: 'Add a design director' });
+    const ok = await call('/v1/team/publish', { spec, branch: 'team/add-design', message: 'Add a design director' });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.equal(ok.body.branch, 'team/add-design');
     assert.ok(ok.body.commit);
@@ -96,10 +96,47 @@ test('publishes to a new branch, and refuses errors, dirty files and cross-site 
     assert.equal(git(root, 'status', '--porcelain'), '');
     execFileSync(process.execPath, [cli, 'check', '--dir', root], { stdio: 'ignore' });
 
-    assert.equal((await call('/api/publish', { spec, branch: start })).status, 409, 'an existing branch is refused');
+    assert.equal((await call('/v1/team/publish', { spec, branch: start })).status, 409, 'an existing branch is refused');
     writeFileSync(join(root, '.agent-team/roles/web-dev.extend.md'), '**Model:** light\n');
-    const dirty = await call('/api/publish', { spec, branch: 'team/next' });
+    const dirty = await call('/v1/team/publish', { spec, branch: 'team/next' });
     assert.equal(dirty.status, 409);
     assert.match(dirty.body.error, /uncommitted/);
+  });
+});
+
+test('graph gives the hand-offs, and suggestions read folders and build files', async () => {
+  const root = repo();
+  for (const d of ['apps/web/src', 'supabase/migrations', 'e2e', 'node_modules/x', 'docs/team/extra']) execFileSync('mkdir', ['-p', join(root, d)]);
+  for (const f of ['apps/web/src/main.ts', 'supabase/migrations/1.sql', 'e2e/a.spec.ts']) writeFileSync(join(root, f), '');
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { lint: 'eslint .', test: 'vitest', build: 'vite build', e2e: 'playwright test' } }));
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'app');
+  await serve(root, async (call) => {
+    const { spec } = (await call('/v1/team')).body;
+    const g = await call('/v1/team/graph', { spec });
+    assert.equal(g.status, 200);
+    assert.ok(g.body.edges.length > 0);
+    assert.ok(g.body.edges.every((e) => spec.roles[e.from]?.enabled && spec.roles[e.to]?.enabled));
+
+    const s = (await call('/v1/team/suggestions', { spec })).body;
+    const area = (p) => s.areas.find((a) => a.path === p);
+    assert.equal(area('apps/web/')?.writer, 'web-dev');
+    assert.equal(area('supabase/')?.writer, 'backend-dev');
+    assert.ok(area('e2e/'));
+    assert.ok(!s.areas.some((a) => /^(node_modules|docs\/team)/.test(a.path)), 'generated and vendored folders are never suggested');
+    assert.deepEqual(s.checks.map((c) => c.run), ['npm run lint', 'npm test', 'npm run build', 'npm run e2e']);
+    assert.equal(s.checks.find((c) => c.name === 'e2e').pool, 'browser');
+    assert.ok(s.fromMarkdown.length > 0, 'a hand-written ownership.md is offered as a start');
+
+    // Accepting them publishes ownership.json and gates.json that the kit's own checks pass.
+    spec.ownership = { rows: s.areas.filter((a) => a.writer).map((a) => ({ path: a.path, writer: a.writer, notes: '' })) };
+    spec.gates = { all: ['web'], pools: { build: 1, browser: 2 }, targets: { web: s.checks.map((c) => (c.pool ? { name: c.name, run: c.run, pool: c.pool } : { name: c.name, run: c.run })) } };
+    spec.resources = { resources: [{ id: 'db', type: 'database', name: 'Supabase', config: {}, secrets: ['SUPABASE_URL'] }], bindings: [{ role: 'web-dev', resource: 'db', permission: 'read' }] };
+    const ok = await call('/v1/team/publish', { spec, branch: 'team/areas' });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.match(readFileSync(join(root, 'docs/team/ownership.md'), 'utf8'), /apps\/web\//);
+    assert.match(readFileSync(join(root, 'scripts/agent-team/gates.sh'), 'utf8'), /npm run e2e/);
+    assert.match(readFileSync(join(root, 'docs/team/roles/web-dev.md'), 'utf8'), /Supabase/);
+    execFileSync(process.execPath, [cli, 'check', '--dir', root], { stdio: 'ignore' });
   });
 });

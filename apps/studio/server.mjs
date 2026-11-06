@@ -13,7 +13,10 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
-import { compileLayer, importLayer, validate } from '../../packages/team-model/index.mjs';
+import { compileLayer, importLayer, resolveSpec, validate } from '../../packages/team-model/index.mjs';
+import { parseBrief } from '../../tools/briefs.mjs';
+import { graphFrom } from '../../tools/roster-graph.mjs';
+import { ownershipFromMarkdown, suggestAreas, suggestChecks } from './suggest.mjs';
 import { loadKit, readLayer, writeLayer } from '../../packages/team-model/node.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -94,14 +97,31 @@ export function publish(root, spec, { branch, message } = {}) {
   return { branch: gitState(root).branch, commit: git(root, 'rev-parse', '--short', 'HEAD'), files: staged, written };
 }
 
+/** Who hands work to whom, for the Flow view: the dashboard's graph of the team as the spec resolves it. */
+export function graph(spec) {
+  const { roles } = resolveSpec(spec, loadKit(KIT));
+  const g = graphFrom(roles.map((r) => parseBrief(r.slug, r.md)));
+  return { edges: g.edges, unresolved: g.unresolved };
+}
+
+/** Owned areas and checks the repository suggests, and the rows of a hand-written ownership.md to start from. */
+export function suggestions(root, spec) {
+  const kit = loadKit(KIT);
+  const { roles } = resolveSpec(spec, kit);
+  const team = new Set(roles.map((r) => r.slug));
+  const titles = new Map(roles.map((r) => [parseBrief(r.slug, r.md).title.toLowerCase(), r.slug]));
+  return { areas: suggestAreas(root, spec.ownership?.rows ?? [], team), checks: suggestChecks(root), fromMarkdown: spec.ownership ? [] : ownershipFromMarkdown(root, titles) };
+}
+
 const send = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 
 export function createStudio({ root }) {
   return createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
-      if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, state(root));
-      if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
+      // The Studio's API, versioned like the public API it will become (ADR 0005): additive changes only within /v1/.
+      if (req.method === 'GET' && url.pathname === '/v1/team') return send(res, 200, state(root));
+      if (req.method === 'POST' && url.pathname.startsWith('/v1/')) {
         // Only this page may change the repository: same origin, JSON body (a cross-site form cannot send either).
         const origin = req.headers.origin;
         if (origin && new URL(origin).host !== req.headers.host) throw new HttpError(403, 'cross-origin request refused');
@@ -109,8 +129,10 @@ export function createStudio({ root }) {
         let body = '';
         for await (const chunk of req) { body += chunk; if (body.length > 5_000_000) throw new HttpError(413, 'too large'); }
         const input = JSON.parse(body || '{}');
-        if (url.pathname === '/api/preview') return send(res, 200, preview(root, input.spec));
-        if (url.pathname === '/api/publish') return send(res, 200, publish(root, input.spec, input));
+        if (url.pathname === '/v1/team/preview') return send(res, 200, preview(root, input.spec));
+        if (url.pathname === '/v1/team/publish') return send(res, 200, publish(root, input.spec, input));
+        if (url.pathname === '/v1/team/graph') return send(res, 200, graph(input.spec));
+        if (url.pathname === '/v1/team/suggestions') return send(res, 200, suggestions(root, input.spec));
         throw new HttpError(404, 'no such endpoint');
       }
       if (req.method === 'GET' || req.method === 'HEAD') {

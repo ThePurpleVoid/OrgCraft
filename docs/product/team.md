@@ -38,7 +38,7 @@ Paths are in [docs/team/ownership.md](../team/ownership.md). Lane priorities are
 
 ## The bootstrap rule: we run on the last release
 
-The team is pinned to a released tag (`"kit": "…#v0.6.0"`), never to `main`, the way a compiler builds itself with the previous release. A change to the kit reaches us the way it reaches every team: the kit core dev merges it, the release manager tags a release, then bumps the pin in `.agent-team/team.json` and runs `scripts/agent-team/sync.sh` in a follow-up PR. That PR is our own upgrade test: if its diff surprises us, it will surprise every other team too.
+The team is pinned to a released tag (`"kit": "…#v0.7.0"`), never to `main`, the way a compiler builds itself with the previous release. A change to the kit reaches us the way it reaches every team: the kit core dev merges it, the release manager tags a release, then bumps the pin in `.agent-team/team.json` and runs `scripts/agent-team/sync.sh` in a follow-up PR. That PR is our own upgrade test: if its diff surprises us, it will surprise every other team too.
 
 ## How a request becomes work here
 

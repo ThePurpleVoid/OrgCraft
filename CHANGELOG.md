@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.7.0
+
+Agent Team Studio: connect your systems, assign owned areas and set checks (demo steps 5 and 6).
+
+- **Views:** Org, Flow, Systems, Owned areas and Checks, over the same team.
+  - **Flow** draws who hands work to whom, from each role's "Hands to". Click a role to see its hand-offs, with blue going out and green coming in.
+  - **Systems:** add a repository, database, backend, hosting, monitoring or any MCP server, with its settings and the *names* of its secrets. Drag a system onto a role to let the role use it, then set read, write or deploy in the inspector. Cards show each role's systems, and publishing writes `.agent-team/resources.json`.
+  - **Owned areas:** one writer per area of the repository. The Studio reads the repository's folders and suggests an owner for each one nobody owns (`apps/web/` → web dev, `supabase/` → backend dev, `e2e/` → test automation). You can also import a hand-written `ownership.md`. Publishing writes `.agent-team/ownership.json`.
+  - **Checks:** sets of checks that must pass before a merge, with machine slots (pools), suggested from `package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, Gradle and Swift. Publishing writes `.agent-team/gates.json`.
+- The inspector shows each role's systems. The live check list is now called **Problems**, and clicking one opens the view it is about.
+- The Studio's API moved to `/v1/` (`GET /v1/team`; `POST /v1/team/preview`, `/publish`, `/graph`, `/suggestions`), versioned like the public API it will become ([ADR 0005](docs/adr/0005-online-first-built-to-last.md)).
+
 - This repository's own team is on 0.6.0.
 
 ## 0.6.0

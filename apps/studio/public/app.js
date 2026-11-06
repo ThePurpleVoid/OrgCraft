@@ -1,6 +1,7 @@
 // Agent Team Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
 import { resolveSpec, setEnabled, setField, splitBrief, validate } from './team-model.mjs';
+import { bind, renderAreas, renderChecks, renderSystemInspector, renderSystemsStrip, roleSystemsHtml, wireBindings } from './panels.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -18,6 +19,10 @@ const undo = [];
 const redo = [];
 let view = null; // derived each render
 let zoom = 'fit'; // or a number
+let mode = 'org'; // org | flow | systems | areas | checks
+let selectedSystem = null;
+let flow = { key: '', edges: [], unresolved: [] }; // hand-offs, from the server, for the spec they were made from
+let sugg = null; // owned area and check suggestions from the repository
 let scale = 1;
 
 // ------------------------------------------------------------------------------------------------ model
@@ -89,6 +94,16 @@ function setManager(slug, manager) {
   });
   selected = slug;
 }
+
+const ctx = {
+  spec: () => spec,
+  change: (fn) => change(fn),
+  render: () => render(),
+  get team() { return view.team; },
+  esc,
+  selectSystem: (id) => { selectedSystem = id; if (id) selected = null; render(); },
+  selectRole: (slug) => select(slug),
+};
 
 // ------------------------------------------------------------------------------------------------ canvas
 
@@ -174,19 +189,41 @@ function layout(team) {
   return { pos, edges, w: root.w, h: root.h };
 }
 
+function systemsLine(slug) {
+  const b = (spec.resources?.bindings ?? []).filter((x) => x.role === slug);
+  return b.length ? b.map((x) => `${x.resource} ${x.permission}`).join(' · ') : 'no systems';
+}
+
 function nodeSvg(r, p, extra = '') {
-  const tier = r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}` : '';
+  const tier = mode === 'systems' ? systemsLine(r.slug) : r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}` : '';
   const flag = view.issues.some((i) => i.level === 'error' && i.where === `roles/${r.slug}`) ? ' ⚠' : r.changed ? ' •' : '';
   return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${extra}" data-slug="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}">
     <rect class="card" width="${W}" height="${H}"></rect>
     <rect class="stripe" width="4" height="${H - 16}" x="8" y="8" fill="${groupColor(r.group)}"></rect>
     <text class="title" x="20" y="23">${esc(r.title.length > 21 ? r.title.slice(0, 20) + '…' : r.title)}${flag}</text>
-    <text class="meta" x="20" y="41">${esc(tier)}</text>
+    <text class="meta" x="20" y="41">${esc(tier.length > 28 ? tier.slice(0, 27) + '…' : tier)}</text>
   </g>`;
 }
 
 function renderCanvas() {
-  const { pos, edges, w, h } = layout(view.team);
+  const canvasMode = ['org', 'flow', 'systems'].includes(mode);
+  document.body.dataset.mode = mode;
+  for (const b of document.querySelectorAll('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
+  $('#summary').textContent = `${view.team.length} roles on · ${view.all.length - view.team.length} off · kit ${S.kitVersion}`;
+  if (mode === 'systems') renderSystemsStrip($('#systems-strip'), ctx, selectedSystem);
+  if (!canvasMode) {
+    if (!sugg) loadSuggestions();
+    (mode === 'areas' ? renderAreas : renderChecks)($('#canvas'), ctx, sugg);
+    return;
+  }
+  const lay = layout(view.team);
+  const { pos, w, h } = lay;
+  let edges = lay.edges.map((d) => `<path class="edge" d="${d}"></path>`);
+  if (mode === 'flow') {
+    loadFlow();
+    edges = edges.map((e) => e.replace('class="edge"', 'class="edge faint"')).concat(flow.edges.filter((x) => pos.has(x.from) && pos.has(x.to) && (!selected || x.from === selected || x.to === selected))
+      .map((x) => handoff(pos.get(x.from), pos.get(x.to), !selected ? 'all' : x.from === selected ? 'out' : 'in')));
+  }
   const PAD = 24;
   const fit = Math.min(1, ($('#canvas').clientWidth - 8) / (w + PAD * 2));
   scale = zoom === 'fit' ? Math.max(0.4, fit) : zoom;
@@ -194,11 +231,45 @@ function renderCanvas() {
   const owner = pos.get('owner');
   const nodes = view.team.map((r) => nodeSvg(r, pos.get(r.slug))).join('');
   $('#canvas').innerHTML = `<svg width="${(w + PAD * 2) * scale}" height="${(h + PAD * 2) * scale}" viewBox="${-PAD} ${-PAD} ${w + PAD * 2} ${h + PAD * 2}">
-    ${edges.map((d) => `<path class="edge" d="${d}"></path>`).join('')}
+    <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"></path></marker><marker id="arrow-in" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead in"></path></marker></defs>
+    ${edges.join('')}
     <g class="node owner" data-slug="owner" transform="translate(${owner.x},${owner.y})"><rect class="card" width="${W}" height="${H}"></rect>
       <text class="title" x="20" y="23">${esc(spec.values?.OWNER || 'The owner')}</text><text class="meta" x="20" y="41">owner</text></g>
     ${nodes}</svg>`;
-  $('#summary').textContent = `${view.team.length} roles on · ${view.all.length - view.team.length} off · kit ${S.kitVersion}`;
+  if (mode === 'flow') {
+    const mine = selected ? flow.edges.filter((x) => x.from === selected || x.to === selected) : flow.edges;
+    $('#summary').textContent += selected ? ` · ${view.bySlug.get(selected)?.title}: ${mine.filter((x) => x.from === selected).length} out, ${mine.filter((x) => x.to === selected).length} in` : ` · ${flow.edges.length} hand-offs`;
+  }
+}
+
+/** A hand-off arrow between two cards, curving out to the side so it does not run along the reporting lines. */
+function handoff(a, b, kind) {
+  const x1 = a.x + W / 2, y1 = a.y + H / 2, x2 = b.x + W / 2, y2 = b.y + H / 2;
+  const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+  // Start and end on the card edges, not their centres.
+  const t = (ux, uy) => Math.min(Math.abs((W / 2) / (ux || 1e-9)), Math.abs((H / 2) / (uy || 1e-9)));
+  const ux = dx / len, uy = dy / len, s = t(ux, uy) + 2;
+  const sx = x1 + ux * s, sy = y1 + uy * s, ex = x2 - ux * s, ey = y2 - uy * s;
+  const bend = Math.min(80, len / 4);
+  const cx = (sx + ex) / 2 - uy * bend, cy = (sy + ey) / 2 + ux * bend;
+  return `<path class="handoff ${kind}" marker-end="url(#${kind === 'in' ? 'arrow-in' : 'arrow'})" d="M${sx},${sy} Q${cx},${cy} ${ex},${ey}"></path>`;
+}
+
+let flowTimer = null;
+function loadFlow() {
+  const key = JSON.stringify(spec.roles);
+  if (flow.key === key || flowTimer) return;
+  flowTimer = setTimeout(async () => {
+    try { flow = { key, ...(await api('/v1/team/graph', { spec })) }; } catch { flow = { key, edges: [], unresolved: [] }; }
+    flowTimer = null;
+    if (mode === 'flow') renderCanvas();
+  }, 150);
+}
+
+async function loadSuggestions() {
+  sugg = { areas: [], checks: [], fromMarkdown: [], loading: true };
+  try { sugg = await api('/v1/team/suggestions', { spec }); } catch { sugg = { areas: [], checks: [], fromMarkdown: [] }; }
+  if (mode === 'areas' || mode === 'checks') renderCanvas();
 }
 
 // Dragging a card onto another card makes it report there. Pointer events, so it works with touch too.
@@ -207,7 +278,7 @@ function wireCanvas() {
   let drag = null;
   canvas.addEventListener('pointerdown', (e) => {
     const g = e.target.closest('.node');
-    if (!g || g.dataset.slug === 'owner') return;
+    if (!g || g.dataset.slug === 'owner' || !g.closest('svg')) return;
     drag = { slug: g.dataset.slug, g, x: e.clientX, y: e.clientY, moved: false, start: g.getAttribute('transform') };
     g.setPointerCapture(e.pointerId);
   });
@@ -243,6 +314,8 @@ function wireCanvas() {
     e.preventDefault();
     const slug = e.dataTransfer.getData('text/x-role');
     const t = e.target.closest?.('.node');
+    const system = e.dataTransfer.getData('text/x-system');
+    if (system) { if (t && t.dataset.slug !== 'owner') { selected = t.dataset.slug; selectedSystem = null; bind(ctx, t.dataset.slug, system); render(); } return; }
     if (!slug) return;
     if (t) setManager(slug, t.dataset.slug);
     else { change(() => setEnabled(spec, slug, true)); selected = slug; render(); }
@@ -280,6 +353,7 @@ function wireLibrary() {
 
 function renderInspector() {
   const el = $('#inspector');
+  if (selectedSystem) return renderSystemInspector(el, ctx, selectedSystem);
   const r = selected && view.bySlug.get(selected);
   if (!r) { el.innerHTML = '<p class="muted">Pick a role on the canvas or in the library.</p>'; return; }
   const role = spec.roles[r.slug];
@@ -311,7 +385,8 @@ function renderInspector() {
           <label class="row hint"><input type="checkbox" data-replace="${esc(name)}" style="width:auto" ${m?.mode === 'replace' ? 'checked' : ''}> Replace the kit's text instead of adding to it</label></details>`;
       }).join('');
   }
-  el.innerHTML = head + body;
+  el.innerHTML = head + (r.enabled ? roleSystemsHtml(ctx, r.slug) : '') + body;
+  wireBindings(el, ctx);
   $('#i-enabled').onchange = (e) => change(() => setEnabled(spec, r.slug, e.target.checked));
   $('#i-tier').onchange = (e) => change(() => setExtField(r.slug, 'Model', r.model.replace(/^[a-z]+/i, e.target.value) || e.target.value));
   $('#i-manager').onchange = (e) => setManager(r.slug, e.target.value);
@@ -333,8 +408,8 @@ function renderIssues() {
   const errors = list.filter((i) => i.level === 'error').length;
   const pill = $('#checks');
   pill.className = `pill ${errors ? 'error' : 'ok'}`;
-  pill.textContent = errors ? `${errors} error${errors > 1 ? 's' : ''}, ${list.length - errors} warnings` : `Checks pass${list.length ? ` · ${list.length} warnings` : ''}`;
-  $('#issues').innerHTML = list.length ? list.map((i) => `<li class="${i.level}" data-where="${esc(i.where)}"><strong>${i.level}</strong> · ${esc(i.where)}: ${esc(i.message)}</li>`).join('') : '<li class="none">Everything checks out.</li>';
+  pill.textContent = errors ? `${errors} error${errors > 1 ? 's' : ''}, ${list.length - errors} warnings` : `No problems${list.length ? ` · ${list.length} warnings` : ''}`;
+  $('#issues').innerHTML = list.length ? list.map((i) => `<li class="${i.level}" data-where="${esc(i.where)}"><strong>${i.level}</strong> · ${esc(i.where)}: ${esc(i.message)}</li>`).join('') : '<li class="none">No problems.</li>';
 }
 
 let flashTimer = null;
@@ -346,7 +421,14 @@ function flash(text) {
   flashTimer = setTimeout(renderIssues, 3500);
 }
 
-function select(slug) { selected = slug; render(); }
+function setMode(m) {
+  mode = m;
+  if (m !== 'systems') selectedSystem = null;
+  if (m === 'areas' || m === 'checks') sugg = null; // fresh suggestions for the current team
+  render();
+}
+
+function select(slug) { selected = slug; selectedSystem = null; render(); }
 
 function render() {
   view = derive();
@@ -401,7 +483,7 @@ async function openPublish() {
   $('#message').value ||= 'Update the agent team (Agent Team Studio)';
   dlg.showModal();
   try {
-    const { changes, issues } = await api('/api/preview', { spec });
+    const { changes, issues } = await api('/v1/team/preview', { spec });
     const errors = issues.filter((i) => i.level === 'error');
     $('#confirm').disabled = !changes.length || errors.length > 0;
     $('#changes').innerHTML = errors.length ? `<p class="result error" style="padding:10px">Fix ${errors.length} error${errors.length > 1 ? 's' : ''} before publishing.</p>` :
@@ -419,13 +501,14 @@ async function confirmPublish() {
   out.className = 'result';
   out.textContent = 'Publishing…';
   try {
-    const r = await api('/api/publish', { spec, branch: $('#branch').value.trim(), message: $('#message').value });
+    const r = await api('/v1/team/publish', { spec, branch: $('#branch').value.trim(), message: $('#message').value });
     out.className = 'result ok';
     out.textContent = r.commit ? `Committed ${r.commit} on ${r.branch} (${r.files.length} files). Push it and open a pull request: git push -u origin ${r.branch}` : `Nothing changed on ${r.branch}.`;
-    const fresh = await api('/api/state');
+    const fresh = await api('/v1/team');
     S = fresh;
     spec = fresh.spec;
     undo.length = 0; redo.length = 0;
+    sugg = null;
     render();
   } catch (e) {
     out.className = 'result error';
@@ -438,7 +521,7 @@ async function confirmPublish() {
 
 async function start() {
   try {
-    S = await api('/api/state');
+    S = await api('/v1/team');
   } catch (e) {
     document.body.innerHTML = `<main style="padding:24px"><h1>Agent Team Studio</h1><p>${esc(e.message)}</p></main>`;
     return;
@@ -455,7 +538,16 @@ async function start() {
   $('#redo').onclick = () => step(redo, undo);
   $('#publish').onclick = openPublish;
   $('#confirm').onclick = confirmPublish;
-  $('#issues').addEventListener('click', (e) => { const w = e.target.closest('li')?.dataset.where; const m = /^roles\/(.+)$/.exec(w ?? ''); if (m && view.bySlug.has(m[1])) select(m[1]); });
+  $('#issues').addEventListener('click', (e) => {
+    const w = e.target.closest('li')?.dataset.where ?? '';
+    const m = /^roles\/(.+)$/.exec(w);
+    if (m && view.bySlug.has(m[1])) return select(m[1]);
+    const to = /^ownership/.test(w) ? 'areas' : /^gates/.test(w) ? 'checks' : /^(resources|bindings)/.test(w) ? 'systems' : null;
+    if (to) setMode(to);
+    const r = /^resources\/(.+)$/.exec(w);
+    if (r) ctx.selectSystem(r[1]);
+  });
+  $('#views').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setMode(b.dataset.view); });
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
     e.preventDefault();
