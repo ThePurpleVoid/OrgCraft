@@ -114,7 +114,7 @@ jobs:
           node-version: 22
       - name: The M3 dry run with the runner image (scripted fake model, local control plane, stand-in remote; no key)
         if: hashFiles('apps/runner/Dockerfile') != ''
-        env: { M3_DRY_RUN_RUNNER: docker, M3_DRY_RUN_IMAGE: 'agent-team-runner:ci' }
+        env: { M3_DRY_RUN_RUNNER: docker, M3_DRY_RUN_IMAGE: 'agent-team-runner:ci', M3_DRY_RUN_DEBUG: '1' }
         run: |
           npm ci --prefix apps/server && npm ci --prefix apps/runner
           node --test tests/e2e/m3-dry-run.e2e.mjs | tee m3-dry-run.tap

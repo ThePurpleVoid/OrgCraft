@@ -56,7 +56,7 @@ before(async () => {
   assert.ok(cookie, 'the Studio link gives a cookie');
 });
 after(async () => {
-  if (process.env.M3_DRY_RUN_DEBUG && h) console.log(JSON.stringify({ log: hk.log(), proposals: hk.proposals(), chat: await cards().catch((e) => e.message) }, null, 1));
+  if (process.env.M3_DRY_RUN_DEBUG && h) console.log(JSON.stringify({ log: hk.log(), proposals: hk.proposals(), chat: await cards().catch((e) => e.message), events: await h.events().catch((e) => e.message) }, null, 1));
   await h?.down();
 });
 

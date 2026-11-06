@@ -133,7 +133,9 @@ export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), por
     plane.runners?.closeAll?.(); plane.closeAllConnections?.(); plane.close();
     await db.close?.();
   }
-  return { ...state, plane, down };
+  /** What the control plane recorded for the sessions and pull requests (the harness's debugging aid). */
+  const events = async () => (await db.system("select type, actor_id, envelope->'data' as data from events where team = $1 and (type like 'session.%' or type like 'proposal.%' or type like 'message.%') order by seq", [TEAM]));
+  return { ...state, plane, events, down };
 }
 
 export async function waitFor(fn, ms = 60_000, every = 200) {
