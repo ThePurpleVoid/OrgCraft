@@ -451,7 +451,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
    * tenant out with 429, each audited. The token is single use, bound to the person, and kept only as a hash.
    */
   async function stepUp(tenant, by, secret, { verifier, bearer }) {
-    if (!verifier) throw new Problem(503, 'step-up is not set up on this server: set AGENT_TEAM_STEP_UP_SECRET_HASH (see apps/server/README.md)');
+    if (!verifier) throw new Problem(401, 'step-up is not set up on this server (AGENT_TEAM_STEP_UP_SECRET_HASH), so nothing that needs it can be done', { type: 'step-up-required' });
     if (typeof secret !== 'string' || !secret) throw new Problem(400, 'send { secret }');
     const [{ n }] = await db.tenant(tenant, ({ q }) => q(`select count(*)::int as n from step_up_failures where at > now() - make_interval(mins => $1)`, [STEP_UP_LOCKOUT.minutes]));
     if (n >= STEP_UP_LOCKOUT.failures) {
@@ -608,10 +608,14 @@ export function stepUpVerifier(stored) {
   const m = /^scrypt\$(\d+)\$(\d+)\$(\d+)\$([\w-]+)\$([\w-]+)$/.exec(String(stored ?? ''));
   if (!m) throw new Error('AGENT_TEAM_STEP_UP_SECRET_HASH is not a scrypt hash (make one with: agent-team-server --hash-step-up)');
   const [, N, r, p, salt, hash] = m;
-  if (Number(N) < 2 ** 15) throw new Error('the step-up hash must use scrypt N of at least 2^15');
+  const n = Number(N), rr = Number(r), pp = Number(p);
+  if (n < 2 ** 15 || n > 2 ** 20 || (n & (n - 1)) !== 0) throw new Error('the step-up hash must use scrypt N, a power of two from 2^15 to 2^20');
+  if (rr < 1 || rr > 32 || pp < 1 || pp > 16) throw new Error('the step-up hash has an out-of-range scrypt r or p');
   const want = Buffer.from(hash, 'base64url');
+  if (want.length < 16 || Buffer.from(salt, 'base64url').length < 16) throw new Error('the step-up hash needs a salt and a key of at least 16 bytes');
+  const maxmem = 128 * n * rr * pp + 32 * 1024 * 1024;
   return async (typed) => {
-    const got = await scrypt(String(typed), Buffer.from(salt, 'base64url'), want.length, { N: Number(N), r: Number(r), p: Number(p), maxmem: 256 * 1024 * 1024 });
+    const got = await scrypt(String(typed), Buffer.from(salt, 'base64url'), want.length, { N: n, r: rr, p: pp, maxmem });
     return got.length === want.length && timingSafeEqual(got, want);
   };
 }

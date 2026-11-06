@@ -90,7 +90,13 @@ test('step-up: a slow hash, the bearer token refused, single use, a lockout afte
     assert.equal((await call('POST', '/auth/step-up', { secret: SECRET })).status, 201, 'the lockout lifts after 15 minutes');
   });
   await plane(async ({ call }) => {
-    assert.equal((await call('POST', '/auth/step-up', { secret: SECRET })).status, 503, 'with no step-up hash configured, nothing can be approved');
+    const off = await call('POST', '/auth/step-up', { secret: SECRET });
+    assert.deepEqual([off.status, off.body.type], [401, 'step-up-required'], 'with no step-up hash configured, nothing that needs it passes');
+  });
+  assert.throws(() => stepUpVerifier('sha256$abc'), /not a scrypt hash/);
+  assert.throws(() => stepUpVerifier('scrypt$16384$8$1$c2FsdHNhbHRzYWx0c2FsdA$a2V5a2V5a2V5a2V5a2V5a2V5a2V5a2V5'), /2\^15 to 2\^20/);
+  assert.throws(() => stepUpVerifier('scrypt$2097152$8$1$c2FsdHNhbHRzYWx0c2FsdA$a2V5a2V5a2V5a2V5a2V5a2V5a2V5a2V5'), /2\^15 to 2\^20/);
+  await plane(async () => {
   });
 });
 

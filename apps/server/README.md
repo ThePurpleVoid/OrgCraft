@@ -102,7 +102,9 @@ refused); the server keeps only its scrypt hash, from `AGENT_TEAM_STEP_UP_SECRET
 printf '%s' 'a secret of 12 characters or more' | node bin.mjs --hash-step-up   # → scrypt$32768$8$1$…
 ```
 
-Five wrong secrets in 15 minutes lock step-up for the tenant (`429`), and every try is audited. Local mode makes a
+Five wrong secrets in 15 minutes lock step-up for the tenant (`429`), and every try is audited. With no hash set,
+step-up is refused (`401 step-up-required`), never passed. A notification to the owner on lockout comes with the
+notification channels (M4). Local mode makes a
 secret in `--data/step-up.secret`. M4's sign-in replaces the secret; the header stays.
 
 ## Host it in another server
