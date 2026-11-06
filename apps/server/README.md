@@ -145,6 +145,32 @@ audited.
 runners. Rows are taken with `skip locked`, so instances can tick at once. A host without a long-lived process calls
 `POST /v1/internal/tick` with `Authorization: Bearer $CRON_SECRET`; with `CRON_SECRET` unset that path does not exist.
 
+## Signing in (hosted, M4)
+
+Off unless `GITHUB_APP_CLIENT_ID` is set, so local mode is unchanged. Then the control plane is the deployment's
+own OIDC issuer ([ADR 0007](../../docs/adr/0007-deployment-is-its-own-identity-provider.md), spec
+[m4-sign-in.md](../../docs/specs/m4-sign-in.md)), built on [oidc-provider](https://github.com/panva/node-oidc-provider), an
+OpenID-Certified library: `identity.mjs` holds its storage adapter and our policy, and no protocol code of our own.
+
+- **Web.** The Studio opens `/oauth/authorize?client_id=agent-team-web&return=<path>`. With no session, that leads to
+  `/sign-in?interaction=<uid>` (the Studio's page), then GitHub (`/oauth/interaction/<uid>/github`), then the
+  issuer's callback. The web leg's code is consumed on the server, which sets `__Host-agent-team` (HttpOnly, Secure,
+  SameSite=Lax; 12 hours idle, 7 days in all) and returns to `return`, checked with the Studio's own `safeReturn`.
+  Unsafe methods with the cookie need this deployment's `Origin` and `content-type: application/json`. Sign out is
+  `POST /oauth/revoke` with the cookie and `{}`.
+- **Apps and the CLI.** The authorization code flow with PKCE (S256) and exact redirect URIs. Refresh tokens rotate
+  and are bound to the device's DPoP key. Reusing one revokes its whole family and writes an `identity_audit` row.
+- **Who gets in.** A member, someone with an open invitation (by numeric GitHub user id, or a verified primary email),
+  or, on a deployment with no members yet, `AGENT_TEAM_OWNER_GITHUB`, whose first sign-in makes them the owner.
+  Anyone else gets `/sign-in?error=not-invited` and nothing is stored. The person's GitHub token is used once to
+  read who they are, and dropped.
+- **Settings:** `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, an https `AGENT_TEAM_PUBLIC_URL` (the issuer),
+  `AGENT_TEAM_OWNER_GITHUB`, and `AGENT_TEAM_CLIENT_IP_HEADER` for rate limits behind a proxy. The signing key is made on
+  first start and sealed in the vault.
+
+Still to come (order 2): passkeys and step-up for signed-in people, roles on every route (until then a signed-in
+person can read, and only an owner can write), bearer tokens from the apps on `/v1`, and retiring the admin token.
+
 ## Host it in another server
 
 `createHandler(opts)` from `server.mjs` is the API as a plain `(req, res)` handler, for serverless functions or a

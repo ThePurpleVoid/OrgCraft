@@ -5,6 +5,10 @@
 //   x-team-token: <report token>     POST /v1/teams/{team}/reports only (append, for that one team; reads nothing)
 //   Authorization: Bearer <token>    everything else, as a person of the server's tenant. Until sign-in (OIDC)
 //                                    lands, that is one admin token per server (AGENT_TEAM_ADMIN_TOKEN).
+//   cookie __Host-agent-team         a signed-in person (identity.mjs, hosted only): the same routes, as that person,
+//                                    in the server's tenant if they are a member there. Unsafe methods need this
+//                                    deployment's Origin and content-type: application/json (CSRF), and, until roles
+//                                    land on every route (M4 order 2), the owner role.
 //   (none, a one-time code)          POST /v1/runners only: a runner redeems a code a person minted for its key.
 //
 // Every write may carry an Idempotency-Key: the first answer is kept for a day and a retry gets it back verbatim
@@ -99,7 +103,7 @@ export function createControlPlane(opts) {
   // The tick runs in-process every 15 s; a deployment can also call POST /v1/internal/tick from a cron.
   const tickMs = opts.tickMs ?? 15_000;
   let ticking = false;
-  const timer = tickMs > 0 ? setInterval(() => { if (ticking) return; ticking = true; bus.tick().catch((e) => console.error(`tick: ${e.message}`)).finally(() => { ticking = false; }); }, tickMs) : null;
+  const timer = tickMs > 0 ? setInterval(() => { if (ticking) return; ticking = true; bus.tick().then(() => opts.identity?.sweep()).catch((e) => console.error(`tick: ${e.message}`)).finally(() => { ticking = false; }); }, tickMs) : null;
   timer?.unref?.();
   server.runners = runners;
   server.m3 = m3;
@@ -113,7 +117,7 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
@@ -135,12 +139,23 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const rate = new Map();
   const appended = (team, stored) => { if (stored.length) { live.emit(team, stored); sinks?.wake(); } };
 
-  const person = (req) => {
+  /** Who is calling: the admin token, or (hosted) a signed-in person's cookie. `tenant` is null for a person who is
+   *  not a member of this server's workspace: they can read /v1/me and nothing else. */
+  const person = async (req) => {
     const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? '');
     // D6: a session's token acts for a role, never for a person (approvals, cards, runs, budgets, step-up).
     if (m && /^st_/.test(m[1])) throw new Problem(403, 'a session token cannot act for a person');
-    if (!m || !adminToken || !same(m[1], adminToken)) throw new Problem(401, 'sign in: send Authorization: Bearer <token>');
-    return tenant;
+    if (m) {
+      if (!adminToken || !same(m[1], adminToken)) throw new Problem(401, 'sign in: send Authorization: Bearer <token>', { type: 'unauthenticated' });
+      return { tenant, principal: 'admin', via: 'admin', role: 'owner' };
+    }
+    const s = identity ? await identity.sessionOf(req) : null;
+    if (!s) throw new Problem(401, identity ? 'sign in first' : 'sign in: send Authorization: Bearer <token>', { type: 'unauthenticated' });
+    // A cross-site form can send neither this Origin nor JSON, so a cookie alone never makes a write (spec section 2).
+    if (!identity.csrfOk(req)) throw new Problem(403, 'cross-site request refused: send this deployment\'s Origin and content-type: application/json', { type: 'csrf' });
+    const workspaces = await identity.workspaces(s.person);
+    const here = workspaces.find((w) => w.tenant === tenant);
+    return { tenant: here ? tenant : null, principal: s.person, via: 'cookie', role: here?.role ?? null, session: s, workspaces };
   };
 
   // A sliding minute per team and role, so a burst that straddles the turn of a clock minute is still counted.
@@ -242,6 +257,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     const url = new URL(req.url, 'http://x');
     const parts = url.pathname.replace(/\/+$/, '').split('/').slice(1).map(decodeURIComponent);
     const m = req.method;
+    // Sign-in (hosted only): the issuer's /oauth/* and discovery.
+    if (identity && await identity.handle(req, res, url)) return;
     if (parts[0] !== 'v1') throw new Problem(404, 'not found');
     const [, a, team, b, c] = parts;
 
@@ -295,14 +312,26 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return send(res, 200, { ok: true });
     }
 
-    const t = person(req);
-    return idempotent(req, res, t, 'admin', url.pathname, () => personRoute(req, res, t, url, parts));
+    const who = await person(req);
+    if (a === 'me' && !team && m === 'GET') return send(res, 200, await meView(who));
+    // A member elsewhere only: nothing here shows which teams exist (spec section 4).
+    if (!who.tenant) throw new Problem(404, 'not found');
+    if (who.via === 'cookie' && WRITES.has(m) && who.role !== 'owner') throw new Problem(403, 'only an owner can change this workspace yet', { type: 'forbidden' });
+    return idempotent(req, res, who.tenant, who.principal, url.pathname, () => personRoute(req, res, who, url, parts));
   }
 
-  async function personRoute(req, res, t, url, parts) {
+  /** GET /v1/me: the signed-in person, their workspaces and roles, and how many passkeys they have. */
+  async function meView(who) {
+    if (who.via === 'admin') return { id: 'admin', login: null, name: 'Admin token', workspaces: [{ tenant, role: 'owner' }], passkeys: 0, authTime: null };
+    const [{ n }] = await db.system('select count(*)::int as n from passkeys where person = $1', [who.principal]);
+    return { id: who.principal, login: who.session.login, name: who.session.name ?? who.session.login, workspaces: who.workspaces.map((w) => ({ tenant: w.tenant, role: w.role })), passkeys: Number(n), authTime: who.session.authTime };
+  }
+
+  async function personRoute(req, res, who, url, parts) {
     const m = req.method;
     const stepUp = req.headers['x-step-up'] ?? null;
     const [, a, team, b, c] = parts;
+    const t = who.tenant, me = who.principal;
     if (a === 'me' && team === 'summary' && !b && m === 'GET') {
       const tag = `W/"${(await store.tenantHead(db, t)).seq}-${Math.floor(now().getTime() / 60_000)}"`;
       if (req.headers['if-none-match'] === tag) { res.writeHead(304, { etag: tag }); return res.end(); }
@@ -325,17 +354,19 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     }
     if (a === 'auth' && team === 'step-up' && !b && m === 'POST') {
       const body = await readJson(req, 4 * 1024);
+      // The typed secret is local mode's step-up; a signed-in person steps up with a passkey (M4 order 2).
+      if (who.via === 'cookie') throw new Problem(400, 'the step-up secret is for local mode; sign-in steps up with a passkey', { type: 'step-up-method' });
       const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
-      return send(res, 201, await m3.stepUp(t, 'admin', body?.secret, { verifier: stepUpVerifier, bearer }), {}, { secrets: ['token'] });
+      return send(res, 201, await m3.stepUp(t, me, body?.secret, { verifier: stepUpVerifier, bearer }), {}, { secrets: ['token'] });
     }
-    if (a === 'runs' && team && b && !c && m === 'POST') return send(res, 200, await did(m3.controlRun(t, team, b, 'admin', { stepUp })));
-    if (a === 'approvals' && team && !b && m === 'POST') return send(res, 200, await did(m3.decideApproval(t, team, await readJson(req, 16 * 1024), 'admin', { stepUp })));
+    if (a === 'runs' && team && b && !c && m === 'POST') return send(res, 200, await did(m3.controlRun(t, team, b, me, { stepUp })));
+    if (a === 'approvals' && team && !b && m === 'POST') return send(res, 200, await did(m3.decideApproval(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
     if (a === 'cards' && team && !b && m === 'GET') return send(res, 200, await m3.getCard(t, team));
-    if (a === 'cards' && team && !b && m === 'POST') return send(res, 200, await did(m3.answerCard(t, team, await readJson(req, 16 * 1024), 'admin', { stepUp })));
+    if (a === 'cards' && team && !b && m === 'POST') return send(res, 200, await did(m3.answerCard(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
     if (a === 'runners' && team === 'codes' && !b && m === 'POST') {
       const body = req.headers['content-type'] ? (await readJson(req, 16 * 1024)) ?? {} : {};
-      await m3.requireStepUp(t, 'admin', stepUp, 'Adding a runner');
-      return send(res, 201, await store.mintRunnerCode(db, t, 'admin', body), {}, { secrets: ['code'] });
+      await m3.requireStepUp(t, me, stepUp, 'Adding a runner');
+      return send(res, 201, await store.mintRunnerCode(db, t, me, body), {}, { secrets: ['code'] });
     }
     if (a === 'runners' && !team && m === 'GET') return send(res, 200, { runners: await store.listRunners(db, t) });
     if (a === 'runners' && team && team !== 'codes' && !b && m === 'DELETE') { await store.revokeRunner(db, t, team); runners?.close(team); return send(res, 200, { ok: true }); }
@@ -362,12 +393,12 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       }
       if (b === 'events' && c === 'stream' && m === 'GET') return stream(req, res, t, team, url);
       if (b === 'budget' && !c && m === 'GET') return send(res, 200, await m3.getBudget(t, team));
-      if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), 'admin', { stepUp })));
+      if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
-      if (b === 'runs' && !c && m === 'POST') return send(res, 201, await did(m3.startRun(t, team, (await readJson(req, MAX_BODY)) ?? {}, 'admin')));
+      if (b === 'runs' && !c && m === 'POST') return send(res, 201, await did(m3.startRun(t, team, (await readJson(req, MAX_BODY)) ?? {}, me)));
       if (b === 'chat' && !c && m === 'GET') return send(res, 200, await m3.getChat(t, team, Object.fromEntries(url.searchParams)));
       if (b === 'chat' && !c && m === 'POST') {
-        const { created, event } = await did(m3.postChat(t, team, await readJson(req, 64 * 1024), 'admin'));
+        const { created, event } = await did(m3.postChat(t, team, await readJson(req, 64 * 1024), me));
         return send(res, created ? 201 : 200, event);
       }
       if (b === 'board' && m === 'GET') {
@@ -392,7 +423,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (a === 'secrets' && !team && m === 'GET') return send(res, 200, { secrets: await store.listSecrets(db, t) });
     if (a === 'secrets' && team && !b && m === 'PUT') {
       const body = await readJson(req, 64 * 1024);
-      await m3.requireStepUp(t, 'admin', stepUp, 'Writing a secret');
+      await m3.requireStepUp(t, me, stepUp, 'Writing a secret');
       await store.putSecret(db, key, t, team, body?.value);
       return send(res, 200, { ok: true, name: team });
     }

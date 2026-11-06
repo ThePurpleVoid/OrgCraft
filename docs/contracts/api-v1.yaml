@@ -21,6 +21,7 @@ servers:
     variables: { host: { default: localhost:4849 } }
 security:
   - person: []
+  - cookie: []
 tags:
   - { name: teams }
   - { name: events, description: "The event log (events.md) and the board projected from it" }
@@ -242,6 +243,11 @@ paths:
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }
       responses: { "200": { description: Budget, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }, "401": { description: "Step-up required (problem type step-up-required)" } }
+  /me:
+    get:
+      tags: [me]
+      summary: "Who is signed in: their workspaces and role in each, how many passkeys they have, and when they signed in (auth_time; never a step-up). 401 (problem type unauthenticated) sends the web to /oauth/authorize"
+      responses: { "200": { description: Me, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }, "401": { description: "Not signed in (problem type unauthenticated)" } }
   /me/inbox:
     get:
       tags: [me]
@@ -291,6 +297,7 @@ components:
     session: { type: http, scheme: bearer, description: Short-lived agent session token from the runner }
     runner: { type: http, scheme: bearer, description: Runner key }
     reportToken: { type: apiKey, in: header, name: x-team-token }
+    cookie: { type: apiKey, in: cookie, name: __Host-agent-team, description: "The web's session, set by the issuer's callback (HttpOnly, Secure, SameSite=Lax; 12 hours idle, 7 days in all). An unsafe method sent with it needs this deployment's Origin and content-type application/json, or gets 403 (problem type csrf)" }
   parameters:
     team: { name: team, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }
     cursor: { name: cursor, in: query, schema: { type: string } }
@@ -301,6 +308,16 @@ components:
     Team: { description: A team, content: { application/json: { schema: { $ref: "#/components/schemas/Team" } } } }
     TeamList: { description: Teams, content: { application/json: { schema: { type: object, properties: { teams: { type: array, items: { $ref: "#/components/schemas/Team" } }, next: { type: string } } } } } }
   schemas:
+    Me:
+      type: object
+      required: [id, workspaces, passkeys]
+      properties:
+        id: { type: string, description: "per_…" }
+        login: { type: [string, "null"], description: The upstream login, for display only (it can change) }
+        name: { type: [string, "null"] }
+        workspaces: { type: array, items: { type: object, properties: { tenant: { type: string }, role: { type: string, enum: [owner, admin, editor, viewer, approver] } } } }
+        passkeys: { type: integer }
+        authTime: { type: [string, "null"], format: date-time }
     Team:
       type: object
       properties:

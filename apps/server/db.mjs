@@ -3,6 +3,7 @@
 //
 // Two ways in:
 //   db.system(sql, params)    as the owner, for migrations, auth lookups and the sink worker's scan.
+//   db.systemTx(fn)           a transaction as the owner (sign-in).
 //   db.tenant(id, fn)         a transaction as agent_team_app with app.tenant set; RLS limits it to that tenant.
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -56,6 +57,8 @@ export async function openDb({ url, dataDir } = {}) {
   return {
     kind: raw.kind,
     system: async (sql, params) => (await raw.query(sql, params)).rows,
+    /** A transaction as the owner (sign-in: find or refuse a person, and accept invitations, atomically). */
+    systemTx: (fn) => raw.transaction((tx) => fn({ q: async (sql, params) => (await tx.query(sql, params)).rows })),
     tenant: (id, fn) => raw.transaction(async (tx) => {
       await tx.query("select set_config('app.tenant', $1, true)", [id]);
       await tx.query('set local role agent_team_app');
