@@ -429,7 +429,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     },
   };
 
-  /** A merge refused because the head moved: the old approval is superseded and a new one asked for (D1). */
+  /** A merge refused because the head moved: the old approval is superseded; the runner asks again with the new head (D1). */
   async function supersedeApproval(ctx, sess, data) {
     const [a] = await ctx.q("select id, card, action, call, why, risk, state from approvals where id = $1 and session = $2 for update", [data.approval, sess.id]);
     if (!a) return;
@@ -439,8 +439,6 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (c?.state === 'open') await m3.changeCard(ctx, sess.team, a.card, { state: 'superseded' });
       await ctx.emit(sess.team, 'approval.decided', { approval: a.id, decision: 'superseded', by: null, note: 'the pull request changed after it was approved', session: sess.id, cardId: a.card }, { subject: `approval/${a.id}`, run: sess.run });
     }
-    const call = { ...(a.call ?? {}), headSha: typeof data.headSha === 'string' ? data.headSha.slice(0, 64) : null };
-    await m3.requestApproval(ctx, sess.team, { action: a.action, call, why: `${a.why} (asked again: the head moved to ${call.headSha ?? 'a new commit'})`, risk: a.risk, session: sess.id, run: sess.run, role: sess.role });
   }
 
   /** The runner went quiet: its live sessions are unknown until it reconnects (runner-protocol, ping). */

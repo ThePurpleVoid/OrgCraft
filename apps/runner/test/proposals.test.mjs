@@ -12,10 +12,11 @@ import { stubAdapter } from '../adapters/stub.mjs';
 import { fakeControlPlane } from './fake-control-plane.mjs';
 import { noFailedTurns, origin, sh } from './helpers.mjs';
 
-/** A branch on the bare origin with one commit on top of main. */
-function branch(bare, root, name, file, text) {
+/** A branch on the bare origin with one commit on top of its main (or of the seed's older main, for a conflict). */
+function branch(bare, root, name, file, text, { stale = false } = {}) {
   const seed = join(root, '..', 'seed');
-  sh(seed, 'checkout', '--quiet', '-B', name, 'main');
+  sh(seed, 'fetch', '--quiet', bare, 'main');
+  sh(seed, 'checkout', '--quiet', '-B', name, stale ? 'main' : 'FETCH_HEAD');
   writeFileSync(join(seed, file), text);
   sh(seed, 'add', '-A'); sh(seed, 'commit', '--quiet', '-m', `${name}: ${file}`); sh(seed, 'push', '--quiet', '--force', bare, name);
   sh(seed, 'checkout', '--quiet', 'main');
@@ -38,7 +39,7 @@ test('local proposals: open once, merge only the approved head, and say why not'
   assert.deepEqual([rec.state, rec.mergedHead, rec.result, rec.approval], ['merged', head, m.result, 'apr_1'], 'the harness can read the head and the merge result');
 
   // A conflict with what landed on main meanwhile, and a red check.
-  const h2 = branch(bare, root, 'web/2-b', 'a.txt', 'other\n');
+  const h2 = branch(bare, root, 'web/2-b', 'a.txt', 'other\n', { stale: true });
   const o2 = await p.open({ repo: bare, branch: 'web/2-b', base: 'main', title: 'b' });
   await assert.rejects(p.accept({ repo: bare, ref: o2.ref, headSha: h2 }), (e) => e.reason === 'conflict');
   const red = localProposals({ checks: async () => false });
@@ -48,7 +49,7 @@ test('local proposals: open once, merge only the approved head, and say why not'
 });
 
 test('GitHub proposals: an app JWT, an installation token, the pull request found or opened, and the merge pinned to the head', async () => {
-  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
   const jwt = appJwt(123, privateKey, Date.parse('2026-11-06T00:00:00Z'));
   const [h, b, sig] = jwt.split('.');
   assert.ok(createVerify('RSA-SHA256').update(`${h}.${b}`).verify(publicKey, Buffer.from(sig, 'base64url')), 'signed with the app key');
@@ -75,12 +76,15 @@ test('GitHub proposals: an app JWT, an installation token, the pull request foun
   const o = await g.open({ repo: 'https://github.com/acme/shop.git', branch: 'web/9-x', base: 'main', title: 't' });
   assert.deepEqual([o.ref, o.url, o.existed], [9, 'https://github.com/acme/shop/pull/9', false]);
   assert.match(calls[0].auth, /^Bearer ey/, 'the installation is looked up with the app JWT');
-  assert.deepEqual(calls[1].body, { repositories: ['shop'] }, 'the token is scoped to the one repository');
+  assert.deepEqual(calls[1].body, { repositories: ['shop'], permissions: { contents: 'write', pull_requests: 'write' } }, 'the token is scoped to the one repository and two permissions');
   assert.equal(calls.at(-1).auth, 'Bearer ghs_installation');
   assert.equal(calls.at(-1).body.maintainer_can_modify, false);
   existing = [{ number: 9, html_url: 'https://github.com/acme/shop/pull/9', head: { sha: H } }];
   assert.equal((await g.open({ repo: 'git@github.com:acme/shop.git', branch: 'web/9-x', base: 'main', title: 't' })).existed, true);
   assert.equal(calls.filter((c) => c.path.endsWith('/access_tokens')).length, 1, 'the token is reused until it nears expiry');
+  const secrets = g.secrets();
+  assert.ok(secrets.includes('ghs_installation'), 'the installation token is a secret value for the scans');
+  assert.ok(secrets.some((l) => privateKey.includes(l) && l.length >= 40), 'so are the key\'s lines');
 
   assert.deepEqual(await g.accept({ repo: 'https://github.com/acme/shop', ref: 9, headSha: H }), { result: 'b'.repeat(40) });
   assert.deepEqual(calls.at(-1).body, { sha: H, merge_method: 'squash' }, 'GitHub refuses the merge if the head is not this sha');
@@ -95,11 +99,11 @@ test('GitHub proposals: an app JWT, an installation token, the pull request foun
 
 test('the runner opens the pull request after the first checkpoint, and merges it pinned to the approved head only on approval', async () => {
   const { bare, root } = origin();
-  let moveHead = false;
+  let moveHead = false, movedTo = null;
   const cp = await fakeControlPlane({
     decide: (req) => {
       // The branch moves after the person saw it: the merge must not land.
-      if (moveHead) branch(bare, root, 'web/5-form', 'form.txt', 'changed after approval\n');
+      if (moveHead) { moveHead = false; movedTo = branch(bare, root, 'web/5-form', 'form.txt', 'changed after approval\n'); }
       return { decision: 'approved', by: 'owner', headSha: req.headSha };
     },
   });
@@ -139,13 +143,19 @@ test('the runner opens the pull request after the first checkpoint, and merges i
     cp.send('session.stop', { session: f.body.session, mode: 'finish-step', reason: 'owner' });
     await cp.until(() => cp.events.some((e) => e.type === 'session.ended'));
     const g = cp.start({ role: 'web-dev', run: 'run_5', repo: { url: bare }, worktree: 'web/5-form', areas: ['form.txt'] });
-    await cp.until(() => results.length === 2 && cp.events.some((e) => e.type === 'proposal.failed'));
+    await cp.until(() => results.length === 2 && cp.events.filter((e) => e.type === 'proposal.accepted').length === 2);
     const failed = cp.events.find((e) => e.type === 'proposal.failed');
     assert.equal(failed.data.reason, 'head-moved');
-    assert.ok(failed.data.approval, 'the server supersedes that approval and asks again');
-    assert.equal(results[1].isError, true);
-    assert.match(results[1].text, /head-moved/);
-    assert.equal(sh(bare, 'show', 'main:form.txt'), 'form 1', 'nothing the person did not see was merged');
+    const round2 = cp.approvals.slice(1);
+    assert.equal(round2.length, 2, 'one new card for the new head, asked by the runner (the server only supersedes)');
+    assert.equal(failed.data.approval, round2[0].approval);
+    assert.equal(failed.data.headSha, round2[0].input.headSha, 'what failed is the head that was approved');
+    assert.equal(round2[1].input.headSha, movedTo, 'the new card names the head that is there now');
+    assert.match(round2[1].input.why, /asked again: the pull request's head moved/);
+    const merged = cp.events.filter((e) => e.type === 'proposal.accepted').at(-1);
+    assert.deepEqual([merged.data.headSha, merged.data.approval], [movedTo, round2[1].approval], 'only the head the person saw last is merged');
+    assert.equal(sh(bare, 'show', 'main:form.txt'), 'changed after approval');
+    assert.ok(!results[1].isError, results[1].text);
     for (const e of cp.events) assert.deepEqual(checkEvent(e), [], JSON.stringify(e));
     noFailedTurns(cp);
     cp.send('session.stop', { session: g.body.session, mode: 'finish-step', reason: 'owner' });

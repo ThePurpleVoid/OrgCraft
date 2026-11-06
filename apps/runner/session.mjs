@@ -20,6 +20,8 @@ export const DEFAULT_TIERS = { deep: 'claude-opus-5-5', standard: 'claude-opus-5
 const PASS_ENV = ['PATH', 'LANG', 'LC_ALL', 'TZ', 'TERM', 'SHELL', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE'];
 /** Tools whose message the next role acts on: the branch is checkpointed and pushed first, so it is there. */
 const PUSH_FIRST = new Set(['handoff', 'bug', 'signoff', 'blocked']);
+// How many times one accept asks again because the pull request's head moved after an approval.
+const MAX_REASKS = 3;
 const HEARTBEAT_MS = 5 * 60_000;
 const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 80);
 
@@ -318,7 +320,10 @@ export class Session {
   }
 
   /** Values that must never leave in a push or the memory file: the session's proxy token, the model key, the runner key. */
-  secretValues() { return [this.proxyToken, process.env.ANTHROPIC_API_KEY, this.deps.runnerKey].filter(Boolean); }
+  secretValues() {
+    // The merger app's key and its installation tokens are the runner's too: none may leave in a commit or a memory.
+    return [this.proxyToken, process.env.ANTHROPIC_API_KEY, this.deps.runnerKey, ...(this.deps.proposals?.secrets?.() ?? [])].filter(Boolean);
+  }
 
   /** Checkpoint and push through the runner's checks (ownership, symlinks, secrets); never throws. */
   async save(reason) {
@@ -356,32 +361,47 @@ export class Session {
     if (!saved.pushed || !this.proposal) {
       return { text: `Not asked: the branch could not be pushed and proposed (${saved.error ?? saved.proposalError ?? 'no proposal'}). Fix that first, then ask again.`, isError: true };
     }
-    const headSha = saved.commit;
-    let r;
-    try {
-      r = await this.deps.tools.call('request_approval', { ...input, pr: this.proposal.ref, headSha });
-    } catch (e) {
-      return { text: `The control plane could not be reached (${e.message}). Nothing was sent; try again shortly.`, isError: true };
-    }
-    if (r.problems) return { text: `Refused by the control plane. ${r.problems.join('. ')}. Fix the call and try again.`, isError: true };
-    this.state = 'waiting';
-    const d = await this.untilStopped(this.deps.awaitApproval(r.result.approval, this.id));
-    if (this.state === 'waiting') this.state = 'working';
-    if (d.decision !== 'approved') return { text: JSON.stringify({ approval: r.result.approval, decision: d.decision, note: d.note }) + ' Not approved: it was not merged.', isError: true };
-    // The merge lands only on the head the person approved, whatever the branch holds now.
-    const approved = d.headSha ?? headSha;
-    const base = { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: approved, approval: r.result.approval };
-    try {
-      const m = await this.deps.proposals.accept({ repo: this.body.repo.url, ref: this.proposal.ref, branch: this.copy.branch, base: this.copy.base, headSha: approved, approval: r.result.approval });
-      await this.emit('proposal.accepted', { ...base, result: m.result });
-      return { text: JSON.stringify({ approval: r.result.approval, decision: 'approved', merged: m.result, pr: this.proposal.ref, headSha: approved }) + ' Approved and merged by the runner.' };
-    } catch (e) {
-      const reason = ['head-moved', 'checks', 'conflict'].includes(e.reason) ? e.reason : 'checks';
-      await this.emit('proposal.failed', { ...base, reason, detail: String(e.message).slice(0, 500) });
-      const next = reason === 'head-moved' ? ' The branch moved after the approval, so the owner is asked again for the new head.' : reason === 'conflict' ? ' Bring the base into the branch and resolve the conflict, then ask again.' : ' A required check has not passed: fix it, then ask again.';
-      return { text: JSON.stringify({ approval: r.result.approval, decision: 'approved', merged: false, reason }) + ` Approved, but not merged (${reason}).${next}`, isError: true };
+    let headSha = saved.commit;
+    // A head that moves after the approval (someone pushed to the pull request) is not merged: the runner asks
+    // again, naming the new head, and only that answer can merge it. The server only supersedes the old approval.
+    for (let round = 1; ; round++) {
+      let r;
+      try {
+        r = await this.deps.tools.call('request_approval', { ...input, pr: this.proposal.ref, headSha, ...(round > 1 ? { why: `${input.why} (asked again: the pull request's head moved to ${headSha} after the last approval)` } : {}) });
+      } catch (e) {
+        return { text: `The control plane could not be reached (${e.message}). Nothing was sent; try again shortly.`, isError: true };
+      }
+      if (r.problems) return { text: `Refused by the control plane. ${r.problems.join('. ')}. Fix the call and try again.`, isError: true };
+      const approval = r.result.approval;
+      this.state = 'waiting';
+      const d = await this.untilStopped(this.deps.awaitApproval(approval, this.id));
+      if (this.state === 'waiting') this.state = 'working';
+      if (d.decision !== 'approved') return { text: JSON.stringify({ approval, decision: d.decision, note: d.note }) + ' Not approved: it was not merged.', isError: true };
+      // The merge lands only on the head the person approved, whatever the branch holds now.
+      const approved = d.headSha ?? headSha;
+      const base = { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: approved, approval };
+      try {
+        const m = await this.deps.proposals.accept({ repo: this.body.repo.url, ref: this.proposal.ref, branch: this.copy.branch, base: this.copy.base, headSha: approved, approval });
+        await this.emit('proposal.accepted', { ...base, result: m.result });
+        return { text: JSON.stringify({ approval, decision: 'approved', merged: m.result, pr: this.proposal.ref, headSha: approved }) + ' Approved and merged by the runner.' };
+      } catch (e) {
+        const reason = ['head-moved', 'checks', 'conflict'].includes(e.reason) ? e.reason : 'checks';
+        await this.emit('proposal.failed', { ...base, reason, detail: String(e.message).slice(0, 500) });
+        if (reason === 'head-moved' && round < MAX_REASKS) {
+          const now = await this.deps.proposals.head({ repo: this.body.repo.url, ref: this.proposal.ref }).catch(() => null);
+          if (now && now !== approved) {
+            headSha = now;
+            this.proposal.headSha = now;
+            await this.emit('proposal.updated', { connector: this.proposal.connector, ref: this.proposal.ref, url: this.proposal.url, branch: this.copy.branch, headSha: now });
+            continue;
+          }
+        }
+        const next = reason === 'head-moved' ? ' The pull request kept moving after approval; ask again once it is settled.' : reason === 'conflict' ? ' Bring the base into the branch and resolve the conflict, then ask again.' : ' A required check has not passed: fix it, then ask again.';
+        return { text: JSON.stringify({ approval, decision: 'approved', merged: false, reason }) + ` Approved, but not merged (${reason}).${next}`, isError: true };
+      }
     }
   }
+
 
   /** session.stop: `now` aborts the turn in flight, `finish-step` lets it end first. Either way the work is pushed. */
   stop(mode = 'finish-step', reason = 'stopped') {

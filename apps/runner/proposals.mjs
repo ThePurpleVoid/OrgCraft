@@ -11,6 +11,7 @@
 // Both answer the same calls:
 //   open({ repo, branch, base, title, body })  -> { connector, ref, url, headSha, existed }
 //   accept({ repo, ref, branch, base, headSha, approval }) -> { result } (the merge commit)
+//   head({ repo, ref }) -> the proposal's head on the remote now
 // and an accept that cannot land throws a ProposalError with `reason` head-moved, checks or conflict.
 import { createSign } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -25,6 +26,9 @@ export class ProposalError extends Error {
 
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const need = (sha) => { if (!FULL_SHA.test(String(sha ?? ''))) throw new ProposalError('head-moved', 'an accept needs the full head commit it was approved for'); };
+
+// The long lines of a PEM key: any one of them in a commit is a leak (a whole key rarely survives copy and paste).
+const pemLines = (pem) => String(pem).split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length >= 40 && !l.startsWith('-----'));
 
 /** A GitHub App's JWT (RS256, 9 minutes, backdated a minute for clock drift). */
 export function appJwt(appId, privateKey, now = Date.now()) {
@@ -52,7 +56,7 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
     const jwt = appJwt(appId, privateKey);
     const inst = await call(`/repos/${slug}/installation`, { token: jwt });
     if (inst.status !== 200) throw new Error(`the merger app is not installed on ${slug} (${inst.status})`);
-    const tok = await call(`/app/installations/${inst.body.id}/access_tokens`, { token: jwt, method: 'POST', body: JSON.stringify({ repositories: [slug.split('/')[1]] }) });
+    const tok = await call(`/app/installations/${inst.body.id}/access_tokens`, { token: jwt, method: 'POST', body: JSON.stringify({ repositories: [slug.split('/')[1]], permissions: { contents: 'write', pull_requests: 'write' } }) });
     if (tok.status !== 201 || !tok.body.token) throw new Error(`no installation token for ${slug} (${tok.status})`);
     tokens.set(slug, { token: tok.body.token, until: Date.parse(tok.body.expires_at) - 5 * 60_000 });
     return tok.body.token;
@@ -60,6 +64,8 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
   const slugOf = (repo) => { const s = repoSlug(repo); if (!s) throw new Error(`${repo} is not a GitHub repository`); return s; };
   return {
     connector: 'github',
+    /** Values the checkpoint scan and the memory redaction look for (the key's base64 body and the live tokens). */
+    secrets: () => [...pemLines(privateKey), ...[...tokens.values()].map((t) => t.token)],
     async open({ repo, branch, base, title, body = '' }) {
       const slug = slugOf(repo);
       const token = await tokenFor(slug);
@@ -70,6 +76,13 @@ export function githubProposals({ appId, privateKey, api = 'https://api.github.c
       const made = await call(`/repos/${slug}/pulls`, { token, method: 'POST', body: JSON.stringify({ title, head: branch, base, body, maintainer_can_modify: false }) });
       if (made.status !== 201) throw new Error(`the pull request for ${branch} was not opened (${made.status}: ${made.body.message ?? 'no message'})`);
       return { connector: 'github', ref: made.body.number, url: made.body.html_url, headSha: made.body.head?.sha ?? null, existed: false };
+    },
+    /** The proposal's head on the remote now (after a head-moved, the commit a new approval must name). */
+    async head({ repo, ref }) {
+      const slug = slugOf(repo);
+      const r = await call(`/repos/${slug}/pulls/${Number(ref)}`, { token: await tokenFor(slug) });
+      if (r.status !== 200 || !FULL_SHA.test(r.body.head?.sha ?? '')) throw new Error(`could not read the head of pull request ${ref} (${r.status})`);
+      return r.body.head.sha;
     },
     async accept({ repo, ref, headSha }) {
       need(headSha);
@@ -107,6 +120,11 @@ export function localProposals({ checks = async () => true } = {}) {
       store(repo, s);
       return { connector: 'local', ref, url: `file://${repo}#${ref}`, headSha, existed: false };
     },
+    async head({ repo, ref }) {
+      const p = load(repo).proposals[ref];
+      if (!p) throw new Error(`no proposal ${ref}`);
+      return git(repo, 'rev-parse', '--verify', `refs/heads/${p.branch}^{commit}`);
+    },
     async accept({ repo, ref, headSha, approval }) {
       need(headSha);
       const s = load(repo);
@@ -117,7 +135,7 @@ export function localProposals({ checks = async () => true } = {}) {
       if (!(await checks(p))) throw new ProposalError('checks', 'a required check has not passed');
       const tmp = mkdtempSync(join(tmpdir(), 'merge-'));
       try {
-        await git(tmp, 'clone', '--quiet', '--no-hardlinks', repo, 'w');
+        await git(tmp, 'clone', '--quiet', '--no-hardlinks', '--', repo, 'w');
         const w = join(tmp, 'w');
         await git(w, 'checkout', '--quiet', p.base);
         try {
