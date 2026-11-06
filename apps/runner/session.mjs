@@ -265,7 +265,7 @@ export class Session {
       await this.emit('session.tool', { tool, target: String(d.target).slice(0, 500), decision: 'needs-approval', rule: d.rule });
       this.state = 'waiting';
       const call = tool === 'Bash' ? String(input.command ?? '') : JSON.stringify({ tool, input });
-      const a = await this.untilStopped(this.deps.approve({ action: d.rule, call, why: `The team policy keeps this for a person: it ${d.why}.` }));
+      const a = await this.untilStopped(this.deps.approve({ action: d.rule, call, why: `The team policy keeps this for a person: it ${d.why}.`, ...(d.pr ? { pr: d.pr, headSha: d.headSha } : {}) }));
       if (this.state === 'waiting') this.state = 'working';
       const ok = a.decision === 'approved';
       await this.emit('session.tool', { tool, target: String(d.target).slice(0, 500), decision: ok ? 'allowed' : 'refused', rule: d.rule, by: a.by });
