@@ -79,6 +79,12 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
 
   // Approvals need a recent sign-in: the page asks for the step-up secret, the Studio server keeps the step-up token.
   const approval = page.locator('.card-msg.k-approval');
+  // What the merge is bound to (D1): the PR and the short sha, the full sha on tap, kept open across a live redraw.
+  await approval.locator('summary', { hasText: 'commit 3f9c2ab' }).click();
+  await approval.getByText('3f9c2ab41e7d0c95b8f6a2d4e1c0b9a8f7e6d5c4').waitFor();
+  cp.say('Another update arrives.');
+  await page.getByText('Another update arrives.').waitFor();
+  assert.equal(await approval.getByText('3f9c2ab41e7d0c95b8f6a2d4e1c0b9a8f7e6d5c4').isVisible(), true, 'still shown after a redraw');
   await approval.getByRole('button', { name: 'Approve' }).click();
   await approval.getByLabel('Step-up secret').fill('not it');
   await approval.getByRole('button', { name: 'Confirm' }).click();
@@ -103,7 +109,7 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
 
 test('at 360px the chat fits, the cards answer, and the team is read-only', { skip }, async () => {
   cp.say('The settings page change is ready to try. One step needs you before it merges.');
-  cp.card({ id: 'card_phone', kind: 'approval', subject: 'approval/apr_phone', title: 'Merge PR #14', body: 'QA signed off on both themes. The merge gate is green.', risk: 'low', options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger' }], links: [{ rel: 'pr', url: 'https://example.com/pull/14' }, { rel: 'preview', url: 'https://example.com/preview/14' }] });
+  cp.card({ id: 'card_phone', kind: 'approval', subject: 'approval/apr_phone', title: 'release-manager asks to merge #14 at 9b1e4d0', data: { pr: 14, headSha: '9b1e4d07c2a5f8e3b6d9c1a4f7e0b3d6c9a2f5e8' }, body: 'QA signed off on both themes. The merge gate is green.', risk: 'low', options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger' }], links: [{ rel: 'pr', url: 'https://example.com/pull/14' }, { rel: 'preview', url: 'https://example.com/preview/14' }] });
   for (const scheme of ['light', 'dark']) {
     const ctx = await browser.newContext({ viewport: { width: 360, height: 760 }, colorScheme: scheme, isMobile: true, hasTouch: true, deviceScaleFactor: SHOTS ? 2 : 1 });
     const page = await ctx.newPage();
