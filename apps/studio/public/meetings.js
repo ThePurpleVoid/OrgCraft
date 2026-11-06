@@ -45,6 +45,7 @@ const idPattern = /^[a-z0-9][a-z0-9-]*$/;
 export function createMeetings({ root, ctx }) {
   let selected = null; // a meeting id, or 'new'
   let form = null; // the meeting being edited, not yet saved
+  let autoCap = false; // a new meeting's limit follows its estimate until the owner sets it
   let dirty = false;
   let note = '';
 
@@ -115,8 +116,8 @@ export function createMeetings({ root, ctx }) {
           <div class="row seg"><label><input type="radio" name="m-kind" value="schedule"${event ? '' : ' checked'}> On a schedule</label><label><input type="radio" name="m-kind" value="event"${event ? ' checked' : ''}> When an item gets a label</label></div>
           ${event ? `<label>When an item gets the label <input id="m-label" value="${esc(f.when.label)}" placeholder="e.g. design"></label><p class="hint">An issue or pull request. Label meetings start once the runner is connected.</p>`
             : `<div class="row days" role="group" aria-label="Days">${DAYS.map((d) => `<button type="button" class="day" data-day="${d}" aria-pressed="${f.when.days?.includes(d) ? 'true' : 'false'}" aria-label="${DAY_NAME[d]}">${DAY_LETTER[d]}</button>`).join('')}<input id="m-at" type="time" value="${esc(f.when.at ?? '')}" aria-label="Time"></div>
-            <p class="hint">Team time zone: ${esc(tz)}. <a href="#" id="m-tz">Change it</a>${(tz === 'UTC' || !validZone(tz)) && browserTz && browserTz !== tz ? `. This browser is in ${esc(browserTz)}; <a href="#" id="m-tz-browser" data-tz="${esc(browserTz)}">use that</a>` : ''}.</p>
-            <label class="switch"><input type="checkbox" id="m-skip"${f.skipIfQuiet ? ' checked' : ''}> Skipped when nothing changed since the last one</label>`}
+            <p class="hint">${validZone(tz) ? `Times are in ${esc(tz)}. <a href="#" id="m-tz">Change it</a>.` : `Times are in UTC because the team has no time zone yet. <a href="#" id="m-tz">Set it</a>${browserTz ? `, or <a href="#" id="m-tz-browser" data-tz="${esc(browserTz)}">use this browser's (${esc(browserTz)})</a>` : ''}.`}</p>
+            <label class="switch"><input type="checkbox" id="m-skip"${f.skipIfQuiet ? ' checked' : ''}> Skip it when nothing changed since the last one</label>`}
         </fieldset>
         <label>Run by <select id="m-runner">${on.map((r) => `<option value="${esc(r.slug)}"${r.slug === f.facilitator ? ' selected' : ''}>${esc(r.title)}</option>`).join('')}</select><span class="hint">Asks each attendee, writes the minutes, files action items.</span></label>
       </div>
@@ -138,7 +139,7 @@ export function createMeetings({ root, ctx }) {
       <label>Agenda each attendee answers <textarea id="m-agenda" rows="4">${esc(f.agenda)}</textarea></label>
       <fieldset><legend>If an attendee is in the middle of a task</legend>
         ${radio('m-busy', 'next-pause', 'Answer at its next pause', 'The question waits until its current step ends. Its work is never interrupted; a late answer goes into the minutes as an addendum.', f.ifBusy === 'next-pause' || !f.ifBusy)}
-        ${radio('m-busy', 'proxy', 'Answered for it from the board', 'No wake-up and no cost; the minutes mark the answer as written from reports.', f.ifBusy === 'proxy')}
+        ${radio('m-busy', 'proxy', 'Answer from its board reports', 'No wake-up and no cost. The minutes mark the answer as taken from reports.', f.ifBusy === 'proxy')}
         ${radio('m-busy', 'skip', 'Leave it out this time', 'The minutes say it was busy.', f.ifBusy === 'skip')}
       </fieldset>
       <div class="m-grid">
@@ -174,11 +175,11 @@ export function createMeetings({ root, ctx }) {
     const runner = titleOf(f.facilitator) || 'The role that runs it';
     const when = f.when.label !== undefined ? `When an item gets the label "${f.when.label || '…'}"` : f.when.at ? `${meetingWhen(f.when).replace(/`/g, '')}` : 'At the time you set';
     const att = `${n} attendee${n === 1 ? '' : 's'}${who.dynamic ? ', plus everyone who worked since the last one' : ''}`;
-    const busy = ({ 'next-pause': 'An attendee in the middle of a task answers when its current step ends.', proxy: 'An attendee in the middle of a task is answered for from the board, at no cost.', skip: 'An attendee in the middle of a task is left out this time.' })[f.ifBusy ?? 'next-pause'];
+    const busy = ({ 'next-pause': 'An attendee in the middle of a task answers when its current step ends.', proxy: 'An attendee in the middle of a task answers from its board reports, at no cost.', skip: 'An attendee in the middle of a task is left out this time.' })[f.ifBusy ?? 'next-pause'];
     const steps = [
       [when, `${runner} opens the meeting and sends the agenda to ${att}.${f.skipIfQuiet && f.when.label === undefined ? ' If nothing changed since the last one, it is skipped.' : ''}`],
       ['Then', `${f.format === 'discussion' ? `Attendees answer and reply to each other, ${f.rounds ?? 3} rounds (a written round until the runner supports discussions).` : 'Each attendee answers the agenda once.'} ${busy}`],
-      ['Minutes', `${runner} writes the minutes in the chat: done, next, blockers.${f.owner?.minutes !== false ? ' You get them.' : ''}${f.owner?.speaks ? ' You can speak during it.' : ''}`],
+      ['Minutes', `${runner} writes the minutes in the chat: answers, decisions and action items.${f.owner?.minutes !== false ? ' You get them.' : ''}${f.owner?.speaks ? ' You can speak during it.' : ''}`],
       ['After', 'Action items go to their owners as tasks or hand-offs. Anything that needs you becomes a decision card.'],
     ];
     return `<ol class="timeline-steps">${steps.map(([t, d]) => `<li><span class="muted">${esc(t)}</span><span>${esc(d)}</span></li>`).join('')}</ol>`;
@@ -229,14 +230,25 @@ export function createMeetings({ root, ctx }) {
     const m = list().find((x) => x.id === id);
     if (!m) return;
     selected = id;
+    autoCap = false;
     form = { ...structuredClone(m), attendees: { roles: [], lanes: [], rule: null, ...structuredClone(m.attendees ?? {}) }, owner: { minutes: true, speaks: false, ...(m.owner ?? {}) } };
     dirty = false;
     note = '';
     if (!quiet) render();
   }
 
+  /** A new meeting's limit starts at its estimate rounded up to the next dollar, at least $1. */
+  function fitCap() {
+    const prices = ctx.prices();
+    if (!autoCap || !form || !prices) return;
+    form.capUsd = Math.max(1, Math.ceil(meetingEstimate(form, ctx.resolved(), prices).perMeetingUsd));
+    const input = root.querySelector('#m-cap');
+    if (input) input.value = String(form.capUsd);
+  }
+
   function edit(fn, { redraw = false } = {}) {
     fn(form);
+    fitCap();
     dirty = true;
     note = '';
     if (redraw) render(); else refresh();
@@ -244,7 +256,7 @@ export function createMeetings({ root, ctx }) {
 
   function save() {
     const f = structuredClone(form);
-    if (!f.title.trim()) return;
+    if (!f.title.trim()) { note = 'Give the meeting a title first.'; return render(); }
     if (selected === 'new' && !idPattern.test(f.id)) f.id = slugify(f.title);
     if (f.format !== 'discussion') f.rounds = 1;
     if (!f.attendees.rule) f.attendees.rule = null;
@@ -270,7 +282,7 @@ export function createMeetings({ root, ctx }) {
     if (b.dataset.starter) {
       if (dirty && !confirm('Discard the changes to this meeting?')) return;
       b.closest('details')?.removeAttribute('open');
-      selected = 'new'; form = fresh(b.dataset.starter === 'blank' ? null : b.dataset.starter); dirty = true; note = '';
+      selected = 'new'; form = fresh(b.dataset.starter === 'blank' ? null : b.dataset.starter); autoCap = true; fitCap(); dirty = true; note = '';
       render();
       root.querySelector('#m-title')?.focus();
       return;
@@ -296,7 +308,7 @@ export function createMeetings({ root, ctx }) {
     if (t.id === 'm-agenda') return edit((f) => { f.agenda = t.value; });
     if (t.id === 'm-label') return edit((f) => { f.when = { label: t.value }; });
     if (t.id === 'm-at') return edit((f) => { f.when.at = t.value; });
-    if (t.id === 'm-cap') return edit((f) => { f.capUsd = Number(t.value); });
+    if (t.id === 'm-cap') { autoCap = false; return edit((f) => { f.capUsd = Number(t.value); }); }
   });
   root.addEventListener('change', (e) => {
     const t = e.target;

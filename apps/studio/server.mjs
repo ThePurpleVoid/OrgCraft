@@ -29,7 +29,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(HERE, 'public');
 const MODEL = join(KIT, 'packages/team-model/index.mjs');
 const PRICES = join(KIT, 'packages/model-prices/prices.json');
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' };
 /** What a publish commits: the layer and everything sync generates from it. */
 const PUBLISHED = ['.agent-team', 'docs/team', 'scripts/agent-team', '.claude'];
 

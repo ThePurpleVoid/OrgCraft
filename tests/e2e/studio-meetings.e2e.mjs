@@ -63,8 +63,8 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   // Criterion 2: weekdays at 09:00 in the team's zone, skipped when quiet.
   for (const d of ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']) assert.equal(await view.getByRole('button', { name: d }).getAttribute('aria-pressed'), 'true', d);
   assert.equal(await view.getByRole('button', { name: 'Saturday' }).getAttribute('aria-pressed'), 'false');
-  await view.getByText(/Team time zone: /).waitFor();
-  assert.equal(await view.getByLabel('Skipped when nothing changed since the last one').isChecked(), true);
+  await view.getByText(/Times are in UTC because the team has no time zone yet/).waitFor();
+  assert.equal(await view.getByLabel('Skip it when nothing changed since the last one').isChecked(), true);
   // Criterion 4: run by the chief of staff; the CTO's whole lane and one more role.
   assert.equal(await view.getByLabel('Run by').inputValue(), 'chief-of-staff');
   await view.getByLabel('Add roles or a whole lane').selectOption('lane:cto');
@@ -79,12 +79,13 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   assert.match(await side.locator('.estimate tr', { hasText: 'Per month' }).textContent(), /about \$\d+\.\d\d/);
   await side.getByText(/Estimate, prices as of \d{4}-\d\d-\d\d\./).waitFor();
   const perMeeting = await side.locator('.estimate .total td').last().textContent();
+  assert.equal(Number(await page.locator('#m-cap').inputValue()), Math.max(1, Math.ceil(Number(perMeeting.slice(1)))), 'a new limit starts at the estimate, rounded up');
   // Criterion 5: discussion is allowed, with the honest note, and it costs more.
   await view.getByText('Discussion', { exact: true }).click();
   await view.getByText('Discussion meetings run as a written round until the runner supports them.').waitFor();
   assert.notEqual(await side.locator('.estimate .total td').last().textContent(), perMeeting, 'the estimate follows the format');
   await view.getByText('Written round', { exact: true }).click();
-  await view.getByText('Answered for it from the board').click();
+  await view.getByText('Answer from its board reports').click();
   // Criterion 6 and 10: an empty agenda and a zero cap are check errors, in place.
   await view.getByLabel('Agenda each attendee answers').fill('');
   await side.locator('li.error', { hasText: 'Has no agenda' }).waitFor();
