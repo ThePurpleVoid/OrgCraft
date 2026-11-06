@@ -323,6 +323,26 @@ test('a runner that restarted gets its sessions started again with what woke the
   }, { tickMs: 0 });
 });
 
+test('a run paused while its runner was away and resumed during the checkpoint: the session is not stopped after all', async () => {
+  await plane(async (p) => {
+    const { runner, run, runnerId, key } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    const state = async () => (await p.db.system('select state from sessions where id = $1', [s.session]))[0].state;
+    runner.close();
+    await waitFor(async () => (await state()) === 'unknown');
+    assert.equal((await p.call('POST', `/runs/${run.id}/pause`)).status, 200);
+    // The checkpoint is slow: the runner holds its answer while the owner resumes.
+    const back = await fakeRunner(p.base, key, { runner: runnerId, sessions: [s.session], reply: (f) => (f.op === 'session.checkpoint' ? null : {}) });
+    const cp = await back.next((f) => f.op === 'session.checkpoint' && f.body.session === s.session);
+    assert.equal((await p.call('POST', `/runs/${run.id}/resume`)).status, 200);
+    back.ws.send(JSON.stringify({ op: 'ack', id: 'late-cp', ref: cp.id, body: {} }));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(back.frames.find((f) => f.op === 'session.stop' && f.body.session === s.session && f.body.reason === 'run-paused'), undefined, 'a running run keeps its session');
+    back.close();
+  }, { tickMs: 0 });
+});
+
 test('a run paused while its runner was away: back, the session goes through the pause path (checkpoint, then stop)', async () => {
   await plane(async (p) => {
     const { runner, run, runnerId, key } = await setup(p);
