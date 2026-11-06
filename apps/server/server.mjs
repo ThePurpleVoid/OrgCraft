@@ -22,6 +22,7 @@ import { createBus } from './bus.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
+import { appCaller } from './dpop.mjs';
 import { PROVIDERS, createEmail, page } from './email.mjs';
 
 /** The bus hears every stored event (deliveries) and run and approval changes (stops, results). */
@@ -153,7 +154,17 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
 
   /** Who is calling: the admin token, or (hosted) a signed-in person's cookie. `tenant` is null for a person who is
    *  not a member of this server's workspace: they can read /v1/me and nothing else. */
-  const person = async (req) => {
+  const person = async (req, path) => {
+    // An app (iPhone, Android, the CLI): its device-bound access token and a DPoP proof for this request (S3).
+    if (identity && /^DPoP /.test(req.headers.authorization ?? '')) {
+      const app = await appCaller({ db, provider: identity.provider, origin: identity.origin, now }, req, path);
+      const [p] = await db.system('select login, name from people where id = $1', [app.person]);
+      if (!p) throw new Problem(401, 'app token refused: no such person', { type: 'unauthenticated' });
+      const workspaces = await identity.workspaces(app.person);
+      const here = workspaces.find((w) => w.tenant === tenant);
+      // No cookie session: authTime is null, so nothing that trusts a recent sign-in (a first passkey) is open to apps.
+      return { tenant: here ? tenant : null, principal: app.person, via: 'app', role: here?.role ?? null, client: app.client, session: { person: app.person, login: p.login, name: p.name, authTime: null, session: null }, workspaces };
+    }
     const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? '');
     // D6: a session's token acts for a role, never for a person (approvals, cards, runs, budgets, step-up).
     if (m && /^st_/.test(m[1])) throw new Problem(403, 'a session token cannot act for a person');
@@ -344,7 +355,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return send(res, 200, identity.caller(req));
     }
 
-    const who = await person(req);
+    const who = await person(req, url.pathname);
     if (a === 'me' && !team && m === 'GET') return send(res, 200, await meView(who));
     if (passkeys && ((a === 'me' && team === 'passkeys') || (a === 'auth' && team === 'step-up'))) {
       // A retry after a lost answer replays it (the challenge is single use, so running it again would fail).
@@ -354,7 +365,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     // A member elsewhere only: nothing here shows which teams exist (spec section 4).
     if (!who.tenant) throw new Problem(404, 'not found');
     // Roles on every route (roles.mjs): a route without a listed role is refused, so none ships unguarded.
-    if (who.via === 'cookie') {
+    if (who.via !== 'admin') {
       const min = minRole(m, url.pathname.slice(3));
       if (!min) throw new Problem(404, 'not found');
       if (!atLeast(who.role, min)) throw new Problem(403, `this needs the ${min} role or above; you are ${who.role}`, { type: 'forbidden' });
@@ -375,14 +386,17 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return send(res, 201, await passkeys.stepUp(mustBePerson(who), body.webauthn), {}, { secrets: ['token'] });
     }
     if (a === 'me' && !b && m === 'GET') return send(res, 200, await passkeys.list(mustBePerson(who)));
-    if (a === 'me' && b === 'options' && !c && m === 'GET') return send(res, 200, await passkeys.registrationOptions(mustBePerson(who)));
-    if (a === 'me' && !b && m === 'POST') return send(res, 201, await passkeys.register(mustBePerson(who), await readJson(req, 64 * 1024), step));
-    if (a === 'me' && b && !c && m === 'DELETE') return send(res, 200, await passkeys.remove(mustBePerson(who), b, step));
+    if (a === 'me' && b === 'options' && !c && m === 'GET') return send(res, 200, await passkeys.registrationOptions(mustBePerson(who, { web: true })));
+    if (a === 'me' && !b && m === 'POST') return send(res, 201, await passkeys.register(mustBePerson(who, { web: true }), await readJson(req, 64 * 1024), step));
+    if (a === 'me' && b && !c && m === 'DELETE') return send(res, 200, await passkeys.remove(mustBePerson(who, { web: true }), b, step));
     throw new Problem(404, 'not found');
   }
 
-  const mustBePerson = (who) => {
-    if (who.via !== 'cookie') throw new Problem(400, 'passkeys belong to a signed-in person, not the admin token');
+  /** Passkeys are a person's: never the admin token's. Adding or removing one is the web's (it needs a recent sign-in
+   *  or step-up in the browser); an app may list them and step up with one. */
+  const mustBePerson = (who, { web = false } = {}) => {
+    if (who.via === 'admin') throw new Problem(400, 'passkeys belong to a signed-in person, not the admin token');
+    if (web && who.via !== 'cookie') throw new Problem(403, 'add or remove passkeys in the Studio, signed in on the web', { type: 'forbidden' });
     return who;
   };
 

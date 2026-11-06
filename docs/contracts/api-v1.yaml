@@ -22,6 +22,7 @@ servers:
 security:
   - person: []
   - cookie: []
+  - app: []
 tags:
   - { name: teams }
   - { name: events, description: "The event log (events.md) and the board projected from it" }
@@ -425,6 +426,7 @@ components:
     runner: { type: http, scheme: bearer, description: Runner key }
     reportToken: { type: apiKey, in: header, name: x-team-token }
     cron: { type: http, scheme: bearer, description: "The deployment's CRON_SECRET, for /internal/* only (its tick and its smoke check); never a person's" }
+    app: { type: http, scheme: DPoP, description: "An app's access token (iPhone, Android, CLI): `Authorization: DPoP <token>` plus a `DPoP` proof header for this request (RFC 9449), signed by the device key the token is bound to: htm and htu of this request (the deployment's origin and path), iat within 60 seconds, ath of the token, a jti used once. The Bearer scheme is refused for these tokens. Roles apply as for the web; passkeys are added and removed on the web only, and an app may step up with one" }
     cookie: { type: apiKey, in: cookie, name: __Host-agent-team, description: "The web's session, set by the issuer's callback (HttpOnly, Secure, SameSite=Lax; 12 hours idle, 7 days in all). An unsafe method sent with it needs this deployment's Origin and content-type application/json, or gets 403 (problem type csrf)" }
   parameters:
     team: { name: team, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }
