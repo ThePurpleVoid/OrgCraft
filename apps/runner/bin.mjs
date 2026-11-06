@@ -32,7 +32,7 @@ import { parseArgs } from 'node:util';
 import { agentSdkAdapter } from './adapters/agent-sdk.mjs';
 import { startRunner } from './runner.mjs';
 import { useGitConfig } from './worktree.mjs';
-import { privateDir } from './sandbox.mjs';
+import { privateDir, selfCheck } from './sandbox.mjs';
 
 const { values: o, positionals: [cmd] } = parseArgs({ allowPositionals: true, options: {
   server: { type: 'string', default: process.env.AGENT_TEAM_SERVER },
@@ -79,6 +79,10 @@ if (sandbox) {
   if (work === data || work.startsWith(`${data}/`)) fail('AGENT_TEAM_RUNNER_WORK must be outside the data folder, which sessions cannot reach');
   process.umask(0o007); // what the runner makes for a session is shared with it through the group, and no one else
   privateDir(data);
+  // Check the sandbox this platform actually gives before taking any session.
+  const check = selfCheck(sandbox, { data });
+  if (!check.ok) fail(`refusing to start: the sandbox does not hold here: ${check.problems.join('; ')}`);
+  console.error(`[runner] sandbox checked: sessions run as uid ${sandbox.uid}, cannot read this process's environment or ${data}, and have no capabilities`);
 } else if (process.env.ANTHROPIC_API_KEY && process.env.AGENT_TEAM_RUNNER_UNSANDBOXED !== '1') {
   // A real model key in a runner whose sessions share its user would be readable by every session (F3).
   fail('refusing to start: ANTHROPIC_API_KEY is set but there is no sandbox. Run the runner in its container (apps/runner/Dockerfile); for development only, AGENT_TEAM_RUNNER_UNSANDBOXED=1 overrides this');

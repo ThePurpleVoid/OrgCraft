@@ -8,7 +8,7 @@
 // It drops every inheritable capability and sets no_new_privs, so nothing the agent runs can gain privileges.
 // Files the session writes are group-readable and group-writable (umask 007), in folders the runner made with the
 // shared group, so the runner can commit and check them at checkpoints.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, closeSync, constants as C, fchmodSync, fchownSync, fstatSync, ftruncateSync, mkdirSync, openSync, readSync, realpathSync, writeSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 
@@ -116,4 +116,28 @@ export function sharedDir(path, sandbox, { leaf = false } = {}) {
 export function privateDir(path) {
   mkdirSync(path, { recursive: true, mode: 0o700 });
   chmodSync(path, 0o700);
+}
+
+/**
+ * The runner's startup self-check (security review): as the agent, try to read the runner's environment and list
+ * its own folder, and read the agent's capabilities. Platforms differ (Fly, Docker Desktop, CI), so the runner
+ * checks the sandbox it actually got before it takes any session. Returns { ok, problems }.
+ */
+export function selfCheck(sandbox, { pid = process.pid, data }) {
+  const script = [
+    'if cat "/proc/$1/environ" >/dev/null 2>&1; then echo "problem: the runner environment is readable"; fi',
+    'if ls "$2" >/dev/null 2>&1; then echo "problem: the runner data folder is readable"; fi',
+    'grep "^CapEff:" /proc/self/status',
+    'id -u',
+  ].join('\n');
+  const pre = asAgent(sandbox);
+  const r = spawnSync(pre[0], [...pre.slice(1), '/bin/sh', '-c', script, 'check', String(pid), data], { encoding: 'utf8', timeout: 10000 });
+  const out = `${r.stdout ?? ''}`;
+  const problems = out.split('\n').filter((l) => l.startsWith('problem: ')).map((l) => l.slice(9));
+  if (r.error || r.status !== 0) problems.push(`the switch to the agent user failed (${r.error?.message ?? (r.stderr || `exit ${r.status}`).trim()})`);
+  const cap = /^CapEff:\s*([0-9a-f]+)/m.exec(out);
+  if (!cap || /[1-9a-f]/.test(cap[1])) problems.push(`the agent has capabilities (${cap?.[1] ?? 'unknown'})`);
+  const uid = /^(\d+)$/m.exec(out)?.[1];
+  if (uid !== undefined && Number(uid) !== sandbox.uid) problems.push(`the agent runs as uid ${uid}, not ${sandbox.uid}`);
+  return { ok: problems.length === 0, problems };
 }

@@ -434,3 +434,27 @@ test('F3: the runner refuses to start with a model key and no sandbox, unless to
   const dev = spawnSync(process.execPath, [bin, 'start'], { env: { ...env, AGENT_TEAM_RUNNER_UNSANDBOXED: '1' }, encoding: 'utf8', timeout: 1500 });
   assert.doesNotMatch(dev.stderr, /refusing to start/);
 });
+
+test('the startup self-check refuses a sandbox that does not hold', async () => {
+  const { selfCheck, privateDir } = await import('../sandbox.mjs');
+  const { mkdtempSync, chmodSync: chmod } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'runner-check-'));
+  chmod(dir, 0o711);
+  const data = join(dir, 'data');
+  privateDir(data);
+  // A setpriv that does not switch users: the "agent" is the runner, so everything is readable.
+  const fake = join(dir, 'setpriv');
+  writeFileSync(fake, '#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift\nexec "$@"\n');
+  chmod(fake, 0o755);
+  const bad = selfCheck({ uid: 10002, gid: 10010, exec: fake }, { data });
+  assert.equal(bad.ok, false);
+  assert.ok(bad.problems.some((p) => /environment is readable/.test(p)), bad.problems.join('; '));
+  assert.ok(bad.problems.some((p) => /data folder is readable/.test(p)), bad.problems.join('; '));
+  assert.ok(bad.problems.some((p) => /runs as uid/.test(p)), bad.problems.join('; '));
+  // A real switch (root with setpriv here, the runner user with the image's setpriv in the container) holds.
+  if (canSwitch) {
+    const good = selfCheck(IMAGE ?? { uid: 10002, gid: 10010, exec: 'setpriv' }, { data });
+    assert.deepEqual(good.problems, []);
+  }
+});
