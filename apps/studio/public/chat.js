@@ -3,7 +3,7 @@
 // the team's replies in a small Markdown subset, cards built from their fields, today's cost against the cap, and
 // pause and stop for the run. The Studio server holds the token; this page only talks to it.
 
-import { apiUrl, ask, requestJson } from './env.js';
+import { apiUrl, ask, askText, requestJson } from './env.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -17,6 +17,18 @@ export function ulid(now = Date.now()) {
   return t + Array.from(r, (b) => A[b % 32]).join('');
 }
 const newId = () => ulid();
+/** When the daily budget resets, in words: 00:00 UTC, and how far off (a UTC midnight is mid-day for many people). */
+export function resetIn(now = Date.now()) {
+  const d = new Date(now), next = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+  const h = Math.ceil((next - now) / 3_600_000);
+  return `the budget resets at 00:00 UTC (${h <= 1 ? 'in under an hour' : `in ${h} h`})`;
+}
+/**
+ * What a resume refused for a spent budget says (problem type budget-exhausted), above its button: "the cap for today"
+ * while today's budget card is open (its Add half again lifts today only), else "the daily cap" (a new cap from now on).
+ */
+const SPENT = Symbol('budget-exhausted');
+export const spentText = (forToday, now) => `Today's budget is spent, so the run can't resume yet. Raise ${forToday ? 'the cap for today' : 'the daily cap'} to resume it now, or resume it after ${resetIn(now)}.`;
 /** Names for the link relations cards use most; any other relation shows as its own words. */
 const LINKS = { pr: 'Pull request', preview: 'Preview', evidence: 'Evidence', issue: 'Issue', log: 'Log', diff: 'Changes' };
 const safeUrl = (u) => (/^https?:\/\//i.test(String(u ?? '')) ? String(u) : null);
@@ -330,7 +342,14 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     // A live refresh redraws the log while the person may be typing a step-up secret into a card: keep what they typed
     // and where the cursor was, or the redraw silently empties the field (and the next Confirm submits nothing).
     const typing = [...log.querySelectorAll('form[data-stepup] input')].map((i) => ({ card: i.closest('form').dataset.stepup, value: i.value, focused: document.activeElement === i }));
-    log.innerHTML = html + [st.error, st.runError].filter(Boolean).map((m) => `<p class="result error">${esc(m)}</p>`).join('');
+    // A run that is going again (a budget card's Add half again, another tab) has nothing left to refuse.
+    if (st.runError === SPENT && (st.run?.state ?? st.summary?.run) === 'running') { st.runError = null; st.raiseNote = null; }
+    log.innerHTML = html + [st.error, st.runError].filter(Boolean).map((m) => {
+      if (m !== SPENT) return `<p class="result error" role="alert">${esc(m)}</p>`;
+      // Worded as it is drawn: whether today's budget card is still open decides which cap the button raises.
+      const forToday = !!openBudgetCard();
+      return `<p class="result error" role="alert">${esc(spentText(forToday))} <button type="button" class="link tap" id="run-raise">${forToday ? 'Raise the cap for today' : 'Raise the daily cap'}</button></p>${st.raiseNote ? `<p class="result error">${esc(st.raiseNote)}</p>` : ''}`;
+    }).join('');
     for (const t of typing) {
       const input = log.querySelector(`form[data-stepup="${CSS.escape(t.card)}"] input`);
       if (!input) continue;
@@ -343,6 +362,9 @@ export function createChat({ root, onOpen, runs = true } = {}) {
 
   function renderRun() {
     const s = st.summary, state = st.run?.state ?? s?.run ?? null;
+    // A run that is going again (a budget card's Add half again, another tab) has nothing left to refuse: the run state
+    // can arrive on its own (loadRun), so the log is redrawn without the spent line here too.
+    if (state === 'running' && st.runError === SPENT) { st.runError = null; st.raiseNote = null; return draw(); }
     const c = st.cost ?? s?.cost;
     $('#chat-where', root).textContent = st.team ? `· ${st.team}` : '';
     const pill = $('#run-state', root);
@@ -474,7 +496,11 @@ export function createChat({ root, onOpen, runs = true } = {}) {
         e.preventDefault();
         const secret = input.value;
         input.value = '';
-        const r = await api('/v1/team/step-up', { secret });
+        // One check at a time: the control plane refuses a second one while the first runs (429), so a double tap waits.
+        const confirm = form.querySelector('button[type="submit"]');
+        if (confirm?.disabled) return;
+        if (confirm) confirm.disabled = true;
+        const r = await api('/v1/team/step-up', { secret }).finally(() => { if (confirm) confirm.disabled = false; });
         if (r.ok) return finish(true);
         $('#stepup-result', root).textContent = r.status === 401 ? 'That secret was not accepted. Try again.' : r.data.error ?? `HTTP ${r.status}`;
         input.focus();
@@ -486,6 +512,43 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     });
   }
   const needsStepUp = (r) => r.status === 401 && /step-up-required$/.test(r.data.type ?? '');
+  const spent = (r) => r.status === 409 && /budget-exhausted$/.test(r.data.type ?? '');
+  /** A refusal in words for the reader: a spent budget has its own sentence and a Raise the daily cap action. */
+  const refusal = (r) => (spent(r) ? SPENT : r.data.error ?? `HTTP ${r.status}`);
+  /** Today's budget card, while it is open: its Add half again raises the cap for today and resumes, with one step-up. */
+  const openBudgetCard = () => [...st.cards.values()].reverse().find((c) => c.kind === 'budget' && (c.state ?? 'open') === 'open' && !st.answers.has(c.id));
+
+  /**
+   * Raise the daily cap, then resume, when no budget card is open (it was answered Resume tomorrow): the amount, step-up
+   * for the raise, and the resume, which asks again (each step-up is used once).
+   */
+  async function raiseCap() {
+    const b0 = await api('/v1/team/budget');
+    if (b0.ok) st.budget = b0.data;
+    const c = st.cost ?? st.summary?.cost;
+    const cur = currency(), d = minorDigits(cur);
+    const now = st.budget?.perDay ?? c?.capPerDay ?? null;
+    // An Add half again earlier today stays on top of the new cap (budget_days.raised): say so before it surprises.
+    const extra = Number(st.budget?.today?.raised ?? 0);
+    const asked = await askText(`New daily cap in ${cur}.${typeof c?.today === 'number' ? ` Today's spend so far is ${fmtMoney(c.today, cur)}, so the cap must be more than that.` : ''}${extra > 0 ? ` Today's extra ${fmtMoney(extra, cur)} from Add half again stays on top of it, for today only.` : ''}`, now != null ? (now / 10 ** d).toFixed(d) : '');
+    if (asked === null) return;
+    const perDay = toMinor(asked);
+    // These keep the spent sentence and its button: the note goes under them (QA #162).
+    const note = (text) => { st.raiseNote = text; render(); };
+    if (perDay === null) return note('That is not an amount. Nothing changed.');
+    if (typeof c?.today === 'number' && perDay + extra <= c.today) return note(`The new cap must be more than today's spend of ${fmtMoney(c.today, cur)}. Nothing changed.`);
+    st.busy = true; renderRun();
+    let b = await api('/v1/team/budget', { perDay, key: newId() });
+    if (needsStepUp(b)) {
+      if (!(await stepUp(`Raising the daily cap to ${fmtMoney(perDay, cur)} lets the team spend more today.`))) { st.busy = false; renderRun(); return note('The cap was not changed, so the run is still paused.'); }
+      b = await api('/v1/team/budget', { perDay, key: newId() });
+    }
+    st.busy = false;
+    if (!b.ok) { renderRun(); return note(b.data.error ?? `HTTP ${b.status}`); }
+    st.raiseNote = null;
+    st.budget = b.data;
+    return control('resume');
+  }
 
   async function control(action) {
     if (action === 'stop' && !(await ask('Stop the run? Every role session stops after its current step. You can start a new run later.', { ok: 'Stop the run', cancel: 'Keep it running', danger: true }))) return;
@@ -495,7 +558,8 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     if (needsStepUp(r) && await stepUp('Resuming a run that today\'s cap paused lets the team spend again.')) r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
     st.busy = false;
     // Kept apart from load errors, which the next load clears: a refused resume (today's cap is spent) must stay visible.
-    st.runError = r.ok || needsStepUp(r) ? null : r.data.error ?? `HTTP ${r.status}`;
+    st.runError = r.ok || needsStepUp(r) ? null : refusal(r);
+    st.raiseNote = null;
     await load();
   }
 
@@ -549,7 +613,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     out.textContent = 'Starting…';
     const r = await api('/v1/team/run/start', { key: newId() });
     // 409: a run is already going, today's cap is spent, or the team is not published. The control plane says which.
-    if (!r.ok) return fail(r.data.error ?? `HTTP ${r.status}`);
+    if (!r.ok) return fail(spent(r) ? `Today's budget is spent. Set a higher daily cap above to start now, or start after ${resetIn()}.` : r.data.error ?? `HTTP ${r.status}`);
     st.busy = false;
     $('#start-dialog', root).close();
     await load();
@@ -632,6 +696,12 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     const b = e.target.closest('button');
     if (!b) return;
     if (b.id === 'chat-older') return loadOlder();
+    if (b.id === 'run-raise') {
+      // Today's budget card raises the cap and resumes in one step-up: point to it while it is open.
+      const card = openBudgetCard();
+      if (card) { st.focus = { card: card.id }; return render(); }
+      return raiseCap();
+    }
     if (b.dataset.retry) { const p = st.pending.find((x) => x.clientId === b.dataset.retry); if (p) send(p); return; }
     if (b.dataset.card) answer(b.dataset.card, b.dataset.option);
   });
