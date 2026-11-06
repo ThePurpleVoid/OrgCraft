@@ -8,8 +8,9 @@
 // - PKCE is required for public clients (every client a deployment has) but not for the suite's confidential ones,
 //   because the Basic OP plan sends most requests without it. The plan's PKCE module still checks a valid S256 pair.
 // - Registered clients get the refresh_token grant by default, so the refresh rotation module runs.
-// - The Studio's /sign-in page is replaced by a redirect into the GitHub leg, and the stand-in GitHub signs in the
-//   owner at once, so the suite's browser needs no clicks.
+// - The Studio's /sign-in page is a one-button page here, and the stand-in GitHub signs the owner in at once, so the
+//   suite's browser clicks once per sign-in (and takes its screenshot there for prompt=login and max_age).
+// - Error pages are wrapped in HTML for the suite's browser.
 // - Rate limits key on each request: the suite is one caller making hundreds of requests (limits have unit tests).
 //
 // Env: OP_ISSUER (https://op.agent-team.test:3000), OP_GITHUB_URL (the stand-in GitHub as the suite's browser
@@ -40,17 +41,24 @@ const identity = await createIdentity({
     ...config,
     clientDefaults: { ...config.clientDefaults, grant_types: ['authorization_code', 'refresh_token'] },
     pkce: { ...config.pkce, required: (_ctx, client) => client.clientAuthMethod === 'none' },
-    features: { ...config.features, registration: { enabled: true } },
+    features: { ...config.features, registration: { enabled: true }, registrationManagement: { enabled: true } },
+    // The suite's browser reads pages as HTML; the deployment's error answer is the same text as plain text.
+    async renderError(ctx, out, error) {
+      await config.renderError(ctx, out, error);
+      ctx.type = 'text/html; charset=utf-8';
+      ctx.body = `<!doctype html><title>Sign-in failed</title><p id="error">${ctx.body}</p>`;
+    },
   }),
 });
 const handler = createHandler({ db, key, tenant: 'acme', adminToken: ADMIN, publicUrl: ISSUER, identity, stepUpVerifier: verifier });
 
 const server = createServer({ cert: readFileSync(process.env.OP_CERT), key: readFileSync(process.env.OP_KEY) }, (req, res) => {
   const url = new URL(req.url, ISSUER);
-  // The Studio's sign-in page, minus the page: straight into "Continue with GitHub".
-  if (url.pathname === '/sign-in' && url.searchParams.get('interaction')) {
-    res.writeHead(302, { location: `/oauth/interaction/${encodeURIComponent(url.searchParams.get('interaction'))}/github` });
-    return res.end();
+  // The Studio's sign-in page, reduced to its one button: "Continue with GitHub" (the suite's browser clicks it).
+  if (url.pathname === '/sign-in' && /^[A-Za-z0-9_-]{1,100}$/.test(url.searchParams.get('interaction') ?? '')) {
+    const go = `/oauth/interaction/${url.searchParams.get('interaction')}/github`;
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(`<!doctype html><title>Sign in</title><h1>Sign in to Agent Team</h1><a id="continue" href="${go}">Continue with GitHub</a>`);
   }
   return handler(req, res);
 });

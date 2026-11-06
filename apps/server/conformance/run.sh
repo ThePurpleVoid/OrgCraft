@@ -37,9 +37,13 @@ curl -skf https://localhost.emobix.co.uk:8443/api/runner/available >/dev/null
 
 python3 -m pip install --quiet --require-hashes -r "$here/requirements.txt"
 cd "$suite"
+status=0
 CONFORMANCE_SERVER=https://localhost.emobix.co.uk:8443/ CONFORMANCE_DEV_MODE=1 python3 scripts/run-test-plan.py \
   --expected-failures-file "$here/expected-failures.json" \
   --expected-skips-file "$here/expected-skips.json" \
   --export-dir "$work/results" --verbose \
   "oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=dynamic_client]" "$here/suite-config.json" \
-  "oidcc-config-certification-test-plan" "$here/suite-config.json"
+  "oidcc-config-certification-test-plan" "$here/suite-config.json" || status=$?
+# Why anything failed, in the job log (the export zips are also uploaded).
+python3 "$here/explain.py" "$work/results" || true
+exit "$status"

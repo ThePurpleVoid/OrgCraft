@@ -1,1 +1,29 @@
-[]
+[
+  {
+    "test-name": "oidcc-scope-profile",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "current-block": "",
+    "condition": "VerifyScopesReturnedInUserInfoClaims",
+    "expected-result": "warning",
+    "comment": "Feature not offered: the profile scope releases name and preferred_username only. The deployment holds no picture, birthdate, locale and so on (data minimisation, docs/specs/m4-sign-in.md)."
+  },
+  {
+    "test-name": "oidcc-claims-essential",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "current-block": "",
+    "condition": "EnsureUserInfoContainsName",
+    "expected-result": "warning",
+    "comment": "Feature not offered: the claims request parameter. Claims come from scopes only; the module asks for name through the claims parameter with scope openid alone."
+  },
+  {
+    "test-name": "oidcc-ensure-request-with-acr-values-succeeds",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "current-block": "Verify authorization endpoint response",
+    "condition": "ValidateIdTokenACRClaimAgainstAcrValuesRequest",
+    "expected-result": "warning",
+    "comment": "Feature not offered: acr values. Sign-in has one level (GitHub); step-up is a separate passkey check on /v1, not an acr."
+  }
+]

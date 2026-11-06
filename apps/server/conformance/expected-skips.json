@@ -1,1 +1,8 @@
-[]
+[
+  {
+    "test-name": "oidcc-idtoken-unsigned",
+    "variant": "*",
+    "configuration-filename": "*suite-config.json",
+    "comment": "Feature not offered: unsigned ID tokens (alg none). The issuer signs every ID token; the module skips itself when none is not advertised."
+  }
+]

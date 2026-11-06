@@ -4,18 +4,149 @@
   "server": {
     "discoveryUrl": "https://op.agent-team.test:3000/.well-known/openid-configuration"
   },
-  "client": { "client_name": "conformance-client-1" },
-  "client2": { "client_name": "conformance-client-2" },
+  "client": {
+    "client_name": "conformance-client-1"
+  },
+  "client2": {
+    "client_name": "conformance-client-2"
+  },
   "browser": [
     {
       "match": "https://op.agent-team.test:3000/oauth/authorize*",
       "tasks": [
         {
+          "task": "Sign in",
+          "optional": true,
+          "match": "https://op.agent-team.test:3000/sign-in*",
+          "commands": [
+            [
+              "click",
+              "id",
+              "continue"
+            ]
+          ]
+        },
+        {
           "task": "Verify Complete",
           "match": "*/test/*/callback*",
-          "commands": [["wait", "id", "submission_complete", 10]]
+          "commands": [
+            [
+              "wait",
+              "id",
+              "submission_complete",
+              10
+            ]
+          ]
         }
       ]
     }
-  ]
+  ],
+  "override": {
+    "oidcc-prompt-login": {
+      "browser": [
+        {
+          "match": "https://op.agent-team.test:3000/oauth/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://op.agent-team.test:3000/sign-in*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign in to Agent Team",
+                  "update-image-placeholder-optional"
+                ],
+                [
+                  "click",
+                  "id",
+                  "continue"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-max-age-1": {
+      "browser": [
+        {
+          "match": "https://op.agent-team.test:3000/oauth/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://op.agent-team.test:3000/sign-in*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign in to Agent Team",
+                  "update-image-placeholder-optional"
+                ],
+                [
+                  "click",
+                  "id",
+                  "continue"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-ensure-registered-redirect-uri": {
+      "browser": [
+        {
+          "comment": "expect an immediate error page",
+          "match": "https://op.agent-team.test:3000/oauth/authorize*",
+          "tasks": [
+            {
+              "task": "Expect the error page",
+              "match": "https://op.agent-team.test:3000/oauth/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign-in failed",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
 }
