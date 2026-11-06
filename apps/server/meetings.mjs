@@ -246,7 +246,7 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
     const { q } = ctx;
     for (;;) {
       const left = m.attendees.filter((r) => !m.done.includes(r));
-      if (!m.capped && m.turn >= m.attendees.length && m.round < m.rounds && left.length) {
+      if (!m.capped && !m.timed_out && m.turn >= m.attendees.length && m.round < m.rounds && left.length) {
         m = await save(q, m, { round: m.round + 1, turn: 0 });
         continue;
       }
