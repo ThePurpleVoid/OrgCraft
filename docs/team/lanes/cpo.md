@@ -332,7 +332,7 @@ What follows is the CPO's reading, labelled as mine.
 - **D51. Never an action in the email.** An approval email links to the card; approving needs the signed-in Studio and its step-up (O4). No email says "reply to approve". The verification code is the only thing a person types back.
 - **D52. Text from outside the team** (issue titles, PR titles, agent text) is shown in quotes and cut to 120 characters (architecture 12.3). Role names are shown as their titles ("Web dev"), not slugs.
 - **D53. Neutral words.** No email mentions branches, commits or CI; an approval's link opens the card, which shows those details for engineering teams.
-- **D54. The unsubscribe link turns off only that kind**, in one click with no sign-in, and lands on a confirmation page that offers "Turn it back on" and "Manage all emails" (the latter signs in). The address stays verified.
+- **D54. The unsubscribe link turns off only that kind**, with no sign-in. Opening the link only asks (mail scanners open links on their own); one press of "Turn off these emails" does it and lands on a confirmation page that offers "Turn it back on" and "Manage all emails" (the latter signs in). A mail client's own one-click unsubscribe (RFC 8058) turns it off directly. The address stays verified.
 
 ### Copy
 
@@ -388,6 +388,11 @@ Placeholders in braces are filled by the sink. `{team}` is the team's name, `{ro
 **Footer on every email except verification**
 > You get this because you turned on "{kind}" emails for {team}. [Turn off these emails]({unsubscribe_link}) · [Manage all emails]({settings_link})
 
+**Unsubscribe question page** (what the link opens)
+- Heading: `Stop "{kind}" emails for {team}?`
+- Text: `Other emails you turned on still arrive. Your address stays verified.`
+- Button: `Turn off these emails` · link `Keep getting them` (shows `Nothing changed. You still get these emails.`)
+
 **Unsubscribe confirmation page**
 - Heading: `You won't get "{kind}" emails for {team}`
 - Text: `Other emails you turned on still arrive. Your address stays verified.`
@@ -405,7 +410,7 @@ Placeholders in braces are filled by the sink. `{team}` is the team's name, `{ro
 1. Every template renders with real event data in under four body lines, one link, and the footer (D50); a test checks subject length and link count per kind.
 2. No template offers an action by reply; approval links expire in 24 hours and require sign-in plus step-up (D51).
 3. Outside text is quoted and cut to 120 characters; role titles, not slugs (D52).
-4. Unsubscribe turns off one kind for one team without sign-in, lands on the confirmation page, and "Turn it back on" works (D54).
+4. Opening the unsubscribe link changes nothing; pressing "Turn off these emails" turns off one kind for one team without sign-in, lands on the confirmation page, and "Turn it back on" works; the RFC 8058 POST turns it off directly (D54).
 5. Nothing is sent before verification and opt-in (D49); a code expires in 15 minutes.
 6. The CPO signs off the rendered emails from a test send of each kind (screenshots of the HTML and the plain-text part).
 

@@ -65,7 +65,7 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | `session.tool` | `tool`, `target` (path, command or MCP server and tool), `decision` (allowed, refused, needs-approval), `rule` |
 | `proposal.opened`, `proposal.updated`, `proposal.accepted`, `proposal.failed` | `connector` (for example `github`), `ref` (for a repository, the pull request number), `url`, `branch`, `headSha`, `approval` (on accepted and failed), `result` (the merge commit, on accepted), `reason` (on failed: head-moved, checks, conflict). Emitted by the runner, which proposes and accepts for its sessions (work contract `propose` and `accept`) |
 | `usage.recorded` | `inputTokens`, `outputTokens`, `cost` (in the currency's minor unit), `currency` |
-| `budget.warned`, `budget.exhausted` | `scope` (day, run), `day` (UTC date), `spent`, `cap` (minor units), `currency`, `cardId` (string: the budget card's id, on exhausted) |
+| `budget.warned` (at 80% of the day's cap), `budget.exhausted` | `scope` (day, run), `day` (UTC date), `spent`, `cap` (minor units), `currency`, `cardId` (string: the budget card's id, on exhausted) |
 | `budget.updated` | `currency`, `perDay`, `perRun` (minor units, or null), `sessions`, `by` (member): the team's caps after a change |
 
 ### Owner, chat and approvals
@@ -74,7 +74,7 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | --- | --- |
 | `chat.message` | `from` (member or role), `text` (verbatim for the owner; the dilution rule), `replyTo`, `attachments` (links), `clientId` (the id the client made, so a resend is stored once) |
 | `decision.requested`, `decision.answered` | `question`, `options`, `recommended`, `answer`, `by`, `cardId` (string), `session` (the session that asked, which the answer wakes) |
-| `approval.requested` | `action` (a classification from the policy), `command` or `call`, `why`, `risk`, `expires`, `cardId` (string), `session`, `pr` and `headSha` (for `accept`: the approval is for that exact head) |
+| `approval.requested` | `action` (a classification from the policy), `command` or `call`, `why`, `summary` and `recommendation` (optional, shown in the approval email), `risk`, `expires`, `cardId` (string), `session`, `pr` and `headSha` (for `accept`: the approval is for that exact head) |
 | `approval.decided` | `approval`, `decision` (approved, denied, expired, superseded: the head moved), `by` (member), `note`, `session`, `headSha` |
 | `card.updated` | `card` (object): the whole card at its new `version` ([clients.md](clients.md) section 6). Emitted on every change (created, answered, expired, superseded); a client keeps the latest per card id |
 
@@ -86,6 +86,7 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | `team.transition` | `from`, `to`, `items` (per in-flight item: role, choice, state). See ADR 0004 |
 | `connector.connected`, `connector.health`, `connector.revoked` | `connector`, `resource`, `status`, `detail` |
 | `notification.sent`, `notification.failed` | `channel`, `to` (member), `event` (the id it was about), `attempt` |
+| `meeting.minutes` | `meeting` (its name), `meetingId`, `date`, `decisions` (each `{ text }`), `actions`, `needsYou` (how many items need the owner). Emitted by the meeting's clerk when it publishes the minutes; the email sink sends it to people who switched on "Meeting minutes" |
 
 New types are added to this catalogue in the same PR that first emits them.
 

@@ -29,6 +29,7 @@ tags:
   - { name: chat }
   - { name: approvals }
   - { name: connectors }
+  - { name: notifications, description: "Email a person when something needs them (PRD 6.8): their own verified addresses, the kinds they chose, signed links" }
   - { name: runners, description: Registration. The runner protocol itself is runner-protocol.md }
   - { name: me, description: "The signed-in person across teams: inbox, summary, devices (clients.md)" }
 paths:
@@ -128,7 +129,7 @@ paths:
     post:
       x-min-role: admin
       tags: [connectors]
-      summary: Forward events to a URL, in order, at least once (kit-report keeps a board the team already runs working)
+      summary: Forward events to a URL, in order, at least once (kit-report keeps a board the team already runs working), or send them as email to opted-in people
       requestBody:
         required: true
         content:
@@ -137,8 +138,10 @@ paths:
               type: object
               required: [url]
               properties:
-                url: { type: string, format: uri, description: "https, or http to this machine" }
-                format: { enum: [kit-report, event], default: kit-report }
+                url: { type: string, format: uri, description: "https, or http to this machine (not for email)" }
+                format: { enum: [kit-report, event, email], default: kit-report, description: "email sends notification events to the people who opted in (PRD 6.8)" }
+                provider: { type: string, description: "email only: the provider id, such as resend" }
+                sender: { type: string, description: "email only: the From address" }
                 header: { type: string, description: "Header to send the secret in, such as x-team-token" }
                 secret: { type: string, description: "Name of a stored secret (PUT /secrets/{name})" }
                 from: { enum: [now, start], default: now }
@@ -146,6 +149,36 @@ paths:
   /teams/{team}/sinks/{sink}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: sink, in: path, required: true, schema: { type: string } } ]
     delete: { x-min-role: admin, tags: [connectors], summary: Stop forwarding, responses: { "200": { description: Removed } } }
+  /teams/{team}/emails:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { x-min-role: viewer, tags: [notifications], summary: "The caller's own email addresses for this team, and the kinds they can switch on", responses: { "200": { description: "{ kinds, emails }" } } }
+    post:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: Add an address for yourself; a 6-digit code is emailed to it (expires in 15 minutes). Nothing else is sent until it is verified and kinds are on
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } } }
+      responses: { "201": { description: "{ id, email, verified, sent, reason? }" }, "429": { description: A code was sent less than a minute ago } }
+  /teams/{team}/emails/{email}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: email, in: path, required: true, schema: { type: string } } ]
+    patch:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: Choose the kinds to email (approval, budget80, budget100, blocked, minutes); the address must be verified
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes] } } } } } } }
+      responses: { "200": { description: The address }, "409": { description: Not verified yet } }
+    delete: { x-min-role: viewer, tags: [notifications], summary: Remove the address, responses: { "200": { description: Removed } } }
+  /teams/{team}/emails/{email}/verify:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: email, in: path, required: true, schema: { type: string } } ]
+    post:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: Verify the address with the emailed code (5 tries)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code], properties: { code: { type: string, pattern: "^[0-9]{6}$" } } } } } }
+      responses: { "200": { description: Verified }, "400": { description: Wrong code }, "410": { description: Expired or out of tries } }
+  /email/{action}:
+    parameters: [ { name: action, in: path, required: true, schema: { enum: [link, unsubscribe, resubscribe] } }, { name: t, in: query, required: true, schema: { type: string } } ]
+    get: { tags: [notifications], security: [], summary: "No sign-in, the signed token is the proof. link: redirects into the Studio until it expires (approvals 24 hours, others 7 days). unsubscribe: shows a page asking to turn off one kind for one team (the button POSTs)", responses: { "200": { description: A page }, "302": { description: Into the Studio }, "410": { description: The link expired } } }
+    post: { tags: [notifications], security: [], summary: "unsubscribe: turns off one kind for one team (also RFC 8058 one-click); resubscribe: Turn it back on", responses: { "200": { description: A page } } }
   /secrets:
     get: { x-min-role: admin, tags: [connectors], summary: Secret names and when they changed (never values), responses: { "200": { description: Names } } }
   /secrets/{name}:

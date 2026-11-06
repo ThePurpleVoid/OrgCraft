@@ -22,6 +22,7 @@ import { createBus } from './bus.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
+import { PROVIDERS, createEmail, page } from './email.mjs';
 
 /** The bus hears every stored event (deliveries) and run and approval changes (stops, results). */
 function wireBus(m3, bus) {
@@ -68,6 +69,8 @@ function readRaw(req, limit = MAX_BODY) {
     req.on('error', reject);
   });
 }
+
+const readText = async (req, limit) => (await readRaw(req, limit)).toString('utf8');
 
 async function readJson(req, limit) {
   if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new Problem(415, 'send JSON (content-type: application/json)');
@@ -121,12 +124,15 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {} }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
   const passkeys = identity ? createPasskeys({ db, m3, origin: identity.origin, now }) : null;
   const members = identity ? createMembers({ db, lookup: identity.lookup, endSessions: (p) => identity.endSessions(p), requireStepUp: passkeys.requireStepUp, now }) : null;
+  const emailProviders = emailOpts.providers ?? PROVIDERS;
+  const email = createEmail({ db, key, publicUrl, providers: emailProviders, readSecret: store.readSecret, now, fetch: emailOpts.fetch ?? fetch });
+  const studioUrl = String(emailOpts.studioUrl ?? publicUrl ?? '').replace(/\/+$/, '');
   let tickMisses = [];
   const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl });
   if (!givenBus) wireBus(m3, bus);
@@ -289,6 +295,9 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
 
     if (a === 'health' && m === 'GET') return send(res, 200, { ok: true, db: db.kind });
 
+    // Email links (no sign-in): the signed token is the proof. Unsubscribe turns off one kind for one team (D54).
+    if (a === 'email' && !b) return emailPage(req, res, url, team);
+
     // The kit's reports: the same body and answer as the hosted board, so only TEAM_REPORT_URL changes.
     if (a === 'teams' && b === 'reports' && !c && m === 'POST') {
       const t = await store.authReport(db, team, req.headers['x-team-token']);
@@ -389,6 +398,39 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}) })) };
   }
 
+  const html = (res, status, body, headers = {}) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'", ...headers }); res.end(body); };
+  async function emailPage(req, res, url, what) {
+    const t = url.searchParams.get('t') ?? '';
+    const m = req.method;
+    if (what === 'link' && m === 'GET') {
+      const target = email.linkTarget(t);
+      if (!target) return html(res, 400, page('This link is not valid', ['Open the Studio and find the item there.']));
+      if (target.expired) return html(res, 410, page('This link has expired', ['Links in team emails expire. Open the Studio and find the item there.'], studioUrl ? [{ label: 'Open the Studio', href: studioUrl + '/' }] : []));
+      res.writeHead(302, { location: studioUrl + target.path, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+      return res.end();
+    }
+    if ((what === 'unsubscribe' || what === 'resubscribe') && (m === 'GET' || m === 'POST')) {
+      const on = what === 'resubscribe';
+      if (on && m !== 'POST') return html(res, 405, page('Use the button', ['Turn the emails back on with the button on the confirmation page.']), { allow: 'POST' });
+      // A GET only asks: mail scanners open links, and must not turn emails off (security review). The button POSTs.
+      if (m === 'GET') {
+        const p = await email.peekToken(t);
+        if (!p) return html(res, 400, page('This link is not valid', ['Manage your emails in the Studio.']));
+        if (url.searchParams.get('keep') === '1') return html(res, 200, page('Nothing changed', ['You still get these emails.']));
+        return html(res, 200, page(`Stop "${p.label}" emails for ${p.teamName}?`, ['Other emails you turned on still arrive. Your address stays verified.'],
+          [{ label: 'Turn off these emails', href: `/v1/email/unsubscribe?t=${encodeURIComponent(t)}`, post: true }, { label: 'Keep getting them', href: `/v1/email/unsubscribe?t=${encodeURIComponent(t)}&keep=1`, secondary: true }]));
+      }
+      const r = await email.fromToken(t, on);
+      if (!r) return html(res, 400, page('This link is not valid', ['Manage your emails in the Studio.']));
+      // A mail client's one-click unsubscribe (RFC 8058) only needs a 200.
+      if (!on && m === 'POST' && /List-Unsubscribe=One-Click/.test(await readText(req, 1024))) return html(res, 200, page('Unsubscribed', []));
+      const settings = studioUrl ? [{ label: 'Manage all emails', href: `${studioUrl}/teams/${encodeURIComponent(r.team)}/notifications`, secondary: true }] : [];
+      if (on) return html(res, 200, page(`You will get "${r.label}" emails for ${r.teamName} again`, ['Other emails you turned on still arrive.'], [{ label: 'Turn them off', href: `/v1/email/unsubscribe?t=${encodeURIComponent(t)}`, post: true, secondary: true }, ...settings]));
+      return html(res, 200, page(`You won't get "${r.label}" emails for ${r.teamName}`, ['Other emails you turned on still arrive. Your address stays verified.'], [{ label: 'Turn it back on', href: `/v1/email/resubscribe?t=${encodeURIComponent(t)}`, post: true }, ...settings]));
+    }
+    throw new Problem(404, 'not found');
+  }
+
   async function personRoute(req, res, who, url, parts) {
     const m = req.method;
     const stepUp = req.headers['x-step-up'] ?? null;
@@ -477,7 +519,16 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       }
       if (b === 'report-tokens' && c && m === 'DELETE') { await store.revokeReportToken(db, t, team, c); return send(res, 200, { ok: true }); }
       if (b === 'sinks' && !c && m === 'GET') return send(res, 200, { sinks: await store.listSinks(db, t, team) });
-      if (b === 'sinks' && !c && m === 'POST') { const s = await store.addSink(db, t, team, (await readJson(req, 16 * 1024)) ?? {}); sinks?.wake(); return send(res, 201, s); }
+      if (b === 'sinks' && !c && m === 'POST') { const s = await store.addSink(db, t, team, (await readJson(req, 16 * 1024)) ?? {}, { providers: Object.keys(emailProviders) }); sinks?.wake(); return send(res, 201, s); }
+      // A person's own email addresses for this team (PRD 6.8 O7): add, verify with a code, choose kinds, remove.
+      if (b === 'emails') {
+        const d = parts[5];
+        if (!c && m === 'GET') return send(res, 200, await email.list(t, team, me));
+        if (!c && m === 'POST') return send(res, 201, await email.add(t, team, me, await readJson(req, 4 * 1024)));
+        if (c && d === 'verify' && m === 'POST') return send(res, 200, await email.verify(t, team, me, c, await readJson(req, 4 * 1024)));
+        if (c && !d && m === 'PATCH') return send(res, 200, await email.setKinds(t, team, me, c, await readJson(req, 4 * 1024)));
+        if (c && !d && m === 'DELETE') return send(res, 200, await email.remove(t, team, me, c));
+      }
       if (b === 'sinks' && c && m === 'DELETE') { await store.removeSink(db, t, team, c); return send(res, 200, { ok: true }); }
     }
     if (members && a === 'members' && !b) {

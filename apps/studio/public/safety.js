@@ -195,3 +195,135 @@ export function revert(spec, published, item) {
     spec.resources.bindings = [...(spec.resources.bindings ?? []).filter((b) => !(b.role === item.role && b.resource === resource)), ...(was ? [clone(was)] : [])];
   }
 }
+
+// ------------------------------------------------------------------------------------------------ the impact step
+// Criteria 8 to 11: in Publish, between the checks and the file review. Every item has a recommended choice, nothing
+// here blocks Publish (D15), and the chosen plan goes into the commit message only (D12), never a file.
+
+/** The words for a choice, with the PR named only when the work has one (D18). */
+export function choiceLabel(id, item) {
+  const pr = item?.inFlight?.pr;
+  return ({
+    finish: 'Let it finish its current task first',
+    handoff: 'Hand the work off now',
+    pause: 'Pause the work',
+    'move-after-merge': pr ? `Move the area after PR #${pr} merges` : 'Move the area after the current work is done',
+    'move-and-handover': 'Move the area now and hand the files over',
+  })[id] ?? id;
+}
+
+/** The role a hand-off goes to by default (criterion 10): the area's new owner, else the role's manager, if on. */
+export function defaultTarget(item, spec, on, managerOf = null) {
+  const ok = (slug) => slug && slug !== item.role && on.some((r) => r.slug === slug);
+  if (item.kind === 'path-moved') {
+    const path = item.id.split(':').slice(2).join(':');
+    const to = (spec.ownership?.rows ?? []).find((r) => r.path === path)?.writer;
+    if (ok(to)) return to;
+  }
+  // A kit role has no brief in the spec: the caller's managerOf reads the resolved one (QA on #103).
+  const brief = spec.roles[item.role]?.brief ?? '';
+  const mgr = managerOf?.(item.role) || (fieldRe('Reports to').exec(brief)?.[1] ?? spec.roles[item.role]?.extension?.fields?.find((f) => f.name === 'Reports to')?.value ?? '').split(/\s/)[0]?.toLowerCase();
+  if (ok(mgr)) return mgr;
+  return on.find((r) => r.slug !== item.role)?.slug ?? '';
+}
+
+/** Each item that asks for a choice gets its recommendation, and a hand-off target where one can be needed. */
+export function recommendations(items, spec, on, managerOf = null) {
+  const out = new Map();
+  for (const i of items) if (i.severity !== 'safe') out.set(i.id, { choice: i.recommended, target: i.choices.includes('handoff') || i.choices.includes('move-and-handover') ? defaultTarget(i, spec, on, managerOf) : '' });
+  return out;
+}
+
+const needsTarget = (choice) => choice === 'handoff' || choice === 'move-and-handover';
+
+/** The impact step's HTML. `picks` maps item id to { choice, target }; `on` lists the roles on in the draft. */
+export function impactHtml({ items, picks, on, titleOf, board, newest, spec, roles, dispatcher = '' }) {
+  const asks = items.filter((i) => i.severity !== 'safe');
+  const safe = items.filter((i) => i.severity === 'safe');
+  if (!asks.length && !safe.length) return '';
+  const groups = new Map();
+  for (const i of asks) groups.set(i.role, [...(groups.get(i.role) ?? []), i]);
+  const targetSelect = (i, p) => `<label class="target">To <select data-target="${esc(i.id)}" aria-label="Hand ${esc(titleOf(i.role))}'s work to">
+    ${on.filter((r) => r.slug !== i.role).map((r) => `<option value="${esc(r.slug)}"${r.slug === p.target ? ' selected' : ''}>${esc(r.title)}</option>`).join('')}</select></label>`;
+  const itemHtml = (i) => {
+    const p = picks.get(i.id) ?? { choice: i.recommended, target: '' };
+    return `<fieldset class="impact-item" data-item="${esc(i.id)}"><legend>${esc(reasonOf(i).replace(/^./, (c) => c.toUpperCase()))}</legend>
+      ${i.choices.map((c) => `<label class="choice"><input type="radio" name="pick-${esc(i.id)}" value="${esc(c)}" data-pick="${esc(i.id)}"${c === p.choice ? ' checked' : ''}> ${esc(choiceLabel(c, i))}${c === i.recommended ? ' <span class="muted">(recommended)</span>' : ''}</label>${c === p.choice && needsTarget(c) ? targetSelect(i, p) : ''}`).join('')}
+      ${p.choice === 'move-after-merge' ? '<p class="hint">The published files keep the current writer until you publish again after that. The checks panel reminds you.</p>' : ''}
+    </fieldset>`;
+  };
+  return `<section class="impact" aria-labelledby="impact-title">
+    <div class="row impact-head"><h3 id="impact-title">Work in progress</h3>${asks.length ? '<button type="button" id="impact-recommend">Use the recommendations</button>' : ''}</div>
+    ${asks.length ? `<p class="muted">Nothing stops or restarts now. ${esc(carriedBy(dispatcher))}</p>` : ''}
+    ${[...groups].map(([slug, list]) => `<div class="impact-role"><h4>${esc(titleOf(slug))}</h4><ul class="plain">${inFlightList(rowOf(board, slug), spec, roles, slug).map((l) => `<li>${l}</li>`).join('')}</ul>${list.map(itemHtml).join('')}</div>`).join('')}
+    ${safe.length ? `<details class="impact-safe"${asks.length ? '' : ' open'}><summary>Applies at each role's next task (${safe.length})</summary><ul>${safe.map((i) => `<li>${esc(i.detail)}</li>`).join('')}</ul></details>` : ''}
+    <p class="hint">${esc(staleNote(newest))}</p>
+  </section>`;
+}
+
+/** The plan for the commit message (criterion 9): one line per item that asked for a choice. '' when there is none. */
+/** Who carries the plan out: the role that takes the owner's requests when the team has one (CPO copy review of #103). */
+export const carriedBy = (dispatcher) => `${dispatcher ? `${dispatcher.replace(/^./, (c) => c.toUpperCase())} carries` : 'The team carries'} these out when this change is merged.`;
+
+/** The reason as it reads once published (no "in this draft"): "Switched off", "Area web/ moved from a to b". */
+export function doneReason(item) {
+  if (item.kind === 'path-moved' || item.kind === 'path-removed') return `Area ${item.detail.replace(/ moves /, ' moved ').replace(/ no longer has /, ' no longer has ')}`;
+  return ({
+    'role-off': 'Switched off', 'role-removed': 'Removed', 'role-dormant': 'Made dormant', brief: 'Rules changed', tier: 'Tier changed',
+    'reports-to': 'Reports elsewhere', 'binding-removed': 'System removed', 'binding-narrowed': 'System access narrowed',
+  })[item.kind] ?? 'Changed';
+}
+
+export function planText(items, picks, titleOf, dispatcher = '') {
+  const lines = items.filter((i) => i.severity !== 'safe').map((i) => {
+    const p = picks.get(i.id) ?? { choice: i.recommended, target: '' };
+    const w = i.inFlight;
+    const work = w ? [w.task || 'current work', w.branch ? `branch ${w.branch}` : '', w.pr ? `PR #${w.pr}` : ''].filter(Boolean).join(', ') : 'current work';
+    const what = doneReason(i);
+    return `- ${titleOf(i.role)} (${i.role}): ${work}. ${what}: ${choiceLabel(p.choice, i).replace(/^./, (c) => c.toLowerCase())}${needsTarget(p.choice) && p.target ? `, to ${p.target}` : ''}.`;
+  });
+  return lines.length ? `Work in progress\n\n${lines.join('\n')}\n\n${carriedBy(dispatcher)} Based on board reports; may be out of date.` : '';
+}
+
+/**
+ * What is published (criterion 11): the draft, except that an area set to move after its open work merges keeps its
+ * current writer in the files, so there are never two writers. Returns { spec, deferred: [{ path, from, to }] }.
+ */
+export function publishable(draft, published, items, picks) {
+  const out = clone(draft);
+  const deferred = [];
+  for (const i of items) {
+    if (i.kind !== 'path-moved' || (picks.get(i.id)?.choice ?? i.recommended) !== 'move-after-merge' || i.severity === 'safe') continue;
+    const path = i.id.split(':').slice(2).join(':');
+    deferred.push({ path, from: i.role, to: (draft.ownership?.rows ?? []).find((r) => r.path === path)?.writer ?? '', pr: i.inFlight?.pr ?? null, owns: ownsAround(draft, path) });
+    revert(out, published, i);
+  }
+  return { spec: out, deferred };
+}
+
+const overlaps = (a, b) => { const n = (x) => x.replace(/\*+$/, ''); return n(a).startsWith(n(b)) || n(b).startsWith(n(a)); };
+
+/** Every custom brief's Owns lines that touch `path`, as the draft has them: { slug: [{ path, mode, note }] }. */
+function ownsAround(spec, path) {
+  const out = {};
+  for (const [slug, r] of Object.entries(spec.roles)) if (r.brief !== undefined) out[slug] = ownsPaths(r.brief).paths.filter((x) => overlaps(x.path, path));
+  return out;
+}
+
+/**
+ * Puts a deferred move back into a draft that was read from disk (after a reload or a restart, the draft is the
+ * published team, which keeps the old writer): the ownership row and the Owns lines the draft had when it was
+ * published. Code review of #103. Returns true when it changed the draft.
+ */
+export function reapplyFollowUp(spec, f) {
+  const row = (spec.ownership?.rows ?? []).find((r) => r.path === f.path);
+  if (!row || row.writer !== f.from || !spec.roles[f.to]) return false;
+  row.writer = f.to;
+  for (const [slug, lines] of Object.entries(f.owns ?? {})) {
+    const r = spec.roles[slug];
+    if (r?.brief === undefined) continue;
+    const now = ownsPaths(r.brief);
+    r.brief = setOwnsPaths(r.brief, [...now.paths.filter((x) => !overlaps(x.path, f.path)), ...lines], now.prose);
+  }
+  return true;
+}
