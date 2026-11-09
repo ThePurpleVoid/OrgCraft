@@ -738,3 +738,5 @@
 .ats #recovery table.recovery th, .ats #recovery table.recovery td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .ats #recovery tr.pending td { color: var(--muted); }
 @media (max-width: 640px) { .ats #recovery button, .ats #recovery select, .ats .recovery-banner .button { min-height: 44px; } }
+/* qa-web L27w: 44 px targets on the account page at phone width. */
+@media (max-width: 640px) { .ats #account button, .ats .auth-dialog button, .ats .auth-brand a { min-height: 44px; } .ats .auth-brand a { display: inline-flex; align-items: center; } }

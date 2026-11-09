@@ -150,7 +150,9 @@ export const orgName = (me) => (me?.workspaces ?? []).find((w) => w.name)?.name 
 /** The "only you can recover" banner, when the list says fewer than two count. '' otherwise. */
 export function recoveryBanner(rec, me) {
   if (!rec?.warnings?.some((w) => w.code === 'fewer-than-two')) return '';
-  return `<div class="notice recovery-banner" role="status"><p>${esc(t('recovery.banner.one', { organization: orgName(me) }))}</p><p><a class="button" href="/account#recovery">${esc(t('recovery.add'))}</a></p></div>`;
+  // Nobody counts (qa-web L27w): "Only you can recover" would be false, so say nobody can.
+  const none = !(rec.owners ?? []).some((o) => o.counts);
+  return `<div class="notice recovery-banner" role="status"><p>${esc(t(none ? 'recovery.banner.none' : 'recovery.banner.one', { organization: orgName(me) }))}</p><p><a class="button" href="/account#recovery">${esc(t('recovery.add'))}</a></p></div>`;
 }
 
 /** Recovery owners for an admin or owner, or null (a member who is neither, or no recovery here). */
@@ -207,7 +209,7 @@ export function stepUpDialog(why, { doc = document, scope = null } = {}) {
   dlg.querySelector('.result').textContent = '';
   return new Promise((done) => {
     const go = dlg.querySelector('[data-act="go"]');
-    const finish = (v) => { dlg.oncancel = null; go.onclick = null; dlg.querySelector('[data-act="cancel"]').onclick = null; if (dlg.open) dlg.close(); done(v); };
+    const finish = (v) => { dlg.oncancel = null; go.onclick = null; dlg.querySelector('[data-act="cancel"]').onclick = null; if (dlg.open) dlg.close(); dlg.querySelector('.why').textContent = ''; done(v); };
     go.onclick = async () => {
       go.disabled = true;
       dlg.querySelector('.result').textContent = '';

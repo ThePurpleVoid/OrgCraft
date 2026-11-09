@@ -8,6 +8,8 @@ const PENDING = {
   'nav.meetings': 'Meetings',
   // L27: the account page's Security heading (B3 named the tab Security), asked of the CPO.
   'security.title': 'Security',
+  // qa-web L27w: the pending row names the person once (asked of the CPO).
+  'recovery.pending.cell': 'Counts from {time}',
 };
 
 export function t(key, vars = {}) {

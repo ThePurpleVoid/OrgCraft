@@ -14,16 +14,19 @@ let rec = null; // GET /v1/recovery for an owner or admin (L27)
 let owners = []; // the workspace's owners, who can be named (GET /v1/members)
 let recNote = null; // { kind, text }
 
+/** A role in the CPO's words (role.*); anything unknown is "Limited access", never the raw value. */
+export const roleWord = (role) => (['owner', 'admin', 'approver', 'editor', 'viewer', 'member'].includes(role) ? t(`role.${role}`) : t('role.unknown'));
 const fmt = (t) => (t ? new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '');
 
 function render() {
-  const ws = (me.workspaces ?? []).map((w) => `<li>${esc(w.name ?? w.tenant)} <span class="pill">${esc(w.role)}</span></li>`).join('');
+  const ws = (me.workspaces ?? []).map((w) => `<li>${esc(w.name ?? w.tenant)} <span class="pill">${esc(roleWord(w.role))}</span></li>`).join('');
   const rows = keys.map((k) => `<li class="passkey row"><span><strong>${esc(k.name || 'Passkey')}</strong> <span class="muted">added ${esc(fmt(k.createdAt))}${k.lastUsed ? `, last used ${esc(fmt(k.lastUsed))}` : ''}</span></span><button type="button" class="danger" data-remove="${esc(k.id)}">Remove</button></li>`).join('');
   root.innerHTML = `
     ${noticesBanner(me)}
     ${recoveryBanner(rec, me)}
     <p>Signed in as <strong>${esc(me.name || me.login)}</strong>${me.name && me.login ? ` <span class="muted">(${esc(me.login)} on GitHub)</span>` : ''}.</p>
-    <h2>Workspaces</h2>
+    <h2>${esc(t('account.orgs.heading'))}</h2>
+    <p class="muted">${esc(t('account.orgs.intro'))}</p>
     ${ws ? `<ul class="plain">${ws}</ul>` : '<p class="muted">None yet.</p>'}
     <h2>Passkeys</h2>
     ${keys.length ? '' : '<p class="notice" role="status">Add a passkey before you can approve anything. It takes a few seconds.</p>'}
@@ -42,9 +45,9 @@ export function recoveryHtml(r = rec, list = owners, self = me, n = recNote) {
   const when = (iso) => new Date(iso).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   const rows = r.owners.map((o) => {
     const pending = o.why === 'pending';
-    const since = pending ? t('recovery.pending', { person: o.name, time: when(o.effectiveAt) }) : fmt(o.effectiveAt);
-    const act = isOwner ? `<button type="button" data-rec-remove="${esc(o.person)}" data-name="${esc(o.name)}">${esc(t(pending ? 'recovery.cancel' : 'recovery.remove'))}</button>` : '';
-    return `<tr${pending ? ' class="pending"' : ''}><td>${esc(o.name)}</td><td>${esc(since)}</td><td>${o.methods.includes('passkey') ? '✓' : '–'}</td><td>${act}</td></tr>`;
+    const since = pending ? t('recovery.pending.cell', { time: when(o.effectiveAt) }) : fmt(o.effectiveAt);
+    const act = isOwner ? `<button type="button" data-rec-remove="${esc(o.person)}" data-name="${esc(o.name)}"${pending ? ' data-pending="1"' : ''}>${esc(t(pending ? 'recovery.cancel' : 'recovery.remove'))}</button>` : '';
+    return `<tr${pending ? ' class="pending"' : ''}><td>${esc(o.name)}</td><td>${esc(since)}</td><td>${o.methods.includes('passkey') ? `<span aria-hidden="true">✓</span><span class="sr-only">${esc(t('recovery.passkey.yes'))}</span>` : `<span aria-hidden="true">–</span><span class="sr-only">${esc(t('recovery.passkey.no'))}</span>`}</td><td>${act}</td></tr>`;
   }).join('');
   const warn = r.warnings.filter((w) => w.code !== 'fewer-than-two').map((w) => {
     const name = r.owners.find((o) => o.person === w.person)?.name ?? '';
@@ -64,11 +67,45 @@ export function recoveryHtml(r = rec, list = owners, self = me, n = recNote) {
   </section>`;
 }
 
+/** True when `person` is the only recovery owner who counts or is on the way: removing them leaves nobody. */
+export function lastOwner(r, person) {
+  const live = (r?.owners ?? []).filter((o) => o.why !== 'pending');
+  return live.length <= 1 && live.some((o) => o.person === person);
+}
+
+/** The last-owner warning, before any passkey (qa-web L27w round 1). Resolves true for "Remove anyway". */
+function confirmLast(name) {
+  let d = document.getElementById('recovery-last');
+  if (!d) {
+    d = document.createElement('dialog');
+    d.id = 'recovery-last';
+    d.className = 'auth-dialog';
+    d.setAttribute('aria-labelledby', 'recovery-last-text');
+    d.innerHTML = `<form class="dialog" method="dialog"><p id="recovery-last-text"></p><div class="dialog-actions"><button type="button" data-act="keep">${esc(t('recovery.cancel'))}</button><button type="button" class="danger" data-act="go">${esc(t('recovery.remove.last.confirm'))}</button></div></form>`;
+    document.body.append(d);
+  }
+  d.querySelector('#recovery-last-text').textContent = t('recovery.remove.last', { person: name, organization: orgName(me) });
+  return new Promise((done) => {
+    const finish = (v) => { d.oncancel = null; d.querySelector('[data-act="go"]').onclick = null; d.querySelector('[data-act="keep"]').onclick = null; if (d.open) d.close(); done(v); };
+    d.querySelector('[data-act="go"]').onclick = () => finish(true);
+    d.querySelector('[data-act="keep"]').onclick = () => finish(false);
+    d.oncancel = (e) => { e.preventDefault(); finish(false); };
+    d.showModal();
+    d.querySelector('[data-act="keep"]').focus();
+  });
+}
+
+/** A refused DELETE /v1/recovery/{person}: the last-owner rule in its own words, anything else says nothing changed. */
+function removeRefusal(r) {
+  if (r.data?.type === 'last-owner') return t('recovery.failed', { organization: orgName(me) });
+  return r.status ? t('recovery.failed.generic') : t('notify.failed');
+}
+
 /** The refusals of POST /v1/recovery in the CPO's words (409 types not-owner, no-passkey); others say it failed. */
 function recoveryRefusal(r, name) {
   if (r.data?.type === 'not-owner') return t('recovery.warn.notowner', { person: name });
   if (r.data?.type === 'no-passkey') return t('recovery.warn.nopasskey', { person: name });
-  return t('notify.failed');
+  return r.status ? t('recovery.failed.generic') : t('notify.failed');
 }
 
 async function load() {
@@ -137,9 +174,11 @@ root.addEventListener('click', async (e) => {
   if (!b) return;
   if (b.dataset.recRemove) {
     const name = b.dataset.name;
-    const r = await withStepUp(t('stepup.action.recovery.remove', { person: name }), 'DELETE', `/v1/recovery/${encodeURIComponent(b.dataset.recRemove)}`);
+    const pending = !!b.dataset.pending;
+    if (!pending && lastOwner(rec, b.dataset.recRemove) && !(await confirmLast(name))) return b.focus();
+    const r = await withStepUp(t(pending ? 'stepup.action.recovery.cancel' : 'stepup.action.recovery.remove', { person: name }), 'DELETE', `/v1/recovery/${encodeURIComponent(b.dataset.recRemove)}`);
     if (r.cancelled) return;
-    recNote = r.ok ? null : { kind: 'error', text: t('notify.failed') };
+    recNote = r.ok ? null : { kind: 'error', text: removeRefusal(r) };
     return load();
   }
   if (b.id === 'notices-ok') { dismissNotices(me); return render(); }
