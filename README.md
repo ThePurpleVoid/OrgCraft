@@ -39,7 +39,7 @@ cd ~/code/my-app
 npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 init --preset engineering --project "My App" --owner "Sam"
 ```
 
-That writes the role briefs, protocols and scripts into your repository. Nothing runs in the background, and nothing is sent anywhere. Then open your coding agent and say: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."* Install from npm comes next (`npx orgcraft@latest init`).
+That writes the role briefs, protocols and scripts into your repository. Nothing runs in the background, and nothing is sent anywhere. Then open your coding agent and say: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."* Install from npm comes later.
 
 The full setup is in [Getting started](docs/getting-started.md). It covers presets, templates, the dashboard, the Studio, the control plane and the runner.
 
