@@ -12,9 +12,11 @@ import { personActor } from './m3.mjs';
 import { boundCalls, redact } from './signed.mjs';
 import { createMeetings } from './meetings.mjs';
 import { canWork } from './deployment.mjs';
+import { localDay, nextDay } from './budget-day.mjs';
 import { checkIoRefs, ingestStepIo, projectTask, purgeIo } from './inspector.mjs';
 import { memberHeld } from './live.mjs';
 import { resolveTo } from './routing.mjs';
+import { createCaps } from './caps.mjs';
 
 /** How a message's `to` was resolved (section 5.3), on its event: only when it was not already a member id. */
 const routedFields = (r) => (!r ? {} : { ...(r.how !== 'id' ? { toAsked: r.asked, routedBy: r.how } : {}), ...(r.offWiring ? { offWiring: true } : {}) });
@@ -29,12 +31,12 @@ const RUNNER_MAY_SEND = (type) => /^session\./.test(type) || ['usage.recorded', 
 const TOOL_EVENT = { report: 'report.status', handoff: 'message.handoff', bug: 'message.bug', signoff: 'message.signoff', blocked: 'message.blocked' };
 const SESSION_STATE = { 'session.started': 'running', 'session.idle': 'idle', 'session.ended': 'ended' };
 
-const utcDay = (d) => d.toISOString().slice(0, 10);
 const backoff = (attempts) => BACKOFF[Math.min(Math.max(attempts - 1, 0), BACKOFF.length - 1)];
 
 export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null, triggers = null }) {
   const reg = () => (typeof runners === 'function' ? runners() : runners);
   const meetings = createMeetings({ db, m3, publicUrl, ...(meetingTurnMinutes ? { turnMinutes: meetingTurnMinutes } : {}) });
+  const caps = createCaps({ db, getTeam: async () => {}, now });
   const toolsUrl = () => String(publicUrl || '').replace(/\/+$/, '');
 
   // ---- What wakes whom ----------------------------------------------------------------------------------------------
@@ -84,6 +86,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     if (triggers) await triggers.project(ctx, event);
     if (SESSION_STATE[event.type] && event.actor?.session) {
       await q('update sessions set state = $2, last_seen = now() where id = $1 and state <> $2', [event.actor.session, SESSION_STATE[event.type]]);
+      // A session at rest holds no money: its spend lease ends when it goes idle or ends (R4); the next turn asks again.
+      if (event.type === 'session.ended' || event.type === 'session.idle') await caps.release(q, event.actor.session, ctx.now);
       if (event.type === 'session.ended') ctx.after.push(() => startQueued(ctx.tenant, event.team));
     }
     if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided', 'meeting.turn', 'trigger.fired'].includes(event.type)) return;
@@ -101,8 +105,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   const sessionCap = (run, budget) => Math.min(budget?.sessions ?? 3, Number.isSafeInteger(run.caps?.sessions) ? run.caps.sessions : Infinity);
 
   async function remaining(q, run) {
-    const [b] = await q('select per_day, per_run, sessions from budgets where team = (select team from runs where id = $1)', [run.id]);
-    const [d] = await q('select spent, raised, exhausted_at from budget_days where team = (select team from runs where id = $1) and day = $2::date', [run.id, utcDay(now())]);
+    const [b] = await q('select per_day, per_run, sessions, time_zone from budgets where team = (select team from runs where id = $1)', [run.id]);
+    const [d] = await q('select spent, raised, exhausted_at from budget_days where team = (select team from runs where id = $1) and day = $2::date', [run.id, localDay(now(), b?.time_zone ?? 'UTC')]);
     const [{ spent: runSpent }] = await q(`select coalesce(sum(case when jsonb_typeof(envelope->'data'->'cost') = 'number' then (envelope->'data'->>'cost')::numeric else 0 end), 0) as spent
                                            from events where type = 'usage.recorded' and envelope->>'run' = $1`, [run.id]);
     const perDay = b?.per_day === null || b?.per_day === undefined ? null : Number(b.per_day) + Number(d?.raised ?? 0);
@@ -110,7 +114,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     return {
       budget: b ? { sessions: Number(b.sessions) } : null,
       exhausted: Boolean(d?.exhausted_at),
-      remainingToday: perDay === null ? null : Math.max(perDay - Number(d?.spent ?? 0), 0),
+      // What open spend leases hold counts as spent (R4), so a new session is not promised money already given out.
+      remainingToday: perDay === null ? null : Math.max(perDay - Number(d?.spent ?? 0) - (await caps.held(q, run.team, localDay(now(), b?.time_zone ?? 'UTC'), { at: now() })), 0),
       remainingRun: perRun === Infinity ? null : Math.max(perRun - Math.round(Number(runSpent)), 0),
     };
   }
@@ -549,6 +554,19 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       return result;
     },
 
+    /**
+     * A spend lease before the session spends (R4): an amount from what is left today and on its run, for a few
+     * minutes. The ack is { lease, amount, currency, day, expiresAt, remainingToday }, or { amount: 0, reason }.
+     */
+    async 'spend.lease'(conn, body) {
+      const { result } = await m3.tx(conn.tenant, async (ctx) => {
+        const sess = await ownSession(ctx.q, conn, body?.session);
+        if (!LIVE.includes(sess.state)) throw new Problem(409, `session ${sess.id} is ${sess.state}`);
+        return caps.lease(ctx, sess, body?.amount);
+      });
+      return result;
+    },
+
     /** A tool call's input or output, or a turn's own text, for the run inspector (N1): stored outside the log. */
     async 'step.io'(conn, body) {
       return db.tenant(conn.tenant, async ({ q }) => {
@@ -691,10 +709,14 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   }
 
   async function rollover(tenant) {
-    const today = utcDay(now());
+    const at = now();
     await m3.tx(tenant, async (ctx) => {
-      const runs = await ctx.q("select id, team from runs where state = 'paused' and reason = 'budget' and resume_on is not null and resume_on <= $1::date for update skip locked", [today]);
+      // Each team's day turns at its own local midnight (R14): resume_on is a day in the team's time zone.
+      const runs = await ctx.q(`select r.id, r.team, r.resume_on::text as resume_on, coalesce(b.time_zone, 'UTC') as tz from runs r left join budgets b on b.team = r.team
+                                where r.state = 'paused' and r.reason = 'budget' and r.resume_on is not null and r.resume_on <= $1::date for update of r skip locked`, [nextDay(at.toISOString().slice(0, 10))]);
       for (const r of runs) {
+        const today = localDay(at, r.tz);
+        if (r.resume_on > today) continue;
         const [d] = await ctx.q('select exhausted_at from budget_days where team = $1 and day = $2::date', [r.team, today]);
         if (d?.exhausted_at) continue;
         await m3.setRunState(ctx, r.team, r.id, 'running', 'budget', { kind: 'system', id: 'control-plane', via: 'api' });

@@ -8,6 +8,7 @@ import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
 import { checkMeetingDefs } from './meetings.mjs';
+import { dayBounds, dayStart, localDay, nextDay, timeZoneOf } from './budget-day.mjs';
 import { approveScope, factsOf, redact as redactText, riskOf } from './signed.mjs';
 import { checkTriggers } from './triggers.mjs';
 import { halted } from './live.mjs';
@@ -71,8 +72,6 @@ export function mint(tenant, team, type, data, { actor = SYSTEM, subject, run, t
   return e;
 }
 
-const utcDay = (d) => d.toISOString().slice(0, 10);
-const nextUtcDay = (d) => utcDay(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)));
 const isInt = (v) => Number.isSafeInteger(v);
 
 /**
@@ -119,21 +118,24 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   // ---- Budget (section 6) ---------------------------------------------------------------------------------------
 
   async function budgetRow(q, team) {
-    const [b] = await q('select currency, per_day, per_run, sessions, meeting_cap from budgets where team = $1', [team]);
-    return b ? { currency: b.currency, perDay: b.per_day === null ? null : Number(b.per_day), perRun: b.per_run === null ? null : Number(b.per_run), sessions: Number(b.sessions), meetingCap: b.meeting_cap === null || b.meeting_cap === undefined ? null : Number(b.meeting_cap) } : null;
+    const [b] = await q('select currency, per_day, per_run, sessions, meeting_cap, time_zone from budgets where team = $1', [team]);
+    return b ? { currency: b.currency, perDay: b.per_day === null ? null : Number(b.per_day), perRun: b.per_run === null ? null : Number(b.per_run), sessions: Number(b.sessions), meetingCap: b.meeting_cap === null || b.meeting_cap === undefined ? null : Number(b.meeting_cap), timeZone: b.time_zone ?? 'UTC' } : null;
   }
 
-  async function today(q, team, at) {
-    const [d] = await q('select day, spent, raised, warned_at, exhausted_at from budget_days where team = $1 and day = $2::date', [team, utcDay(at)]);
+  /** The team's budget day at `at` (R14: in its time zone), with when it started and when the next one starts. */
+  async function today(q, team, at, tz = null) {
+    tz ??= (await budgetRow(q, team))?.timeZone ?? 'UTC';
+    const day = localDay(at, tz);
+    const [d] = await q('select day, spent, raised, warned_at, exhausted_at from budget_days where team = $1 and day = $2::date', [team, day]);
     const spent = Number(d?.spent ?? 0), raised = Number(d?.raised ?? 0);
-    return { day: utcDay(at), spent, raised, state: d?.exhausted_at ? 'exhausted' : d?.warned_at ? 'warned' : 'ok' };
+    return { day, timeZone: tz, startedAt: dayStart(day, tz).toISOString(), resetsAt: dayStart(nextDay(day), tz).toISOString(), spent, raised, state: d?.exhausted_at ? 'exhausted' : d?.warned_at ? 'warned' : 'ok' };
   }
 
   async function getBudget(tenant, team) {
     await getTeam(db, tenant, team);
     return db.tenant(tenant, async ({ q }) => {
-      const b = (await budgetRow(q, team)) ?? { currency: 'USD', perDay: null, perRun: null, sessions: 3, meetingCap: null };
-      return { ...b, today: await today(q, team, now()) };
+      const b = (await budgetRow(q, team)) ?? { currency: 'USD', perDay: null, perRun: null, sessions: 3, meetingCap: null, timeZone: 'UTC' };
+      return { ...b, today: await today(q, team, now(), b.timeZone) };
     });
   }
 
@@ -145,9 +147,11 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     if (b.meetingCap !== undefined && b.meetingCap !== null && !(isInt(b.meetingCap) && b.meetingCap > 0)) throw new Problem(400, 'meetingCap is a whole number of minor units above zero, or null (a tenth of perDay)');
     if (b.sessions !== undefined && !(isInt(b.sessions) && b.sessions >= 1 && b.sessions <= 100)) throw new Problem(400, 'sessions is 1 to 100');
     if (b.currency !== undefined && !/^[A-Z]{3}$/.test(b.currency)) throw new Problem(400, 'currency is an ISO 4217 code, like USD');
+    const zone = b.timeZone === undefined ? undefined : timeZoneOf(b.timeZone);
+    if (zone === null) throw new Problem(400, 'timeZone is an IANA time zone, like Europe/Berlin or America/Los_Angeles');
     return tx(tenant, async (ctx) => {
-      const old = (await budgetRow(ctx.q, team)) ?? { currency: 'USD', perDay: null, perRun: null, sessions: 3, meetingCap: null };
-      const next = { currency: b.currency ?? old.currency, perDay: b.perDay !== undefined ? b.perDay : old.perDay, perRun: b.perRun !== undefined ? b.perRun : old.perRun, sessions: b.sessions ?? old.sessions, meetingCap: b.meetingCap !== undefined ? b.meetingCap : old.meetingCap ?? null };
+      const old = (await budgetRow(ctx.q, team)) ?? { currency: 'USD', perDay: null, perRun: null, sessions: 3, meetingCap: null, timeZone: 'UTC' };
+      const next = { timeZone: zone ?? old.timeZone, currency: b.currency ?? old.currency, perDay: b.perDay !== undefined ? b.perDay : old.perDay, perRun: b.perRun !== undefined ? b.perRun : old.perRun, sessions: b.sessions ?? old.sessions, meetingCap: b.meetingCap !== undefined ? b.meetingCap : old.meetingCap ?? null };
       // Lowering perDay below the stored meetingCap brings the meeting cap down with it (a lowering, so no step-up);
       // only a meetingCap sent in this request above perDay is refused.
       let clamped = false;
@@ -161,21 +165,22 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       const raises = (o, n, nullIsUnlimited) => (o === null ? (nullIsUnlimited ? false : n !== null) : n === null ? true : n > o);
       // A null meetingCap means a tenth of perDay, so going from a number to null may raise it too.
       const meetingDefault = (x) => (x.meetingCap ?? (x.perDay === null ? 0 : Math.max(1, Math.floor(x.perDay / 10))));
-      const raising = raises(old.perDay, next.perDay, false) || raises(old.perRun, next.perRun, true) || next.sessions > old.sessions || meetingDefault(next) > meetingDefault(old);
+      // Moving the time zone moves where the day resets, which can start a new day (and its cap) sooner: step-up too.
+      const raising = raises(old.perDay, next.perDay, false) || raises(old.perRun, next.perRun, true) || next.sessions > old.sessions || meetingDefault(next) > meetingDefault(old) || next.timeZone !== old.timeZone;
       if (raising && !(await useStepUp(ctx, by, stepUp))) throw new StepUpRequired('Raising a budget');
-      await ctx.q(`insert into budgets(tenant, team, currency, per_day, per_run, sessions, meeting_cap, updated_by) values ($1, $2, $3, $4, $5, $6, $7, $8)
+      await ctx.q(`insert into budgets(tenant, team, currency, per_day, per_run, sessions, meeting_cap, updated_by, time_zone) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                    on conflict (team) do update set currency = excluded.currency, per_day = excluded.per_day, per_run = excluded.per_run,
-                   sessions = excluded.sessions, meeting_cap = excluded.meeting_cap, updated_by = excluded.updated_by, updated_at = now()`,
-        [tenant, team, next.currency, next.perDay, next.perRun, next.sessions, next.meetingCap, by]);
+                   sessions = excluded.sessions, meeting_cap = excluded.meeting_cap, updated_by = excluded.updated_by, updated_at = now(), time_zone = excluded.time_zone`,
+        [tenant, team, next.currency, next.perDay, next.perRun, next.sessions, next.meetingCap, by, next.timeZone]);
       // A stepped-up raise of the daily cap is newer than today's spent mark (and any Resume tomorrow): when the new cap
       // is above today's spend, today is open again, so a resume goes through (QA #162). The warning stays if 80% is passed.
       if (next.perDay !== null && raises(old.perDay, next.perDay, false)) {
         await ctx.q(`update budget_days set exhausted_at = null, warned_at = case when spent >= ceil(($3::bigint + raised) * 0.8) then warned_at else null end
-                     where team = $1 and day = $2::date and exhausted_at is not null and spent < $3::bigint + raised`, [team, utcDay(ctx.now), next.perDay]);
+                     where team = $1 and day = $2::date and exhausted_at is not null and spent < $3::bigint + raised`, [team, localDay(ctx.now, next.timeZone), next.perDay]);
       }
       await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'budget', target: team, decision: 'allowed', detail: { from: old, to: next, stepUp: raising, ...(clamped ? { meetingCapClamped: true } : {}) } });
       await ctx.emit(team, 'budget.updated', { ...next, by }, { actor: personActor(by), subject: 'budget' });
-      return { ...next, today: await today(ctx.q, team, ctx.now) };
+      return { ...next, today: await today(ctx.q, team, ctx.now, next.timeZone) };
     });
   }
 
@@ -185,23 +190,28 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     const team = event.team;
     const cost = isInt(event.data?.cost) && event.data.cost > 0 ? event.data.cost : 0;
     if (!cost) return;
-    const day = utcDay(new Date(event.time));
+    const b = await budgetRow(q, team);
+    // The day it was received, never the sender's date (security on L24s): a usage.recorded dated yesterday would
+    // otherwise land on a closed day and today's cap would never trip.
+    const day = localDay(ctx.now, b?.timeZone ?? 'UTC');
     const [d] = await q(`insert into budget_days(tenant, team, day, spent) values ($1, $2, $3::date, $4)
                          on conflict (team, day) do update set spent = budget_days.spent + excluded.spent
                          returning spent, raised, warned_at, exhausted_at`, [ctx.tenant, team, day, cost]);
-    const b = await budgetRow(q, team);
+    // The session's spend lease (R4) counts what it reported against what it was given.
+    // Only a runner's own usage (not one posted through the API, which names whatever session it likes).
+    if (event.actor?.session && !ctx.outside) await q('update spend_leases set used = used + $2 where session = $1 and team = $3 and ended_at is null', [event.actor.session, cost, team]);
     if (b?.perDay !== null && b?.perDay !== undefined) {
       const cap = b.perDay + Number(d.raised);
       const spent = Number(d.spent);
       if (spent >= cap && !d.exhausted_at) {
         await q('update budget_days set exhausted_at = now(), warned_at = coalesce(warned_at, now()) where team = $1 and day = $2::date', [team, day]);
-        await exhaust(ctx, team, { scope: 'day', day, spent, cap, currency: b.currency });
+        await exhaust(ctx, team, { scope: 'day', day, spent, cap, currency: b.currency, timeZone: b.timeZone });
       } else if (spent >= cap) {
         // Already spent today and the card is out: anything still running stops spending too (issue #28 U2).
         for (const r of await q("select id from runs where team = $1 and state = 'running'", [team])) await setRunState(ctx, team, r.id, 'paused', 'budget', SYSTEM);
       } else if (spent >= Math.ceil(cap * 0.8) && !d.warned_at && !d.exhausted_at) {
         await q('update budget_days set warned_at = now() where team = $1 and day = $2::date', [team, day]);
-        await ctx.emit(team, 'budget.warned', { scope: 'day', day, spent, cap, currency: b.currency });
+        await ctx.emit(team, 'budget.warned', { scope: 'day', day, spent, cap, currency: b.currency, timeZone: b.timeZone });
       }
     }
     // The run's own caps: costPerRun (or the team's perRun) over the whole run, and costPerDay over the UTC day.
@@ -223,9 +233,11 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       const caps = r.caps ?? {};
       const raised = isInt(caps.raised) ? caps.raised : 0;
       const runCap = Math.min(b?.perRun ?? Infinity, isInt(caps.costPerRun) ? caps.costPerRun : Infinity);
+      // The run's day is the team's budget day: [local midnight, next local midnight).
+      const bounds = dayBounds(day, b?.timeZone ?? 'UTC');
       const usage = async (sinceDay) => Math.round(Number((await q(`select coalesce(sum(case when jsonb_typeof(envelope->'data'->'cost') = 'number' then (envelope->'data'->>'cost')::numeric else 0 end), 0) as spent
-                                     from events where team = $1 and type = 'usage.recorded' and envelope->>'run' = $2 ${sinceDay ? "and substr(envelope->>'time', 1, 10) = $3" : ''}`,
-        sinceDay ? [team, r.id, day] : [team, r.id]))[0].spent));
+                                     from events where team = $1 and type = 'usage.recorded' and envelope->>'run' = $2 ${sinceDay ? 'and time >= $3 and time < $4' : ''}`,
+        sinceDay ? [team, r.id, bounds.start.toISOString(), bounds.end.toISOString()] : [team, r.id]))[0].spent));
       const currency = b?.currency ?? 'USD';
       if (runCap !== Infinity) {
         const spent = await usage(false);
@@ -248,7 +260,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     const card = await createCard(ctx, team, {
       kind: 'budget', subject: info.scope === 'run' ? `run/${info.run}` : `budget/${info.day}`, run: info.run ?? runs[0]?.id ?? null,
       title: info.scope === 'run' ? 'This run reached its budget' : "Today's budget is spent",
-      body: `The team has spent ${money(info.spent, info.currency)} of ${money(info.cap, info.currency)} ${info.scope === 'run' ? 'on this run' : `on ${info.day} (UTC)`}. The run is paused; nothing spends until you choose.`,
+      body: `The team has spent ${money(info.spent, info.currency)} of ${money(info.cap, info.currency)} ${info.scope === 'run' ? 'on this run' : `on ${info.day} (${info.timeZone ?? 'UTC'})`}. The run is paused; nothing spends until you choose.`,
       recommendation: { option: 'tomorrow', why: 'Nothing more is spent today.' },
       options: [
         { id: 'tomorrow', label: info.scope === 'run' ? 'Leave it paused' : 'Resume tomorrow', style: 'primary', stepUp: false },
@@ -492,12 +504,13 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   async function budgetAnswer(ctx, row, option) {
     const info = row.card.data ?? {};
+    const b = await budgetRow(ctx.q, row.team);
+    const tz = b?.timeZone ?? 'UTC';
     if (option === 'tomorrow') {
-      if (info.scope !== 'run') await ctx.q("update runs set resume_on = $2::date where team = $1 and state = 'paused' and reason = 'budget'", [row.team, nextUtcDay(ctx.now)]);
+      if (info.scope !== 'run') await ctx.q("update runs set resume_on = $2::date where team = $1 and state = 'paused' and reason = 'budget'", [row.team, nextDay(localDay(ctx.now, tz))]);
       return null;
     }
     // raise: half the daily cap again for today, then the budget-paused runs carry on.
-    const b = await budgetRow(ctx.q, row.team);
     if (info.scope === 'run') {
       // Only this run gets more: the team's caps stay as the owner set them.
       const add = Math.ceil((info.cap ?? b?.perRun ?? 0) / 2);
@@ -511,12 +524,12 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     } else {
       await ctx.q(`insert into budget_days(tenant, team, day, raised) values ($1, $2, $3::date, $4)
                    on conflict (team, day) do update set raised = budget_days.raised + excluded.raised, exhausted_at = null, warned_at = null`,
-        [ctx.tenant, row.team, utcDay(ctx.now), Math.ceil((b?.perDay ?? 0) / 2)]);
+        [ctx.tenant, row.team, localDay(ctx.now, tz), Math.ceil((b?.perDay ?? 0) / 2)]);
     }
     const runs = await ctx.q(info.scope === 'run' ? "select id, caps from runs where id = $1 and state = 'paused' and reason = 'budget'" : "select id, caps from runs where team = $1 and state = 'paused' and reason = 'budget'", [info.scope === 'run' ? info.run : row.team]);
     for (const r of runs) {
       // A run also past its own cap stays paused, with its own card: the day's raise does not lift the run's cap.
-      const over = await runOver(ctx, row.team, r, utcDay(ctx.now), b);
+      const over = await runOver(ctx, row.team, r, localDay(ctx.now, tz), b);
       if (over) {
         const [open] = await ctx.q("select 1 from cards where team = $1 and kind = 'budget' and state = 'open' and subject = $2", [row.team, `run/${r.id}`]);
         if (!open) await exhaust(ctx, row.team, over);
@@ -729,7 +742,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (ids.size) for (const c of await q('select id, card from cards where id = any($1)', [[...ids]])) cards[c.id] = c.card;
       const [run] = await q("select id, state, version from runs where team = $1 order by (state <> 'stopped') desc, started_at desc limit 1", [team]);
       const b = await budgetRow(q, team);
-      const t = await today(q, team, now());
+      const t = await today(q, team, now(), b?.timeZone);
       const [h] = await q('select id from events where team = $1 order by seq desc limit 1', [team]);
       return {
         asOf: h?.id ?? null, items, cards,
@@ -814,12 +827,16 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   async function teamExtras(tenant) {
     return db.tenant(tenant, async ({ q }) => {
       const out = {};
-      const day = utcDay(now());
+      // Each team's own budget day (R14): its time zone decides which day "today" is.
+      const at = now();
+      const zones = await q('select t.id as team, b.time_zone from teams t left join budgets b on b.team = t.id');
+      const teams = zones.map((z) => z.team), days = zones.map((z) => localDay(at, z.time_zone ?? 'UTC'));
       for (const r of await q(`select t.id as team,
                                   (select state from runs where team = t.id order by (state <> 'stopped') desc, started_at desc limit 1) as run,
                                   b.per_day, b.currency, d.spent, d.raised,
                                   (select count(*)::int from cards where team = t.id and state = 'open') as inbox
-                                from teams t left join budgets b on b.team = t.id left join budget_days d on d.team = t.id and d.day = $1::date`, [day])) {
+                                from teams t left join budgets b on b.team = t.id
+                                left join budget_days d on d.team = t.id and d.day = (select x.day from unnest($1::text[], $2::date[]) as x(team, day) where x.team = t.id)`, [teams, days])) {
         out[r.team] = {
           run: r.run ?? null,
           capPerDay: r.per_day === null || r.per_day === undefined ? null : Number(r.per_day) + Number(r.raised ?? 0),
@@ -834,6 +851,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   async function appendEvents(tenant, team, events) {
     await getTeam(db, tenant, team);
     return tx(tenant, async (ctx) => {
+      // Sent through the API: its usage counts toward the day but never against a session's spend lease (L24s).
+      ctx.outside = true;
       // outside: the sender's actor and data are its own words, so no session it names gives the event a task.
       const s = await appendIn(ctx.q, tenant, team, events, { project: (qq, x) => project(ctx, x), now: ctx.now, outside: true });
       ctx.stored.push(...s);
