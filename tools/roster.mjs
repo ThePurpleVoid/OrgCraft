@@ -62,7 +62,9 @@ export function tree(roles) {
     k.forEach((r, i) => {
       const last = i === k.length - 1;
       const tag = [r.tier, r.status === 'dormant' ? 'dormant' : ''].filter(Boolean).join(', ');
-      out.push(`${prefix}${last ? '└─ ' : '├─ '}${r.slug} (${tag})`);
+      // A teammate (kit 0.22) shows its name and the role it is based on: `backend-dev-2 (standard): Maya, Backend dev`.
+      const who = r.type ? `: ${r.title}, ${r.typeTitle ?? r.type}` : '';
+      out.push(`${prefix}${last ? '└─ ' : '├─ '}${r.slug} (${tag})${who}`);
       walk(r.slug, prefix + (last ? '   ' : '│  '));
     });
   };

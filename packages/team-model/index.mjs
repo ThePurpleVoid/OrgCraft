@@ -313,6 +313,42 @@ function memberBrief(base, r, id, kit, typeExtension) {
   return joinBrief(b);
 }
 
+/**
+ * A member's brief from files, for sync (bin/agent-team.mjs): the type's brief (kit or project), the type's own
+ * .extend.md text if any, and the member's .extend.md text. The same rules as resolveSpec, one implementation.
+ */
+export function briefOfMember({ typeMd, typeExtensionMd, extensionMd, id, type }) {
+  const typeExtension = typeExtensionMd ? parseExtension(typeExtensionMd) : undefined;
+  return memberBrief(typeMd, { type, extension: parseExtension(extensionMd) }, id, null, typeExtension);
+}
+
+/**
+ * The Hands to section as sync writes it: structured lines name the target ("- Support lead (support-lead): …"), and a
+ * line to a role that is not on this team is left out. Prose lines are kept as they are. `titles` maps installed ids to names.
+ */
+export function renderHandsTo(md, titles, catalog = []) {
+  const b = splitBrief(md);
+  const sec = b.sections.find((x) => key(x.heading) === 'hands to');
+  if (!sec) return md;
+  const installed = [...titles.keys()];
+  const elsewhere = new Set(catalog.filter((x) => !titles.has(x)));
+  const out = [];
+  for (const line of sec.body) {
+    const parsed = handsTo(`## Hands to\n${line}\n`, [...installed, ...elsewhere]).targets[0];
+    if (!parsed) { out.push(line); continue; }
+    // A line to a role this team doesn't have: the kit's wiring is written for the whole catalog. Leave it out.
+    if (elsewhere.has(parsed.to)) continue;
+    const who = parsed.to === 'owner' ? 'Owner (owner)' : `${titles.get(parsed.to)} (${parsed.to})`;
+    out.push(`- ${who}${parsed.what ? `: ${parsed.what}` : ''}`);
+  }
+  if (!out.some((l) => l.trim())) b.sections.splice(b.sections.indexOf(sec), 1);
+  else sec.body = out;
+  return joinBrief(b);
+}
+
+/** Fills {{ROLE}} with each role's own id (kit 0.22 briefs name their own slug that way). */
+export const fillRole = (md, id) => String(md).replaceAll('{{ROLE}}', id);
+
 /** The type a member is based on; a role that is not a member is its own type. */
 export function typeOf(spec, id) {
   const r = spec.roles[id];
@@ -456,9 +492,18 @@ function checkMembers(spec, kit, roles, manager) {
   }
   const roster = Object.keys(spec.roles);
   const handsOf = new Map([...on].map(([slug, r]) => [slug, handsTo(r.md, roster).targets]));
+  // The kit's own wiring names roles a team may not have (a brief is written for the whole catalog); sync leaves
+  // those lines out of the brief. Only a team's own Hands to line to a role that is off is worth a warning.
+  // The same goes for the kit's wiring to a role the team has several of: routing picks by what each one owns.
+  const kitWiring = (slug) => new Set(handsTo(kit.roles?.[typeOf(spec, slug)] ?? '', roster).targets.map((t) => t.to));
+  const ownWiring = (slug) => new Set((spec.roles[slug]?.extension?.sections ?? []).filter((s) => s.name.toLowerCase() === 'hands to')
+    .flatMap((s) => handsTo(`## Hands to\n${s.text}\n`, roster).targets.map((t) => t.to)));
   for (const [slug, targets] of handsOf) {
+    const fromKit = kitWiring(slug);
+    const own = ownWiring(slug);
     for (const t of targets) {
       if (t.to === 'owner' || on.has(t.to) && spec.roles[t.to]?.source === 'member') continue;
+      if (fromKit.has(t.to) && !own.has(t.to)) continue;
       const several = membersOf(spec, t.to).filter((x) => on.has(x));
       if (several.length > 1) {
         const mine = laneOf(slug, manager);
@@ -549,7 +594,7 @@ export function resolveSpec(spec, kit) {
     roles.push({ slug, md, source });
   }
   const installed = new Set(roles.map((r) => r.slug));
-  for (const r of roles) r.md = fitToTeam(r.md, installed);
+  for (const r of roles) r.md = fillRole(fitToTeam(r.md, installed), r.slug);
   return { roles: applyMeetings(applyBindings(roles, spec.resources), spec.meetings), warnings };
 }
 
@@ -860,7 +905,7 @@ export function draftRole(spec, kit, { start = 'blank', from, md: imported, titl
     md = kit.template ?? '# Role title\n\n**Model:** standard\n**Group:** engineering\n**Reports to:** cto\n**Status:** active\n\n## Identity\n\n## Owns (writes)\n\n## Tools\n\n## Wakes on\n\n## Hands to\n\n## Rules\n';
     md = md.replaceAll('Role title', title || 'New agent');
   }
-  md = md.replaceAll(`team-status.sh ${old} `, `team-status.sh ${slug} `).replaceAll(`roles/${old}.md`, `roles/${slug}.md`);
+  md = md.replaceAll(`team-status.sh ${old} `, `team-status.sh ${slug} `).replaceAll(`roles/${old}.md`, `roles/${slug}.md`).replaceAll('{{ROLE}}', slug);
   if (title) md = setBriefTitle(md, title);
   if (group) md = setBriefField(md, 'Group', group);
   if (reportsTo) md = setBriefField(md, 'Reports to', reportsTo);
@@ -1057,7 +1102,7 @@ export function renameRole(spec, from, to, kit) {
   if (!isCustom(r)) throw new Error(`${from} is not a custom agent`);
   if (!SLUG.test(to)) throw new Error(`"${to}" is not a valid slug`);
   if (spec.roles[to] && isCustom(spec.roles[to])) throw new Error(`this team already has an agent called ${to}`);
-  const brief = r.brief.replaceAll(`team-status.sh ${from} `, `team-status.sh ${to} `).replaceAll(`roles/${from}.md`, `roles/${to}.md`);
+  const brief = r.brief.replaceAll(`team-status.sh ${from} `, `team-status.sh ${to} `).replaceAll(`roles/${from}.md`, `roles/${to}.md`).replaceAll('{{ROLE}}', to);
   delete spec.roles[from];
   // A kit role of the old name (the reason for most renames) comes back as the kit's own, switched off.
   if (kit?.roles && from in kit.roles) spec.roles[from] = { source: 'kit', enabled: false };

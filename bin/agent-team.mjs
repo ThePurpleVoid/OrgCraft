@@ -20,7 +20,7 @@
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 init --preset engineering --project "My App"
+//   npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -30,7 +30,7 @@ import { parseBrief } from '../tools/briefs.mjs';
 import { check as checkRoster, tree } from '../tools/roster.mjs';
 import { DEFAULT_MODELS, toSubagent } from '../tools/export-subagents.mjs';
 import { graphFrom } from '../tools/roster-graph.mjs';
-import { AGENTS_END, TARGETS, neutralInstructions, spliceBlock, teamTargets, withoutBlock, applyBindings, applyMeetings, checkTemplate, fitToPacks, roleTemplateFor, teamDoc, teamPacks, renderMeetings, templateCard, templateLayer, toZone, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
+import { AGENTS_END, TARGETS, neutralInstructions, spliceBlock, teamTargets, withoutBlock, applyBindings, applyMeetings, checkTemplate, fitToPacks, roleTemplateFor, teamDoc, teamPacks, renderMeetings, templateCard, templateLayer, toZone, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, basedOnOf, briefOfMember, fillRole, parseExtension, renderHandsTo, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
 import { loadKit, loadTemplates, readLayer, readTemplateDir, writeLayer } from '../packages/team-model/node.mjs';
 
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -120,11 +120,27 @@ export function resolveRoles(root, project) {
     if (extensions.includes(slug)) { md = extendBrief(md, read(join(dir, `${slug}.extend.md`))); source += ' + extension'; }
     roles.push({ slug, md, source });
   }
-  for (const x of extensions) if (!wanted.has(x)) warnings.push(`${LAYER}/roles/${x}.extend.md extends a role that is not installed`);
+  // Kit 0.22 (ADR 0011): an extension with "Based on" whose name is not a kit or project role is a teammate of that
+  // type, installed unless exclude lists it. It reads like a role: the type's brief, the type's job edits, its own.
+  const members = new Set();
+  for (const x of extensions) {
+    if (kitSlugs.has(x) || own.includes(x)) continue;
+    const extMd = read(join(dir, `${x}.extend.md`));
+    const type = basedOnOf(parseExtension(extMd));
+    if (!type) continue;
+    members.add(x);
+    if (project.exclude.includes(x)) continue;
+    const typeMd = own.includes(type) ? read(join(dir, `${type}.md`)) : kitSlugs.has(type) ? read(join(KIT, 'team/roles', `${type}.md`)) : undefined;
+    if (typeMd === undefined) { warnings.push(`${LAYER}/roles/${x}.extend.md is based on "${type}", which is neither a kit role nor one of yours`); continue; }
+    const typeExtensionMd = extensions.includes(type) ? read(join(dir, `${type}.extend.md`)) : undefined;
+    roles.push({ slug: x, md: briefOfMember({ typeMd, typeExtensionMd, extensionMd: extMd, id: x, type }), source: `member of ${type}`, type });
+  }
+  roles.sort((a, b) => a.slug.localeCompare(b.slug));
+  for (const x of extensions) if (!wanted.has(x) && !members.has(x)) warnings.push(`${LAYER}/roles/${x}.extend.md extends a role that is not installed`);
   // Point reporting lines at what is installed: a missing manager becomes the chief of staff, and direct-report
   // lists drop roles this project does not have.
   const installed = new Set(roles.map((r) => r.slug));
-  for (const r of roles) r.md = fitToTeam(r.md, installed);
+  for (const r of roles) r.md = fillRole(fitToTeam(r.md, installed), r.slug);
   return { roles, warnings };
 }
 
@@ -150,7 +166,9 @@ export function build(root) {
   const resolved = resolveRoles(root, project);
   const roles = applyMeetings(applyBindings(resolved.roles, resources), meetings);
   const { warnings } = resolved;
-  values.ORG_TREE = '```\n' + tree(roles.map((r) => parseBrief(r.slug, fill(r.md, values)))) + '\n```';
+  const briefs = new Map(roles.map((r) => [r.slug, parseBrief(r.slug, fill(r.md, values))]));
+  const typeTitle = (type) => briefs.get(type)?.title ?? (kitRoleSlugs().includes(type) ? parseBrief(type, read(join(KIT, 'team/roles', `${type}.md`))).title : type);
+  values.ORG_TREE = '```\n' + tree(roles.map((r) => (r.type ? { ...briefs.get(r.slug), type: r.type, typeTitle: typeTitle(r.type) } : briefs.get(r.slug)))) + '\n```';
   const out = new Map();
   const md = (path, text) => out.set(path, fill(text, values).trimEnd() + '\n' + mdMarker());
 
@@ -176,6 +194,10 @@ export function build(root) {
   if (gatesData) { const g = renderGates(gatesData).split('\n'); g.splice(1, 0, shMarker()); out.set(`${SCRIPTS}/gates.sh`, g.join('\n')); }
   md(`${DOCS}/role-template.md`, roleTemplateFor(read(join(KIT, 'team/roles/_template.md')), project.packs));
   for (const r of roles) r.md = fitToPacks(r.md, project.packs);
+  // Kit 0.22: structured Hands to lines carry the target's name, and lines to roles this team lacks are left out.
+  const titles = new Map(roles.map((r) => [r.slug, parseBrief(r.slug, r.md).title]));
+  const catalog = [...kitRoleSlugs(), ...roles.map((r) => r.slug)];
+  for (const r of roles) r.md = renderHandsTo(r.md, titles, catalog);
   for (const r of roles) md(`${DOCS}/roles/${r.slug}.md`, r.md);
 
   for (const f of RUNTIME) {

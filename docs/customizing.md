@@ -52,7 +52,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:ThePurpleVoid/OrgCraft#v0.21.1",
+  "kit": "github:ThePurpleVoid/OrgCraft#v0.22.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
