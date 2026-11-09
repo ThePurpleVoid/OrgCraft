@@ -25,7 +25,7 @@ import { atLeast, minRole } from './roles.mjs';
 import { appCaller } from './dpop.mjs';
 import { HOST_ID } from './hosts.mjs';
 import { HOST_CARD_KINDS, hostMay } from './roles.mjs';
-import { PROVIDERS, createEmail, page } from './email.mjs';
+import { PROVIDERS, createEmail, createNotifications, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 import { createHostedStudio } from './studio.mjs';
 import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, describeRunner } from './deployment.mjs';
@@ -148,6 +148,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const members = identity ? createMembers({ db, lookup: identity.lookup, endSessions: (p) => identity.endSessions(p), requireStepUp: passkeys.requireStepUp, now }) : null;
   const emailProviders = emailOpts.providers ?? PROVIDERS;
   const email = createEmail({ db, key, publicUrl, providers: emailProviders, readSecret: store.readSecret, now, fetch: emailOpts.fetch ?? fetch });
+  const notifications = createNotifications({ db });
   const studioUrl = String(emailOpts.studioUrl ?? publicUrl ?? '').replace(/\/+$/, '');
   // "Connect Slack" sends a person back to this Studio page, which posts { code, state } with their session.
   const slack = createSlack({ db, key, publicUrl, redirectUri: studioUrl ? `${studioUrl}/slack/callback` : '', providers: slackOpts.providers ?? SLACK_PROVIDERS, readSecret: store.readSecret, now, fetch: slackOpts.fetch ?? fetch });
@@ -582,6 +583,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return send(res, 200, body, { etag: tag });
     }
     if (a === 'me' && team === 'stream' && !b && m === 'GET') return stream(req, res, t, null, url);
+    if (a === 'me' && team === 'notifications' && !b && m === 'GET') return send(res, 200, await notifications.get(t, me));
+    if (a === 'me' && team === 'notifications' && !b && m === 'PUT') return send(res, 200, await notifications.put(t, me, await readJson(req, 4 * 1024)));
     if (a === 'me' && team === 'inbox' && !b && m === 'GET') {
       const q = Object.fromEntries(url.searchParams);
       const { seq, ...body } = await m3.inbox(t, q);
@@ -711,6 +714,11 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'report-tokens' && c && m === 'DELETE') { await store.revokeReportToken(db, t, team, c); return send(res, 200, { ok: true }); }
       if (b === 'sinks' && !c && m === 'GET') return send(res, 200, { sinks: await store.listSinks(db, t, team) });
       if (b === 'sinks' && !c && m === 'POST') { const s = await store.addSink(db, t, team, (await readJson(req, 16 * 1024)) ?? {}, { providers: Object.keys(emailProviders) }); sinks?.wake(); return send(res, 201, s); }
+      if (b === 'notifications' && c === 'log' && !parts[5] && m === 'GET') {
+        const all = url.searchParams.get('all') === '1';
+        if (all && !atLeast(who.role, 'admin')) throw new Problem(403, "everyone's deliveries need the admin role or above", { type: 'forbidden' });
+        return send(res, 200, await notifications.log(t, team, me, { all, limit: url.searchParams.get('limit'), before: url.searchParams.get('before') }));
+      }
       // A person's own email addresses for this team (PRD 6.8 O7): add, verify with a code, choose kinds, remove.
       if (b === 'emails') {
         const d = parts[5];

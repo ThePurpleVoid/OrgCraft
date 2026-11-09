@@ -21,6 +21,9 @@ export const ROUTES = [
   ['GET', '/me/summary', 'viewer'],
   ['GET', '/me/stream', 'viewer'],
   ['GET', '/me/inbox', 'viewer'],
+  // L25: a person's own quiet hours and daily digest, per workspace.
+  ['GET', '/me/notifications', 'viewer'],
+  ['PUT', '/me/notifications', 'viewer'],
   ['POST', '/auth/step-up', 'viewer'],
   ['POST', '/runs/{run}/{action}', 'editor'],
   ['POST', '/approvals/{approval}', 'approver'],
@@ -84,6 +87,8 @@ export const ROUTES = [
   ['POST', '/teams/{team}/emails/{email}/verify', 'viewer'],
   // Slack (CPO story "Slack notifications", D55): anyone who can see the team may link their own Slack for DMs; only
   // owners and admins pick the team's channels.
+  // The delivery log (L25): a member sees their own rows; ?all=1 (everyone's) is checked again for admin in the handler.
+  ['GET', '/teams/{team}/notifications/log', 'viewer'],
   ['GET', '/teams/{team}/slack', 'viewer'],
   ['POST', '/teams/{team}/slack/connect', 'viewer'],
   ['POST', '/teams/{team}/slack/link', 'viewer'],
