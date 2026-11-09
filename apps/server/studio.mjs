@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStudioHandler } from '../studio/handler.mjs';
+import { managedBackend } from '../studio/managed.mjs';
 import { githubApp, InstallationError } from '../../packages/github-app/index.mjs';
 import { blobCache } from '../studio/github.mjs';
 import { atLeast } from './roles.mjs';
@@ -32,7 +33,9 @@ class StudioRefusal extends Error {
 /**
  * opts: { appId, privateKey, teamRepo(tenant, team) → 'owner/name' | null, boundInstallations(tenant) → [ids],
  * origin (this deployment's page origin), api, fetch, tmpRoot, audit(row) (the deployment's audit table),
- * logger(entry), limiter, hosts: { consented(host, person), nameOf(host) } (delegated publish) }. Returns { enabled, handle(req, who, team, rawBody), tokenFor }.
+ * logger(entry), limiter, hosts: { consented(host, person), nameOf(host) } (delegated publish),
+ * managed: { teamBackend(tenant, team) → 'github' | 'managed', store(tenant, team), refs(tenant, team) } (ADR 0012: a team with
+ * no code host; apps/server/managed-db.mjs gives store and refs) }. Returns { enabled, handle(req, who, team, rawBody), tokenFor }.
  */
 export function createHostedStudio(opts = null) {
   const enabled = Boolean(opts?.appId && opts?.privateKey && opts?.teamRepo && opts?.boundInstallations && opts?.origin);
@@ -76,15 +79,16 @@ export function createHostedStudio(opts = null) {
   }
 
   /** One handler per tenant, team and repository, each with that tenant's cache and temp folder (S3). */
-  function handlerFor(tenant, team, slug) {
-    const k = `${tenant}\u0000${team}\u0000${slug}`;
+  function handlerFor(tenant, team, slug, managed = false) {
+    const k = `${tenant}\u0000${team}\u0000${managed ? 'managed' : slug}`;
     if (handlers.has(k)) return handlers.get(k);
     if (!caches.has(tenant)) caches.set(tenant, blobCache());
     const customer = createHash('sha256').update(String(tenant)).digest('hex').slice(0, 32);
     // Who is asking, per request, from the deployment's own sign-in (set in handle()).
     const callers = new WeakMap();
     const handler = createStudioHandler({
-      repo: slug,
+      // ADR 0012: a managed team's files live in this deployment's own Git store; no GitHub App, no token.
+      ...(managed ? { backend: managedBackend({ store: opts.managed.store(tenant, team), refs: opts.managed.refs(tenant, team) }), teamName: team } : { repo: slug }),
       basePath: `/v1/teams/${encodeURIComponent(team)}/studio`,
       allowedOrigins: [opts.origin],
       authorize: async (request, action) => {
@@ -96,7 +100,7 @@ export function createHostedStudio(opts = null) {
         return { id: String(who.principal), name: who.session?.name || who.session?.login || 'a workspace admin', ...(who.via === 'host' ? { via: { host: who.hostName ?? who.client, user: who.hostUser, hostId: who.client } } : {}) };
       },
       // handle() already checked the installation (fresh for a write), so the lookup and token here are that one's.
-      getInstallationToken: async () => tokenFor(tenant, slug, { write: false }),
+      ...(managed ? {} : { getInstallationToken: async () => tokenFor(tenant, slug, { write: false }) }),
       // Only the blob cache's key (one cache per tenant already); the installation itself is checked in tokenFor().
       installationId: String(tenant),
       cache: caches.get(tenant),
@@ -104,7 +108,7 @@ export function createHostedStudio(opts = null) {
       limiter: opts.limiter ?? null,
       // The publish line (E9) goes to the deployment's audit table, with the other audit rows.
       logger: (e) => {
-        if (e?.event === 'agent-team-studio.publish') return audit({ tenant, team, actorId: e.user, action: 'publish', target: e.branch, decision: 'allowed', detail: { repo: slug, commit: e.commit, pr: e.pr, files: e.files, ...(e.via ? { host: e.via.hostId, hostName: e.via.host, hostUser: e.via.user ?? null } : {}) } });
+        if (e?.event === 'agent-team-studio.publish') return audit({ tenant, team, actorId: e.user, action: 'publish', target: e.branch, decision: 'allowed', detail: { repo: managed ? null : slug, ...(managed ? { managed: true } : {}), commit: e.commit, pr: e.pr, files: e.files, ...(e.via ? { host: e.via.hostId, hostName: e.via.host, hostUser: e.via.user ?? null } : {}) } });
         return (opts.logger ?? ((x) => console.info(JSON.stringify(x))))({ ...e, tenant, team });
       },
       api,
@@ -122,16 +126,21 @@ export function createHostedStudio(opts = null) {
    * its body already read. Returns { status, headers, body } for the server to send (inside idempotent() for writes).
    */
   async function handle(req, who, team, rawBody = null) {
-    if (!enabled) return answer(503, 'the GitHub App is not connected yet');
-    let slug;
-    try { slug = await opts.teamRepo(who.tenant, team); } catch { slug = null; }
-    if (!slug || !/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(slug)) return answer(409, 'this team has no GitHub repository connected yet', 'no-repo');
+    let kind = 'github';
+    if (opts?.managed) { try { kind = (await opts.managed.teamBackend(who.tenant, team)) === 'managed' ? 'managed' : 'github'; } catch { kind = 'github'; } }
+    const managed = kind === 'managed';
+    if (!managed && !enabled) return answer(503, 'the GitHub App is not connected yet');
+    let slug = null;
+    if (!managed) {
+      try { slug = await opts.teamRepo(who.tenant, team); } catch { slug = null; }
+      if (!slug || !/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(slug)) return answer(409, 'this team has no GitHub repository connected yet', 'no-repo');
+    }
     const url = new URL(req.url, opts.origin);
     const writes = req.method === 'POST' && url.pathname.endsWith('/v1/team/publish');
     const viaHost = who.via === 'host';
     if (viaHost) {
       const refuse = async (status, message, type, rule) => {
-        await audit({ tenant: who.tenant, team, actorId: String(who.principal), action: writes ? 'publish' : 'studio', target: slug, decision: 'refused', rule, detail: { host: who.client } });
+        await audit({ tenant: who.tenant, team, actorId: String(who.principal), action: writes ? 'publish' : 'studio', target: slug ?? `managed:${team}`, decision: 'refused', rule, detail: { host: who.client } });
         return { ...answer(status, message, type), ...(status === 429 ? { headers: { ...answer(status, message, type).headers, 'retry-after': '60' } } : {}) };
       };
       // C2: publishing needs the person's yes on the consent text that says the host can open pull requests.
@@ -139,15 +148,17 @@ export function createHostedStudio(opts = null) {
       if (writes && !fits(`publish:${who.client}`, limits.publish)) return refuse(429, 'this site published 10 times in 10 minutes; try again later', 'rate', 'rate');
       if (req.method === 'POST' && HOST_WORK.test(url.pathname) && !fits(`work:${who.client}`, limits.work)) return refuse(429, 'this site asked for 60 previews in a minute; try again later', 'rate', 'rate');
     }
-    try {
-      // Before every request, which installation holds the repository and is it this tenant's (S9): asked fresh
-      // for a write, at most five minutes old for a read. The refusal keeps its reason, so the page can say it.
-      await tokenFor(who.tenant, slug, { write: writes, actor: who.principal ? String(who.principal) : null, team });
-    } catch (e) {
-      if (e instanceof StudioRefusal) return answer(e.status, e.message, e.type);
-      throw e;
+    if (!managed) {
+      try {
+        // Before every request, which installation holds the repository and is it this tenant's (S9): asked fresh
+        // for a write, at most five minutes old for a read. The refusal keeps its reason, so the page can say it.
+        await tokenFor(who.tenant, slug, { write: writes, actor: who.principal ? String(who.principal) : null, team });
+      } catch (e) {
+        if (e instanceof StudioRefusal) return answer(e.status, e.message, e.type);
+        throw e;
+      }
     }
-    const { handler, callers } = handlerFor(who.tenant, team, slug);
+    const { handler, callers } = handlerFor(who.tenant, team, slug, managed);
     const headers = new Headers();
     // The deployment's cookie and bearer never reach the handler, or GitHub.
     for (const [k, v] of Object.entries(req.headers)) if (v !== undefined && k !== 'cookie' && k !== 'authorization' && k !== 'dpop' && k !== 'x-agent-team-host-user') headers.set(k, Array.isArray(v) ? v.join(', ') : String(v));

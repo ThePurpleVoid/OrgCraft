@@ -19,6 +19,7 @@ import * as store from './store.mjs';
 import { attachRunners } from './runners.mjs';
 import { createM3 } from './m3.mjs';
 import { createBus } from './bus.mjs';
+import { createInspector } from './inspector-api.mjs';
 import { createTriggers } from './triggers.mjs';
 import { createLive } from './live.mjs';
 import { createPasskeys } from './passkeys.mjs';
@@ -31,6 +32,8 @@ import { HOST_CARD_KINDS, hostMay } from './roles.mjs';
 import { PROVIDERS, createEmail, createNotifications, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 import { createHostedStudio } from './studio.mjs';
+import { pgObjects, pgRefs } from './managed-db.mjs';
+import { createChanges } from './changes.mjs';
 import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, describeRunner } from './deployment.mjs';
 
 /**
@@ -150,6 +153,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
+  const inspector = createInspector({ db, m3 });
   const passkeys = identity ? createPasskeys({ db, m3, origin: identity.origin, now }) : null;
   const recovery = identity ? createRecovery({ db, requireStepUp: passkeys.requireStepUp, now }) : null;
   const members = identity ? createMembers({ db, lookup: identity.lookup, endSessions: (p) => identity.endSessions(p), requireStepUp: passkeys.requireStepUp, now }) : null;
@@ -178,8 +182,16 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     return wait;
   };
   const runnerCards = async (t) => { const at = now(); return (await store.listRunners(db, t)).map((r) => describeRunner(r, runners?.get(r.id)?.hello && !runners.get(r.id).closed ? runners.get(r.id) : null, at, serverVersion)); };
-  const hostedStudio = createHostedStudio(studioOpts && studioOrigin ? {
+  // A managed team (ADR 0012, migration 022) needs no GitHub App: its files are in this database's Git store.
+  const managedStore = {
+    teamBackend: async (tn, tm) => (await db.tenant(tn, ({ q }) => q('select backend from teams where id = $1', [tm])))[0]?.backend ?? 'github',
+    store: (tn, tm) => pgObjects(db, tn, tm),
+    refs: (tn, tm) => pgRefs(db, tn, tm),
+  };
+  const changes = createChanges({ db, m3, now });
+  const hostedStudio = createHostedStudio(studioOrigin ? {
     origin: studioOrigin,
+    managed: managedStore,
     // The installations this workspace proved (S9) and the team's repository, unless the caller brings its own.
     ...(installations ? { teamRepo: (tn, tm) => installations.teamRepo(tn, tm), boundInstallations: (tn) => installations.bound(tn) } : {}),
     // Delegated publish: the person's consent on the host's current text, and the host's name for the PR line.
@@ -721,6 +733,10 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'events' && c === 'stream' && m === 'GET') return stream(req, res, t, team, url);
       if (b === 'budget' && !c && m === 'GET') return send(res, 200, await m3.getBudget(t, team));
       if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
+      if (b === 'tasks' && !c && m === 'GET') { await store.getTeam(db, t, team); return send(res, 200, await inspector.list(t, team, Object.fromEntries(url.searchParams))); }
+      if (b === 'tasks' && c && !parts[5] && m === 'GET') return send(res, 200, await inspector.get(t, team, c));
+      if (b === 'io' && c && !parts[5] && m === 'GET') return send(res, 200, await inspector.read(t, team, c, me));
+      if (b === 'io' && !c && m === 'DELETE') { await store.getTeam(db, t, team); return send(res, 200, await inspector.remove(t, team, url.searchParams.get('before'), me, stepUp)); }
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
       if (b === 'runs' && !c && m === 'POST') {
         const body = (await readJson(req, MAX_BODY)) ?? {};
@@ -748,6 +764,15 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         return send(res, 200, body, { etag: tag });
       }
       // The rollout view after a publish merges (demo step 17): which roles have picked up the new team version.
+      // A managed team's change requests (ADR 0012, spec L9 section 4.5).
+      if (b === 'changes' && !c && m === 'GET') return send(res, 200, await changes.list(t, team, url.searchParams.get('state') ?? ''));
+      if (b === 'changes' && c && !parts[5] && m === 'GET') return send(res, 200, await changes.get(t, team, c));
+      if (b === 'changes' && c && parts[5] === 'accept' && !parts[6] && m === 'POST') {
+        const body = (await readJson(req, 16 * 1024)) ?? {};
+        return send(res, 200, await changes.accept(who, team, c, { stepUp, words: typeof body.words === 'string' ? body.words : '' }));
+      }
+      if (b === 'changes' && c && parts[5] === 'close' && !parts[6] && m === 'POST') { await readJson(req, 4 * 1024); return send(res, 200, await changes.close(who, team, c)); }
+      if (b === 'rollback' && !c && m === 'POST') return send(res, 201, await changes.rollback(who, team, (await readJson(req, 4 * 1024)) ?? {}));
       if (b === 'rollout' && !c && m === 'GET') return send(res, 200, await store.rollout(db, t, team, { version: url.searchParams.get('version') ?? '', publishedAt: url.searchParams.get('publishedAt') ?? '', now: now() }));
       if (b === 'report-tokens' && !c && m === 'POST') {
         const tok = await store.mintReportToken(db, t, team);
@@ -798,7 +823,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (recovery && a === 'recovery' && !b) {
       if (!team && m === 'GET') return send(res, 200, await recovery.list(who));
       if (!team && m === 'POST') return send(res, 201, await recovery.add(who, await readJson(req, 4 * 1024), stepUp));
-      if (team && m === 'DELETE') return send(res, 200, await recovery.remove(who, team, stepUp));
+      if (team && m === 'DELETE') return send(res, 200, await recovery.remove(who, team, stepUp, (await readJson(req, 4 * 1024)) ?? {}));
     }
     if (members && a === 'invitations' && !b) {
       if (!team && m === 'GET') return send(res, 200, await members.invitations(who));

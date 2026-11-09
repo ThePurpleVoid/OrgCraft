@@ -7,7 +7,8 @@
 //                                                                  the issuer's own authorize, with PKCE kept here
 //   GET  /oauth/authorize?response_type=code&…                      apps and the CLI (oidc-provider), PKCE S256
 //   (no session)                                                   → /sign-in?interaction=<uid> (the Studio page)
-//   GET  /oauth/interaction/<uid>/github                           → GitHub, with our own state and PKCE
+//   GET  /oauth/authorize/<uid>/github                             → GitHub, with our own state and PKCE (this browser only; the
+//                                                                  old /oauth/interaction/<uid>/github redirects here)
 //   GET  /oauth/callback/github                                    member, invitee or the first owner? sign in : not-invited
 //   GET  /oauth/web/done                                           the web leg's code, consumed here: sets the cookie
 //   POST /oauth/token, /oauth/revoke, GET /oauth/jwks, /oauth/userinfo, /.well-known/openid-configuration (oidc-provider)
@@ -329,6 +330,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     provider = makeProvider(keys);
     callback = provider.callback();
   };
+  // The key the provider signs its cookies with; boundToBrowser checks the resume cookie's signature with it too.
+  const cookieKey = createHmac('sha256', key).update('agent-team/oidc-cookies/v1').digest('base64url');
   const makeProvider = (keys) => {
     const config = {
       adapter: adapterFor(db, hosts),
@@ -338,7 +341,7 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
       enabledJWA: { idTokenSigningAlgValues: SIGNING_ALGS, dPoPSigningAlgValues: ['ES256', 'EdDSA'] },
       jwks: { keys },
       cookies: {
-        keys: [createHmac('sha256', key).update('agent-team/oidc-cookies/v1').digest('base64url')],
+        keys: [cookieKey],
         long: { httpOnly: true, sameSite: 'lax', secure: true },
         short: { httpOnly: true, sameSite: 'lax', secure: true },
       },
@@ -453,8 +456,10 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     return redirect(res, u.pathname + u.search, [setCookie(LOGIN_COOKIE, state, FLOW_SECONDS)]);
   }
 
+  // Bound to the browser that started this sign-in, like the passkey legs (security review of L27): the resume cookie
+  // must name this uid, or someone who learns it could finish the victim's sign-in with their own GitHub account.
   async function upstreamStart(req, res, uid) {
-    if (!UID.test(uid)) return toSignIn(res, 'expired');
+    if (!UID.test(uid) || !boundToBrowser(req, uid)) return toSignIn(res, 'expired');
     const interaction = await provider.Interaction.find(uid);
     if (!interaction) return toSignIn(res, 'expired');
     const state = rid('', 24), verifier = randomBytes(32).toString('base64url');
@@ -563,7 +568,6 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
   // resume cookie for this interaction (path /oauth/authorize/{uid}, which is why the routes live under it) must name
   // the uid, so someone who learns the uid cannot finish the sign-in as themselves in another browser.
   const rpID = issuer.hostname;
-  const cookieKey = createHmac('sha256', key).update('agent-team/oidc-cookies/v1').digest('base64url');
   const cookieSig = (name, value) => createHmac('sha1', cookieKey).update(`${name}=${value}`).digest('base64').replace(/\/|\+|=/g, (c) => ({ '/': '_', '+': '-', '=': '' }[c]));
   function boundToBrowser(req, uid) {
     const c = cookies(req);
@@ -685,7 +689,11 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     const authorize = p === '/oauth/authorize';
     if (limited(clientIp(req), authorize ? 'authorize' : 'oauth', authorize ? 20 : 60)) throw new Problem(429, 'too many sign-in requests from here; try again in a minute');
     if (authorize && req.method === 'GET' && url.searchParams.get('client_id') === WEB_CLIENT && !url.searchParams.has('response_type')) { await webStart(req, res, url); return true; }
-    const inter = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
+    // Continue with GitHub lives under the resume cookie's path; the old path redirects there (same browser, same
+    // cookie; another browser lands on sign-in expired).
+    const old = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
+    if (old && req.method === 'GET') { if (!UID.test(old[1])) { toSignIn(res, 'expired'); return true; } redirect(res, `/oauth/authorize/${old[1]}/github`); return true; }
+    const inter = /^\/oauth\/authorize\/([^/]+)\/github$/.exec(p);
     if (inter && req.method === 'GET') { await upstreamStart(req, res, inter[1]); return true; }
     const pk = /^\/oauth\/authorize\/([^/]+)\/passkey$/.exec(p);
     if (pk && req.method === 'GET') { await passkeyOptions(req, res, pk[1]); return true; }

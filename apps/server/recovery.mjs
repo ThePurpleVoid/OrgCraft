@@ -5,7 +5,9 @@
 //   GET    /v1/recovery            the recovery owners, each one's sign-in methods, and warnings (admin)
 //   POST   /v1/recovery            { person } names an owner with a passkey (owner + step-up). Takes effect in 24 hours,
 //                                  told to every owner; the very first one, an owner naming themselves, counts at once
-//   DELETE /v1/recovery/{person}   ends it at once (owner + step-up); a pending one can be undone this way too
+//   DELETE /v1/recovery/{person}   ends it at once (owner + step-up); a pending one can be undone this way too. The last
+//                                  one in effect: 409 last-owner, unless { confirm: 'no-recovery', words } with a step-up
+//                                  scoped remove-last-recovery-owner:<person>
 //
 // Only an owner of the workspace with a passkey can be one: someone whose only way in is GitHub would be lost with
 // the same account. Being demoted from owner or removed ends it (the list stops counting them and says why).
@@ -17,6 +19,8 @@ export const WANTED = 2;
 const rid = () => `rco_${randomBytes(12).toString('base64url')}`;
 /** The step-up scope for naming or removing one recovery owner. */
 export const recoveryScope = (tenant, person) => `recovery:${tenant}_${person}`;
+/** The step-up scope for removing the last recovery owner in effect (CTO ruling: L7 scopes, never another). */
+export const lastScope = (person) => `remove-last-recovery-owner:${person}`;
 
 export function createRecovery({ db, requireStepUp, now = () => new Date() }) {
   const view = (r, at) => {
@@ -85,15 +89,41 @@ export function createRecovery({ db, requireStepUp, now = () => new Date() }) {
     });
   }
 
-  async function remove(who, person, stepUp) {
+  /**
+   * Would removing `person` leave the workspace with no recovery owner who counts (in effect, an owner, a passkey)?
+   * Removing one who does not count yet, or any more, never does: they were not protecting anyone.
+   */
+  async function wouldBeLast(q, tenant, person, at) {
+    const owners = (await q(...forTenant(tenant))).map((r) => view(r, at));
+    const target = owners.find((o) => o.person === person);
+    return !!target?.counts && !owners.some((o) => o.person !== person && o.counts);
+  }
+
+  /**
+   * Ends one recovery owner. Removing the last one in effect is refused (409 last-owner, CTO ruling on qa-web's sev 2)
+   * unless the request says { confirm: 'no-recovery', words } and its step-up is scoped
+   * remove-last-recovery-owner:<person>; that is audited as recovery-owner.removed-last with the owner's words. Below
+   * two stays a warning only.
+   */
+  async function remove(who, person, stepUp, body = {}) {
     mustOwn(who);
-    await requireStepUp(who, stepUp, 'Removing a recovery owner', recoveryScope(who.tenant, person));
+    if (!/^per_[A-Za-z0-9_-]{8,64}$/.test(person)) throw new Problem(404, 'not a recovery owner');
+    const confirmed = body?.confirm === 'no-recovery';
+    const words = typeof body?.words === 'string' ? body.words.trim().slice(0, 2000) : '';
+    // Which step-up this needs depends on whether it is the last one; checked again under the lock below.
+    const last = await db.systemTx(({ q }) => wouldBeLast(q, who.tenant, person, now()));
+    if (last && !confirmed) throw new Problem(409, 'this is the last recovery owner: removing them leaves nobody who can put the workspace right', { type: 'last-owner' });
+    const scope = last ? lastScope(person) : recoveryScope(who.tenant, person);
+    await requireStepUp(who, stepUp, last ? 'Removing the last recovery owner' : 'Removing a recovery owner', scope);
     return db.systemTx(async ({ q }) => {
       await q('select pg_advisory_xact_lock(4854, hashtext($1))', [who.tenant]);
+      // Another removal may have landed in between: the step-up spent must match what this is now.
+      if (!last && await wouldBeLast(q, who.tenant, person, now())) throw new Problem(409, 'this is now the last recovery owner; confirm and step up again', { type: 'last-owner' });
       const gone = await q('update recovery_owners set removed_at = $3, removed_by = $4 where tenant = $1 and person = $2 and removed_at is null returning id', [who.tenant, person, now(), who.principal]);
       if (!gone.length) throw new Problem(404, 'not a recovery owner');
       await tell(q, who, 'recovery-owner.removed', person, {});
-      return { ok: true };
+      if (last) await q("insert into audit(tenant, actor_kind, actor_id, action, target, decision, detail) values ($1, 'person', $2, 'recovery-owner.removed-last', $3, 'allowed', $4)", [who.tenant, who.principal, person, { words: words || null, scope }]);
+      return { ok: true, ...(last ? { last: true } : {}) };
     });
   }
 
