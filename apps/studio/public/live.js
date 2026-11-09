@@ -23,7 +23,7 @@ function stepUp(why, scope) {
   const form = dlg.querySelector('form');
   const input = dlg.querySelector('input');
   const result = dlg.querySelector('.result');
-  dlg.querySelector('.why').textContent = why;
+  dlg.querySelector('.why').textContent = t('stepup.body', { action: why });
   result.textContent = '';
   input.value = '';
   return new Promise((done) => {
@@ -37,7 +37,7 @@ function stepUp(why, scope) {
       go.disabled = true;
       const r = await api('/v1/team/step-up', { secret, ...(scope ? { scope } : {}) }).finally(() => { go.disabled = false; });
       if (r.ok) return finish(true);
-      result.textContent = r.status === 401 ? 'That was not accepted. Try again.' : r.data.error ?? `HTTP ${r.status}`;
+      result.textContent = t(r.status === 429 ? 'stepup.locked' : 'stepup.failed');
       input.focus();
     };
     dlg.querySelector('[data-act="cancel"]').onclick = () => finish(false);
@@ -96,10 +96,12 @@ export function createLive({ say = () => {}, titleOf = (x) => x, onChange = () =
   const liftOnce = (id) => act(async () => {
     let r = await api('/v1/team/live/lift', { id });
     if (needsStepUp(r)) {
-      if (!(await stepUp(t('stop.resume.passkey'), r.data.scope ?? `lift:${id}`))) return { ok: true, data: {} };
+      const x = st.items.find((i) => i.id === id);
+      const action = x?.kind === 'member' ? t('stepup.action.resume.member', { teammate: titleOf(x.member) }) : t('stepup.action.resume.team');
+      if (!(await stepUp(action, r.data.scope ?? `lift:${id}`))) return { ok: true, data: {} };
       r = await api('/v1/team/live/lift', { id });
     }
-    if (r.ok) say(t('stop.resumed', { person: 'you', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }));
+    if (r.ok) say(t('stop.resumed.you', { time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }));
     return r;
   });
 

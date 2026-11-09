@@ -100,11 +100,12 @@ export const SHELL = `
 <dialog id="agent-dialog" aria-labelledby="agent-title"></dialog>
 <dialog id="live-stepup" aria-labelledby="live-stepup-title">
   <form class="dialog">
-    <h2 id="live-stepup-title">Confirm it is you</h2>
+    <h2 id="live-stepup-title">${t('stepup.title')}</h2>
     <p class="why"></p>
-    <label>Step-up secret <input type="password" autocomplete="current-password" required></label>
+    <p class="hint">${t('stepup.why')}</p>
+    <label>${t('stepup.label')} <input type="password" autocomplete="current-password" required></label>
     <p class="result error" role="status"></p>
-    <div class="dialog-actions"><button type="button" data-act="cancel">Cancel</button><button type="submit" class="primary">${t('stop.resume')}</button></div>
+    <div class="dialog-actions"><button type="button" data-act="cancel">${t('stepup.cancel')}</button><button type="submit" class="primary">${t('stepup.button')}</button></div>
   </form>
 </dialog>
 `;

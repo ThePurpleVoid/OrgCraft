@@ -21,10 +21,10 @@ if (!chromium && process.env.CI) throw new Error('CI is set but the playwright p
 const skip = !chromium && 'the playwright package is not installed';
 const SHOTS = process.env.SCREENSHOTS;
 
-let cp, studio, base, browser, plain, plainBase;
+let cp, studio, base, browser, plain, plainBase, root;
 before(async () => {
   if (skip) return;
-  const root = mkdtempSync(join(tmpdir(), 'studio-live-'));
+  root = mkdtempSync(join(tmpdir(), 'studio-live-'));
   execFileSync('git', ['-C', root, 'init', '-q']);
   execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
   cp = await fakeControlPlane({ team: 'sample-app' });
@@ -71,16 +71,16 @@ test('Stop everything in one tap; the banner stays through a run start; Resume n
   // Resume asks for the step-up, bound to lift:<id>; cancelling changes nothing.
   await banner.getByRole('button', { name: 'Resume: Stop everything' }).click();
   const dlg = page.locator('#live-stepup');
-  await dlg.getByText('Resuming needs your passkey.').waitFor();
+  await dlg.getByText('Resume the team. Use your passkey to confirm. It covers this one action only.').waitFor();
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.activeElement?.matches?.('#live-banner [data-lift]'));
   assert.equal(cp.live.length, 1, 'nothing lifted without the step-up');
   await banner.getByRole('button', { name: 'Resume: Stop everything' }).click();
-  await dlg.getByLabel('Step-up secret').fill('wrong');
-  await dlg.getByRole('button', { name: 'Resume' }).click();
-  await dlg.getByText('That was not accepted. Try again.').waitFor();
-  await dlg.getByLabel('Step-up secret').fill(cp.stepUpSecret);
-  await dlg.getByRole('button', { name: 'Resume' }).click();
+  await dlg.getByLabel('Passkey').fill('wrong');
+  await dlg.getByRole('button', { name: 'Use passkey' }).click();
+  await dlg.getByText("That didn't work. Try again, or cancel.").waitFor();
+  await dlg.getByLabel('Passkey').fill(cp.stepUpSecret);
+  await dlg.getByRole('button', { name: 'Use passkey' }).click();
   await banner.waitFor({ state: 'hidden' });
   assert.equal(cp.live.length, 0);
   assert.equal(cp.runs[0].state, 'running', 'the runs it paused carry on');
@@ -99,14 +99,28 @@ test('SH-10: Pause a teammate from a 360 px phone; it stops at once, and comes b
   await item.waitFor();
   const slug = await item.getAttribute('data-node');
   await item.click();
+  // Block the code host: any request leaving this machine, from the Studio or the page, fails and is recorded.
+  const blocked = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (u, ...rest) => {
+    const host = new URL(typeof u === 'string' ? u : u.url ?? String(u)).hostname;
+    if (host !== '127.0.0.1' && host !== 'localhost') { blocked.push(host); return Promise.reject(new Error('code host blocked')); }
+    return realFetch(u, ...rest);
+  };
+  await ctx.route((url) => !/^(127\.0\.0\.1|localhost)$/.test(url.hostname), (r) => { blocked.push(new URL(r.request().url()).hostname); return r.abort(); });
+  const head = execFileSync('git', ['-C', root, 'status', '--porcelain', '--branch'], { encoding: 'utf8' });
   const pause = page.locator('#i-live-pause');
   await pause.waitFor();
+  assert.equal(await pause.getAttribute('data-tip'), 'Teammates finish their current step, then wait. Nothing is lost.');
   assert.equal(await pause.isDisabled(), false, 'Pause works on a phone, where editing is read-only');
   const box = await pause.boundingBox();
   assert.ok(box.height >= 44, `a 44 px target (${box.height})`);
   await pause.click();
   await page.locator('#live-banner', { hasText: / is paused\. Its work waits until you resume it\./ }).waitFor();
   assert.deepEqual(cp.live.map((x) => [x.kind, x.member, x.state]), [['member', slug, 'paused']]);
+  assert.equal(execFileSync('git', ['-C', root, 'status', '--porcelain', '--branch'], { encoding: 'utf8' }), head, 'no Git involved');
+  assert.deepEqual(blocked, [], 'nothing went to the code host');
+  globalThis.fetch = realFetch;
   assert.equal(await page.locator('#i-live-pause').count(), 0, 'paused already: the banner has Resume');
   const name = (await item.locator('.name').textContent()).trim();
   assert.match(await page.locator('#live-banner .live-text').textContent(), new RegExp(`^${name} is paused`), 'the teammate\'s name, never the id');
@@ -118,8 +132,9 @@ test('SH-10: Pause a teammate from a 360 px phone; it stops at once, and comes b
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'pause-teammate-phone-light.png') });
 
   await page.locator('#live-banner [data-lift]').click();
-  await page.locator('#live-stepup').getByLabel('Step-up secret').fill(cp.stepUpSecret);
-  await page.locator('#live-stepup').getByRole('button', { name: 'Resume' }).click();
+  await page.locator('#live-stepup .why', { hasText: `Resume ${name}. Use your passkey` }).waitFor();
+  await page.locator('#live-stepup').getByLabel('Passkey').fill(cp.stepUpSecret);
+  await page.locator('#live-stepup').getByRole('button', { name: 'Use passkey' }).click();
   await page.locator('#live-banner').waitFor({ state: 'hidden' });
   assert.equal(cp.live.length, 0);
   // SH-5 on a phone: Stop everything is in More, one tap, a 44 px target.
