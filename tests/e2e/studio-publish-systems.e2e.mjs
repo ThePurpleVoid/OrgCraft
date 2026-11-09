@@ -73,11 +73,11 @@ test('a widened binding: Widens access, the publish, a step-up scoped to the tea
 
   // The control plane asks for a step-up scoped systems:sample-app; the dialog says what it covers.
   const dlg = page.locator('#live-stepup');
-  await dlg.locator('.why', { hasText: 'Change what the team can reach' }).waitFor();
+  await dlg.locator('.why', { hasText: 'Change which systems your team can use' }).waitFor();
   assert.equal(cp.systemsPuts.length, 0, 'nothing is set before the step-up');
   await dlg.getByLabel('Confirmation code').fill(cp.stepUpSecret);
   await dlg.getByRole('button', { name: 'Use passkey' }).click();
-  await page.locator('#publish-result .systems-result', { hasText: 'OrgCraft now has the new systems' }).waitFor();
+  await page.locator('#publish-result .systems-result', { hasText: 'Your systems are updated' }).waitFor();
   assert.equal(cp.systemsPuts.length, 1);
   assert.deepEqual(cp.systems.bindings, [{ role: ROLE, resource: 'drive', permission: 'write' }], 'what was published, not the draft');
   assert.deepEqual(cp.systems.resources.map((r) => [r.id, r.secrets]), [['drive', ['DRIVE_TOKEN']]]);
@@ -89,7 +89,7 @@ test('a widened binding: Widens access, the publish, a step-up scoped to the tea
   await page.close();
 });
 
-test('cancelling the step-up: the team is published, the systems are not, and Send the systems tries again', { skip }, async () => {
+test('cancelling the step-up: the team is published, the systems are not, and Send the system changes tries again', { skip }, async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.locator(`#canvas [data-node="${ROLE}"]`).waitFor();
@@ -97,16 +97,16 @@ test('cancelling the step-up: the team is published, the systems are not, and Se
   await page.locator(`select[data-binding="${ROLE}|drive"]`).selectOption('deploy');
   await page.locator('#publish').click();
   await page.locator('#confirm').click();
-  await page.locator('#live-stepup .why', { hasText: 'Change what the team can reach' }).waitFor();
+  await page.locator('#live-stepup .why', { hasText: 'Change which systems your team can use' }).waitFor();
   await page.keyboard.press('Escape');
-  const line = page.locator('#publish-result .systems-result', { hasText: "the new systems weren't sent" });
+  const line = page.locator('#publish-result .systems-result', { hasText: "the system changes weren't sent" });
   await line.waitFor();
   const before = cp.systemsPuts.length;
-  await line.getByRole('button', { name: 'Send the systems' }).click();
+  await line.getByRole('button', { name: 'Send the system changes' }).click();
   const dlg = page.locator('#live-stepup');
   await dlg.getByLabel('Confirmation code').fill(cp.stepUpSecret);
   await dlg.getByRole('button', { name: 'Use passkey' }).click();
-  await page.locator('#publish-result .systems-result', { hasText: 'OrgCraft now has the new systems' }).waitFor();
+  await page.locator('#publish-result .systems-result', { hasText: 'Your systems are updated' }).waitFor();
   assert.equal(cp.systemsPuts.length, before + 1);
   assert.equal(cp.systems.bindings[0].permission, 'deploy');
   await page.close();

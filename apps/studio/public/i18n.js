@@ -6,21 +6,6 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
-  // L40 (asked of the CPO): systems on Publish.
-  'widens.system-added': 'A new system, {system}, is added ({type})',
-  'widens.resource-command': '{system} runs a different program, used by {teammates}',
-  'widens.resource-tools': '{system} lets {teammates} use more of its tools: {tools}',
-  'widens.resource-effects': '{system} asks less before {tools}, used by {teammates}',
-  'widens.resource-egress': '{system} can now reach {hosts}, used by {teammates}',
-  'widens.resource-tier': '{system} is no longer {tier}, used by {teammates}',
-  'tier.verified': 'verified',
-  'tier.community': 'from the community',
-  'tier.custom': 'custom',
-  'stepup.action.systems': 'Change what the team can reach',
-  'publish.systems.done': 'OrgCraft now has the new systems. Runs that start from now use them.',
-  'publish.systems.failed': "The team is published, but OrgCraft doesn't have the new systems yet, so runs still use the old ones.",
-  'publish.systems.cancelled': "The team is published, but the new systems weren't sent, so runs still use the old ones.",
-  'publish.systems.retry': 'Send the systems',
 };
 
 export function t(key, vars = {}) {

@@ -34,11 +34,11 @@ test('widensLine: one line per kind of systems widening', { skip: !widensLine &&
   const name = (s) => ({ cos: 'Chief of staff' })[s] ?? s;
   const sys = (s) => ({ drive: 'Shared drive' })[s] ?? s;
   const line = (x) => widensLine({ kind: 'resource-widened', subject: 'cos', resource: 'drive', detail: 'drive …', ...x }, name, sys);
-  assert.match(line({ egress: ['files.example'] }), /Shared drive can now reach files\.example, used by Chief of staff/);
+  assert.match(line({ egress: ['files.example'] }), /Shared drive can now connect to files\.example, used by Chief of staff/);
   assert.match(line({ tier: { from: 'verified', to: 'custom' } }), /Shared drive is no longer verified/);
-  assert.match(line({ tools: [{ tool: 'upload', at: 'read', from: 'write' }] }), /use more of its tools: upload/);
-  assert.match(line({ effects: [{ tool: 'upload', from: 'write', to: 'read' }] }), /asks less before upload/);
-  assert.match(line({ command: true }), /runs a different program/);
+  assert.match(line({ tools: [{ tool: 'upload', at: 'read', from: 'write' }] }), /use more tools: upload/);
+  assert.match(line({ effects: [{ tool: 'upload', from: 'write', to: 'read' }] }), /upload no longer ask you first/);
+  assert.match(line({ command: true }), /runs different software/);
   // More than one kind, or settings: the general line.
   assert.equal(line({ egress: ['a'], tier: { from: 'verified', to: 'custom' } }), line({ secrets: ['X'] }));
   assert.equal(line({ egress: ['a'], detail: 'drive changes its settings, can reach a' }), line({ secrets: ['X'] }));
