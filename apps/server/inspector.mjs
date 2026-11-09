@@ -55,12 +55,16 @@ const ANSWER_OF = { 'approval.decided': ['approval.requested', 'approval'], 'dec
 /**
  * Sets `env.task` and `env.cause` as the server decides (in place), before the event is stored. A sender's own
  * values are dropped; a runner's `cause` is kept only for an event delivered to that session.
+ *
+ * `outside`: the event came through the API or a report token, so its actor and data are the sender's words. It gets
+ * no task: a session it names (actor.session or data.session) is never looked up. Only the runner path, which sets
+ * actor.session from the session it runs, and the server's own writes name a session that is trusted.
  */
-export async function attribute(q, env) {
+export async function attribute(q, env, { outside = false } = {}) {
   const hint = typeof env.cause === 'string' && env.cause.length <= 80 ? env.cause : null;
   delete env.task;
   delete env.cause;
-  if (!env.team) return;
+  if (!env.team || outside) return;
   const set = (task, cause) => { if (task) env.task = task; if (cause) env.cause = cause; };
   if (ROOT(env)) return set(taskId(Date.parse(env.time) || Date.now()), null);
   const sid = env.actor?.kind === 'role' ? env.actor.session : null;
@@ -142,10 +146,13 @@ export async function ingestStepIo(q, tenant, sess, b, { now = new Date(), probl
   if (!used || Number(used.bytes) > IO_DAY_CAP) return { kept: false, reason: 'daily-limit' };
   const [{ io_days: days } = { io_days: 30 }] = await q('select io_days from budgets where team = $1', [sess.team]);
   const expires = new Date(now.getTime() + Number(days ?? 30) * 86_400_000);
-  await q(`insert into step_io(id, tenant, team, session, task, part, mime, body, bytes, truncated, redactions, expires_at)
-           values ($1, $2, $3, $4, (select task from sessions where id = $4), $5, $6, $7, $8, $9, $10, $11) on conflict (id) do nothing`,
+  // An id another tenant already used is invisible here (RLS) and the insert does nothing: refuse it, so the runner
+  // never hears kept for a row that is not this session's.
+  const [put] = await q(`insert into step_io(id, tenant, team, session, task, part, mime, body, bytes, truncated, redactions, expires_at)
+           values ($1, $2, $3, $4, (select task from sessions where id = $4 and team = $3), $5, $6, $7, $8, $9, $10, $11) on conflict (id) do nothing returning id`,
     [b.id, tenant, sess.team, sess.id, b.part, mime, text, Number.isSafeInteger(b.bytes) && b.bytes >= bytes ? Math.min(b.bytes, INT_MAX) : bytes, b.truncated === true,
       hit ? [...new Set([...names, 'secret'])] : names, expires.toISOString()]);
+  if (!put) throw problem(`${b.id} is taken; send a new id`);
   return { kept: true };
 }
 
