@@ -127,3 +127,47 @@ test('demo steps 7, 8 and 13: the first publish, then a small change with Widens
   assert.deepEqual(errors, []);
   await ctx.close();
 });
+
+test('someone publishes first: the second publish is refused as stale, and after a reload the draft is back on top of theirs (B1.1-10)', { skip }, async () => {
+  const open = async () => {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    await page.goto(`${base}/?t=${studio.launchToken}`);
+    await page.locator('#canvas [data-node="backend-dev"]').waitFor();
+    return { ctx, page };
+  };
+  const a = await open();
+  const b = await open();
+  const flip = async (page, slug) => { const on = await isOn(page, slug); await switchTeammate(page, slug, !on); return !on; };
+  const aWants = await flip(a.page, 'mobile-dev');
+  const bWants = await flip(b.page, 'qa-web');
+
+  // B publishes first.
+  await b.page.locator('#publish').click();
+  await b.page.locator('#advanced').evaluate((d) => { d.open = true; });
+  await b.page.locator('#branch').fill('b-first');
+  await b.page.locator('#confirm').click();
+  await b.page.locator('#publish-result', { hasText: /^Saved 1 change in your files/ }).waitFor();
+
+  // A, without reloading: refused, never a silent undo of B's change.
+  await a.page.locator('#publish').click();
+  await a.page.locator('#advanced').evaluate((d) => { d.open = true; });
+  await a.page.locator('#branch').fill('a-second');
+  await a.page.locator('#confirm').click();
+  await a.page.locator('#publish-result', { hasText: /^Someone published a change to this team after you started\./ }).waitFor();
+  assert.equal(execFileSync('git', ['-C', root, 'branch', '--list', 'a-second'], { encoding: 'utf8' }).trim(), '', 'nothing was written');
+
+  // A reloads: its change is back, on top of B's.
+  await a.page.reload();
+  await a.page.locator('#restored', { hasText: /^Your unpublished changes from .+ are back\./ }).waitFor();
+  assert.equal(await isOn(a.page, 'mobile-dev'), aWants, 'A\'s change came back');
+  assert.equal(await isOn(a.page, 'qa-web'), bWants, 'B\'s published change is kept');
+  await a.page.locator('#publish', { hasText: /^Publish 1 change$/ }).waitFor();
+  await a.page.locator('#publish').click();
+  await a.page.locator('#advanced').evaluate((d) => { d.open = true; });
+  await a.page.locator('#branch').fill('a-second');
+  await a.page.locator('#confirm').click();
+  await a.page.locator('#publish-result', { hasText: /^Saved 1 change in your files/ }).waitFor();
+  await a.ctx.close();
+  await b.ctx.close();
+});

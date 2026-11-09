@@ -1165,7 +1165,8 @@ function wireSheet() {
     renderImpact();
     previewPublish();
     // Keep the keyboard where it was: the next line's Undo, else the sheet's title.
-    ($$('#sheet-changes [data-undo-line]')[+b.dataset.undoLine] ?? $$('#sheet-changes [data-undo-line]').at(-1) ?? $('#publish-title')).focus?.();
+    const left = $$('#sheet-changes [data-undo-line]');
+    (left.find((x) => +x.dataset.undoLine >= +b.dataset.undoLine) ?? left.at(-1) ?? $('#publish-title')).focus?.();
   });
 }
 
@@ -1512,7 +1513,9 @@ function wireTemplates() {
 // ------------------------------------------------------------------------------------------------ the draft
 // B1.1-10: unpublished changes survive a reload. The draft is kept in this browser per repository and branch, with
 // the published team it was made on; it comes back only on that same published team, and the owner can discard it.
-const draftKey = () => `orgcraft.draft:${where()}:${S.git?.branch ?? ''}`;
+// Keyed by the team (where it lives), not the branch: a local publish moves to a new branch, and the draft must
+// still be found after someone else's publish (qa-web L14 round 3, S1). rebaseDraft puts it on their version.
+const draftKey = () => `orgcraft.draft:${where()}`;
 const fingerprint = (x) => { const s = JSON.stringify(x); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return `${s.length}:${h}`; };
 function saveDraft() {
   {
