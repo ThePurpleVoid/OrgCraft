@@ -595,7 +595,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       const n = (await ctx.q('select count(*)::int as n from standing_rules where team = $1 and created_at <= (select created_at from standing_rules where id = $2)', [team, covered.rule.id]))[0].n;
       for (const u of covered.uses) await ctx.q('insert into standing_rule_uses(tenant, team, rule, approval, amount, recipient) values ($1, $2, $3, $4, $5, $6)', [ctx.tenant, team, covered.rule.id, apr, u.amount, u.recipient]);
       // ledger.byrule: "Done under standing rule #{n}: {what}".
-      return { approval: apr, card: await settle(ctx, team, { apr, cid: card.id, session, run, decision: 'approved', by: `rule:${covered.rule.id}`, note: `Done under standing rule #${n}: ${ruleLine(covered.rule.spec)}`, kind: 'rule-used', rule: covered.rule.id, hash: bound.hash, extra: { ruleNumber: n, ruleLine: ruleLine(covered.rule.spec) } }) };
+      return { approval: apr, card: await settle(ctx, team, { apr, cid: card.id, session, run, decision: 'approved', by: `rule:${covered.rule.id}`, note: `Done under standing rule #${n}: ${ruleLine(covered.rule.spec)}`, kind: 'rule-used', rule: covered.rule.id, hash: bound.hash, extra: { ruleNumber: n, ruleForm: covered.rule.spec, ruleLine: ruleLine(covered.rule.spec) } }) };
     }
     return { approval: apr, card };
   }

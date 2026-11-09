@@ -44,7 +44,7 @@ export function ruleForm(body = {}) {
   if (typeof body.recipientField !== 'string' || !FIELD.test(body.recipientField)) throw new Problem(400, 'recipientField is the input field that names who it goes to (customer, to, ...)');
   if (!(body.period in PERIODS)) throw new Problem(400, `period is one of ${Object.keys(PERIODS).join(', ')}: every rule has a limit per period`);
   const label = (v, what) => (v === undefined || v === null ? null : typeof v === 'string' && v.length <= 80 ? v : (() => { throw new Problem(400, `${what} is a short name`); })());
-  const form = { kind, tool: body.tool, recipientField: body.recipientField, period: body.period };
+  const form = { kind, tool: body.tool, recipientField: body.recipientField, period: body.period, ...shapeOf(body, kind) };
   if (kind === 'send.known') {
     return { ...form, n: int(body.n, 'n', { max: 10_000 }), channel: label(body.channel, 'channel') };
   }
@@ -57,6 +57,45 @@ export function ruleForm(body = {}) {
   return { ...form, amountField: body.amountField, currency: body.currency, ...(body.currencyField ? { currencyField: body.currencyField } : {}), maxEach, total, system: label(body.system, 'system') };
 }
 
+/**
+ * The call's shape a rule allows (security review sev 2): `fixed` input fields that must equal these values, and
+ * `free` fields that may hold any plain value. A covered call has no other field and nothing nested, so the owner's
+ * rule is never wider than what they read. Both are in the form, so in its hash and its line.
+ */
+function shapeOf(body, kind) {
+  const fixed = body.fixed ?? {};
+  const free = body.free ?? [];
+  if (!fixed || typeof fixed !== 'object' || Array.isArray(fixed) || Object.keys(fixed).length > 20) throw new Problem(400, 'fixed is an object of at most 20 input fields and the exact value each must have');
+  if (!Array.isArray(free) || free.length > 20) throw new Problem(400, 'free is a list of at most 20 input fields that may hold any plain value');
+  const own = [body.recipientField, ...(kind === 'send.known' ? [] : [body.amountField, body.currencyField])].filter(Boolean);
+  const seen = new Set(own);
+  for (const [k, v] of Object.entries(fixed)) {
+    if (!FIELD.test(k) || seen.has(k)) throw new Problem(400, `fixed names each input field once, and not the recipient, amount or currency field: ${k}`);
+    if (!(typeof v === 'string' ? v.length <= 200 : Number.isSafeInteger(v) || typeof v === 'boolean')) throw new Problem(400, `fixed.${k} is a short text, a whole number or true/false`);
+    seen.add(k);
+  }
+  for (const k of free) {
+    if (typeof k !== 'string' || !FIELD.test(k) || seen.has(k)) throw new Problem(400, `free names each input field once, and none already named: ${k}`);
+    seen.add(k);
+  }
+  return { fixed: Object.fromEntries(Object.entries(fixed).sort(([a], [b]) => (a < b ? -1 : 1))), free: [...free].sort() };
+}
+
+/** Does this call's input have only the fields the rule allows, every fixed one as fixed, and nothing nested? */
+function fitsShape(f, input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
+  const allowed = new Set([f.recipientField, f.amountField, f.currencyField, ...Object.keys(f.fixed ?? {}), ...(f.free ?? [])].filter(Boolean));
+  for (const [k, v] of Object.entries(input)) {
+    if (!allowed.has(k)) return false;
+    if (v !== null && typeof v === 'object') return false;
+  }
+  for (const [k, v] of Object.entries(f.fixed ?? {})) if (input[k] !== v) return false;
+  return true;
+}
+
+/** The action classes a rule kind can cover; anything else (a passkey-only change, a deploy, a secret) never is. */
+const ACTIONS = { refund: ['payment', 'refund'], 'pay.known': ['payment'], 'send.known': ['outbound-message', 'send', 'message'] };
+
 export const formHash = (form) => sha(`rule/1\n${canonical(form)}`);
 
 /** The one line a rule reads as (CPO §6b patterns), for the ledger and the list. Parts that are not set are left out. */
@@ -67,27 +106,42 @@ export function ruleLine(form) {
     'pay.known': ['Payments to people you\'ve paid before', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} per ${form.period}`, form.system && `in ${form.system}`],
     'send.known': ['Messages to people the team has written to before', form.channel && `in ${form.channel}`, `at most ${form.n} per ${form.period}`],
   }[form.kind];
-  return parts.filter(Boolean).join(' · ');
+  const fixed = Object.entries(form.fixed ?? {}).map(([k, v]) => `${k} ${JSON.stringify(v)}`);
+  const only = [form.recipientField, form.amountField, form.currencyField, ...(form.free ?? [])].filter(Boolean);
+  // The fields a covered call may carry, all of them, so the line is never narrower than the rule (security sev 2).
+  return [...parts, fixed.length && `with ${fixed.join(', ')}`, `fields: ${[...only, ...Object.keys(form.fixed ?? {})].join(', ')}`].filter(Boolean).join(' · ');
 }
 
 /** Has this teammate read outside text (a trigger's outside block) since a person last decided for its session? */
 async function readOutside(q, session) {
   if (!session) return false;
-  const [r] = await q(`select exists(
+  // Since a person last decided for this session: a trigger wake carrying outside text, a call whose output came from
+  // outside the team (session.result outside: a web fetch, an email read through a connector), or a step I/O row so
+  // marked (security review sev 3).
+  const [r] = await q(`with since as (select coalesce((select max(a.decided_at) from approvals a where a.session = $1 and a.state in ('approved', 'denied')
+        and a.decided_by not like 'rule:%' and a.decided_by not in ('ledger', 'changed')), '-infinity'::timestamptz) as at)
+    select exists(
       select 1 from sessions x join deliveries d on d.run = x.run and d.role = x.role and coalesce(d.instance, '') = coalesce(x.instance, '')
         join events e on e.team = d.team and e.id = d.event
       where x.id = $1 and e.type = 'trigger.fired'
         and exists(select 1 from events s where s.team = e.team and s.id = e.envelope->'data'->>'source' and s.type = 'inbound.received')
-        and d.created_at > coalesce((select max(a.decided_at) from approvals a where a.session = $1 and a.state in ('approved', 'denied') and a.decided_by not like 'rule:%' and a.decided_by <> 'ledger'), '-infinity'::timestamptz)
+        and d.created_at > (select at from since)
+    ) or exists(
+      select 1 from events e where e.type = 'session.result' and e.envelope->'actor'->>'session' = $1 and e.envelope->'data'->>'outside' = 'true'
+        and e.received_at > (select at from since)
+    ) or exists(
+      select 1 from step_io i where i.session = $1 and i.outside and i.created_at > (select at from since)
     ) as yes`, [session]);
   return Boolean(r?.yes);
 }
 
 /** Has the team sent this tool's calls to this recipient before, with a person's yes or under a rule? (rule.never.newrecipient) */
-async function known(q, team, tool, field, recipient) {
-  const [r] = await q(`select exists(select 1 from approvals a where a.team = $1 and a.state = 'approved' and a.calls @> $2::jsonb)
-      or exists(select 1 from standing_rule_uses u join standing_rules s on s.id = u.rule where u.team = $1 and s.spec->>'tool' = $3 and u.recipient = $4) as yes`,
-  [team, JSON.stringify([{ tool, input: { [field]: recipient } }]), tool, recipient]);
+async function known(q, team, rule, tool, field, recipient) {
+  // A person's yes (never a rule's or the ledger's), or this rule's own earlier uses (security review low 2).
+  const [r] = await q(`select exists(select 1 from approvals a where a.team = $1 and a.state = 'approved' and a.decided_by not like 'rule:%'
+        and a.decided_by not in ('ledger', 'changed') and a.calls @> $2::jsonb)
+      or exists(select 1 from standing_rule_uses u where u.rule = $4 and u.recipient = $3) as yes`,
+  [team, JSON.stringify([{ tool, input: { [field]: recipient } }]), recipient, rule]);
   return Boolean(r?.yes);
 }
 
@@ -107,14 +161,14 @@ export async function coveredBy(ctx, team, { action, bound, session }) {
     let ok = true;
     for (const c of bound.calls) {
       const recipient = c.input?.[f.recipientField];
-      if (c.tool !== f.tool || typeof recipient !== 'string' || !recipient || recipient.length > 200) { ok = false; break; }
+      if (c.tool !== f.tool || !ACTIONS[f.kind].includes(action) || !fitsShape(f, c.input) || typeof recipient !== 'string' || !recipient || recipient.length > 200) { ok = false; break; }
       let amount = null;
       if (f.amountField) {
         amount = c.input?.[f.amountField];
         const cur = f.currencyField ? String(c.input?.[f.currencyField] ?? '').toUpperCase() : f.currency;
         if (!Number.isSafeInteger(amount) || amount < 0 || amount > f.maxEach || cur !== f.currency) { ok = false; break; }
       }
-      if (f.kind !== 'refund' && !(await known(ctx.q, team, f.tool, f.recipientField, recipient))) { ok = false; break; }
+      if (f.kind !== 'refund' && !(await known(ctx.q, team, rule.id, f.tool, f.recipientField, recipient))) { ok = false; break; }
       uses.push({ amount, recipient });
     }
     if (!ok) continue;
@@ -263,7 +317,7 @@ export function createLedger({ db, m3, now = () => new Date() }) {
     const items = rows.map((r) => ({ at: new Date(r.at).toISOString(), kind: r.kind, by: r.by, name: nameIn(names, r.by), words: r.words ?? null, channel: r.channel ?? null,
       // {letter}: the ask's letter once cards carry lettered asks; none yet.
       ...(r.approval ? { approval: r.approval, action: r.action, role: r.role, what: whatOf(r.card), letter: r.card?.data?.letter ?? null } : {}),
-      ...(r.rule ? { rule: r.rule, ruleNumber: r.rule_spec ? Number(r.rule_number) : null, ruleLine: r.rule_spec ? ruleLine(r.rule_spec) : null } : {}),
+      ...(r.rule ? { rule: r.rule, ruleNumber: r.rule_spec ? Number(r.rule_number) : null, ruleForm: r.rule_spec ?? null, ruleLine: r.rule_spec ? ruleLine(r.rule_spec) : null } : {}),
       ...(r.calls_hash ? { callsHash: r.calls_hash } : {}) }));
     return { items, next: rows.length === n ? String(rows.at(-1).id) : null };
   }

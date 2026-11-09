@@ -31,8 +31,8 @@ async function ask(p, s, calls, why = 'Refund the customer', changed = undefined
 const RULE = { kind: 'refund', tool: 'mcp__payments__refund', amountField: 'amount', currency: 'USD', currencyField: 'currency', recipientField: 'customer', maxEach: 2000, total: 3000, period: 'week', system: 'Payments' };
 
 test('rule forms: the fixed list, a limit per period, never deleting or going live', () => {
-  assert.equal(ruleLine(ruleForm(RULE)), 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments');
-  assert.equal(ruleLine(ruleForm({ kind: 'send.known', tool: 'mcp__mail__send', recipientField: 'to', n: 50, period: 'day', channel: 'Email' })), 'Messages to people the team has written to before · in Email · at most 50 per day');
+  assert.equal(ruleLine(ruleForm(RULE)), 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments · fields: customer, amount, currency');
+  assert.equal(ruleLine(ruleForm({ kind: 'send.known', tool: 'mcp__mail__send', recipientField: 'to', n: 50, period: 'day', channel: 'Email' })), 'Messages to people the team has written to before · in Email · at most 50 per day · fields: to');
   assert.throws(() => ruleForm({ ...RULE, period: undefined }), /limit per period/);
   assert.throws(() => ruleForm({ ...RULE, tool: 'mcp__shop__delete_order' }), /never cover deleting/);
   assert.throws(() => ruleForm({ ...RULE, tool: 'mcp__site__deploy' }), /going live/);
@@ -54,8 +54,8 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
     const a = await ask(p, s, [refund('cus_dana')]);
     assert.equal(a.card.state, 'answered', 'covered: no card waits for anyone');
     assert.equal(a.card.answer.by, `rule:${made.body.id}`);
-    assert.equal(a.card.answer.note, 'Done under standing rule #1: Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments');
-    assert.deepEqual([a.card.answer.ruleNumber, a.card.answer.ruleLine], [1, 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments']);
+    assert.equal(a.card.answer.note, 'Done under standing rule #1: Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments · fields: customer, amount, currency');
+    assert.deepEqual([a.card.answer.ruleNumber, a.card.answer.ruleLine], [1, 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments · fields: customer, amount, currency']);
     const res = await runner.next((f) => f.op === 'approval.result' && f.body.approval === a.approval);
     assert.deepEqual([res.body.decision, res.body.callsHash], ['approved', a.callsHash]);
 
@@ -67,7 +67,7 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
     assert.equal((await ask(p, s, [refund('cus_eli', 400)])).card.state, 'answered', 'per customer');
 
     const rules = (await p.call('GET', '/teams/shop/standing-rules')).body;
-    assert.deepEqual(rules.rules.map((r) => [r.number, r.line, r.words, r.used]), [[1, 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments', 'small refunds don\'t need me', { n: 3, amount: 3100 }]]);
+    assert.deepEqual(rules.rules.map((r) => [r.number, r.line, r.words, r.used]), [[1, 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments · fields: customer, amount, currency', 'small refunds don\'t need me', { n: 3, amount: 3100 }]]);
     assert.deepEqual(rules.never, ['newrecipient', 'live', 'delete', 'passkey', 'outside']);
 
     // Withdrawn: at once, no step-up, and the next one asks.
@@ -78,7 +78,7 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
     assert.deepEqual(ledger.map((l) => l.kind).reverse(), ['rule-added', 'rule-used', 'rule-used', 'rule-used', 'rule-withdrawn']);
     assert.equal(ledger.at(-1).words, 'small refunds don\'t need me', 'the owner\'s words, exactly');
     // Every rule row says which rule, as the list would (web-dev: no cross-reference).
-    const line = 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments';
+    const line = 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments · fields: customer, amount, currency';
     assert.ok(ledger.every((l) => l.ruleNumber === 1 && l.ruleLine === line));
     const used = ledger.find((l) => l.kind === 'rule-used');
     assert.equal(typeof used.what, 'string');
@@ -105,6 +105,52 @@ test('pay.known and send.known never cover someone new; a merge is never covered
     assert.equal(words.words, 'yes, that is our flour supplier');
     assert.equal(words.channel, 'approvals', 'decided through POST /v1/approvals');
     assert.match(words.what, /acct_stranger|acct_supplier|pay/i);
+  });
+});
+
+test('a rule covers only the fields it names, only its own kind of action, and never after outside text (security review)', async () => {
+  await plane(async (p) => {
+    const { s } = await setup(p);
+    const askAs = async (action, calls) => {
+      const callsHash = hashCalls(calls.map((c) => callOf(c.tool, c.input)));
+      const r = await p.call('POST', `/sessions/${s.session}/tools/request_approval`, { action, call: JSON.stringify(calls), why: 'Pay the supplier', calls, callsHash }, { authorization: `Bearer ${s.token}` });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      return { ...r.body, callsHash, card: (await p.call('GET', `/cards/${r.body.card}`)).body };
+    };
+    const approve = async (a) => {
+      const scope = approveScope({ tenant: 'acme', team: 'shop', approval: a.approval, version: 1, callsHash: a.callsHash });
+      assert.equal((await p.call('POST', `/approvals/${a.approval}`, { decision: 'approved', version: 1, note: 'ok' }, await p.su(scope))).status, 200);
+    };
+    const PAY = { kind: 'pay.known', tool: 'mcp__bank__pay', amountField: 'amount', currency: 'USD', recipientField: 'to', maxEach: 20000, total: 100000, period: 'week', free: ['memo'] };
+    assert.equal(ruleLine(ruleForm(PAY)), "Payments to people you've paid before · up to $200.00 each · at most $1,000.00 per week · fields: to, amount, memo");
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...PAY, fixed: { 'bad key': 1 }, words: 'regular suppliers' }, await p.su('rule:x'))).status, 400);
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...PAY, words: 'regular suppliers are fine' }, await p.su(`rule:${formHash(ruleForm(PAY))}`))).status, 201);
+    const SEND = { kind: 'send.known', tool: 'mcp__mail__send', recipientField: 'to', n: 10, period: 'day', free: ['subject', 'body'] };
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...SEND, words: 'replies to known customers' }, await p.su(`rule:${formHash(ruleForm(SEND))}`))).status, 201);
+    const pay = (input) => [{ tool: 'mcp__bank__pay', input: { amount: 5000, to: 'acct_supplier', ...input } }];
+    const mail = (input) => [{ tool: 'mcp__mail__send', input: { to: 'jo@shop.example', subject: 'Hi', body: 'Thanks', ...input } }];
+    await approve(await askAs('payment', pay({})));
+    await approve(await askAs('outbound-message', mail({})));
+    // Known now: covered, with a free field too.
+    assert.equal((await askAs('payment', pay({ memo: 'May invoice' }))).card.state, 'answered');
+    assert.equal((await askAs('outbound-message', mail({}))).card.state, 'answered');
+    // A field the owner never saw, or anything nested: a person decides.
+    assert.equal((await askAs('payment', pay({ destination_account: 'acct_attacker' }))).card.state, 'open');
+    assert.equal((await askAs('payment', pay({ memo: { note: 'x' } }))).card.state, 'open');
+    assert.equal((await askAs('outbound-message', mail({ bcc: 'attacker@evil.example' }))).card.state, 'open');
+    // Not the kind of action the rule is for (a deploy, a secret, anything passkey-only): a person decides.
+    assert.equal((await askAs('secret-write', pay({}))).card.state, 'open');
+    // A person decided just now, so the next one is covered again ...
+    const pending = await askAs('payment', pay({ memo: 'June' }));
+    assert.equal(pending.card.state, 'answered');
+    // ... until the teammate reads something from outside the team (an email, through a connector).
+    await p.db.tenant('acme', ({ q }) => q(`insert into events(tenant, team, id, type, version, time, actor_kind, actor_id, envelope)
+      values ('acme', 'shop', 'ev_outside1', 'session.result', 1, now(), 'role', 'chief-of-staff', $1)`,
+    [JSON.stringify({ id: 'ev_outside1', type: 'session.result', actor: { kind: 'role', id: 'chief-of-staff', session: s.session }, data: { call: 'c1', tool: 'mcp__mail__read', ok: true, outside: true } })]));
+    const after = await askAs('payment', pay({ memo: 'July' }));
+    assert.equal(after.card.state, 'open', 'rule.never.outside: a connector read counts, not only trigger wakes');
+    await approve(after);
+    assert.equal((await askAs('payment', pay({ memo: 'August' }))).card.state, 'answered', 'a person decided since');
   });
 });
 
