@@ -105,6 +105,7 @@ test('the Approvals page: rules with Withdraw, kinds not available yet, the neve
   await a.getByText('Decided by You on').waitFor();
   await a.getByText('"small refunds don\'t need me"', { exact: false }).waitFor();
   await a.getByText('Used once this week. $48.00 left.', { exact: false }).waitFor();
+  assert.deepEqual(await a.locator('code').allTextContents(), ['customer', 'amount'], 'field names in code style (CPO)');
   assert.match(await a.locator('button.info').getAttribute('data-tip'), /^Every detail an action under this rule may carry, named as Payments names them\. Anything not listed makes it ask you\.$/);
   for (const k of ['Replies to customers', 'Merges', 'Tasks that cost more than usual']) await rules.locator('.kinds li', { hasText: k }).getByText('Not available yet').waitFor();
   assert.equal(await rules.locator('.kinds button').count(), 0, 'nothing to pick for a kind not enforced yet');

@@ -362,6 +362,7 @@ export const EN = {
   "rule.owner": "Decided by {person} on {date}, in their words: \"{words}\"",
   "rule.part.fields": "may include: {fields}",
   "rule.part.fields.tip": "Every detail an action under this rule may carry, named as {system} names them. Anything not listed makes it ask you.",
+  "rule.part.system.fallback": "the connected system",
   "rule.part.with": "only when {field} is \"{value}\"",
   "rule.pay.known": "Payments to people you've paid before · up to {amount} each · at most {total} a {period} · in {system}",
   "rule.period.day": "day",
