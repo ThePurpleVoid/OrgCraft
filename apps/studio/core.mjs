@@ -173,6 +173,20 @@ export function code(changes) {
   return { needsCode: changes.some(isCodePath), commands };
 }
 
+/**
+ * The checks on a version of the team (spec L9 section 4.4), what `sync.sh check` runs in CI: the team validates with no
+ * errors, and sync's output equals what is committed. { ok, errors: [text], drift: [paths sync would change] }.
+ */
+export function checkTeam(read, { tmpRoot = null } = {}) {
+  const s = state(read);
+  if (s.noTeam) return { ok: false, errors: ['the team has no .agent-team/team.json'], drift: [] };
+  let p;
+  try { p = plan(read, s.spec, { strict: true, tmpRoot }); } catch (e) { return { ok: false, errors: [String(e?.message ?? e).slice(0, 300)], drift: [] }; }
+  const errors = p.issues.filter((i) => i.level === 'error').map((i) => `${i.where}: ${i.message}`);
+  const drift = p.changes.map((c) => c.path);
+  return { ok: !errors.length && !drift.length, errors, drift };
+}
+
 /** The preview the page shows: [{ path, status, before, after }], the issues, the commands and the kit upgrade. */
 export function preview(read, spec, { tmpRoot = null } = {}) {
   const files = filesOf(read);

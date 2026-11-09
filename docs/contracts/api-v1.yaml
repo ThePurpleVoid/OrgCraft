@@ -195,6 +195,43 @@ paths:
       tags: [events]
       summary: "The rollout after a publish merges (demo step 17): per role moved, next-task, finishing (with the change step's plan), off-finishing, off, no-report or unknown, and the summary. A role counts as moved only when a report after the merge names the new version. Read-only"
       responses: { "200": { description: "{ version, name, publishedAt, pr, roles: [{ role, state, teamVersion, status, task, lastAt, stale, plan? }], summary: { moved, of, finishing, offFinishing, unknown, noReport, allMoved } }; version null when nothing is published yet" } }
+  /teams/{team}/changes:
+    parameters:
+      - { $ref: "#/components/parameters/team" }
+      - { name: state, in: query, schema: { type: string, enum: [open, accepted, closed] } }
+    get:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "A managed team's change requests (ADR 0012, spec L9 section 4.5), newest first, at most 200. 409 not-managed for a team in a code host"
+      responses: { "200": { description: "{ changes: [{ number, title, state, base, head, branch, url, checks, capability, needsCode, createdBy, authorMember, acceptedBy, acceptedSha, createdAt, closedAt }] }" } }
+  /teams/{team}/changes/{change}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: change, in: path, required: true, schema: { type: integer, minimum: 1 } } ]
+    get:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "One change request: its title and body, the files it changes (before and after), the capability diff (Widens access, ADR 0013), the checks, and the commands it adds when it changes what the team runs"
+      responses: { "200": { description: "{ number, title, body, state, base, head, branch, url, checks: { ok, errors, drift }, capability: [{ kind, subject, subjects?, detail }], needsCode, files: [{ path, status, before, after }], commands }" } }
+  /teams/{team}/changes/{change}/accept:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: change, in: path, required: true, schema: { type: integer, minimum: 1 } } ]
+    post:
+      x-min-role: admin
+      x-interactive-only: true
+      tags: [studio]
+      summary: "Accept a change: the checks and the capability diff run again at its head against the current main. Red checks refuse (409 checks); a change a teammate drafted that widens itself or weakens a check refuses (403 self-widening); commands need an admin (403 publish-code); a non-empty capability diff needs x-step-up from a step-up scoped to this change (scope accept-change:<team>_<number>, named in the 401) and is audited with the person's words. Then main moves, fast-forward only (409 stale), and team.published (id published-<sha>, via managed) is appended once"
+      requestBody: { content: { application/json: { schema: { type: object, properties: { words: { type: string, maxLength: 2000, description: "What the person says about it, kept in the audit row" } } } } } }
+      responses: { "200": { description: "The change, accepted, with the files it changed" }, "401": { description: "step-up-required, with body.scope accept-change:<team>_<number>" }, "403": { description: "self-widening, publish-code" }, "409": { description: "stale, checks, or the change is not open" } }
+  /teams/{team}/changes/{change}/close:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: change, in: path, required: true, schema: { type: integer, minimum: 1 } } ]
+    post: { x-min-role: editor, tags: [studio], summary: "Close an open change without accepting it; its ref cr/<n> stays for history", responses: { "200": { description: The change, closed } } }
+  /teams/{team}/rollback:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: admin
+      x-interactive-only: true
+      tags: [studio]
+      summary: "Roll a managed team back (spec L9 section 4.5, S2-19): opens a change request whose tree is version `to`'s, on top of main. Its capability diff is against the current main, so access it restores needs the step-up when it is accepted"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [to], properties: { to: { type: string, pattern: "^[0-9a-f]{40}$" } } } } } }
+      responses: { "201": { description: "The new change request, as GET /teams/{team}/changes/{change}" }, "404": { description: "Not a version this team published" } }
   /teams/{team}/tasks:
     parameters:
       - { $ref: "#/components/parameters/team" }

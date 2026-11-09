@@ -85,6 +85,13 @@ export const ROUTES = [
   ['POST', '/teams/{team}/studio/v1/team/publish', 'editor'],
   ['GET', '/teams/{team}/studio/assets/{version}/{name}', 'viewer'],
   ['GET', '/teams/{team}/rollout', 'viewer'],
+  // A managed team's change requests (ADR 0012, changes.mjs): accepting one is an admin's, and widening access needs
+  // step-up on top; closing one is an editor's, like publishing.
+  ['GET', '/teams/{team}/changes', 'viewer'],
+  ['GET', '/teams/{team}/changes/{change}', 'viewer'],
+  ['POST', '/teams/{team}/changes/{change}/accept', 'admin'],
+  ['POST', '/teams/{team}/changes/{change}/close', 'editor'],
+  ['POST', '/teams/{team}/rollback', 'admin'],
   // The run inspector (N1, L19s-b): the list and the timeline show summaries only; a step's stored input or output is
   // for editors and every read is audited; deleting it early is an admin's, with step-up.
   ['GET', '/teams/{team}/tasks', 'viewer'],
