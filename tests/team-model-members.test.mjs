@@ -79,12 +79,12 @@ test('addMember: <type>-2 with the computed name "<Type> 2", the type\'s manager
   assert.throws(() => addMember(spec, kit, { type: 'backend-dev-2' }), /teammate, not a role/);
 });
 
-test('setDisplayName: only the title line changes, the id stays, and a duplicate is refused with 409', () => {
+test('setDisplayName: only the name changes (a legacy "# " name becomes the Name field), the id stays, and a duplicate is refused with 409', () => {
   const files = layer({ 'roles/backend-dev-2.extend.md': MAYA, 'ownership.json': JSON.stringify({ rows: [{ path: 'api/', writer: 'backend-dev-2' }] }, null, 2) + '\n' });
   const spec = importLayer(files, kit);
   setDisplayName(spec, 'backend-dev-2', '  Maya   Silva ', kit);
   const out = compileLayer(spec, kit);
-  assert.equal(out['roles/backend-dev-2.extend.md'], MAYA.replace('# Maya', '# Maya Silva'));
+  assert.equal(out['roles/backend-dev-2.extend.md'], MAYA.replace('# Maya\n\n', '**Name:** Maya Silva\n'));
   assert.equal(out['ownership.json'], files['ownership.json']);
   assert.ok(spec.roles['backend-dev-2']);
   const e = assert.throws(() => setDisplayName(spec, 'backend-dev', 'maya  silva', kit), (err) => err.status === 409 && err.message === 'Another teammate is already called Maya Silva');
