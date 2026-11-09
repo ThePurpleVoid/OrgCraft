@@ -156,3 +156,30 @@ test('the tier map and the cost fallback come from the shared price table; the S
   assert.equal(model('no tier line'), PRICES.tiers.standard, 'no tier: standard');
   assert.equal(model('**Model:** light', { tiers: { light: 'claude-other' } }), 'claude-other', 'the runner config overrides a tier');
 });
+
+/** A stand-in for the SDK's query(): records its options, then plays `steps(options)` and ends the turn. */
+const fakeSdk = (steps) => ({
+  tool, createSdkMcpServer,
+  query: ({ options }) => (async function* () {
+    await steps(options);
+    yield { type: 'result', session_id: 'sdk-1', usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0 };
+  })(),
+});
+const turnOpts = (o) => ({ env: { ANTHROPIC_API_KEY: 'k', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1/s/x' }, signal: new AbortController().signal, tools: [], callTool: async () => ({ text: '' }), prompt: 'go', systemPrompt: '', ...o });
+
+test('N1: the adapter passes each call\'s tool_use id to the policy, and reports what the tool returned after it ran', async () => {
+  const pre = [], post = [];
+  const a = agentSdkAdapter({ sdk: fakeSdk(async (options) => {
+    const [guard] = options.hooks.PreToolUse[0].hooks;
+    const [after] = options.hooks.PostToolUse[0].hooks;
+    await guard({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'tu_1' });
+    assert.deepEqual(await after({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_response: { stdout: 'a' }, tool_use_id: 'tu_1' }), {}, 'the result changes nothing the model sees');
+    await options.canUseTool('Read', { file_path: 'x' }, { toolUseID: 'tu_2' });
+  }) });
+  await a.turn(turnOpts({
+    preToolUse: async (tool, input, meta) => { pre.push([tool, meta.id]); return { allow: true }; },
+    postToolUse: async (tool, input, response, meta) => post.push([tool, response, meta.id]),
+  }));
+  assert.deepEqual(pre, [['Bash', 'tu_1'], ['Read', 'tu_2']]);
+  assert.deepEqual(post, [['Bash', { stdout: 'a' }, 'tu_1']]);
+});
