@@ -74,6 +74,7 @@ The mapping is exact in both directions. That is how the webhook sink forwards t
 | `usage.recorded` | `inputTokens`, `outputTokens`, `cost` (in the currency's minor unit), `currency` (always `USD` for now: runners price in US dollars and nothing converts; a hosted deployment keeps budgets in USD, B8), `io` (optional: the turn's own text as a `step_io` id, when the team captures `all`), `meeting` (optional: the meeting whose turn this was; the server counts it toward that meeting's cap only when the session was given one of its turns, and otherwise ignores the tag) |
 | `budget.warned` (at 80% of the day's cap), `budget.exhausted` | `scope` (day, run), `day` (UTC date), `spent`, `cap` (minor units), `currency`, `cardId` (string: the budget card's id, on exhausted) |
 | `budget.updated` | `currency`, `perDay`, `perRun` (minor units, or null), `sessions`, `meetingCap` (minor units, or null for a tenth of `perDay`; at most `perDay`, and lowering `perDay` below it lowers it too), `by` (member): the team's caps after a change |
+| `gateway.slowed` | `provider` (github, model), `waitMs`, `keys` (the pacing keys that held the call), `session`, `detail` (the words for the team: "Calls to … are being paced: this one waits about N s. Nothing is dropped."). At most once a minute per key, and only for a call made for a team (L20g) |
 
 ### Owner, chat and approvals
 
