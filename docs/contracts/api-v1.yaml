@@ -394,6 +394,39 @@ paths:
     parameters: [ { name: action, in: path, required: true, schema: { enum: [unsubscribe, resubscribe] } }, { name: t, in: query, required: true, schema: { type: string } } ]
     get: { tags: [notifications], security: [], summary: "No sign-in, the signed token is the proof. unsubscribe: shows a page asking to turn off one kind of Slack DM for one team (the button POSTs). Studio links in Slack messages use /email/link", responses: { "200": { description: A page } } }
     post: { tags: [notifications], security: [], summary: "unsubscribe: turns off one kind of Slack DM for one team; resubscribe: Turn it back on", responses: { "200": { description: A page } } }
+  /credentials:
+    get: { x-min-role: admin, tags: [connectors], summary: "Credentials (L20): name, label, service, grants (team and resource), health from the last Test connection, last used, and which teams and roles used each one in 30 days (from the release audit). Never a value", responses: { "200": { description: "{ credentials, services }" } } }
+    post:
+      x-min-role: admin
+      x-interactive-only: true
+      tags: [connectors]
+      summary: "Add a credential: sealed in its own row, granted to team resources of its service (none by default). Needs step-up scoped credential:<name>. The value is never returned again"
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name, service, value], properties: { name: { type: string, pattern: "^[A-Z][A-Z0-9_]{0,63}$" }, label: { type: string, maxLength: 80 }, service: { type: string, pattern: "^[a-z0-9][a-z0-9.-]{0,39}$" }, value: { type: string, maxLength: 16384 }, grants: { type: array, maxItems: 200, description: "Where it may be used: a resource of the same service type in that team's systems", items: { type: object, required: [team, resource], properties: { team: { type: string }, resource: { type: string } } } } } } } } }
+      responses: { "201": { description: "{ id, name, service, grants }" }, "401": { description: "Step-up required (problem type step-up-required)" }, "409": { description: A live credential already has this name } }
+  /teams/{team}/systems:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { x-min-role: viewer, tags: [connectors], summary: "The team's systems (resources.json: resources and bindings), names only, with the version", responses: { "200": { description: "{ resources, bindings, version }" } } }
+    put:
+      x-min-role: admin
+      x-interactive-only: true
+      tags: [connectors]
+      summary: "Set the team's systems (L20). Needs step-up scoped systems:<team>; audited with the diff and every command that receives secrets. A run freezes them at start; a run request never carries them"
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { resources: { type: array, maxItems: 50 }, bindings: { type: array, maxItems: 500 } } } } } }
+      responses: { "200": { description: "{ resources, bindings, version, added, removed, changed, bound, unbound, commands }" }, "401": { description: "Step-up required (problem type step-up-required)" } }
+  /credentials/{id}/test:
+    parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+    post: { x-min-role: admin, tags: [connectors], summary: "Test connection: one read-only call to the service (slack auth.test, github /user, stripe /v1/balance) through the gateway's pacing. A repeat within a minute answers the last result with again true", responses: { "200": { description: "{ ok, at, detail }" } } }
+  /credentials/{id}:
+    parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: admin
+      x-interactive-only: true
+      tags: [connectors]
+      summary: "Remove a credential and delete its sealed value. Needs step-up scoped credential:<name>"
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      responses: { "200": { description: Removed }, "401": { description: "Step-up required (problem type step-up-required)" } }
   /secrets:
     get: { x-min-role: admin, tags: [connectors], summary: Secret names and when they changed (never values), responses: { "200": { description: Names } } }
   /secrets/{name}:
