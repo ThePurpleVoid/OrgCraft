@@ -43,8 +43,8 @@ test('rule lines, use and ledger lines are the CPO\'s patterns, with unset parts
   assert.doesNotMatch(ledgerLine({ at: day(0), kind: 'denied', by: 'per_kim', what: 'x' }, me), /per_kim/);
   // Withdraw only for an owner: the control plane's DELETE is owner-only (code review).
   const live = { kinds: [], never: [], rules: [{ id: 'sr_x', number: 1, form: REFUND, words: 'w', createdBy: me, createdAt: day(0), expiresAt: day(9), live: true, used: { n: 0, amount: 0 } }] };
-  assert.match(rulesHtml(live, me), /data-withdraw="sr_x"/);
-  assert.doesNotMatch(rulesHtml(live, me, { owner: false }), /data-withdraw/);
+  assert.match(rulesHtml(live, me, { owner: true }), /data-withdraw="sr_x"/);
+  assert.doesNotMatch(rulesHtml(live, me), /data-withdraw/, 'Withdraw only when the caller says owner');
   // A name the server doesn't send yet is neutral; a null name means they no longer have access here (CPO).
   assert.match(ledgerLine({ at: day(0), kind: 'denied', by: 'per_kim', what: 'x' }, me), /Someone in Acme declined|Someone in .+ declined/);
   assert.match(ledgerLine({ at: day(0), kind: 'denied', by: 'per_kim', name: null, what: 'x' }, me), /Someone who no longer has access declined/);

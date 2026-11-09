@@ -59,7 +59,7 @@ export function usedLine(r) {
   return out.join(' ');
 }
 
-export function rulesHtml(data, me, { owner = true } = {}) {
+export function rulesHtml(data, me, { owner = false } = {}) {
   if (!data) return '';
   const rules = data.rules ?? [];
   const live = rules.filter((r) => r.live);
