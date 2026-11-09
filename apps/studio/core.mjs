@@ -9,7 +9,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { DEFAULT_KIT_SPEC, initExtras, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
-import { compileLayer, importLayer, resolveSpec, TEMPLATE_SCHEMA, templateCard, templateSpec, validate, withoutBlock } from '../../packages/team-model/index.mjs';
+import { compileLayer, importLayer, listMembers, resolveSpec, TEMPLATE_SCHEMA, templateCard, templateSpec, validate, withoutBlock } from '../../packages/team-model/index.mjs';
 import { loadKit, loadTemplates, readLayer, writeLayer } from '../../packages/team-model/node.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
@@ -99,7 +99,9 @@ export function state(read) {
   let kitRoles = null;
   try { kitRoles = JSON.parse(files.get('.agent-team/kit.lock.json')?.content ?? 'null')?.kitRoles ?? null; } catch { /* never synced */ }
   const spec = scratch(new Map([...files].filter(([p]) => p.startsWith('.agent-team/'))), (dir) => importLayer(readLayer(dir), kit));
-  return { kitVersion: VERSION, spec, kit, kitRoles, base: read.base ?? null, kitUpgrade: kitInfo.upgrade };
+  // ADR 0011: the seats and the role catalog, computed (never stored), for the Team page.
+  const { members, catalog } = listMembers(spec, kit);
+  return { kitVersion: VERSION, spec, kit, kitRoles, base: read.base ?? null, kitUpgrade: kitInfo.upgrade, members, catalog };
 }
 
 /** The files init writes once (config.sh, the roles README, ownership.md, the lane template, .gitignore). */

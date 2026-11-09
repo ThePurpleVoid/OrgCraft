@@ -22,6 +22,7 @@ import { ownershipFromMarkdown, suggestAreas, suggestChecks } from './suggest.mj
 import { loadKit, loadTemplates } from '../../packages/team-model/node.mjs';
 import * as core from './core.mjs';
 import { liveSource } from './live.mjs';
+import { changeUrl, localRollout, pendingOf } from './rollout.mjs';
 import { chatSource } from './chat.mjs';
 import { runRequest, RunRefused } from './runs.mjs';
 import { openPullRequest, prSupport, pullRequestText } from './pr.mjs';
@@ -252,6 +253,15 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       // The live board, and a stream that says when it changed (the page then fetches the board again).
       if (req.method === 'GET' && url.pathname === '/v1/team/board') {
         try { return send(res, 200, { source: live.kind, where: live.where, board: await live.board() }); } catch (e) { return send(res, 502, { source: live.kind, where: live.where, error: e.message }); }
+      }
+      // The rollout view (demo step 17): the control plane's when connected (it heard team.published), else this
+      // repository's default branch and the board. Either way this checkout says whether a publish is still waiting.
+      if (req.method === 'GET' && url.pathname === '/v1/team/rollout') {
+        if (chat.connected) {
+          const pending = pendingOf(root);
+          return relay(res, async () => { const r = await chat.rollout(); return { source: 'server', ...r, changeUrl: changeUrl(root, r), pending }; });
+        }
+        try { return send(res, 200, { source: live.kind, ...localRollout(root, await live.board()) }); } catch (e) { return send(res, 502, { source: live.kind, error: e.message }); }
       }
       // The chat with the chief of staff. The page refreshes it when the board stream says something changed.
       if (req.method === 'GET' && url.pathname === '/v1/team/chat') {

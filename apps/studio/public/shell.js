@@ -7,6 +7,7 @@ export const SHELL = `
   <nav id="pages" class="views pages" aria-label="Pages">
     <button type="button" data-page="team" aria-pressed="true">Team</button>
     <button type="button" data-page="meetings" aria-pressed="false">Meetings</button>
+    <button type="button" data-page="rollout" aria-pressed="false">Rollout</button>
     <button type="button" data-page="chat" aria-pressed="false">Chat</button>
   </nav>
   <div class="bar-actions team-only">
@@ -54,6 +55,7 @@ export const SHELL = `
 <section id="gallery-page" class="gallery-page gallery-only" aria-label="Start a team"></section>
 <section id="meetings-page" class="meetings-page meetings-only" aria-label="Meetings"></section>
 <section id="chat-page" class="chat-page chat-only" aria-label="Chat with the chief of staff"></section>
+<section id="rollout-page" class="rollout-page rollout-only" aria-label="Rollout of the published team" aria-live="polite"></section>
 <dialog id="publish-dialog">
   <form method="dialog" class="dialog">
     <h2>Publish the team</h2>

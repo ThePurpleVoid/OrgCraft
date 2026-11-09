@@ -410,3 +410,20 @@ test('the host log never gets a token, a JWT, a bearer header or a key', async (
   for (const bad of ['ghs_abc', 'github_pat_11', 'eyJhbGci', 'abcdefgh1234', 'MIIE']) assert.ok(!out.includes(bad), bad);
   assert.match(out, /^a \[token\] b \[token\] c \[jwt\] d Bearer \[token\] e \[key\] f$/);
 });
+
+test('GET /v1/team adds the computed members and catalog (team-json-0.22 section 4), the same from both backends', async () => {
+  const r = repos();
+  const m = await mounted(r.bare);
+  try {
+    const body = (await m.call('GET', '/v1/team')).body;
+    const local = localState(r.local);
+    assert.deepEqual(body.members, local.members);
+    assert.deepEqual(body.catalog, local.catalog);
+    const cos = body.members.find((x) => x.id === 'chief-of-staff');
+    assert.equal(cos.name, 'Chief of staff');
+    assert.equal(cos.type, 'chief-of-staff');
+    assert.equal(cos.reportsTo, 'owner');
+    assert.equal(body.catalog.find((c) => c.type === 'chief-of-staff').count, 1);
+    assert.ok(body.catalog.some((c) => c.count === 0), 'roles nobody on the team has are still in the catalog');
+  } finally { await m.gh.close(); }
+});
