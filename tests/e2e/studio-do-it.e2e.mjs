@@ -62,9 +62,13 @@ test('Do it covers the asks it can, leaves a held one open, and sends each card 
   assert.equal(await page.locator('[data-card-id="card_D"] #doit').count(), 1);
   assert.equal(await page.locator('#doit .doitcov').textContent(), 'Covers A and B. C and D need you to do something first.');
   await page.locator('#doit').click();
-  await page.locator('[data-card-id="card_A"] .answer', { hasText: /took the recommendation on A and B with Do it · in Chat$/ }).waitFor();
+  await page.locator('[data-card-id="card_A"] .answer', { hasText: /^You took the recommendation on A and B with Do it · in Chat$|You took the recommendation on A and B with Do it · in Chat$/ }).waitFor();
   await page.locator('[data-card-id="card_B"] .answer', { hasText: 'took the recommendation on A and B with Do it' }).waitFor();
   assert.equal(await page.evaluate(() => document.activeElement?.className), 'muted doit-none', 'focus on what is left (qa-web F1)');
+  // Still there after the live refresh redraws the cards.
+  await page.waitForTimeout(800);
+  assert.equal(await page.evaluate(() => document.activeElement?.className), 'muted doit-none', 'focus survives the redraw');
+  assert.doesNotMatch(await page.locator('[data-card-id="card_A"] .answer').textContent(), /no longer has access|Someone/);
   assert.deepEqual(cp.doIts[0].asks, [{ approval: 'apr_A', version: 1 }, { approval: 'apr_B', version: 1 }]);
   assert.equal(cp.doIts[0].via, 'chat');
   // Only the held ask is left: nothing to cover, so no button, and the reason.
@@ -94,6 +98,8 @@ test('one bound ask: one passkey for the set, scoped to it', { skip }, async () 
   await dlg.locator('button[type="submit"]').click();
   await page.locator('[data-card-id="card_A"] .answer').waitFor();
   assert.equal(cp.doIts.length, 1);
+  await page.waitForTimeout(800);
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.cardId), 'card_A', 'after the passkey, focus on the answered ask');
 });
 
 test('an ask that changed since it was shown: nothing is approved, the page says so, and Do it works on the new one', { skip }, async () => {

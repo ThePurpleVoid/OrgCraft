@@ -60,6 +60,8 @@ export const kindName = (kind) => t(`rule.kind.${kind}`);
  * a server that sends no name at all gets the CPO's neutral words (never claim they lost access). Never an id.
  */
 let org = '';
+/** The same words for a person anywhere (chat cards too): `name` undefined when the server sent no name field. */
+export const personWord = (id, name, me, organization = '') => (id && me && id === me ? t('notify.log.you') : name ? name : name === null ? t('notify.log.who.unknown') : t('person.loading', { organization: organization || org || t('org.fallback') }));
 const person = (id, name, me) => (id && me && id === me ? t('notify.log.you') : name ? name : name === null ? t('notify.log.who.unknown') : t('person.loading', { organization: org || t('org.fallback') }));
 
 /** Use this period: "Used 3 times this week. $40.00 left." */

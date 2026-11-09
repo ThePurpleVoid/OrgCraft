@@ -284,6 +284,11 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         return relay(res, async () => ({ connected: true, ...(await chat.live()) }));
       }
       // Approvals (L22): the standing rules and the ledger, from the control plane only.
+      // Who is signed in to the control plane, so a page can say "You" for this person's own answers (L39).
+      if (req.method === 'GET' && url.pathname === '/v1/team/me') {
+        if (!chat.connected) return send(res, 200, { connected: false });
+        return relay(res, async () => { const me = await chat.me(); return { connected: true, id: me?.id ?? me?.person?.id ?? null }; });
+      }
       if (req.method === 'GET' && url.pathname === '/v1/team/approvals') {
         if (!chat.connected) return send(res, 200, { connected: false });
         const before = url.searchParams.get('before');

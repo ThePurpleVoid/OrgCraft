@@ -106,7 +106,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       doIts.push(body);
       const decided = found.sort((a, b) => (a.c.data.letter < b.c.data.letter ? -1 : 1)).map(({ x, c }) => {
         const event = append('approval.decided', { kind: 'person', id: 'owner', via: 'studio' }, { approval: x.approval, cardId: c.id, decision: 'approved', by: 'owner', words: null, tap: 'do-it' }, c.subject);
-        const done = { ...c, version: c.version + 1, state: 'answered', answer: { option: 'approve', by: 'owner', at: new Date().toISOString(), tap: 'do-it', covered: found.map((f) => f.c.data.letter).sort(), channel: body.via ?? 'approvals' } };
+        const done = { ...c, version: c.version + 1, state: 'answered', answer: { option: 'approve', by: { id: 'per_owner', name: 'Owner' }, at: new Date().toISOString(), tap: 'do-it', covered: found.map((f) => f.c.data.letter).sort(), channel: body.via ?? 'approvals' } };
         cards.set(c.id, done);
         append('card.updated', { kind: 'system', id: 'cards' }, { card: done }, `card/${c.id}`);
         return { letter: c.data.letter, approval: x.approval, decision: 'approved', card: done, event };

@@ -5,7 +5,7 @@
 
 import { apiUrl, ask, askText, requestJson } from './env.js';
 import { t } from './i18n.js';
-import { ruleLine } from './approvals.js';
+import { personWord, ruleLine } from './approvals.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -230,14 +230,18 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   }
 
   /** What a closed card says instead of its buttons: its answer (#47 puts it on the card), or why it closed. */
+  // Who answered, by the rule the ledger uses (qa-web L22w/L39w): You; the name given; gone when the name is null;
+  // the neutral "Someone in {organization}" when no name field came at all.
+  const myId = () => me() ?? st.me ?? null;
+  const byId = (a) => (typeof a.by === 'object' ? a.by?.id : a.by) ?? null;
+  const byWord = (a) => personWord(byId(a), typeof a.by === 'object' && a.by && 'name' in a.by ? a.by.name : 'name' in a ? a.name : undefined, myId(), organization());
   function closedText(card) {
     if (card.state === 'answered' && card.answer) {
       const a = card.answer;
       // Done under a standing rule (L22): the rule's number and line, never "rule:sr_…".
       // Taken with Do it (L39): the letters the tap covered, in the ledger's words; never words the person didn't type.
       if (a.tap === 'do-it' && Array.isArray(a.covered)) {
-        const id = typeof a.by === 'object' ? a.by?.id : a.by;
-        const who = id && id === me() ? t('notify.log.you') : (typeof a.by === 'object' ? a.by?.name : null) ?? t('notify.log.who.unknown');
+        const who = byWord(a);
         return t('ledger.doit', { time: a.at ? fmtTime(a.at) : '', person: who, list: andList(a.covered.filter((x) => LETTER.test(x))), channel: t(`ledger.via.${a.channel === 'approvals' ? 'approvals' : 'chat'}`) }).replace(/^ · /, '');
       }
       if (Number.isInteger(a.ruleNumber) && (a.ruleForm || a.ruleLine)) return t('ledger.byrule', { time: a.at ? fmtTime(a.at) : '', n: a.ruleNumber, what: a.ruleForm ? ruleLine(a.ruleForm) : a.ruleLine }).replace(/^ · /, '');
@@ -323,8 +327,8 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       // Answered elsewhere (another window, another person) says who and when; a real change to an action says so.
       const done = r.data.cards.find((c) => c?.answer || (c?.state && c.state !== 'open'));
       const a = done?.answer;
-      const id = a ? (typeof a.by === 'object' ? a.by?.id : a.by) : null;
-      const who = id && id === me() ? t('notify.log.you') : (typeof a?.by === 'object' ? a.by?.name : null);
+      // A name only when the server gave one (or it is this person): never "no longer has access" on a guess.
+      const who = a && (byId(a) === myId() || (typeof a.by === 'object' && a.by?.name)) ? byWord(a) : null;
       flashNote(r.data.cards.every((c) => c?.answer || (c?.state && c.state !== 'open'))
         ? (who && a?.at ? t('card.answered', { person: who, time: fmtTime(a.at) }) : t('card.answered.unknown'))
         : t('card.changed'));
@@ -333,8 +337,10 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     if (!r.ok) { render(); if (!needsStepUp(r)) flashNote(r.data.error ?? `HTTP ${r.status}`); return focus($('#doit', root), log.parentElement.querySelector('.focus-miss')); }
     for (const d of r.data.decided ?? []) if (d.card?.id) takeCards([d.card]);
     await load();
-    const first = p.covered[0] && $(`[data-card-id="${CSS.escape(p.covered[0].id)}"]`, root);
-    focus($('#doit', root), $('.doit-none', root), first);
+    // The live refresh redraws the cards soon after, replacing the element: keep the focus there for a moment.
+    const sel = ['#doit', '.doit-none', p.covered[0] && `[data-card-id="${CSS.escape(p.covered[0].id)}"]`].filter(Boolean);
+    st.refocus = { sel, until: Date.now() + 3000 };
+    refocus();
   }
 
   function cardHtml(card, answered) {
@@ -377,8 +383,17 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   }
 
   /** Draws the chat, then brings a linked card or the budget into view once it is there (a notification's link). */
+  function refocus() {
+    const r = st.refocus;
+    if (!r || Date.now() > r.until) { st.refocus = null; return; }
+    const el = r.sel.map((x) => root.querySelector(x)).find(Boolean);
+    if (!el || document.activeElement === el) return;
+    if (!el.matches('button, a, input')) el.tabIndex = -1;
+    el.focus();
+  }
   function render() {
     draw();
+    refocus();
     if (!st.focus || !st.loaded) return;
     const el = st.focus.card ? log.querySelector(`[data-card-id="${CSS.escape(st.focus.card)}"], [data-subject-id="${CSS.escape(st.focus.card)}"]`) : st.focus.budget ? $('#cost', root) : null;
     if (!el) { const budget = st.focus.budget; st.focus = null; if (budget) return; return flashNote('The card that link points to is not in the recent chat. It may be older, or already answered.'); }
@@ -513,6 +528,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   }
 
   async function load() {
+    if (st.me === undefined) { st.me = null; api('/v1/team/me').then((r) => { if (r.ok && r.data.id) { st.me = r.data.id; render(); } }); }
     const r = await api('/v1/team/chat');
     st.loaded = true;
     if (r.data.connected === false) { st.connected = false; return render(); }
