@@ -6,6 +6,13 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
+  // L25 web half: words §6d does not have yet, asked of the CPO; interim.
+  'notify.save': 'Save',
+  'notify.zone.device': 'Use this device\'s time zone ({zone})',
+  'notify.log.who': 'Who',
+  'notify.channel.email': 'Email',
+  'notify.channel.slack': 'Slack',
+  'notify.tip.breakthrough': 'A decision only you can make, or the team stopped because today\'s budget is spent.',
 };
 
 export function t(key, vars = {}) {
