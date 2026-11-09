@@ -43,6 +43,7 @@ export const ROUTES = [
   ['PUT', '/teams/{team}/live/members/{member}', 'editor'],
   ['DELETE', '/teams/{team}/live/{override}', 'editor'],
   ['POST', '/approvals/{approval}', 'approver'],
+  ['POST', '/approvals/do-it', 'approver'],
   ['GET', '/cards/{card}', 'viewer'],
   ['POST', '/cards/{card}', 'approver'],
   ['POST', '/runners/codes', 'admin'],
