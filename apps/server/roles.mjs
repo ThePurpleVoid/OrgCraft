@@ -28,6 +28,8 @@ export const ROUTES = [
   ['POST', '/cards/{card}', 'approver'],
   ['POST', '/runners/codes', 'admin'],
   ['GET', '/runners', 'admin'],
+  ['GET', '/deployment', 'viewer'],
+  ['POST', '/deployment/check', 'editor'],
   ['DELETE', '/runners/{runner}', 'admin'],
   // Hosts (studio-embed.md section 6): registering one makes a sign-in client, so it is an admin's, with step-up.
   ['GET', '/hosts', 'admin'],
@@ -134,7 +136,7 @@ export function routeOf(method, path) {
  * refused for a host, so a new route is closed to hosts until someone decides otherwise.
  */
 export const HOST_ROUTES = new Set([
-  'GET /me/summary', 'GET /me/stream', 'GET /me/inbox',
+  'GET /me/summary', 'GET /me/stream', 'GET /me/inbox', 'GET /deployment',
   'POST /runs/{run}/{action}',
   'GET /cards/{card}', 'POST /cards/{card}',
   'GET /teams', 'GET /teams/{team}', 'GET /teams/{team}/events', 'GET /teams/{team}/events/stream', 'POST /teams/{team}/stream-tickets',

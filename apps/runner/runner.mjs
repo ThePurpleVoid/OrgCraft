@@ -22,7 +22,10 @@ const RENEW_BEFORE_MS = 2 * 60_000;
  */
 export function startRunner({ server, key, root, work = root, sandbox = null, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
   // The model key stays in this process; sessions reach the model through the loopback proxy (modelproxy.mjs).
-  const proxy = modelProxy === undefined ? startModelProxy({ log }) : modelProxy;
+  const proxy = modelProxy === undefined ? startModelProxy({ log, onHealth: (h) => reportHealth(h) }) : modelProxy;
+  // Outage mode (L29): the control plane hears when the model provider stops or starts answering, and starts no new
+  // work here while it doesn't. The hello carries the same state after every reconnect.
+  function reportHealth(h) { if (up) link.send('runner.health', { model: h }).catch(() => {}); }
   // The agent users (#28): one per live session from a pool, or one shared user for a runner of a single customer.
   const pool = sandboxPool(sandbox);
   let customer = null; // with one shared agent user: the only team this runner serves
@@ -40,7 +43,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
 
   const link = makeLink({
     server, key, log,
-    hello: () => ({ runner: id, version: RUNNER_VERSION, protocol: PROTOCOL, capabilities: { sandboxes: ['process'], runtimes: [adapter.runtime ?? 'agent-sdk'], maxSessions, slots: {} }, sessions: [...sessions.values()].filter((s) => s.state !== 'ended').map((s) => s.id) }),
+    hello: () => ({ runner: id, version: RUNNER_VERSION, protocol: PROTOCOL, capabilities: { sandboxes: ['process'], runtimes: [adapter.runtime ?? 'agent-sdk'], maxSessions, slots: {} }, sessions: [...sessions.values()].filter((s) => s.state !== 'ended').map((s) => s.id), ...(proxy?.health ? { health: { model: proxy.health() } } : {}) }),
   });
 
   /** Values that must never leave the runner in an event: the model key and the session's tool token. */
@@ -152,6 +155,8 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     tenant = w.tenant ?? tenant ?? 'local';
     if (welcomed) for (const [, a] of approvals) if (a.resolve && sessions.get(a.session)?.state !== 'ended') link.send('approval.wait', { session: a.session, approval: a.approval, resend: true });
     welcomed = true;
+    // Behind the supported window (R13): still served, but told to upgrade by a date. The Studio shows it too.
+    if (w.upgrade?.required) log(`this runner is ${w.upgrade.behind ?? 'too many'} versions behind the control plane (${w.upgrade.current}); upgrade by ${w.upgrade.by}`);
     // Sessions to resume after a reconnect: ids this runner still runs are kept; full bodies are (re)started.
     for (const a of w.sessions ?? w.assignments ?? []) if (a && typeof a === 'object') startSession({ resume: true, ...a });
     readyResolve(w);
