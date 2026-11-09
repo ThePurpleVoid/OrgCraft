@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mergeSettings } from '../bin/agent-team.mjs';
 import { readLog, summarize } from '../tools/board.mjs';
-import { fromHook, makeEvent, parseArgs, shellVars } from '../tools/report.mjs';
+import { checkSignoff, fromHook, kitVersion, makeEvent, parseArgs, shellVars } from '../tools/report.mjs';
 
 const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(KIT, 'bin/agent-team.mjs');
@@ -240,4 +240,46 @@ test('threads: the environment still wins, and a missing role is said, not guess
     assert.equal(none.status, 0);
     assert.match(none.stderr, /not reported \(no role/);
   }
+});
+
+// ------------------------------------------------------------------------------------------------ sign-offs (kit 0.23.0, L23s)
+
+const SHA40 = 'a'.repeat(40);
+test('signoff: version, version kind, result and unverified are parsed and checked before anything is sent', () => {
+  const f = parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--pr', '7', '--version', SHA40, '--result', 'pass', '--unverified', 'Android', '--unverified', 'Safari 17']);
+  assert.deepEqual([f.version, f.result, f.unverified], [SHA40, 'pass', ['Android', 'Safari 17']]);
+  assert.deepEqual(parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--unverified', 'none']).unverified, [], 'none is an empty list');
+  assert.equal(parseArgs(['qa-web', 'signoff', '-', '--to', 'cto']).unverified, undefined, 'left out is not stated');
+  assert.deepEqual(parseArgs(['editor', 'signoff', '-', '--to', 'cto', '--version', 'reply-881 r2', '--version-kind', 'draft']).versionKind, 'draft');
+  assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--version', 'abc1234']), /full commit id/);
+  assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--version', 'abc1234', '--version-kind', 'commit']), /full commit id/);
+  assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--version', SHA40, '--version-kind', 'build']), /commit, revision or draft/);
+  assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--result', 'ok']), /pass or fail/);
+  assert.throws(() => checkSignoff({ unverified: Array(21).fill('x') }), /at most 20/);
+  // The flags belong to sign-offs only.
+  const h = parseArgs(['qa-web', 'handoff', '-', '--to', 'cto', '--version', SHA40]);
+  assert.equal(h.version, undefined);
+});
+
+test('signoff: the event keeps an empty unverified and the board row keeps the version fields', () => {
+  const e = makeEvent({ role: 'qa-web', kind: 'signoff', to: 'cto', version: SHA40, versionKind: 'commit', result: 'pass', unverified: [], kit: '0.23.0' });
+  assert.deepEqual(e.unverified, [], 'an empty list means none, so it is sent');
+  const [row] = (() => { const d = mkdtempSync(join(tmpdir(), 'so-')); const f = join(d, 'e.jsonl'); writeFileSync(f, JSON.stringify(e) + '\n'); return readLog(f); })();
+  assert.deepEqual([row.version, row.versionKind, row.result, row.unverified, row.kit], [SHA40, 'commit', 'pass', [], '0.23.0']);
+});
+
+test('smoke: team-status.sh signoff sends HEAD as the full commit, the result, unverified and the kit version (with jq too)', { skip: process.platform === 'win32' }, () => {
+  const p = project();
+  execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'x'], { cwd: p.dir });
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: p.dir, encoding: 'utf8' }).trim();
+  const r = spawnSync('bash', ['scripts/agent-team/team-status.sh', 'qa-web', 'signoff', '-', '--to', 'cto', '--pr', '7', '--version', 'HEAD', '--result', 'pass', '--unverified', 'none'], { cwd: p.dir, env: p.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const line = JSON.parse(readFileSync(p.log, 'utf8').trim().split('\n').at(-1));
+  assert.deepEqual([line.version, line.versionKind, line.result, line.unverified], [head, 'commit', 'pass', []]);
+  assert.equal(line.kit, kitVersion(p.dir));
+  assert.match(line.kit, /^\d+\.\d+\.\d+$/);
+  // A short id is refused here, with the reason, and nothing is sent.
+  const bad = spawnSync('bash', ['scripts/agent-team/team-status.sh', 'qa-web', 'signoff', '-', '--to', 'cto', '--version', head.slice(0, 7)], { cwd: p.dir, env: p.env, encoding: 'utf8' });
+  assert.equal(bad.status, 0);
+  assert.match(bad.stderr, /not reported \(--version is a full commit id/);
 });

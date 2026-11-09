@@ -4,6 +4,8 @@
 #   team-status.sh <role>[#instance] <kind> [<status>|-] [--task "..."] [--issue N] [--pr N] [--branch b]
 #                  [--commit sha] [--platform p] [--to role] [--severity 1-4] [--evidence path,path] [--team-version sha]
 #                  [--detail "..."] [--session id]
+#                  signoff: [--version <full commit id>|HEAD] [--version-kind commit|revision|draft] [--result pass|fail]
+#                  [--unverified "what you did not check"]... (or --unverified none)
 #
 #   kind    status | handoff | bug | signoff | blocked | note | heartbeat
 #   status  idle | working | waiting | blocked | review | done   (required for kind=status; others keep the last one)
@@ -23,15 +25,16 @@
 # a missing tool or a refused report prints one line and exits 0. Without jq it runs report.mjs, which needs only Node.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-# Without jq, the Node reporter (same arguments, same event) does the job.
-if ! command -v jq >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+# Without jq, the Node reporter (same arguments, same event) does the job. It always sends sign-offs (kit 0.23.0): they
+# carry the version checked, the result, what was not checked and the kit's version, which it checks before sending.
+if command -v node >/dev/null 2>&1 && { ! command -v jq >/dev/null 2>&1 || [ "${1:-}" = signoff ] || [ "${2:-}" = signoff ]; }; then
   for r in "$here/report.mjs" "$here/../tools/report.mjs"; do [ -f "$r" ] && exec node "$r" "$@"; done
 fi
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 at_init
 
-usage() { sed -n '2,23p' "$0" >&2; exit 0; }
+usage() { sed -n '2,25p' "$0" >&2; exit 0; }
 # The role can be left out when AGENT_TEAM_ROLE (environment or .agent-team/local.env) names it.
 case "${1:-}" in status|handoff|bug|signoff|blocked|note|heartbeat)
   if [ -n "$AT_ROLE" ]; then set -- "$AT_ROLE" "$@"; else
