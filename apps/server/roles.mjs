@@ -132,6 +132,8 @@ export const ROUTES = [
   ['DELETE', '/teams/{team}/slack/channels/{channel}', 'admin'],
   ['GET', '/teams/{team}/systems', 'viewer'],
   ['PUT', '/teams/{team}/systems', 'admin'],
+  ['DELETE', '/teams/{team}/systems/pending', 'admin'],
+  ['POST', '/teams/{team}/systems/pending/apply', 'admin'],
   ['GET', '/credentials', 'admin'],
   ['POST', '/credentials', 'admin'],
   ['POST', '/credentials/{id}/test', 'admin'],

@@ -81,3 +81,6 @@ export function loadTemplates(kitDir = KIT_DIR) {
   for (const id of readdirSync(root).sort()) if (existsSync(join(root, id, 'template.json'))) out[id] = readTemplateDir(join(root, id));
   return out;
 }
+
+// L40b: the systems hash team.published carries; one implementation, shared with the synced report.mjs.
+export { canonicalSystemsHash, normalizeSystems, SYSTEMS_HASH_VERSION } from '../../tools/systems-hash.mjs';

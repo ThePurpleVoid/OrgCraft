@@ -61,9 +61,10 @@ test('the body names the merge commit on main, the roles it runs, the ones switc
   const b = publishedBody(root);
   assert.equal(b.version, merge, 'first-parent: the merge, not the branch commit');
   assert.equal(teamVersionAt(root), merge.slice(0, 12), 'what roles report is the same version');
-  assert.deepEqual({ ...b, version: undefined }, {
+  assert.match(b.systemsHash, /^[0-9a-f]{64}$/, 'no resources.json: the empty set\'s hash (checked below)');
+  assert.deepEqual({ ...b, version: undefined, systemsHash: undefined }, {
     kind: 'published', version: undefined, publishedAt: '2026-11-06T10:10:00.000Z', pr: 12, roles: ['filer'], off: ['clerk'],
-    plan: { clerk: { choice: 'handoff', to: 'filer' } }, changes: ['.agent-team/team.json', 'docs/team/roles/clerk.md'], by: 'Dana', source: 'report.mjs',
+    plan: { clerk: { choice: 'handoff', to: 'filer' } }, changes: ['.agent-team/team.json', 'docs/team/roles/clerk.md'], by: 'Dana', source: 'report.mjs', systemsHash: undefined,
   });
   const old = publishedBody(root, { sha: first.slice(0, 9), pr: '3', by: 'ci-bot' });
   assert.deepEqual([old.version, old.pr, old.roles, old.off, old.by], [first, 3, ['clerk', 'filer'], [], 'ci-bot']);
@@ -94,4 +95,45 @@ test('the CLI posts to the report URL and the mirror with their tokens, never th
   assert.equal(execFileSync('ls', ['-A', home], { encoding: 'utf8' }), '', 'nothing written to the local log');
   server.close();
   rmSync(root, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+});
+
+// L40b: team.published carries systemsHash; the kit, the Studio (team-model) and the server's stored form agree.
+test('systemsHash: the same resources.json hashes the same in report.mjs, team-model and the server\'s stored form', async () => {
+  const { canonicalSystemsHash, normalizeSystems } = await import('../packages/team-model/node.mjs');
+  const { checkSystems } = await import('../apps/server/credentials.mjs');
+  const { root } = repo();
+  const empty = canonicalSystemsHash(null);
+  assert.equal(publishedBody(root).systemsHash, empty, 'no resources.json: the empty set, so removing every system can match');
+  assert.equal(canonicalSystemsHash({ resources: [], bindings: [] }), empty);
+  assert.equal(canonicalSystemsHash(checkSystems({})), empty, 'the server stores no systems as null');
+  // Keys in an odd order, defaults missing and a config the server does not keep.
+  const file = {
+    bindings: [{ permission: 'write', role: 'filer', resource: 'slack' }],
+    resources: [{ type: 'slack', id: 'slack', config: { channel: '#ops' }, secrets: ['SLACK_TOKEN'], tools: { url: 'https://mcp.slack.example/' }, permissions: { read: ['slack.read*'] } }],
+  };
+  put(root, '.agent-team/resources.json', `${JSON.stringify(file, null, 2)}\n`);
+  git(root, 'add', '.'); git(root, 'commit', '-qm', 'Add Slack');
+  const body = publishedBody(root);
+  assert.match(body.systemsHash, /^[0-9a-f]{64}$/);
+  assert.equal(body.systemsHash, canonicalSystemsHash(file), 'the Studio hashes the draft file the same');
+  assert.equal(body.systemsHash, canonicalSystemsHash(checkSystems(file)), 'and the server its stored row');
+  assert.deepEqual(normalizeSystems(normalizeSystems(file)), normalizeSystems(file), 'normalizing twice changes nothing');
+  assert.equal(canonicalSystemsHash({ ...file, resources: [{ ...file.resources[0], tier: 'custom', egress: [], effects: {} }] }), body.systemsHash, 'spelled-out defaults are the same systems');
+  assert.notEqual(canonicalSystemsHash({ ...file, bindings: [{ ...file.bindings[0], permission: 'read' }] }), body.systemsHash);
+  // Unordered lists are sorted: reordering resources, bindings, secrets, egress or a permission's tools is the same.
+  const two = { resources: [file.resources[0], { id: 'gh', type: 'github', secrets: ['B', 'A'], egress: ['b.example', 'a.example'], permissions: { read: ['z', 'y'] } }], bindings: [file.bindings[0], { role: 'clerk', resource: 'gh', permission: 'read' }] };
+  const shuffled = { resources: [{ ...two.resources[1], secrets: ['A', 'B'], egress: ['a.example', 'b.example'], permissions: { read: ['y', 'z'] } }, two.resources[0]], bindings: [...two.bindings].reverse() };
+  assert.equal(canonicalSystemsHash(shuffled), canonicalSystemsHash(two));
+  // tools.args keep their order: it is the command line.
+  const args = (a) => canonicalSystemsHash({ resources: [{ id: 'x', type: 'x', tools: { command: 'npx', args: a } }] });
+  assert.notEqual(args(['a', 'b']), args(['b', 'a']));
+  // A file that does not parse names no systems: the field is left out.
+  put(root, '.agent-team/resources.json', '{ not json');
+  git(root, 'add', '.'); git(root, 'commit', '-qm', 'Broken');
+  assert.equal(publishedBody(root).systemsHash, undefined);
+  // An empty file (cat-file gives '' as on an error) is not taken for "no systems".
+  put(root, '.agent-team/resources.json', '');
+  git(root, 'add', '.'); git(root, 'commit', '-qm', 'Empty');
+  assert.equal(publishedBody(root).systemsHash, undefined);
+  rmSync(root, { recursive: true, force: true });
 });

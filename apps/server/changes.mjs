@@ -9,6 +9,7 @@
 //   - a non-empty capability diff needs a step-up (passkey) and writes an audit row with the person's own words;
 //   - main moves by compare-and-swap, fast-forward only (409 stale), and team.published is appended once per commit.
 import { managedBackend } from '../studio/managed.mjs';
+import { activatePending } from './credentials.mjs';
 import * as core from '../studio/core.mjs';
 import { capabilityDiff, selfCapability } from '../../packages/team-model/index.mjs';
 import { loadKit } from '../../packages/team-model/node.mjs';
@@ -132,6 +133,9 @@ export function createChanges({ db, m3, now = () => new Date(), backendFor = nul
       await emit(tenant, team, 'proposal.accepted', { connector: 'managed', ref: number, url: `/studio/changes/${number}`, branch: `cr/${number}`, headSha: c.head, result: done.sha }, who);
       const files = await b.diff(c.base, c.head);
       await emit(tenant, team, 'team.published', { version: done.sha, publishedAt: now().toISOString(), pr: number, roles: [], off: [], plan: {}, changes: files.map((f) => f.path).slice(0, 200), by: String(who.principal), via: 'managed' }, who, publishedId(done.sha));
+      // L40b: the server moved main itself, so it vouches for this publish: a systems change pending on this change's
+      // head (or the commit main moved to) switches on now, if its base is unmoved.
+      await m3.tx(tenant, (ctx) => activatePending(ctx, team, { shas: [c.head, done.sha], via: 'managed' }));
       return { ...view(done.change), files: files.map((f) => ({ path: f.path, status: f.status })) };
     },
 
