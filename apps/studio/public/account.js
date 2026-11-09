@@ -4,6 +4,7 @@
 // step-up with an existing passkey.
 import { addPasskey, call, dismissNotices, ensureSignedIn, esc, loadRecovery, needsStepUp, noticesBanner, orgName, recoveryBanner, signOut, stepUpDialog, withStepUp } from './auth.js';
 import { t } from './i18n.js';
+import { infoButton, installTips } from './tooltip.js';
 
 const root = document.getElementById('account');
 const dlg = document.getElementById('passkey-add');
@@ -19,7 +20,7 @@ export const roleWord = (role) => (['owner', 'admin', 'approver', 'editor', 'vie
 const fmt = (t) => (t ? new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '');
 
 function render() {
-  const ws = (me.workspaces ?? []).map((w) => `<li>${esc(w.name ?? w.tenant)} <span class="pill">${esc(roleWord(w.role))}</span></li>`).join('');
+  const ws = (me.workspaces ?? []).map((w) => `<li>${esc(w.name ?? w.tenant)} <span class="pill">${esc(roleWord(w.role))}</span>${w.role === 'member' ? ` ${infoButton(t('role.member.tip'), esc, roleWord(w.role))}` : ''}</li>`).join('');
   const rows = keys.map((k) => `<li class="passkey row"><span><strong>${esc(k.name || 'Passkey')}</strong> <span class="muted">added ${esc(fmt(k.createdAt))}${k.lastUsed ? `, last used ${esc(fmt(k.lastUsed))}` : ''}</span></span><button type="button" class="danger" data-remove="${esc(k.id)}">Remove</button></li>`).join('');
   root.innerHTML = `
     ${noticesBanner(me)}
@@ -193,4 +194,5 @@ root.addEventListener('click', async (e) => {
   }
 });
 
+installTips(document.body);
 load().catch((e) => { root.innerHTML = `<p class="result error" role="alert">${esc(e.message)}</p>`; });

@@ -135,7 +135,7 @@ test('Security › Recovery owners: the banner while fewer than two count, namin
   await stepUp(page, 'Add Dana Ruiz as a recovery owner');
   const pending = sec.locator('tbody tr.pending', { hasText: 'Dana Ruiz' });
   await sec.getByRole('status').getByText(/^Dana Ruiz becomes a recovery owner at .+\. We've told every owner\.$/).waitFor();
-  await pending.getByText(/^Counts from .+/).waitFor(); // the row names her once (qa-web)
+  await pending.getByText(/^Starts .+/).waitFor(); // the row names her once (qa-web)
   assert.equal(await pending.locator('.sr-only').textContent(), 'Has a passkey');
   await banner.waitFor(); // still only one counts until the 24 hours pass
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'recovery-owners-desktop-light.png'), fullPage: true });
