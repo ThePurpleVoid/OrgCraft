@@ -30,7 +30,7 @@ import { parseBrief } from '../tools/briefs.mjs';
 import { check as checkRoster, tree } from '../tools/roster.mjs';
 import { DEFAULT_MODELS, toSubagent } from '../tools/export-subagents.mjs';
 import { graphFrom } from '../tools/roster-graph.mjs';
-import { AGENTS_END, TARGETS, neutralInstructions, spliceBlock, teamTargets, withoutBlock, applyBindings, applyMeetings, checkTemplate, fitToPacks, roleTemplateFor, teamDoc, teamPacks, renderMeetings, templateCard, templateLayer, toZone, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, basedOnOf, briefOfMember, fillRole, parseExtension, renderHandsTo, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
+import { AGENTS_END, TARGETS, neutralInstructions, spliceBlock, teamTargets, withoutBlock, applyBindings, applyMeetings, checkTemplate, fitToPacks, roleTemplateFor, teamDoc, teamPacks, renderMeetings, templateCard, templateLayer, toZone, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, basedOnOf, briefOfMember, fillRole, roleTitle, parseExtension, renderHandsTo, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
 import { loadKit, loadTemplates, readLayer, readTemplateDir, writeLayer } from '../packages/team-model/node.mjs';
 
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -167,7 +167,14 @@ export function build(root) {
   const roles = applyMeetings(applyBindings(resolved.roles, resources), meetings);
   const { warnings } = resolved;
   const briefs = new Map(roles.map((r) => [r.slug, parseBrief(r.slug, fill(r.md, values))]));
-  const typeTitle = (type) => briefs.get(type)?.title ?? (kitRoleSlugs().includes(type) ? parseBrief(type, read(join(KIT, 'team/roles', `${type}.md`))).title : type);
+  // L11b: the role's title, never its own seat's name: the role's brief (the team's or the kit's) and its own "# " line.
+  const typeTitle = (type) => {
+    const dir = join(root, LAYER, 'roles');
+    const own = join(dir, `${type}.md`);
+    const typeMd = existsSync(own) ? read(own) : kitRoleSlugs().includes(type) ? read(join(KIT, 'team/roles', `${type}.md`)) : undefined;
+    const ext = join(dir, `${type}.extend.md`);
+    return (typeMd === undefined ? '' : roleTitle(fill(typeMd, values), existsSync(ext) ? fill(read(ext), values) : undefined)) || type;
+  };
   values.ORG_TREE = '```\n' + tree(roles.map((r) => (r.type ? { ...briefs.get(r.slug), type: r.type, typeTitle: typeTitle(r.type) } : briefs.get(r.slug)))) + '\n```';
   const out = new Map();
   const md = (path, text) => out.set(path, fill(text, values).trimEnd() + '\n' + mdMarker());
