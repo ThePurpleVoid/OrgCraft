@@ -13,6 +13,8 @@ import { randomBytes } from 'node:crypto';
 
 export const IO_MAX = 64 * 1024;
 export const IO_DAY_CAP = 50 * 1024 * 1024;
+// The original size a runner reports for a cut body is clamped to the column (int).
+const INT_MAX = 2 ** 31 - 1;
 export const PURGE_BATCH = 1000;
 const IO_ID = /^io_[0-9A-HJKMNP-TV-Z]{26}$/;
 const MIME = /^[a-z]+\/[a-z0-9.+-]{1,80}$/;
@@ -63,7 +65,8 @@ export async function attribute(q, env) {
   if (ROOT(env)) return set(taskId(Date.parse(env.time) || Date.now()), null);
   const sid = env.actor?.kind === 'role' ? env.actor.session : null;
   if (sid) {
-    const [s] = await q('select task, cause from sessions where id = $1', [sid]);
+    // The team too: a session id named by another team's event (a report token can name any) gives nothing.
+    const [s] = await q('select task, cause from sessions where id = $1 and team = $2', [sid, env.team]);
     let task = s?.task ?? null, cause = s?.cause ?? null;
     if (hint && hint !== cause) {
       const [d] = await q('select task from deliveries where team = $1 and session = $2 and event = $3 limit 1', [env.team, sid, hint]);
@@ -85,7 +88,7 @@ export async function attribute(q, env) {
   // Written by the server for a session (a card it asked for, an approval): that session's task.
   const forSession = env.actor?.session ?? env.data?.session;
   if (typeof forSession === 'string') {
-    const [s] = await q('select task, cause from sessions where id = $1', [forSession]);
+    const [s] = await q('select task, cause from sessions where id = $1 and team = $2', [forSession, env.team]);
     if (s) set(s.task, s.cause);
   }
 }
@@ -113,7 +116,7 @@ export async function projectTask(q, tenant, event) {
              cost = cost + $4, currency = coalesce(currency, $5),
              title = case when $6 <> '' then $6 else title end,
              work_item = coalesce(work_item, $7)
-           where id = $1`, [event.task, event.time, role, cost, cost ? String(event.data.currency ?? 'USD') : null, title, work]);
+           where id = $1 and team = $8`, [event.task, event.time, role, cost, cost ? String(event.data.currency ?? 'USD') : null, title, work, event.team]);
 }
 
 /**
@@ -141,7 +144,7 @@ export async function ingestStepIo(q, tenant, sess, b, { now = new Date(), probl
   const expires = new Date(now.getTime() + Number(days ?? 30) * 86_400_000);
   await q(`insert into step_io(id, tenant, team, session, task, part, mime, body, bytes, truncated, redactions, expires_at)
            values ($1, $2, $3, $4, (select task from sessions where id = $4), $5, $6, $7, $8, $9, $10, $11) on conflict (id) do nothing`,
-    [b.id, tenant, sess.team, sess.id, b.part, mime, text, Number.isSafeInteger(b.bytes) && b.bytes >= bytes ? b.bytes : bytes, b.truncated === true,
+    [b.id, tenant, sess.team, sess.id, b.part, mime, text, Number.isSafeInteger(b.bytes) && b.bytes >= bytes ? Math.min(b.bytes, INT_MAX) : bytes, b.truncated === true,
       hit ? [...new Set([...names, 'secret'])] : names, expires.toISOString()]);
   return { kept: true };
 }
