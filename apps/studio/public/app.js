@@ -855,7 +855,9 @@ function renderInspector() {
   name.onchange = () => {
     const v = name.value;
     try { const probe = JSON.parse(JSON.stringify(spec)); setDisplayName(probe, r.slug, v, S.kit); } catch (err) {
-      $('#i-name-msg').textContent = err.status === 409 ? t('teammate.dupname', { name: err.message.replace(/^Another teammate is already called /, '') }) : err.message;
+      const dup = /^Another teammate is already called (.+)$/.exec(err.message);
+      const address = /^(.+) is already a teammate's id, a role or "owner"/.exec(err.message);
+      $('#i-name-msg').textContent = dup ? t('teammate.dupname', { name: dup[1] }) : address ? t('teammate.name.address', { name: address[1] }) : err.message;
       name.setAttribute('aria-invalid', 'true'); return;
     }
     name.removeAttribute('aria-invalid');
