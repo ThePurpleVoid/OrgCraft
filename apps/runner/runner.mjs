@@ -53,7 +53,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     return out;
   };
 
-  function emit(s, type, data, { via = 'hook' } = {}) {
+  function emit(s, type, data, { via = 'hook', cause } = {}) {
     if (!MAY_EMIT(type, s.frontDoor)) { log(`not sent: the runner key may not send ${type}`); return Promise.resolve(); }
     const b = s.body;
     const event = {
@@ -62,6 +62,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
       actor: { kind: 'role', id: s.role, instance: b.instance ?? null, session: s.id, via },
       subject: `role/${s.role}`, run: b.run ?? null, teamVersion: b.teamVersion ?? null,
       data: Object.fromEntries(Object.entries(data ?? {}).filter(([, v]) => v !== undefined)),
+      ...(typeof cause === 'string' ? { cause } : {}),
     };
     const clean = scrub(s, event);
     const problems = checkEvent(clean);
@@ -123,7 +124,9 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     }
     let s;
     const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
-    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online });
+    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online,
+      // step.io (N1): sent before the event that names it; a control plane that does not keep step I/O refuses it, harmlessly.
+      stepIo: (frame) => { Promise.resolve(link.send('step.io', frame)).catch(() => {}); } });
     s.tools = tools;
     setToken(s, body.token, body.tokenExpires);
     sessions.set(body.session, s);

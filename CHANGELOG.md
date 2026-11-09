@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Runner: step boundaries and step I/O for the run inspector** (N1, ADR 0009, L19 runner part). Every tool call gets a `call` id, an `effect` and, when it repeats a failed call, `retryOf`, all set by the runner; an allowed call ends with a new `session.result` (ok, duration, a short redacted summary). When the team captures steps (`session.start.caps.capture`: all or tools), the input, the output and (with all) each turn's own text go out as `step.io` frames, redacted with the secrets' names and cut at 64 KiB, and the turn's events name their wake as `cause`. The Agent SDK adapter gains a PostToolUse hook that only observes. Contracts additive. **What existing teams see:** nothing until the control plane turns capture on.
+- **The kit moved to `github.com/ThePurpleVoid/OrgCraft`.** The old `PurpleGiragge/Agent-Team-Kit` account is gone. Install lines, docs, package metadata, schema `$id`s and the default pin `init` writes now say `github:ThePurpleVoid/OrgCraft#vX.Y.Z`; the release tags are the same commits. **What existing teams see on sync:** after changing their pin to `github:ThePurpleVoid/OrgCraft#v…`, the kit's links in the generated README and dashboard script. Nothing else changes: `.agent-team/` and the `AGENT_TEAM_*` names stay. The product rename to OrgCraft comes in a separate change.
+
 ## 0.21.1
 
 - **The kit moved to `github.com/ThePurpleVoid/OrgCraft`.** The old `PurpleGiragge/Agent-Team-Kit` account is gone. Install lines, docs, package metadata, schema `$id`s and the default pin `init` writes now say `github:ThePurpleVoid/OrgCraft#vX.Y.Z`; the release tags are the same commits. **What existing teams see on sync:** after changing their pin to `github:ThePurpleVoid/OrgCraft#v…`, the kit's links in the generated README and dashboard script. Nothing else changes: `.agent-team/` and the `AGENT_TEAM_*` names stay. The product rename to OrgCraft comes in a separate change.
