@@ -457,6 +457,7 @@ export const EN = {
   "systems.dropped.merged-different": "The system changes were dropped because the change that was accepted has different system changes from the ones you confirmed. Check them and publish again.",
   "systems.dropped.moved": "The system changes were dropped because your team's systems changed in the meantime. Publish again to send them.",
   "systems.ready": "Your team's checks say the change was accepted. OrgCraft hasn't confirmed this itself. Its system changes are ready to switch on.",
+  "systems.ready.term": "this message",
   "systems.ready.tip": "The message came from your team's own checks, not from your code host. Look at the change before you switch its system changes on.",
   "systems.removed": "{system} is removed",
   "systems.switchon": "Switch on now",
