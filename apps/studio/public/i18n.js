@@ -6,9 +6,6 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
-  // L18 code-reviewer round 1, asked of the CPO; interim words. The field stands in for the passkey until OIDC.
-  'stepup.label': 'Passkey',
-  'stop.resumed.you': 'You resumed it at {time}.',
 };
 
 export function t(key, vars = {}) {

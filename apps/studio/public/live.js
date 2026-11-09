@@ -94,14 +94,15 @@ export function createLive({ say = () => {}, titleOf = (x) => x, onChange = () =
     if (again) again.focus();
   });
   const liftOnce = (id) => act(async () => {
+    const x = st.items.find((i) => i.id === id);
     let r = await api('/v1/team/live/lift', { id });
     if (needsStepUp(r)) {
-      const x = st.items.find((i) => i.id === id);
       const action = x?.kind === 'member' ? t('stepup.action.resume.member', { teammate: titleOf(x.member) }) : t('stepup.action.resume.team');
       if (!(await stepUp(action, r.data.scope ?? `lift:${id}`))) return { ok: true, data: {} };
       r = await api('/v1/team/live/lift', { id });
     }
-    if (r.ok) say(t('stop.resumed.you', { time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }));
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (r.ok) say(x?.kind === 'member' ? t('stop.resumed.you.member', { teammate: titleOf(x.member), time }) : t('stop.resumed.you', { time }));
     return r;
   });
 

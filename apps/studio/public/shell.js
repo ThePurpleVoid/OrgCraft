@@ -103,7 +103,8 @@ export const SHELL = `
     <h2 id="live-stepup-title">${t('stepup.title')}</h2>
     <p class="why"></p>
     <p class="hint">${t('stepup.why')}</p>
-    <label>${t('stepup.label')} <input type="password" autocomplete="current-password" required></label>
+    <label>${t('stepup.label.interim')} <input type="password" autocomplete="current-password" aria-describedby="live-stepup-hint" required></label>
+    <p class="hint" id="live-stepup-hint">${t('stepup.label.interim.hint')}</p>
     <p class="result error" role="status"></p>
     <div class="dialog-actions"><button type="button" data-act="cancel">${t('stepup.cancel')}</button><button type="submit" class="primary">${t('stepup.button')}</button></div>
   </form>

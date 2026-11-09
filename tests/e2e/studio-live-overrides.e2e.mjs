@@ -76,10 +76,10 @@ test('Stop everything in one tap; the banner stays through a run start; Resume n
   await page.waitForFunction(() => document.activeElement?.matches?.('#live-banner [data-lift]'));
   assert.equal(cp.live.length, 1, 'nothing lifted without the step-up');
   await banner.getByRole('button', { name: 'Resume: Stop everything' }).click();
-  await dlg.getByLabel('Passkey').fill('wrong');
+  await dlg.getByLabel('Confirmation code').fill('wrong');
   await dlg.getByRole('button', { name: 'Use passkey' }).click();
   await dlg.getByText("That didn't work. Try again, or cancel.").waitFor();
-  await dlg.getByLabel('Passkey').fill(cp.stepUpSecret);
+  await dlg.getByLabel('Confirmation code').fill(cp.stepUpSecret);
   await dlg.getByRole('button', { name: 'Use passkey' }).click();
   await banner.waitFor({ state: 'hidden' });
   assert.equal(cp.live.length, 0);
@@ -133,7 +133,7 @@ test('SH-10: Pause a teammate from a 360 px phone; it stops at once, and comes b
 
   await page.locator('#live-banner [data-lift]').click();
   await page.locator('#live-stepup .why', { hasText: `Resume ${name}. Use your passkey` }).waitFor();
-  await page.locator('#live-stepup').getByLabel('Passkey').fill(cp.stepUpSecret);
+  await page.locator('#live-stepup').getByLabel('Confirmation code').fill(cp.stepUpSecret);
   await page.locator('#live-stepup').getByRole('button', { name: 'Use passkey' }).click();
   await page.locator('#live-banner').waitFor({ state: 'hidden' });
   assert.equal(cp.live.length, 0);
