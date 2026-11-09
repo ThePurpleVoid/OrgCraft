@@ -32,7 +32,7 @@ const SESSION_STATE = { 'session.started': 'running', 'session.idle': 'idle', 's
 const utcDay = (d) => d.toISOString().slice(0, 10);
 const backoff = (attempts) => BACKOFF[Math.min(Math.max(attempts - 1, 0), BACKOFF.length - 1)];
 
-export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null, triggers = null }) {
+export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null, triggers = null, gateway = null }) {
   const reg = () => (typeof runners === 'function' ? runners() : runners);
   const meetings = createMeetings({ db, m3, publicUrl, ...(meetingTurnMinutes ? { turnMinutes: meetingTurnMinutes } : {}) });
   const toolsUrl = () => String(publicUrl || '').replace(/\/+$/, '');
@@ -555,6 +555,56 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         const sess = await ownSession(q, conn, body.session);
         return ingestStepIo(q, conn.tenant, sess, body, { now: now(), problem: (m) => new Problem(400, m) });
       });
+    },
+
+    /**
+     * The outbound governor (L20g, R1a): a slot for one call to a provider on this session's behalf. The ack comes
+     * when the call may go, { waitedMs }: a busy key never refuses, it only delays. `installation` names a GitHub App
+     * installation the call uses.
+     */
+    async pace(conn, body) {
+      if (!gateway) throw new Problem(501, 'this control plane has no gateway');
+      const sess = await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, body?.session));
+      const installation = body?.installation === undefined || body.installation === null ? null : String(body.installation);
+      if (installation !== null && !/^\d{1,20}$/.test(installation)) throw new Problem(400, 'installation is a GitHub App installation id');
+      return gateway.pace({ provider: body?.provider, installation, tenant: conn.tenant, team: sess.team, session: sess.id });
+    },
+
+    /**
+     * A provider told the runner to slow down (a 429, a secondary rate limit, an abuse response): hold its keys. A
+     * runner's word holds a shared key for at most 5 minutes, so one bad runner can't stall every tenant for an hour;
+     * a longer hold is renewed by the next 429.
+     */
+    async 'governor.report'(conn, body) {
+      if (!gateway) throw new Problem(501, 'this control plane has no gateway');
+      await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, body?.session));
+      const installation = body?.installation === undefined || body.installation === null ? null : String(body.installation);
+      if (installation !== null && !/^\d{1,20}$/.test(installation)) throw new Problem(400, 'installation is a GitHub App installation id');
+      return gateway.block({ provider: body?.provider, installation, tenant: conn.tenant }, { retryAfterMs: body?.retryAfterMs, reason: body?.reason, maxMs: 300_000 });
+    },
+
+    /**
+     * An outward effect is about to be sent (R5): its idempotency key is recorded first. The ack is { state: 'first' }
+     * (send it), or { state: 'repeat', result } (it was done already: send nothing, use this result); a key in flight
+     * is refused.
+     */
+    async 'effect.begin'(conn, body) {
+      if (!gateway) throw new Problem(501, 'this control plane has no gateway');
+      const { result } = await m3.tx(conn.tenant, async (ctx) => {
+        const sess = await ownSession(ctx.q, conn, body?.session);
+        return gateway.begin(ctx, { key: body?.key, team: sess.team, session: sess.id, tool: body?.tool, callHash: body?.callHash ?? null });
+      });
+      return result;
+    },
+
+    /** How an outward effect ended: { key, ok, result }. A failed one may be tried again with the same key. */
+    async 'effect.end'(conn, body) {
+      if (!gateway) throw new Problem(501, 'this control plane has no gateway');
+      const { result } = await m3.tx(conn.tenant, async (ctx) => {
+        const sess = await ownSession(ctx.q, conn, body?.session);
+        return gateway.end(ctx, { key: body?.key, ok: body?.ok === true, result: body?.result ?? null, session: sess.id });
+      });
+      return result;
     },
 
     /** A fresh session token, sent as session.token. */
