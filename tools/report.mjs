@@ -188,10 +188,15 @@ export function publishedBody(cwd, { sha = '', pr = '', by = '' } = {}) {
   const before = roleSlugs(cwd, parent);
   const changes = (parent ? git(cwd, ['diff', '--name-only', parent, version, '--', ...TEAM_PATHS]) : git(cwd, ['ls-tree', '-r', '--name-only', version, '--', ...TEAM_PATHS]))
     .split('\n').filter(Boolean).slice(0, 200);
-  // No resources.json is no systems (the empty set's hash); one that does not parse names no systems at all.
+  // No resources.json is no systems (the empty set's hash). A file that does not parse, or a git error (the git helper
+  // gives '' for both a failure and nothing), names no systems at all: the field is left out.
   let systemsHash = null;
-  const raw = git(cwd, ['cat-file', '-p', `${version}:.agent-team/resources.json`]);
-  try { systemsHash = canonicalSystemsHash(raw ? JSON.parse(raw) : null); } catch { systemsHash = null; }
+  const layer = git(cwd, ['ls-tree', '--name-only', version, '--', '.agent-team/']).split('\n').filter(Boolean);
+  if (layer.length) {
+    try {
+      systemsHash = canonicalSystemsHash(layer.includes('.agent-team/resources.json') ? JSON.parse(git(cwd, ['cat-file', '-p', `${version}:.agent-team/resources.json`])) : null);
+    } catch { systemsHash = null; }
+  }
   const n = String(pr || /\(#(\d+)\)\s*$/.exec(subject ?? '')?.[1] || /^Merge pull request #(\d+)/.exec(subject ?? '')?.[1] || '');
   return {
     kind: 'published', version, publishedAt: new Date(publishedAt).toISOString(), pr: /^\d+$/.test(n) ? Number(n) : null,

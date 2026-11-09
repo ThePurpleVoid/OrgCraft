@@ -131,5 +131,9 @@ test('systemsHash: the same resources.json hashes the same in report.mjs, team-m
   put(root, '.agent-team/resources.json', '{ not json');
   git(root, 'add', '.'); git(root, 'commit', '-qm', 'Broken');
   assert.equal(publishedBody(root).systemsHash, undefined);
+  // An empty file (cat-file gives '' as on an error) is not taken for "no systems".
+  put(root, '.agent-team/resources.json', '');
+  git(root, 'add', '.'); git(root, 'commit', '-qm', 'Empty');
+  assert.equal(publishedBody(root).systemsHash, undefined);
   rmSync(root, { recursive: true, force: true });
 });
