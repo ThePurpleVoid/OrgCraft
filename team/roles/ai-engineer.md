@@ -17,15 +17,17 @@ The claude-api skill, the evals runner, the pricing doc
 A spec touching AI features; an eval regression
 
 ## Hands to
-Backend dev (wiring), backend tester, security reviewer
+- backend-dev: wiring
+- backend-tester
+- security-reviewer
 
 ## Rules
 - Run evals on a sample by default; a full run needs the chief of staff's approval because it costs money.
 - Every prompt change ships with its eval result in the PR.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh ai-engineer status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/ai-engineer.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.

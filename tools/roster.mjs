@@ -62,7 +62,10 @@ export function tree(roles) {
     k.forEach((r, i) => {
       const last = i === k.length - 1;
       const tag = [r.tier, r.status === 'dormant' ? 'dormant' : ''].filter(Boolean).join(', ');
-      out.push(`${prefix}${last ? '└─ ' : '├─ '}${r.slug} (${tag})`);
+      // A teammate (kit 0.22, team-json-0.22 §5.2) shows its name and the role it is based on:
+      // `Maya (backend-dev-2), Backend dev (standard)`. Roles without teammates keep `slug (tier)`.
+      const label = r.type ? `${r.title} (${r.slug}), ${r.typeTitle ?? r.type}` : r.slug;
+      out.push(`${prefix}${last ? '└─ ' : '├─ '}${label} (${tag})`);
       walk(r.slug, prefix + (last ? '   ' : '│  '));
     });
   };

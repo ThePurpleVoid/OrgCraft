@@ -115,7 +115,15 @@ export function graphFrom(briefs, ownership = '') {
     const execs = roles.filter((x) => x !== r && x.group === 'executive' && x.reportsTo !== 'owner').map((x) => x.slug);
     const special = { 'the direct reports': r.reports, 'direct reports': r.reports, 'other executives': peers, executives: execs };
     const found = [];
-    const rest = r.handsToRaw.replace(/\b(the direct reports|direct reports|other executives|executives)\b/gi, (m) => { found.push(...special[m.toLowerCase()]); return ''; });
+    // Kit 0.22: structured lines name their target, as "- slug: what" in a brief or "- Title (slug): what" after sync.
+    const prose = r.handsToRaw.split('\n').filter((line) => {
+      const m = /^[-*]\s*(?:[^(\n]*\(([a-z][a-z0-9-]*)\)|([a-z][a-z0-9]*(?:-[a-z0-9]+)*))\s*(?::.*)?$/.exec(line.trim());
+      const slug = m && (m[1] ?? m[2]);
+      if (slug && (bySlug.has(slug) || slug === 'owner')) { if (slug !== 'owner') found.push(slug); return false; }
+      if (slug && m[2] && /-/.test(slug)) return false; // a structured line to a role that isn't installed
+      return true;
+    }).join('\n');
+    const rest = prose.replace(/\b(the direct reports|direct reports|other executives|executives)\b/gi, (m) => { found.push(...special[m.toLowerCase()]); return ''; });
     const { slugs: hit, unresolved: u } = resolveTargets(rest, byTitle, alias);
     r.handsTo = [...new Set(found.concat(hit))].filter((s) => s !== r.slug);
     for (const to of r.handsTo) edges.push({ from: r.slug, to });

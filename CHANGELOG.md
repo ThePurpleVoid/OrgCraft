@@ -4,6 +4,26 @@
 
 - **Runner: step boundaries and step I/O for the run inspector** (N1, ADR 0009, L19 runner part). Every tool call gets a `call` id, an `effect` and, when it repeats a failed call, `retryOf`, all set by the runner; an allowed call ends with a new `session.result` (ok, duration, a short redacted summary). When the team captures steps (`session.start.caps.capture`: all or tools), the input, the output and (with all) each turn's own text go out as `step.io` frames, redacted with the secrets' names and cut at 64 KiB, and the turn's events name their wake as `cause`. The Agent SDK adapter gains a PostToolUse hook that only observes. Contracts additive. **What existing teams see:** nothing until the control plane turns capture on.
 - **The kit moved to `github.com/ThePurpleVoid/OrgCraft`.** The old `PurpleGiragge/Agent-Team-Kit` account is gone. Install lines, docs, package metadata, schema `$id`s and the default pin `init` writes now say `github:ThePurpleVoid/OrgCraft#vX.Y.Z`; the release tags are the same commits. **What existing teams see on sync:** after changing their pin to `github:ThePurpleVoid/OrgCraft#v…`, the kit's links in the generated README and dashboard script. Nothing else changes: `.agent-team/` and the `AGENT_TEAM_*` names stay. The product rename to OrgCraft comes in a separate change.
+- **Change safety for teammates (team-json-0.22 §5.4, local PR L14, kit half).** `diffTeams` now compares a teammate's brief the way sync writes it, and has five new kinds: `member-added` (instead of `role-added` for a teammate), `member-renamed` (the name alone; `impact` applies it at once), `type-changed` (Based on; treated as a brief change), `pool` (shrinking lets the extra sessions finish their task first) and `hands-to` (the structured targets, with `removed` and `added`). A prose change in Hands to is still a `brief` change. In `impact`, a dropped Hands to target with hand-offs still queued from that teammate (`inventory.roles[target].queuedFrom`) offers `reroute-queued` (recommended) or `keep-queued`. Switching off a teammate with hand-offs addressed to its role (`queuedByType`) adds `reroute-queued` to its choices.
+- **What a change widens: `capabilityDiff(published, draft, kit)`** (ADR 0013 rule 2, architecture S2-09). It returns typed items, each with the seat it widens:
+  - a seat added, or its Based on changed;
+  - a binding added or widened;
+  - an area gained;
+  - the model tier changed;
+  - Pool raised;
+  - a Hands to line to a reviewer or quality role removed;
+  - a gate check removed or changed (subject `*`, every seat);
+  - a bound system that gains a secret or changes its settings.
+
+  `selfCapability(items, author)` lists the items a change drafted by that seat may not make. The Studio's preview now returns `capability`, and the pull request it opens starts with a **Widens access** section. The sheet itself is web-dev's half of L14.
+- **What existing teams see on sync:** nothing; these are Studio and package changes.
+
+## 0.22.0
+
+- **Teammates: several agents of one role, each with its own name** (ADR 0011, `docs/specs/team-json-0.22.md`, local PRs L11 and L12). A file `.agent-team/roles/<id>.extend.md` with `**Based on:** <role>` adds a teammate: `backend-dev-2` called Maya, based on Backend dev. Sync writes `docs/team/roles/<id>.md` for each teammate. Its brief is the role's kit brief, then the team's edits to that role (minus the role's own seat settings: title, Based on, Reports to, Pool, Group, Owns and Hands to), then the teammate's own file (§1.2a). Its header says `**Type:** Backend dev (backend-dev)`, and with subagents on it gets its own `.claude/agents/<id>.md`. The org tree in the project instructions (and AGENTS.md) lists each teammate as `Maya (backend-dev-2), Backend dev (standard)`. A team without teammates gets the same tree as before. `packages/team-model` exports `briefOfMember`, `listMembers`, `setDisplayName` and the members' checks: nobody hands work to a teammate, two teammates doing the same job in one lane (use Pool), and a Hands to line that has to pick which of several teammates.
+- **Hands to is structured in every kit brief.** Each line that names a role is now `- <role id>: what is handed over` (or just `- <role id>`), so the Studio and Publish can warn about orphans and overlaps. Sync shows each line as `- Title (role id): what`. It leaves out a line to a role the team does not have, and drops the section when nothing is left. Lines that name no single role stay as prose. The kit's own wiring to a role that is off, or to a role the team has several of, no longer warns; a team's own line still does.
+- **`{{ROLE}}` in a brief is the role's own id.** The kit briefs' "Every thread, every task" footer uses it, and sync fills it in for each role and teammate, so a teammate's footer points at its own brief and memory file. A new role drafted or renamed in the Studio gets the same.
+- **What existing teams see on sync:** every role's Hands to section is rewritten: lines become `- Title (role id): what`, and lines to roles you do not have are gone. The footer and the rest of each brief read as before. Teams with their own `## Hands to` edits keep them; a line in your own words that names no role stays prose.
 
 ## 0.21.1
 
