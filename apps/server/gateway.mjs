@@ -15,6 +15,15 @@
 // never sent again; a repeat while it is in flight is refused (409). `end` records the result, or a failure that
 // allows one more attempt (the provider said nothing happened).
 import { Problem } from './store.mjs';
+import { redactPatterns } from './inspector.mjs';
+
+/** An effect's result with every string run through the inspector's credential patterns (L19), before it is kept. */
+function scrub(v, depth = 0) {
+  if (typeof v === 'string') return redactPatterns(v).text;
+  if (depth > 20 || v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map((x) => scrub(x, depth + 1));
+  return Object.fromEntries(Object.entries(v).map(([k, x]) => [redactPatterns(k).text, scrub(x, depth + 1)]));
+}
 
 const KEY = /^[A-Za-z0-9:._@/-]{1,200}$/;
 const EFFECT_KEY = /^[A-Za-z0-9:._-]{8,200}$/;
@@ -37,7 +46,15 @@ export const DEFAULT_LIMITS = Object.freeze({
   'tenant-github': { rate: 2, burst: 15 },
   model: { rate: 8, burst: 20 },
   'tenant-model': { rate: 1, burst: 6 },
+  // How often one tenant's runners may say "the provider slowed us down" (governor.report): 4 at once, then one in 30 s.
+  report: { rate: 1 / 30, burst: 4 },
 });
+
+/** A runner's report holds keys for at most this long; a shared account key, only on two tenants' word, once in 30 minutes. */
+export const REPORT_HOLD_MAX_MS = 5 * 60_000;
+const REPORT_QUORUM = 2;
+const REPORT_WINDOW_MS = 5 * 60_000;
+const REPORT_ACCOUNT_EVERY_MS = 30 * 60_000;
 
 /** The keys a call goes through, in lock order: account, installation, tenant share. */
 export function keysFor({ provider, account = null, installation = null, tenant = null }) {
@@ -67,7 +84,7 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
     return takeKeys(call, keysFor(call));
   }
 
-  async function takeKeys(call, keys) {
+  async function takeKeys(call, keys, { onlyNow = false } = {}) {
     const at = now();
     const t = at.getTime();
     const slowed = [];
@@ -91,6 +108,8 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
         row.allowAt = Math.max(t, row.tat - (burst - 1) * row.interval, blocked);
         goAt = Math.max(goAt, row.allowAt);
       }
+      // A limiter (onlyNow) takes the slot only when it is free now: a refused report is not counted.
+      if (onlyNow && goAt > t) return { waitMs: Math.round(goAt - t), keys: keys.map((k) => k.key) };
       for (const { key, kind, r, interval, tat } of rows) {
         const next = Math.max(tat, goAt) + interval;
         const slow = goAt - t >= 2000 && (!r.slowed_at || t - new Date(r.slowed_at).getTime() >= SLOWED_EVERY_MS);
@@ -148,19 +167,50 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
    * A provider answered with a rate limit or an abuse response: hold its keys until `retryAfterMs` from now (at
    * least a second, at most an hour), whichever key it was. `scope`: account (the App or key), installation or tenant.
    */
-  async function block(call, { retryAfterMs, reason = 'rate-limited', maxMs = 3600_000 }) {
-    const keys = keysFor(call);
+  async function block(call, { retryAfterMs, reason = 'rate-limited', maxMs = 3600_000, keys: only = null }) {
+    const keys = only ?? keysFor(call);
     const ms = Math.min(Math.max(Number(retryAfterMs) || 60_000, 1000), maxMs);
     const at = now();
     const until = new Date(at.getTime() + ms).toISOString();
     const why = String(reason).slice(0, 100);
     // An abuse or secondary limit is the account's; a plain rate limit holds every key the call went through.
-    const which = /abuse|secondary/i.test(why) ? keys.slice(0, 1) : keys;
+    const which = only ? keys : /abuse|secondary/i.test(why) ? keys.slice(0, 1) : keys;
     for (const k of which) {
       await db.system(`insert into governor_buckets(key, tat, blocked_until, blocked_reason) values ($1, $4, $2, $3)
                        on conflict (key) do update set blocked_until = greatest(coalesce(governor_buckets.blocked_until, excluded.blocked_until), excluded.blocked_until), blocked_reason = excluded.blocked_reason, updated_at = now()`, [k.key, until, why, at.toISOString()]);
     }
     return { blockedUntil: until, keys: which.map((k) => k.key) };
+  }
+
+  /**
+   * A runner says a provider slowed it down (governor.report). Its word is a tenant's, so it holds only that tenant's
+   * own keys (its share and its installation, which the caller has checked is the tenant's) for at most 5 minutes.
+   * The shared account key is held on the server's own observation (wrapFetch), or when runners of two tenants report
+   * it within 5 minutes; that hold lasts at most 5 minutes and is not renewed for 30, however often anyone reports.
+   * A tenant may report 4 times at once, then once in 30 s; past that it is refused (429).
+   */
+  async function reported(call, { retryAfterMs, reason = 'rate-limited' }) {
+    if (!call.tenant) throw new Problem(400, 'a report is a tenant\'s');
+    const keys = keysFor(call);
+    const limit = await takeKeys({ provider: call.provider }, [{ key: `report:${call.tenant}`, kind: 'report' }], { onlyNow: true });
+    if (limit.waitMs > 0) throw new Problem(429, `too many slow-down reports; the next one in about ${Math.ceil(limit.waitMs / 1000)} s`, { type: 'report-rate' });
+    const own = await block({ ...call, own: true }, { retryAfterMs, reason, maxMs: REPORT_HOLD_MAX_MS, keys: keys.slice(1) });
+    const account = keys[0];
+    const t = now().getTime();
+    const held = await db.systemTx(async ({ q }) => {
+      await q('insert into governor_buckets(key, tat) values ($1, $2) on conflict (key) do nothing', [account.key, new Date(t).toISOString()]);
+      const [r] = await q('select reports, report_held_at from governor_buckets where key = $1 for update', [account.key]);
+      const reports = Object.fromEntries(Object.entries(r.reports ?? {}).filter(([, at]) => t - Date.parse(at) < REPORT_WINDOW_MS));
+      reports[call.tenant] = new Date(t).toISOString();
+      const quorum = Object.keys(reports).length >= REPORT_QUORUM;
+      const recent = r.report_held_at && t - new Date(r.report_held_at).getTime() < REPORT_ACCOUNT_EVERY_MS;
+      await q('update governor_buckets set reports = $2::jsonb, report_held_at = case when $3::boolean then $4::timestamptz else report_held_at end where key = $1',
+        [account.key, JSON.stringify(reports), quorum && !recent, new Date(t).toISOString()]);
+      return quorum && !recent;
+    });
+    if (!held) return own;
+    const acct = await block(call, { retryAfterMs, reason, maxMs: REPORT_HOLD_MAX_MS, keys: [account] });
+    return { blockedUntil: own.blockedUntil, keys: [...acct.keys, ...own.keys] };
   }
 
   /**
@@ -201,7 +251,7 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
 
   function busy(waitMs) {
     const s = Math.ceil(waitMs / 1000);
-    return new Response(JSON.stringify({ type: 'paced', message: `GitHub is being paced for this workspace: try again in about ${s} s. Nothing was sent.`, retryAfter: s }),
+    return new Response(JSON.stringify({ type: 'paced', message: `GitHub calls are being paced: try again in about ${s} s. Nothing was sent.`, retryAfter: s }),
       { status: 503, headers: { 'content-type': 'application/json', 'retry-after': String(s) } });
   }
 
@@ -219,9 +269,9 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
     const [row] = await ctx.q(`insert into effects(tenant, key, team, session, tool, call_hash, started_at) values ($1, $2, $3, $4, $5, $6, $7)
                                on conflict (tenant, key) do nothing returning key`, [ctx.tenant, key, team, session, tool, callHash, ctx.now.toISOString()]);
     if (row) return { state: 'first' };
-    const [e] = await ctx.q('select tool, call_hash, team, state, result, started_at from effects where tenant = $1 and key = $2 for update', [ctx.tenant, key]);
+    const [e] = await ctx.q('select tool, call_hash, team, state, result, started_at, approval as used from effects where tenant = $1 and key = $2 for update', [ctx.tenant, key]);
     // The same key for another call is a bug or an attack: never answer it with someone else's result.
-    if (e.tool !== tool || (e.call_hash && callHash && e.call_hash !== callHash)) throw new Problem(409, `idempotency key ${key.slice(0, 40)} belongs to another call`, { type: 'effect-key' });
+    if (e.tool !== tool || (e.call_hash && callHash && e.call_hash !== callHash) || (e.team && team && e.team !== team)) throw new Problem(409, `idempotency key ${key.slice(0, 40)} belongs to another call`, { type: 'effect-key' });
     if (e.state === 'done') return { state: 'repeat', result: e.result ?? null };
     // Still started long after it began: whoever sent it was cut off, and nobody knows whether it went. It becomes
     // `unknown`, and is never sent again on a runner's word: only with a person's approval to resend it (action
@@ -232,9 +282,11 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
     }
     if (e.state === 'started') throw new Problem(409, 'this effect is already being sent; wait for its result', { type: 'effect-in-flight' });
     if (e.state === 'unknown') {
-      if (!(await approved(ctx, approval, e.team, key))) return { state: 'unknown', startedAt: new Date(e.started_at).toISOString(), detail: 'It may or may not have been sent. Ask a person (approval action effect-resend, call the key) before sending it again.' };
+      if (approval && approval === e.used) throw new Problem(409, 'that approval was already used to resend this effect; a person decides again', { type: 'effect-approval-used' });
+      if (!(await approved(ctx, approval, e.team, key, e.started_at))) return { state: 'unknown', startedAt: new Date(e.started_at).toISOString(), detail: 'It may or may not have been sent. Ask a person (approval action effect-resend, call the key) before sending it again.' };
     }
-    await ctx.q("update effects set state = 'started', attempts = attempts + 1, started_at = $3, done_at = null where tenant = $1 and key = $2", [ctx.tenant, key, ctx.now.toISOString()]);
+    await ctx.q("update effects set state = 'started', attempts = attempts + 1, started_at = $3, done_at = null, approval = coalesce($4, approval) where tenant = $1 and key = $2",
+      [ctx.tenant, key, ctx.now.toISOString(), e.state === 'unknown' ? approval : null]);
     return { state: 'first', retry: true };
   }
 
@@ -245,22 +297,27 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
    */
   async function end(ctx, { key, ok, result = null, session = null, approval = null }) {
     if (typeof key !== 'string' || !EFFECT_KEY.test(key)) throw new Problem(400, 'key is the effect\'s idempotency key');
-    const json = result === null || result === undefined ? null : JSON.stringify(result);
+    const json = result === null || result === undefined ? null : JSON.stringify(scrub(result));
     const kept = json && json.length > RESULT_MAX ? JSON.stringify({ truncated: true, bytes: json.length }) : json;
-    const [e] = await ctx.q('select state, session, team from effects where tenant = $1 and key = $2 for update', [ctx.tenant, key]);
+    const [e] = await ctx.q('select state, session, team, started_at, approval as used from effects where tenant = $1 and key = $2 for update', [ctx.tenant, key]);
+    if (e?.state === 'unknown' && approval && approval === e.used) throw new Problem(409, 'that approval was already used to resend this effect; a person decides again', { type: 'effect-approval-used' });
     const mine = e?.state === 'started' && (!session || e.session === session);
-    const decided = e?.state === 'unknown' && await approved(ctx, approval, e.team, key);
+    const decided = e?.state === 'unknown' && await approved(ctx, approval, e.team, key, e.started_at);
     if (!mine && !decided) throw new Problem(409, e?.state === 'unknown' ? 'this effect may or may not have gone: a person decides (approval effect-resend)' : 'no effect in flight with that key', { type: 'effect-key' });
     await ctx.q('update effects set state = $3, result = $4::jsonb, done_at = $5 where tenant = $1 and key = $2', [ctx.tenant, key, ok ? 'done' : 'failed', kept, ctx.now.toISOString()]);
     return { state: ok ? 'done' : 'failed' };
   }
 
-  /** A person approved resending (or settling) this unknown effect: action effect-resend, its call the key, on its team. */
-  async function approved(ctx, approval, team, key) {
+  /**
+   * A person approved resending (or settling) this unknown effect: action effect-resend, its call the key, on its
+   * team, decided after the attempt that was cut off began. A resend starts a new attempt, so an approval counts once:
+   * if that one is cut off too, a person decides again.
+   */
+  async function approved(ctx, approval, team, key, startedAt) {
     if (typeof approval !== 'string' || !approval) return false;
-    return (await ctx.q(`select 1 from approvals where id = $1 and tenant = $2 and team = $3 and state = 'approved' and action = 'effect-resend' and call->>'command' = $4`,
-      [approval, ctx.tenant, team, key])).length > 0;
+    return (await ctx.q(`select 1 from approvals where id = $1 and tenant = $2 and team = $3 and state = 'approved' and action = 'effect-resend' and call->>'command' = $4
+                         and decided_at > $5`, [approval, ctx.tenant, team, key, new Date(startedAt).toISOString()])).length > 0;
   }
 
-  return { take, stage, pace, block, wrapFetch, begin, end, keysFor };
+  return { take, stage, pace, block, reported, wrapFetch, begin, end, keysFor };
 }

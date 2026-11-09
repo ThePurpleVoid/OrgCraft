@@ -3,7 +3,7 @@
 -- `governor_buckets`: one row per pacing key (a provider account, an installation, a tenant's share of a provider).
 -- `tat` is the key's theoretical arrival time (GCRA): a call may go at tat minus the burst allowance, and moves tat on
 -- by one interval. Calls are delayed, never dropped. `blocked_until` holds a key back after the provider answered with
--- a rate limit or an abuse response. Keys span tenants (a shared App or model key), so the table is the control
+-- a rate limit or an abuse response (the server's own observation; see `reports` for what runners say). Keys span tenants (a shared App or model key), so the table is the control
 -- plane's own: no tenant column, row level security on with no policy, read and written as the owner only.
 --
 -- `effects`: every outward effect's idempotency key (task, step and call hash, or the sidecar's key), per tenant. The
@@ -22,6 +22,10 @@ create table governor_buckets (
   blocked_until timestamptz,
   blocked_reason text,
   slowed_at timestamptz,
+  -- A shared account key only: the tenants whose runners said the provider slowed them, and when (kept 5 minutes).
+  -- A runner's word alone never holds the shared key; two tenants' do, at most once every 30 minutes.
+  reports jsonb not null default '{}',
+  report_held_at timestamptz,
   updated_at timestamptz not null default now()
 );
 alter table governor_buckets enable row level security;
@@ -36,6 +40,8 @@ create table effects (
   state text not null default 'started' check (state in ('started', 'done', 'failed', 'unknown')),
   result jsonb,
   attempts int not null default 1,
+  -- The effect-resend approval its latest attempt was sent under; an approval counts once.
+  approval text,
   created_at timestamptz not null default now(),
   started_at timestamptz not null default now(),
   done_at timestamptz,

@@ -469,6 +469,19 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
 
   // ---- Runner ops after hello (section 4) ---------------------------------------------------------------------------
 
+  /**
+   * An installation a runner names (pace, governor.report) must be one its own tenant proved it owns (S9), so a
+   * runner can never pace on, or hold, another tenant's installation. Answers the id as text, or null for none.
+   */
+  async function ownInstallation(conn, given) {
+    if (given === undefined || given === null) return null;
+    const installation = String(given);
+    if (!/^\d{1,20}$/.test(installation)) throw new Problem(400, 'installation is a GitHub App installation id');
+    const rows = await db.system('select 1 from github_installations where installation_id = $1::bigint and tenant = $2', [installation, conn.tenant]);
+    if (!rows.length) throw new Problem(403, 'that installation was not proved by this account');
+    return installation;
+  }
+
   async function ownSession(q, conn, sid) {
     const [s] = await q('select id, team, run, role, instance, runner, state, team_version from sessions where id = $1', [sid]);
     if (!s || s.runner !== conn.runner) throw new Problem(403, `session ${sid} is not run by this runner`);
@@ -567,22 +580,20 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     async pace(conn, body) {
       if (!gateway) throw new Problem(501, 'this control plane has no gateway');
       const sess = await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, body?.session));
-      const installation = body?.installation === undefined || body.installation === null ? null : String(body.installation);
-      if (installation !== null && !/^\d{1,20}$/.test(installation)) throw new Problem(400, 'installation is a GitHub App installation id');
+      const installation = await ownInstallation(conn, body?.installation);
       return gateway.stage({ provider: body?.provider, installation, tenant: conn.tenant, team: sess.team, session: sess.id }, body?.stage ?? 'own');
     },
 
     /**
-     * A provider told the runner to slow down (a 429, a secondary rate limit, an abuse response): hold its keys. A
-     * runner's word holds a shared key for at most 5 minutes, so one bad runner can't stall every tenant for an hour;
-     * a longer hold is renewed by the next 429.
+     * A provider told the runner to slow down (a 429, a secondary rate limit, an abuse response). Its word holds only
+     * its own tenant's keys, for at most 5 minutes; the shared App or key only when two tenants say so (gateway
+     * `reported`). Rate limited per tenant.
      */
     async 'governor.report'(conn, body) {
       if (!gateway) throw new Problem(501, 'this control plane has no gateway');
       await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, body?.session));
-      const installation = body?.installation === undefined || body.installation === null ? null : String(body.installation);
-      if (installation !== null && !/^\d{1,20}$/.test(installation)) throw new Problem(400, 'installation is a GitHub App installation id');
-      return gateway.block({ provider: body?.provider, installation, tenant: conn.tenant }, { retryAfterMs: body?.retryAfterMs, reason: body?.reason, maxMs: 300_000 });
+      const installation = await ownInstallation(conn, body?.installation);
+      return gateway.reported({ provider: body?.provider, installation, tenant: conn.tenant }, { retryAfterMs: body?.retryAfterMs, reason: body?.reason });
     },
 
     /**

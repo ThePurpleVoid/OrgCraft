@@ -138,13 +138,23 @@ test('an effect cut off mid-send becomes unknown, and is sent again only with a 
     assert.match(u.detail, /Ask a person/);
     assert.equal((await begin()).state, 'unknown', 'and it stays that way on a runner\'s word');
     await assert.rejects(m3.tx('acme', (ctx) => g.end(ctx, { key: 'eff_crashed01', ok: false, session: 'ses_a' })), /a person decides/, 'marking it failed would let it be resent');
-    const card = async (id, state, command) => db.system(`insert into approvals(id, tenant, team, session, action, call, card, state, expires_at) values ($1, 'acme', 'shop', 'ses_a', 'effect-resend', $2, 'crd_' || $1, $3, now() + interval '1 day')`, [id, JSON.stringify({ command }), state]);
-    await card('apr_pending', 'pending', 'eff_crashed01');
-    await card('apr_other', 'approved', 'eff_someother');
-    await card('apr_yes', 'approved', 'eff_crashed01');
+    const card = async (id, state, command, decidedAt) => db.system(`insert into approvals(id, tenant, team, session, action, call, card, state, decided_at, expires_at) values ($1, 'acme', 'shop', 'ses_a', 'effect-resend', $2, 'crd_' || $1, $3, $4, now() + interval '1 day')`, [id, JSON.stringify({ command }), state, decidedAt]);
+    await card('apr_pending', 'pending', 'eff_crashed01', null);
+    await card('apr_other', 'approved', 'eff_someother', '2026-11-09T12:17:00Z');
+    await card('apr_early', 'approved', 'eff_crashed01', '2026-11-09T11:00:00Z');
+    await card('apr_yes', 'approved', 'eff_crashed01', '2026-11-09T12:17:00Z');
     assert.equal((await begin({ approval: 'apr_pending' })).state, 'unknown', 'a pending card is not an answer');
     assert.equal((await begin({ approval: 'apr_other' })).state, 'unknown', 'an approval for another effect does not count');
+    assert.equal((await begin({ approval: 'apr_early' })).state, 'unknown', 'nor one decided before the attempt that was cut off');
+    tick(2 * 60_000);
     assert.deepEqual(await begin({ approval: 'apr_yes' }), { state: 'first', retry: true }, 'the person said send it again');
+    tick(16 * 60_000);
+    await assert.rejects(begin({ approval: 'apr_yes' }), (e) => e.status === 409 && /already used/.test(e.message), 'cut off again: the same approval never resends it twice');
+    assert.equal((await begin()).state, 'unknown');
+    await card('apr_settle', 'approved', 'eff_crashed01', '2026-11-09T12:40:00Z');
+    tick(10 * 60_000);
+    assert.deepEqual((await m3.tx('acme', (ctx) => g.end(ctx, { key: 'eff_crashed01', ok: true, result: { id: 'm9' }, approval: 'apr_settle' }))).result, { state: 'done' }, 'a person said it went');
+    assert.deepEqual(await begin(), { state: 'repeat', result: { id: 'm9' } });
   });
 });
 
@@ -154,6 +164,9 @@ test('runner ops: pace answers a wait, effect.begin and effect.end keep a replay
     assert.equal((await p.call('PUT', '/teams/shop/budget', { perDay: 1000, sessions: 2 }, await p.su())).status, 200);
     const r = await registerRunner(p.call);
     const runner = await fakeRunner(p.base, r.key, { runner: r.id });
+    await p.db.system("insert into people(id, provider, subject, login) values ('per_gatewaytest1', 'github', '424242', 'octo') on conflict do nothing");
+    await store.ensureTenant(p.db, 'other');
+    for (const [id, tenant] of [[42, 'acme'], [77, 'other']]) await p.db.system("insert into github_installations(installation_id, tenant, account_login, account_id, account_type, proven_by, github_login, method) values ($1, $2, 'octo', $1, 'User', 'per_gatewaytest1', 'octo', 'install-callback')", [id, tenant]);
     const roster = { version: 'abc123', repo: { url: 'https://github.com/example/shop.git', ref: 'main' }, roles: [{ slug: 'chief-of-staff', reportsTo: 'owner', areas: [], brief: 'Front door.' }] };
     assert.equal((await p.call('POST', '/teams/shop/runs', { team: roster })).status, 201);
     await p.call('POST', '/teams/shop/chat', { text: 'Hello' });
@@ -165,6 +178,11 @@ test('runner ops: pace answers a wait, effect.begin and effect.end keep a replay
     assert.deepEqual([acct.op, acct.body.stage, acct.body.next], ['ack', 'account', null]);
     assert.equal((await runner.request('pace', { session: s.session, provider: 'github', stage: 'later' })).op, 'nack');
     assert.equal((await runner.request('pace', { session: s.session, provider: 'smtp' })).op, 'nack');
+    // Another tenant's installation: a runner can't pace on it, or hold it.
+    const theirs = await runner.request('pace', { session: s.session, provider: 'github', installation: 77 });
+    assert.deepEqual([theirs.op, theirs.body.problem], ['nack', 'that installation was not proved by this account']);
+    assert.equal((await runner.request('governor.report', { session: s.session, provider: 'github', installation: 77, retryAfterMs: 3600_000, reason: 'rate-limited' })).op, 'nack');
+    assert.equal((await p.db.system("select count(*)::int as n from governor_buckets where key = 'installation:77'"))[0].n, 0, 'theirs was never touched');
     assert.equal((await runner.request('pace', { session: 'ses_other', provider: 'model' })).op, 'nack', 'only for its own sessions');
     const b1 = await runner.request('effect.begin', { session: s.session, key: 'sha256-abcdef0123', tool: 'mcp__mail__send', callHash: 'c1' });
     assert.deepEqual([b1.op, b1.body.state], ['ack', 'first']);
@@ -173,8 +191,10 @@ test('runner ops: pace answers a wait, effect.begin and effect.end keep a replay
     assert.deepEqual(b2.body, { state: 'repeat', result: { id: 'm1' } });
     const rep = await runner.request('governor.report', { session: s.session, provider: 'model', retryAfterMs: 20_000, reason: 'overloaded' });
     assert.equal(rep.op, 'ack');
-    const [held] = await p.db.system("select blocked_until from governor_buckets where key = 'model:shared'");
-    assert.ok(Date.parse(held.blocked_until) - Date.now() > 19_000, 'the model account is held for what the provider said');
+    const [held] = await p.db.system("select blocked_until from governor_buckets where key = 'tenant:acme:model'");
+    assert.ok(Date.parse(held.blocked_until) - Date.now() > 19_000, 'its own share is held for what the provider said');
+    const [shared] = await p.db.system("select blocked_until from governor_buckets where key = 'model:shared'");
+    assert.equal(shared?.blocked_until ?? null, null, 'one tenant\'s runner never holds the shared key');
     // A paced call never holds the runner's other requests (they run one at a time per connection): the ack says how
     // long to wait, at once, and another session's request right behind it is answered at once too.
     const t0 = Date.now();
@@ -186,4 +206,42 @@ test('runner ops: pace answers a wait, effect.begin and effect.end keep a replay
     assert.equal(other.body.state, 'first');
     assert.ok(Date.now() - t0 < 2000, `both answered at once (${Date.now() - t0} ms)`);
   }, { tickMs: 0, gatewayLimits: LIMITS });
+});
+
+test('a runner\'s report holds only its own tenant\'s keys, for at most 5 minutes; the shared App only on two tenants\' word, once in 30 minutes; reports are rate limited', async () => {
+  await withGateway(async ({ g, db, tick }) => {
+    const until = async (key) => { const [r] = await db.system('select blocked_until from governor_buckets where key = $1', [key]); return r?.blocked_until ? Date.parse(r.blocked_until) : null; };
+    const t0 = Date.parse('2026-11-09T12:00:00Z');
+    await g.reported({ provider: 'github', installation: '7', tenant: 'acme' }, { retryAfterMs: 3600_000, reason: 'secondary rate limit' });
+    assert.equal(await until('github-app:shared'), null, 'one tenant\'s word does not hold the shared App, abuse or not');
+    assert.equal(await until('tenant:acme:github'), t0 + 5 * 60_000, 'its own share is held, for 5 minutes at most');
+    assert.equal(await until('installation:7'), t0 + 5 * 60_000);
+    tick(60_000);
+    await g.reported({ provider: 'github', tenant: 'zeta' }, { retryAfterMs: 3600_000, reason: 'secondary rate limit' });
+    assert.equal(await until('github-app:shared'), t0 + 60_000 + 5 * 60_000, 'two tenants within 5 minutes: the App is held, 5 minutes at most');
+    tick(6 * 60_000);
+    await g.reported({ provider: 'github', tenant: 'acme' }, { retryAfterMs: 3600_000, reason: 'rate-limited' });
+    await g.reported({ provider: 'github', tenant: 'zeta' }, { retryAfterMs: 3600_000, reason: 'rate-limited' });
+    assert.equal(await until('github-app:shared'), t0 + 60_000 + 5 * 60_000, 'and re-reporting does not renew it within 30 minutes');
+    tick(30 * 60_000);
+    await g.reported({ provider: 'github', tenant: 'acme' }, { retryAfterMs: 1000, reason: 'rate-limited' });
+    await g.reported({ provider: 'github', tenant: 'zeta' }, { retryAfterMs: 1000, reason: 'rate-limited' });
+    assert.ok(await until('github-app:shared') > t0 + 37 * 60_000, 'after 30 minutes, two tenants may hold it again');
+    await store.ensureTenant(db, 'noisy');
+    for (let i = 0; i < 4; i++) await g.reported({ provider: 'model', tenant: 'noisy' }, { retryAfterMs: 1000 });
+    await assert.rejects(g.reported({ provider: 'model', tenant: 'noisy' }, { retryAfterMs: 1000 }), (e) => e.status === 429 && /too many slow-down reports/.test(e.message));
+    tick(30_000);
+    await g.reported({ provider: 'model', tenant: 'noisy' }, { retryAfterMs: 1000 });
+  });
+});
+
+test('effect results are redacted before they are kept, and a key from another team is refused', async () => {
+  await withGateway(async ({ g, m3, db }) => {
+    await db.system("insert into teams(id, tenant, name) values ('shop', 'acme', 'shop'), ('blog', 'acme', 'blog')");
+    await m3.tx('acme', (ctx) => g.begin(ctx, { key: 'eff_redact0001', team: 'shop', tool: 'mcp__crm__create' }));
+    await m3.tx('acme', (ctx) => g.end(ctx, { key: 'eff_redact0001', ok: true, result: { id: 'c1', token: 'ghp_' + 'a'.repeat(36), list: ['sk-ant-' + 'b'.repeat(30)] } }));
+    const [row] = await db.system("select result from effects where key = 'eff_redact0001'");
+    assert.deepEqual(row.result, { id: 'c1', token: '[secret]', list: ['[secret]'] });
+    await assert.rejects(m3.tx('acme', (ctx) => g.begin(ctx, { key: 'eff_redact0001', team: 'blog', tool: 'mcp__crm__create' })), /belongs to another call/);
+  });
 });
