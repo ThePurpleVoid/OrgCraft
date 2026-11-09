@@ -243,9 +243,10 @@ export function targetsOf(calls) {
   const walk = (tool, obj, depth, under) => {
     if (depth > 3 || !obj || typeof obj !== 'object') return;
     for (const [k, v] of Object.entries(obj)) {
-      const hit = under || TARGET.test(k);
+      // Below a target key only id-like keys count (`customer: { id, email }`), never its country or currency.
+      const hit = TARGET.test(k) || (under && /^(id|email|key|ref)$/i.test(k));
       for (const x of Array.isArray(v) ? v : [v]) {
-        if (x && typeof x === 'object') walk(tool, x, depth + 1, hit);
+        if (x && typeof x === 'object') walk(tool, x, depth + 1, TARGET.test(k));
         else if (hit && ((typeof x === 'string' && x.trim()) || typeof x === 'number')) out.add(`${tool}\n${String(x).trim().toLowerCase()}`);
       }
     }

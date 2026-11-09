@@ -240,4 +240,8 @@ test('targetsOf: the tool and the values it acts on, whatever field carries them
   // Nested targets count, and a call without one in the set does not hide the others (code review sev 4).
   assert.ok(overlap(targetsOf([{ tool: 'mcp__payments__refund', input: { customer: { id: 'cus_zed' }, amount: 1 } }]), a));
   assert.ok(overlap(targetsOf([refund('cus_zed', 9000), { tool: 'mcp__notes__add', input: { text: 'refunded' } }]), a));
+  // Only id-like keys below a target key: two customers in the same country are not the same target (code review sev 4).
+  const nested = (id) => targetsOf([{ tool: 'mcp__payments__refund', input: { customer: { id, country: 'us', currency: 'usd' }, amount: 1 } }]);
+  assert.ok(!overlap(nested('cus_1'), nested('cus_2')));
+  assert.deepEqual(nested('cus_1'), ['mcp__payments__refund\ncus_1']);
 });
