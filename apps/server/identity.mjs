@@ -17,6 +17,7 @@
 // configures it (bin.mjs: GITHUB_APP_CLIENT_ID and an https AGENT_TEAM_PUBLIC_URL), so local mode is unchanged.
 import { createHash, createHmac, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import Provider, { interactionPolicy } from 'oidc-provider';
+import { generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { safeReturn } from '../studio/public/auth.js';
 import { seal, unseal } from './vault.mjs';
 import { Problem } from './store.mjs';
@@ -552,6 +553,63 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     return redirect(res, interaction.returnTo, clear);
   }
 
+  // ---- the second way in: a passkey (L27, B15) --------------------------------------------------------------------
+  // A person who has added a passkey can sign in with it alone, so losing their GitHub account never locks them out.
+  // The sign-in page asks GET /oauth/interaction/{uid}/passkey for options (no allowCredentials: the authenticator
+  // offers its own passkeys for this site), then POSTs the assertion as JSON from this origin. The passkey must be
+  // someone's who is still a member somewhere; user verification is required.
+  const rpID = issuer.hostname;
+  const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
+
+  async function passkeyOptions(res, uid) {
+    if (!UID.test(uid) || !(await provider.Interaction.find(uid))) throw new Problem(410, 'this sign-in has expired; start again', { type: 'expired' });
+    const options = await generateAuthenticationOptions({ rpID, userVerification: 'required', timeout: 120_000 });
+    await db.system('insert into oidc_store(model, id_hash, payload, expires_at) values ($1, $2, $3, $4)', ['WebAuthn', sha(options.challenge), { kind: 'sign-in', uid }, new Date(Date.now() + 120_000)]);
+    return json(res, 200, options);
+  }
+
+  async function passkeyDone(req, res, uid) {
+    if (!csrfOk(req)) throw new Problem(403, 'cross-site request refused: send this deployment\'s Origin and content-type: application/json');
+    if (limited(clientIp(req), 'passkey-sign-in', 10)) throw new Problem(429, 'too many passkey sign-ins from here; try again in a minute');
+    if (!UID.test(uid)) throw new Problem(410, 'this sign-in has expired; start again', { type: 'expired' });
+    let raw = '';
+    for await (const c of req) { raw += c; if (raw.length > 64 * 1024) throw new Problem(413, 'too large'); }
+    let assertion;
+    try { assertion = JSON.parse(raw)?.webauthn; } catch { throw new Problem(400, 'send { webauthn }: the assertion from navigator.credentials.get()'); }
+    const refuse = async (why, detail = {}) => {
+      await audit(null, 'sign-in.refused', { method: 'passkey', reason: why, ...detail });
+      throw new Problem(401, 'that passkey did not sign you in', { type: 'passkey-refused' });
+    };
+    let challenge = null;
+    try { challenge = JSON.parse(Buffer.from(String(assertion?.response?.clientDataJSON ?? ''), 'base64url').toString('utf8')).challenge; } catch { /* refused below */ }
+    if (typeof challenge !== 'string' || !challenge || challenge.length > 200) return refuse('no challenge');
+    // Single use, and only for this sign-in.
+    const [ch] = await db.system("delete from oidc_store where model = 'WebAuthn' and id_hash = $1 and expires_at > now() returning payload", [sha(challenge)]);
+    if (!ch || ch.payload.kind !== 'sign-in' || ch.payload.uid !== uid) return refuse('unknown, used or expired challenge');
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction) throw new Problem(410, 'this sign-in has expired; start again', { type: 'expired' });
+    const [k] = await db.system('select id, person, credential_id, public_key, sign_count from passkeys where credential_id = $1', [String(assertion?.id ?? '').slice(0, 512)]);
+    if (!k) return refuse('unknown passkey');
+    // A discoverable passkey names its person (the user id given at registration): it must be the same one.
+    const handle = assertion?.response?.userHandle;
+    if (handle && Buffer.from(String(handle), 'base64url').toString('utf8') !== k.person) return refuse('user handle mismatch', { passkey: k.id });
+    let out;
+    try {
+      out = await verifyAuthenticationResponse({ response: assertion, expectedChallenge: challenge, expectedOrigin: origin, expectedRPID: rpID, requireUserVerification: true,
+        credential: { id: k.credential_id, publicKey: Buffer.from(k.public_key, 'base64url'), counter: 0 } });
+    } catch (e) { return refuse(String(e.message).slice(0, 200), { passkey: k.id }); }
+    if (!out.verified) return refuse('did not verify', { passkey: k.id });
+    const counter = out.authenticationInfo.newCounter;
+    if ((counter > 0 || Number(k.sign_count) > 0) && counter <= Number(k.sign_count)) await audit(k.person, 'passkey.sign-count-flagged', { passkey: k.id, stored: Number(k.sign_count), got: counter });
+    await db.system('update passkeys set sign_count = greatest(sign_count, $2), last_used = now() where id = $1', [k.id, counter]);
+    const person = await activePerson(k.person);
+    if (!person) return refuse('not a member', { passkey: k.id });
+    await audit(person.id, 'sign-in', { method: 'passkey', passkey: k.id });
+    interaction.result = { login: { accountId: person.id, amr: ['hwk', 'user'], remember: false } };
+    await interaction.save(Math.max(1, interaction.exp - epoch()));
+    return json(res, 200, { location: interaction.returnTo });
+  }
+
   async function webDone(req, res, url) {
     const clear = [setCookie(LOGIN_COOKIE, '', 0)];
     const state = url.searchParams.get('state') ?? '', mine = cookies(req).get(LOGIN_COOKIE) ?? '';
@@ -613,6 +671,9 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     if (authorize && req.method === 'GET' && url.searchParams.get('client_id') === WEB_CLIENT && !url.searchParams.has('response_type')) { await webStart(req, res, url); return true; }
     const inter = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
     if (inter && req.method === 'GET') { await upstreamStart(req, res, inter[1]); return true; }
+    const pk = /^\/oauth\/interaction\/([^/]+)\/passkey$/.exec(p);
+    if (pk && req.method === 'GET') { await passkeyOptions(res, pk[1]); return true; }
+    if (pk && req.method === 'POST') { await passkeyDone(req, res, pk[1]); return true; }
     const consent = /^\/oauth\/interaction\/([^/]+)\/consent$/.exec(p);
     if (consent && (req.method === 'GET' || req.method === 'POST')) {
       if (req.method === 'POST' && !/^application\/x-www-form-urlencoded\b/i.test(req.headers['content-type'] ?? '')) throw new Problem(415, 'send the consent form');

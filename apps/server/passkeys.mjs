@@ -63,7 +63,8 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
       rpName, rpID, userName: who.session.login, userDisplayName: who.session.name ?? who.session.login,
       userID: new TextEncoder().encode(who.principal), attestationType: 'none',
       excludeCredentials: (await mine(who.principal)).map((p) => ({ id: p.credential_id })),
-      authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
+      // Discoverable, so the passkey alone can sign the person in (L27).
+      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
       timeout: CHALLENGE_SECONDS * 1000,
     });
     await challenges.put('register', who.principal, options.challenge);
