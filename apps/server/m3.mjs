@@ -78,7 +78,7 @@ const isInt = (v) => Number.isSafeInteger(v);
  * list of what was stored. `hooks.afterCommit` lets the bus send frames once the transaction is durable.
  */
 /** A merge card's sign-offs (governance G2): each with its version and whether it is fresh, and what blocks the merge. */
-const signoffData = (g) => ({ signoffs: g.signoffs.map(({ signoff, by, version, versionKind, result, unverified, fresh, problem }) => ({ signoff, by, version, versionKind, result, unverified, fresh, ...(problem ? { problem } : {}) })), ...(g.missing.length ? { blocked: refusal(g.missing) } : {}) });
+const signoffData = (g) => ({ signoffs: g.signoffs.map(({ signoff, by, origin, label, version, versionKind, result, unverified, fresh, problem, notes }) => ({ signoff, by, origin, ...(label ? { label } : {}), version, versionKind, result, unverified, fresh, ...(problem ? { problem } : {}), ...(notes ? { notes } : {}) })), ...(g.missing.length ? { blocked: refusal(g.missing) } : {}) });
 /** Approve is off, with the reason, while a sign-off on the pull request is not fresh. Deny always works. */
 const approvalOptions = (g) => [
   { id: 'approve', label: 'Approve', style: 'primary', stepUp: true, ...(g && g.missing.length ? { disabled: true, reason: refusal(g.missing) } : {}) },
@@ -588,6 +588,26 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     }
   }
 
+  /**
+   * Reported sign-offs were stored (the API or a report token): the merge cards of their pull requests show them
+   * (security ruling on L23s). A runner's own sign-off refreshes them from the tool route, after its audit row.
+   */
+  async function refreshForReports(ctx, team, stored) {
+    const prs = new Set();
+    for (const s of stored ?? []) {
+      const e = s?.event ?? s;
+      const pr = Number(e?.data?.pr);
+      if (e?.type === 'message.signoff' && Number.isSafeInteger(pr) && pr > 0) prs.add(pr);
+    }
+    for (const pr of prs) await refreshShipCards(ctx, team, pr);
+  }
+
+  /** The same after the report route appended outside a transaction of this module. */
+  async function reportsStored(tenant, team, stored) {
+    if (!(stored ?? []).some((s) => (s?.event ?? s)?.type === 'message.signoff')) return;
+    await tx(tenant, (ctx) => refreshForReports(ctx, team, stored));
+  }
+
   /** POST /v1/approvals/{id}: approving needs a fresh step-up; denying never does. */
   async function decideApproval(tenant, apr, body, by, { stepUp = null } = {}) {
     const { decision, note, version } = body ?? {};
@@ -861,6 +881,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       // outside: the sender's actor and data are its own words, so no session it names gives the event a task.
       const s = await appendIn(ctx.q, tenant, team, events, { project: (qq, x) => project(ctx, x), now: ctx.now, outside: true });
       ctx.stored.push(...s);
+      await refreshForReports(ctx, team, s);
       return s;
     });
   }
@@ -885,7 +906,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   return {
     appendIn: appendInTx, onStored: (fn) => listeners.push(fn), hooks,
-    requireStepUp, refreshShipCards, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
+    requireStepUp, refreshShipCards, reportsStored, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
     createCard, changeCard, getCard, answerCard, requestApproval, decideApproval, readyToTry, previewArrived, checkPreviewed, previewForMerge,
     stepUp, mintStepUp, postChat, getChat, inbox, teamExtras,

@@ -379,6 +379,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (limited(team, role)) throw new Problem(429, `more than ${REPORTS_PER_MINUTE} reports a minute from ${role}`);
       const { id, stored } = await store.appendReport(db, t, team, body, now());
       appended(team, stored);
+      await m3.reportsStored(t, team, stored);
       return send(res, 200, { ok: true, id });
     }
 
@@ -668,7 +669,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         const bad = events.map((e) => String(e?.type ?? '')).filter((ty) => !postable(ty));
         if (bad.length) throw new Problem(403, `these event types are written by the control plane or a runner, never posted: ${[...new Set(bad)].slice(0, 10).join(', ')}`, { type: 'forbidden', body: { refused: [...new Set(bad)].slice(0, 50) } });
         // A sign-off's `checks` are the runner's own record; one posted here is the sender's words, so it is dropped.
-        for (const e of events) if (e?.type === 'message.signoff' && e.data && typeof e.data === 'object') delete e.data.checks;
+        // Its origin is "reported" whatever it says: only the tool route stamps "session".
+        for (const e of events) if (e?.type === 'message.signoff' && e.data && typeof e.data === 'object') { delete e.data.checks; e.data.origin = 'reported'; }
         const stored = await did(m3.appendEvents(t, team, events));
         const sent = new Set(events.map((e) => e?.id));
         const mine = stored.filter(({ id }) => sent.has(id));

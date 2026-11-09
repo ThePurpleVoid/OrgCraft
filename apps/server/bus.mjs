@@ -370,6 +370,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
           : { ...i, ...(tool === 'blocked' && !i.to ? { to: i.needFrom === 'owner' ? roster.frontDoor : i.needFrom !== sess.role ? i.needFrom : undefined } : {}), detail: detailOf(tool, i), ...(i.artifact ? { evidence: [i.artifact] } : {}), ...routedFields(check.routed) };
         // The runner's own record of what this session ran (governance G2): only a runner session sends it, here.
         if (tool === 'signoff') data.checks = await cleanChecks(ctx.q, sess.id, input?.checks);
+        // Who stands behind it (security ruling on L23s): this one a runner session ran. `source` is the kit's own label.
+        if (tool === 'signoff') data.origin = 'session';
         const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
         const ev = await ctx.emit(sess.team, TOOL_EVENT[tool], clean, opts);
         if (tool === 'blocked') await ctx.emit(sess.team, 'report.status', { status: 'blocked', task: i.task, issue: i.issue, detail: i.need }, opts);

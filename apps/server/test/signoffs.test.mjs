@@ -175,3 +175,75 @@ test('review fixes: only a runner session\'s own sign-off counts, and a revision
     assert.equal(r.status, 200, JSON.stringify(r.body));
   }, { tickMs: 0 });
 });
+
+test('security ruling: the server stamps origin; a reported sign-off can only tighten a runner\'s, and the card refreshes on a report', async () => {
+  await plane(async (p) => {
+    const { front, qa } = await team(p);
+    assert.equal((await tool(p.call, qa, 'signoff', so(B))).status, 200);
+    const ask = await tool(p.call, front, 'request_approval', { action: 'accept', call: 'merge #7', why: 'ready', pr: 7, headSha: B });
+    const card = async () => (await p.db.system('select card from cards where id = $1', [ask.body.card]))[0].card;
+    assert.equal((await card()).options[0].disabled, undefined, 'the runner\'s pass opens the merge');
+    // The tool route stamps "session"; a posted one is "reported" whatever it says.
+    const [own] = await events(p.call, 'message.signoff');
+    assert.equal(own.data.origin, 'session');
+    const failed = { ...env(front, 'message.signoff', so(B, { result: 'fail', origin: 'session' })), actor: { kind: 'role', id: 'qa' } };
+    assert.equal((await p.call('POST', '/teams/shop/events', { events: [failed] })).status, 200);
+    assert.equal((await events(p.call, 'message.signoff')).find((x) => x.id === failed.id).data.origin, 'reported');
+    // A runner pass followed by a reported fail blocks, and the card shows it without another sign-off.
+    let c = await card();
+    assert.match(c.data.blocked, /qa reported a sign-off that did not pass after its own \(reported, not run here\)/);
+    assert.equal(c.options[0].disabled, true);
+    assert.deepEqual(c.data.signoffs.map((s) => [s.by, s.origin, s.fresh]), [['qa', 'session', false]]);
+    const r = await p.call('POST', `/approvals/${ask.body.approval}`, { decision: 'approved', version: c.version }, await p.su());
+    assert.equal(r.status, 409);
+    // A reported pass after it does not undo it; only the runner's own sign-off again does.
+    const passed = { ...env(front, 'message.signoff', so(B)), actor: { kind: 'role', id: 'qa' } };
+    assert.equal((await p.call('POST', '/teams/shop/events', { events: [passed] })).status, 200);
+    assert.equal((await card()).options[0].disabled, true, 'the earlier reported fail still stands after the runner\'s pass');
+    assert.equal((await tool(p.call, qa, 'signoff', so(B))).status, 200);
+    c = await card();
+    assert.deepEqual([c.data.blocked, c.options[0].disabled], [undefined, undefined]);
+  }, { tickMs: 0 });
+});
+
+test('security ruling: a role with no runner sign-off is judged on its reported one, labelled; a kit before 0.23.0 can\'t state a version', async () => {
+  await plane(async (p) => {
+    const { front, qa } = await team(p);
+    assert.equal((await tool(p.call, qa, 'signoff', so(B))).status, 200);
+    const { token } = (await p.call('POST', '/teams/shop/report-tokens')).body;
+    const report = (body) => p.call('POST', '/teams/shop/reports', { role: 'code-reviewer', kind: 'signoff', to: 'chief-of-staff', pr: 7, detail: 'LGTM', ...body }, { 'x-team-token': token });
+    const ask = await tool(p.call, front, 'request_approval', { action: 'accept', call: 'merge #7', why: 'ready', pr: 7, headSha: B });
+    const card = async () => (await p.db.system('select card from cards where id = $1', [ask.body.card]))[0].card;
+    // A kit before 0.23.0: no version, no unverified, no result. Shown as not stated, labelled, and it does not block.
+    assert.equal((await report({ id: 'r-old' })).status, 200);
+    let c = await card();
+    const cr = c.data.signoffs.find((s) => s.by === 'code-reviewer');
+    assert.deepEqual([cr.origin, cr.label, cr.fresh], ['reported', 'reported, not run here', true]);
+    assert.match(cr.notes.join(' '), /before 0\.23\.0: version not stated/);
+    assert.equal(c.options[0].disabled, undefined);
+    // From 0.23.0 on, leaving the version out blocks; a reported fail always blocks.
+    assert.equal((await report({ id: 'r-new', kit: '0.23.0', result: 'pass', unverified: [] })).status, 200);
+    c = await card();
+    assert.match(c.data.blocked, /code-reviewer's sign-off names no version/);
+    assert.equal((await report({ id: 'r-new2', kit: '0.23.0', result: 'pass', version: B, unverified: [] })).status, 200);
+    c = await card();
+    assert.deepEqual([c.data.blocked, c.options[0].disabled], [undefined, undefined], 'a full reported sign-off on the head counts');
+    const [stored] = (await events(p.call, 'message.signoff')).filter((e) => e.id === 'r-new2');
+    assert.deepEqual([stored.data.origin, stored.data.version, stored.data.versionKind, stored.data.unverified, stored.data.kit], ['reported', B, 'commit', [], '0.23.0']);
+    assert.equal((await report({ id: 'r-fail', result: 'fail' })).status, 200);
+    c = await card();
+    assert.match(c.data.blocked, /code-reviewer's sign-off did not pass/);
+  }, { tickMs: 0 });
+});
+
+test('judge: a reported sign-off from an old kit, from 0.23.0, and a later reported item that tightens', () => {
+  const e = (data, actor = { kind: 'role', id: 'qa' }) => ({ id: 'ev_x', actor, data });
+  const old = judge(e({}), A, { kind: 'commit', origin: 'reported' });
+  assert.deepEqual([old.fresh, old.label, old.notes.length], [true, 'reported, not run here', 2]);
+  assert.match(judge(e({ kit: '0.23.1' }), A, { kind: 'commit', origin: 'reported' }).problem, /names no version/);
+  assert.match(judge(e({ kit: '0.22.9', version: B }), A, { kind: 'commit', origin: 'reported' }).problem, /needs a fresh sign-off/, 'a stated version is still compared');
+  assert.match(judge(e({ version: A }), A, { kind: 'commit' }).problem, /did not pass/, 'a session sign-off gets no old-kit leniency');
+  const pass = e({ version: A, result: 'pass', unverified: [] });
+  assert.equal(judge(pass, A, { later: [e({ result: 'pass' })] }).fresh, true);
+  assert.match(judge(pass, A, { later: [e({ unverified: ['Safari'] })] }).problem, /reported unchecked items after its own sign-off \(reported, not run here\): "Safari"/);
+});

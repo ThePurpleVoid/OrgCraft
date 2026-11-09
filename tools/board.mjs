@@ -56,7 +56,25 @@ export function toRow(b, now = new Date()) {
     detail: text(b.detail, 2000),
     source: text(b.source, 60) ?? 'team-status.sh',
     session: text(b.session, 120),
+    ...(kind === 'signoff' ? signoffFields(b) : {}),
   };
+}
+
+/**
+ * A sign-off's version fields (governance G1, kit 0.23.0): the version it checked and what kind it is, its result,
+ * what it did not check (an empty list is "none"; left out is "not stated") and the kit that sent it. Only what is
+ * present and well formed is kept, so a report from an older kit reads as before.
+ */
+function signoffFields(b) {
+  const out = {};
+  const version = text(b.version, 200);
+  if (version) out.version = /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(version) ? version.toLowerCase() : version;
+  if (['commit', 'revision', 'draft'].includes(b.versionKind)) out.versionKind = b.versionKind;
+  else if (out.version && /^([0-9a-f]{40}|[0-9a-f]{64})$/.test(out.version)) out.versionKind = 'commit';
+  if (['pass', 'fail'].includes(b.result)) out.result = b.result;
+  if (Array.isArray(b.unverified) && b.unverified.length <= 20 && b.unverified.every((u) => typeof u === 'string' && u.trim() && u.length <= 500)) out.unverified = b.unverified.map((u) => u.trim());
+  if (/^\d+\.\d+\.\d+$/.test(String(b.kit ?? ''))) out.kit = String(b.kit);
+  return out;
 }
 
 /** Every valid row in a JSONL log, oldest first. Bad lines are skipped. */

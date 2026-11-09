@@ -130,7 +130,10 @@ export async function appendIn(q, tenant, team, events, { project = null, now = 
 export async function appendReport(db, tenant, team, body, now = new Date()) {
   let row;
   try { row = toRow(body, now); } catch (e) { throw new Problem(400, e.message); }
-  const stored = await append(db, tenant, team, [fromKitRow(row, { tenant, team })]);
+  const event = fromKitRow(row, { tenant, team });
+  // A sign-off through a report token is the sender's word (security ruling on L23s): its origin is "reported".
+  if (event.type === 'message.signoff') event.data.origin = 'reported';
+  const stored = await append(db, tenant, team, [event]);
   return { id: row.id, row, stored };
 }
 
