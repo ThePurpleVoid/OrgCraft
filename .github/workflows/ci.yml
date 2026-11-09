@@ -117,7 +117,7 @@ jobs:
         if: hashFiles('apps/runner/Dockerfile') != ''
         run: |
           docker run --rm -e RUNNER_F3_MARKER=sk-ant-ci-marker-not-a-key-0123456789 \
-            agent-team-runner:ci node --test --test-concurrency=1 apps/runner/test/security.test.mjs apps/runner/test/pool.test.mjs | tee runner-image.tap
+            agent-team-runner:ci node --test --test-concurrency=1 apps/runner/test/security.test.mjs apps/runner/test/pool.test.mjs apps/runner/test/sidecar.test.mjs | tee runner-image.tap
           # Every test must have run in the image: a skip here means the sandbox was not exercised.
           grep -q '^# fail 0$' runner-image.tap && grep -q '^# skipped 0$' runner-image.tap
       - name: Keys from the M3-on-a-Mac mount land in the runner's closed folder
@@ -211,7 +211,8 @@ jobs:
         run: node deploy/vercel/build.mjs --api https://example.invalid --out "$RUNNER_TEMP/site" && test -f "$RUNNER_TEMP/site/vercel.json"
 
   studio-browser:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to Ubuntu 26, which Playwright 1.56.1's --with-deps install does not support.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

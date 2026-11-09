@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Agent Team Studio API
+  title: OrgCraft Studio API
   version: "1"
   summary: The public API. The Studio, the CLI, the kit's hooks and integrations use only this.
   description: |
@@ -134,7 +134,7 @@ paths:
     get:
       x-min-role: viewer
       tags: [studio]
-      summary: "The Studio (hosted mode): the team as the Studio reads it from the team's GitHub repository, with base (the default branch's head sha), git and features. 503 until the deployment's GitHub App is set up; 409 no-repo when the team has no repository connected"
+      summary: "The Studio (hosted mode): the team as the Studio reads it from the team's GitHub repository, with base (the default branch's head sha), git, features, and (kit 0.22, additive) members[] and catalog[] computed from the spec exactly as the local Studio returns them (plans team-json-0.22 section 4: each teammate with id, name, type, lane, pool, handsTo, problems; each role type with count of enabled teammates). 503 until the deployment's GitHub App is set up; 409 no-repo when the team has no repository connected"
       responses: { "200": { description: OK } }
   /teams/{team}/studio/v1/team/pr:
     parameters: [ { $ref: "#/components/parameters/team" } ]
@@ -339,8 +339,9 @@ paths:
         - { name: run, in: path, required: true, schema: { type: string } }
         - { name: action, in: path, required: true, schema: { enum: [pause, resume, stop] } }
         - { $ref: "#/components/parameters/stepUp" }
-      description: Pause and stop never need step-up. Resuming a run paused with reason budget does
-      responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required)" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
+      x-interactive-only: [resume]
+      description: "Pause and stop never need step-up. Resuming does, whoever paused the run, with a step-up bound to scope resume:<run> (ADR 0013; before, only after a budget pause). Resume is interactive only: a host's token may pause or stop, never resume (403)"
+      responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required); the body's scope names what to step up for" }, "403": { description: "Resume through a host" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
   /teams/{team}/chat:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
@@ -391,7 +392,19 @@ paths:
       security: []
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name], properties: { code: { type: string }, name: { type: string }, capabilities: { type: object } } } } } }
       responses: { "201": { description: "Runner id and key (`<id>.<secret>`, shown once)" }, "401": { description: The code is unknown, used or expired } }
-    get: { x-min-role: admin, tags: [runners], summary: "Registered runners: name, capabilities, version, last seen, revoked (never keys)", responses: { "200": { description: Runners } } }
+    get: { x-min-role: admin, tags: [runners], summary: "Registered runners: name, capabilities, version, last seen, revoked (never keys); and the runner card (L29): state (connected, quiet, offline, never-connected, revoked), window (status current, supported, upgrade-required, ahead or unknown; behind; current; supported 2; upgradeBy) and model (state, since, provider, error)", responses: { "200": { description: Runners } } }
+  /deployment:
+    get:
+      x-min-role: viewer
+      tags: [runners]
+      summary: "Where OrgCraft runs and outage mode (L29, O19.1, O37.1, O37.8): mode (local, self-hosted, hosted), version, region, startedAt, db.kind, the runner window (N-2), a runner summary with no names, the code host and model provider (state ok, unreachable or unknown; since; lastError), and outage { active, down, publish: ok or waiting, work: ok or queued }"
+      responses: { "200": { description: The deployment view (plans/build/L29-data.md) } }
+  /deployment/check:
+    post:
+      x-min-role: editor
+      tags: [runners]
+      summary: "Check again: probes the code host once (at most every 30 s per server) and answers the deployment view with checked, or checked false and retryIn"
+      responses: { "200": { description: The deployment view after the probe } }
   /runners/codes:
     post:
       x-min-role: admin
@@ -484,8 +497,8 @@ paths:
       x-min-role: viewer
       tags: [me]
       summary: "A single-use step-up token (su_, 5 minutes), bound to the person and the tenant. Only ever minted from a proof that the person is present now: on a hosted deployment a passkey assertion with user verification ({ webauthn }, after GET /auth/step-up/challenge); in local mode the typed step-up secret ({ secret }; the deployment holds only its scrypt hash, AGENT_TEAM_STEP_UP_SECRET_HASH). A hosted deployment refuses { secret } (400, problem type step-up-method). A sign-in, however recent, is never a step-up. Five failures in 15 minutes lock it (429)"
-      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { webauthn: { type: object, description: "AuthenticationResponseJSON (WebAuthn Level 3)" }, secret: { type: string, writeOnly: true, description: Local mode only } } } } } }
-      responses: { "201": { description: The step-up token, content: { application/json: { schema: { type: object, properties: { token: { type: string }, expires: { type: string, format: date-time } } } } } }, "401": { $ref: "#/components/responses/Problem" }, "429": { description: Too many wrong secrets; locked for 15 minutes } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { webauthn: { type: object, description: "AuthenticationResponseJSON (WebAuthn Level 3)" }, secret: { type: string, writeOnly: true, description: Local mode only }, scope: { type: string, maxLength: 200, pattern: "^[a-z][a-z-]{0,30}:[A-Za-z0-9_-]{1,120}$", description: "Binds the token to one change (ADR 0013), named by the step-up-required answer, e.g. resume:<run id>. A bound token is spent only on that change; a route that names a scope refuses a token without it" } } } } } }
+      responses: { "201": { description: The step-up token, content: { application/json: { schema: { type: object, properties: { token: { type: string }, expires: { type: string, format: date-time }, scope: { type: string } } } } } }, "401": { $ref: "#/components/responses/Problem" }, "429": { description: Too many wrong secrets; locked for 15 minutes } }
   /auth/step-up/challenge:
     get:
       tags: [me]
@@ -631,7 +644,7 @@ components:
     team: { name: team, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }
     cursor: { name: cursor, in: query, schema: { type: string } }
     limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
-    stepUp: { name: x-step-up, in: header, schema: { type: string }, description: "A step-up token from POST /auth/step-up: approvals, options with stepUp: true, raising a budget cap, resuming after a budget pause, runner codes and secrets" }
+    stepUp: { name: x-step-up, in: header, schema: { type: string }, description: "A step-up token from POST /auth/step-up: approvals, options with stepUp: true, raising a budget cap, resuming a paused run, runner codes and secrets" }
   responses:
     Problem: { description: An error (RFC 9457), content: { application/problem+json: { schema: { type: object, properties: { type: { type: string }, title: { type: string }, status: { type: integer }, detail: { type: string } } } } } }
     Team: { description: A team, content: { application/json: { schema: { $ref: "#/components/schemas/Team" } } } }

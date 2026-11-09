@@ -225,6 +225,16 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     </details>`;
   }
 
+  /**
+   * What a bound approval will do (ADR 0013): the facts the control plane rendered from the signed calls, never the
+   * role's words, which follow under "Why". Approving signs exactly these.
+   */
+  function factsHtml(card) {
+    const facts = Array.isArray(card.data?.facts) ? card.data.facts.filter((f) => f && typeof f.text === 'string') : [];
+    if (card.kind !== 'approval' || !facts.length) return '';
+    return `<div class="facts"><p><strong>It will do exactly this${facts.length > 1 ? `, ${facts.length} steps` : ''}:</strong></p>${facts.map((f) => `<pre><code>${esc(f.text)}</code></pre>`).join('')}${facts.some((f) => f.redacted) ? '<p class="muted">Values that look like passwords or keys are hidden here as [redacted]. Approving still covers the exact steps, hidden values included.</p>' : ''}<p class="muted">Approving signs these exact steps. Anything different is asked for again.</p></div>`;
+  }
+
   function cardHtml(card, answered) {
     answered = answered || (card.state && card.state !== 'open' ? closedText(card) ?? human(card.state) : answered);
     const note = st.notes.get(card.id);
@@ -243,7 +253,8 @@ export function createChat({ root, onOpen, runs = true } = {}) {
       ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="Step-up secret" placeholder="Step-up secret" required><button type="submit" class="primary">Confirm</button></form>` : ''}
       <h3>${esc(card.title)}</h3>
       ${boundHtml(card)}
-      ${card.body ? `<div class="md">${md(card.body)}</div>` : ''}
+      ${factsHtml(card)}
+      ${card.body ? `${factsHtml(card) ? '<p class="muted why-label">Why, in the teammate\'s words:</p>' : ''}<div class="md">${md(card.body)}</div>` : ''}
       ${card.recommendation?.why && !answered ? `<p class="muted why">${esc(card.recommendation.why)}</p>` : ''}
       ${links ? `<p class="links">${links}</p>` : ''}
       ${answered ? `<p class="answer">${esc(answered)}</p>` : `<div class="card-actions">${buttons}</div>`}
@@ -452,11 +463,12 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     const ev = st.events.find((e) => /\.requested$/.test(e.type) && cardFrom(e).id === cardId);
     const card = st.cards.get(cardId) ?? (ev && cardFrom(ev));
     if (!card) return;
+    const scope = st.notes.get(cardId)?.scope ?? null; // the step-up this card asked to be bound to (ADR 0013)
     st.notes.delete(cardId);
     for (const b of log.querySelectorAll(`[data-card="${CSS.escape(cardId)}"]`)) b.disabled = true;
     if (secret) {
-      const su = await api('/v1/team/step-up', { secret });
-      if (!su.ok) { st.notes.set(cardId, { kind: 'stepup', option, text: su.status === 401 ? 'That token was not accepted. Try again.' : su.data.error ?? `HTTP ${su.status}` }); return render(); }
+      const su = await api('/v1/team/step-up', { secret, ...(scope ? { scope } : {}) });
+      if (!su.ok) { st.notes.set(cardId, { kind: 'stepup', option, scope, text: su.status === 401 ? 'That token was not accepted. Try again.' : su.data.error ?? `HTTP ${su.status}` }); return render(); }
     }
     const r = await api(`/v1/team/cards/${encodeURIComponent(cardId)}`, { kind: card.kind, subject: card.subject ?? ev?.subject, option, version: card.version, key: newId() });
     if (r.status === 409 && r.data.card) {
@@ -466,7 +478,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     } else if (r.status === 401 && /step-up-required$/.test(r.data.type ?? '')) {
       // Until sign-in lands (M4), the proof is the deployment's step-up secret typed in; the Studio server keeps only the
       // short-lived step-up token the control plane gives back.
-      st.notes.set(cardId, { kind: 'stepup', option, text: 'Confirm it is you: type the step-up secret to answer. The control plane checks it; neither this page nor the Studio keeps it.' });
+      st.notes.set(cardId, { kind: 'stepup', option, scope: typeof r.data.scope === 'string' ? r.data.scope : null, text: 'Confirm it is you: type the step-up secret to answer. The control plane checks it; neither this page nor the Studio keeps it.' });
     } else if (r.status === 403) {
       st.forbidden.add(cardId);
       st.notes.set(cardId, { kind: 'error', text: card.kind === 'budget' ? 'Only an admin of this workspace can answer a budget card, since it changes what the team may spend. Ask an admin.' : `Your role cannot answer this card. ${r.data.error ?? ''}`.trim() });
@@ -483,7 +495,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
   }
 
   /** Asks for the step-up secret in a dialog. Resolves true once the Studio server holds a step-up token. */
-  function stepUp(why) {
+  function stepUp(why, scope) {
     const dlg = $('#stepup-dialog', root);
     const form = $('#stepup-form', root);
     const input = $('#stepup-secret', root);
@@ -500,7 +512,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
         const confirm = form.querySelector('button[type="submit"]');
         if (confirm?.disabled) return;
         if (confirm) confirm.disabled = true;
-        const r = await api('/v1/team/step-up', { secret }).finally(() => { if (confirm) confirm.disabled = false; });
+        const r = await api('/v1/team/step-up', { secret, ...(scope ? { scope } : {}) }).finally(() => { if (confirm) confirm.disabled = false; });
         if (r.ok) return finish(true);
         $('#stepup-result', root).textContent = r.status === 401 ? 'That secret was not accepted. Try again.' : r.data.error ?? `HTTP ${r.status}`;
         input.focus();
@@ -554,8 +566,8 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     if (action === 'stop' && !(await ask('Stop the run? Every role session stops after its current step. You can start a new run later.', { ok: 'Stop the run', cancel: 'Keep it running', danger: true }))) return;
     st.busy = true; renderRun();
     let r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
-    // Resuming a run the budget paused needs a recent sign-in.
-    if (needsStepUp(r) && await stepUp('Resuming a run that today\'s cap paused lets the team spend again.')) r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
+    // Resuming needs a recent sign-in, bound to this run (ADR 0013): the control plane names the scope when it asks.
+    if (needsStepUp(r) && await stepUp('Resuming the run lets the team carry on working and spending.', r.data.scope)) r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
     st.busy = false;
     // Kept apart from load errors, which the next load clears: a refused resume (today's cap is spent) must stay visible.
     st.runError = r.ok || needsStepUp(r) ? null : refusal(r);

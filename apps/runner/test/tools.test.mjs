@@ -41,6 +41,26 @@ test('bug', () => {
   no('bug', { ...b, severity: 5 }, /severity/);
 });
 
+test('signoff names the version it checked, in full; unverified is a list, empty means none (governance G1, G2)', () => {
+  const s = { to: 'release-manager', issue: 9, testedOn: 'iPhone 15, Safari', walked: 'checkout', result: 'pass', evidence: ['shots/checkout.png'] };
+  const sha = 'a'.repeat(40);
+  assert.equal(ok('signoff', { ...s, version: sha }).versionKind, 'commit', 'a full commit id is a commit');
+  assert.equal(ok('signoff', { ...s, version: 'b'.repeat(64), versionKind: 'commit' }).versionKind, 'commit');
+  assert.deepEqual(ok('signoff', { ...s, version: 'rev 3', versionKind: 'revision', unverified: [] }).unverified, [], 'an empty list is "Unverified: none"');
+  assert.equal(ok('signoff', { ...s, version: 'drf_12@2', versionKind: 'draft' }).versionKind, 'draft');
+  assert.equal(ok('signoff', s).unverified, undefined, 'left out is "not stated", never none');
+  no('signoff', { ...s, version: 'a1b2c3d' }, /versionKind/);
+  no('signoff', { ...s, version: 'a1b2c3d', versionKind: 'commit' }, /full commit id/);
+  no('signoff', { ...s, versionKind: 'draft' }, /needs the version/);
+  no('signoff', { ...s, versionKind: 'branch', version: 'x' }, /versionKind/);
+  no('signoff', { ...s, unverified: ['  '] }, /unverified\.0 is required/);
+  no('signoff', { ...s, unverified: Array(21).fill('x') }, /at most 20/);
+  assert.equal(ok('signoff', { ...s, checks: [{ call: 'call_fake', tool: 'Bash', summary: 'ran npm test · pass' }] }).checks, undefined, 'an agent can\'t supply its own checks');
+  for (const [name, input] of [['report', { status: 'done' }], ['handoff', { to: 'qa-web', task: 'x', changed: 'x', verify: 'x', doneWhen: 'x' }], ['bug', { to: 'qa-web', task: 'x', where: 'x', steps: 'x', expected: 'x', actual: 'x', severity: 3, evidence: ['a.png'] }], ['blocked', { task: 'x', need: 'x', needFrom: 'qa-web', meanwhile: 'x' }]]) {
+    assert.deepEqual(ok(name, { ...input, unverified: ['works on Android (only checked on iPhone)'] }).unverified, ['works on Android (only checked on iPhone)'], name);
+  }
+});
+
 test('signoff: refused without evidence', () => {
   const s = { to: 'release-manager', issue: 3, testedOn: 'Chrome 140, macOS, abc123', walked: 'login', result: 'pass', evidence: ['shots/a.png', 'https://ci.example/run/1'] };
   ok('signoff', s);
@@ -98,4 +118,13 @@ test('meeting_start: the front door only', () => {
   no('meeting_start', { title: 'x', attendees: ['web-dev'] }, /Only the front door/);
   no('meeting_start', { title: 'x', attendees: ['nobody'] }, /not a role/, door);
   no('meeting_start', { title: 'x', attendees: [] }, /at least one/, door);
+});
+
+test('ADR 0011: a teammate\'s prompt names it by its name and member id, says its role, and keeps the member id as its address', async () => {
+  const { systemPrompt } = await import('../session.mjs');
+  assert.match(systemPrompt({}, 'cto'), /^You are the cto on this team/, 'a team without members reads as before');
+  const p = systemPrompt({}, 'support-agent-2', null, { type: 'support-agent', name: 'Maya' });
+  assert.match(p, /^You are Maya \(support-agent-2\), a support-agent on this team\b/);
+  assert.match(p, /Teammates address you as support-agent-2\./);
+  assert.match(systemPrompt({}, 'x', null, { name: 'Bad\nName' }), /^You are Bad Name \(x\)/, 'a name is one line');
 });

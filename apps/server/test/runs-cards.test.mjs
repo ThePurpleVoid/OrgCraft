@@ -17,8 +17,8 @@ const roster = (extra = []) => ({ version: 'abc123', roles: [
 const M3_TABLES = ['runs', 'sessions', 'deliveries', 'cards', 'approvals', 'chat_messages', 'budgets', 'budget_days', 'audit', 'step_up_tokens', 'step_up_failures'];
 
 const withStepUp = (o) => plane(o, { stepUpVerifier: verifier });
-async function stepUp(call) {
-  const r = await call('POST', '/auth/step-up', { secret: SECRET });
+async function stepUp(call, scope) {
+  const r = await call('POST', '/auth/step-up', { secret: SECRET, ...(scope ? { scope } : {}) });
   assert.equal(r.status, 201);
   return { ...auth, 'x-step-up': r.body.token };
 }
@@ -137,8 +137,9 @@ test('runs: frozen on a roster with one front door, one at a time, paused, resum
     assert.equal((await call('POST', '/teams/shop/runs', { team: roster() })).status, 409, 'one run at a time');
     assert.equal((await call('POST', `/runs/${run.id}/pause`)).body.state, 'paused');
     assert.equal((await call('POST', `/runs/${run.id}/pause`)).status, 409);
-    const resumed = (await call('POST', `/runs/${run.id}/resume`)).body;
-    assert.equal(resumed.state, 'running', 'resuming after the owner paused needs no step-up');
+    assert.equal((await call('POST', `/runs/${run.id}/resume`)).body.type, 'step-up-required', 'resuming needs step-up, whoever paused it (ADR 0013)');
+    const resumed = (await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call, `resume:${run.id}`))).body;
+    assert.equal(resumed.state, 'running');
     assert.equal(resumed.version, 3);
     assert.equal((await call('POST', `/runs/${run.id}/stop`)).body.state, 'stopped');
     assert.equal((await call('POST', `/runs/${run.id}/explode`)).status, 404);
@@ -268,7 +269,7 @@ test('budget: warns once at 80%, and at 100% pauses the run and sends one card; 
     const summary = (await call('GET', '/me/summary')).body.teams[0];
     assert.deepEqual([summary.run, summary.cost.today, summary.cost.capPerDay, summary.inbox], ['paused', 1070, 1000, 1]);
 
-    const refused = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call));
+    const refused = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call, `resume:${run.id}`));
     assert.equal(refused.status, 409, 'resuming is refused while today is still spent');
     assert.match(refused.body.type ?? '', /budget-exhausted$/, 'a typed problem, so a client can say it in its own words');
     assert.equal((await call('POST', `/cards/${cards[0].id}`, { option: 'raise', version: 1 })).body.type, 'step-up-required', 'raising spends money, so it needs step-up');
@@ -321,12 +322,12 @@ test('budget: after "tomorrow", a stepped-up raise of the daily cap above today\
     assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 100 })).status, 200);
     assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 90 })).status, 200, 'lowering never needs step-up');
     assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 100 }, await stepUp(call))).body.today.state, 'exhausted', 'a cap equal to the spend is still spent');
-    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call))).status, 409);
+    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call, `resume:${run.id}`))).status, 409);
     // Above it, today is open again: the raise is newer than the spent mark and was stepped up.
     assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 2000 })).body.type, 'step-up-required');
     const put = await call('PUT', '/teams/shop/budget', { perDay: 2000 }, await stepUp(call));
     assert.deepEqual([put.status, put.body.today.state], [200, 'ok'], 'under 80% of the new cap, so not even warned');
-    const resumed = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call));
+    const resumed = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call, `resume:${run.id}`));
     assert.deepEqual([resumed.status, resumed.body.state], [200, 'running']);
     const [r] = await db.system('select resume_on from runs where id = $1', [run.id]);
     assert.equal(r.resume_on, null, 'the Resume tomorrow date is gone');

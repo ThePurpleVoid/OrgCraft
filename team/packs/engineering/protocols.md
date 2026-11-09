@@ -89,7 +89,7 @@ scripts/agent-team/team-status.sh code-reviewer#57 status done
 - Then run `scripts/agent-team/sync.sh` and commit the result with the change.
 
 <!-- fill:upstream -->
-A change that would help every team (a better rule, a script fix) goes upstream to Agent Team Kit as a pull request; the next kit version brings it back.
+A change that would help every team (a better rule, a script fix) goes upstream to OrgCraft as a pull request; the next kit version brings it back.
 
 <!-- fill:hooks -->
 Where the repository has the kit's Claude Code hooks (`.claude/settings.json`), Claude Code also reports for you: `working` when your session starts or gets a message, a heartbeat while you use tools, `idle` when your turn ends, and each subagent or teammate as its own role. That is a safety net, not a substitute: report your start, your waits and every message yourself, because only you know the task's name and whom you wait on. Without bash or `jq`, `node scripts/agent-team/report.mjs` takes the same arguments as `team-status.sh`. When your checkout's `.agent-team/local.env` names your role (`AGENT_TEAM_ROLE`), you can leave the role out: `team-status.sh status working --task "..."`.

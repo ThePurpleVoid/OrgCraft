@@ -94,7 +94,7 @@ test('control-plane mode: read, preview and publish through the deployment for t
       assert.match(pub.body.pr.url, /^https:\/\//);
       const pr = github.pulls.at(-1);
       assert.match(pr.body, /Published through Admin at shop\.example for `Ana \(u-7\)`/);
-      assert.match(github.git(['log', '-1', '--format=%B', pub.body.commit]), /Published-by: Octo Cat \(.+\) via Agent Team Studio/, 'the actor is the token\'s person');
+      assert.match(github.git(['log', '-1', '--format=%B', pub.body.commit]), /Published-by: Octo Cat \(.+\) via OrgCraft Studio/, 'the actor is the token\'s person');
       const status = await call('GET', `/v1/team/pr?branch=${encodeURIComponent(pub.body.branch)}`);
       assert.equal(status.status, 200, JSON.stringify(status.body));
 

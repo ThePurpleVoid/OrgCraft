@@ -1,6 +1,6 @@
-# Getting started with the kit
+# Getting started
 
-This is the detailed setup guide that used to be the README. It covers the kit as it ships today (0.21): role briefs as plain files, the dashboard, the Studio, the control plane and the runner. For what OrgCraft is and where it's going, see the [README](../README.md) and the [roadmap](roadmap.md).
+This is the detailed setup guide that used to be the README. It covers OrgCraft as it ships today: role briefs as plain files, the dashboard, the Studio, the control plane and the runner. For what OrgCraft is and where it's going, see the [README](../README.md) and the [roadmap](roadmap.md).
 
 ## Lightest setup: just the agent files
 
@@ -8,7 +8,7 @@ You don't need the Studio, the control plane or the runner. The kit works as pla
 
 ```sh
 cd ~/code/my-app
-npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 init --preset engineering --project "My App" --owner "Sam" --subagents
+npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 init --preset engineering --project "My App" --owner "Sam" --subagents
 ```
 
 That writes the role briefs and protocols to `docs/team/`, the report and gate scripts to `scripts/agent-team/`, one subagent per active role to `.claude/agents/`, and your project layer to `.agent-team/`. Nothing runs in the background and nothing is sent anywhere. Paste `docs/team/project-instructions.md` (below its line) into `CLAUDE.md`, then open Claude Code in the repository and say:
@@ -39,7 +39,7 @@ Requirements: git and Node 18+. The merge gate, locks and reporter also run with
 
 ```sh
 cd ~/code/my-app
-npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 init --preset engineering --project "My App" --owner "Sam" --timezone "America/Los_Angeles"
+npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 init --preset engineering --project "My App" --owner "Sam" --timezone "America/Los_Angeles"
 ```
 
 Or start from a team template: `agent-team templates` lists them (Startup product team, Customer support team, Content studio), and `init --template customer-support-team --project "My Shop"` makes that team, with its custom agents, areas, meeting and suggested systems. See [team templates](customizing.md#start-from-a-team-template).
@@ -49,7 +49,7 @@ Then:
 1. Edit `docs/team/ownership.md` so the paths match your layout.
 2. Edit the gates and hardware pools in `.agent-team/config.sh`.
 3. Paste `docs/team/project-instructions.md` into your Claude project's instructions (or into `CLAUDE.md`).
-4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI ([the CI snippet](customizing.md#ci) also tells a hosted control plane when a team change reaches main). `npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 doctor` smoke-tests the whole setup.
+4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI ([the CI snippet](customizing.md#ci) also tells a hosted control plane when a team change reaches main). `npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 doctor` smoke-tests the whole setup.
 5. Open the chief of staff: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."*
 6. Ask for something. Watch it live with `node scripts/agent-team/dashboard.mjs` (a web dashboard at http://localhost:4747) or `scripts/agent-team/team-board.sh` in the terminal.
 
@@ -144,19 +144,19 @@ tests/                          tests for the CLI, scripts and tools, smoke scen
 
 `node scripts/agent-team/roster.mjs --check` validates every brief (tiers, reporting lines, loops, direct reports) and `--tree` prints the org.
 
-## Build the team visually: Agent Team Studio
+## Build the team visually: OrgCraft Studio
 
 ```sh
-npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 studio --open   # opens http://localhost:4848/?t=<launch token>
+npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 studio --open   # opens http://localhost:4848/?t=<launch token>
 ```
 
 Switch roles on and off from the library, drag a card onto another to change who it reports to, and set each role's model tier, status and duties in the inspector. **Flow** shows who hands work to whom. In **Systems**, add your database, hosting or any MCP server and drag it onto the roles that may use it. **Owned areas** and **Checks** are suggested from your repository's folders and build files. The kit's rules run on every change. **Publish** shows every file that would change, then commits the team and its generated files on a new branch. It can also push that branch and open a pull request for review: with the GitHub CLI (`gh`) signed in on your machine, the Studio opens the pull request itself; without it, you get the branch and a link to open one. The pull request's body is the publish's change-safety plan. The Studio uses only your machine's own git and gh sign-in, and never force-pushes.
 
-![Agent Team Studio: the role library, the org chart and the inspector](images/studio.png)
+![OrgCraft Studio: the role library, the org chart and the inspector](images/studio.png)
 
 The Studio, like the dashboard, answers only on `localhost`, `127.0.0.1`, `[::1]` and the address it is bound to. That way a web page on another domain cannot reach it by pointing a DNS name at your machine. To open it under another name, list that name in `STUDIO_ALLOWED_HOSTS` (comma-separated).
 
-**In your own app.** The same Studio mounts in a site you already run, behind your own admin sign-in, with `createStudioHandler` from `agent-team-kit/studio/handler` ([docs/studio-in-your-app.md](studio-in-your-app.md)). It publishes through your own GitHub App, or, with `controlPlane: { url, team, hostToken, dpopKey }`, through the team's deployment: your server signs in to it once, and the deployment reads the repository and opens the pull request for your signed-in user. A change to the commands the team runs is never published through your site; the page links the deployment's own Studio for that.
+**In your own app.** The same Studio mounts in a site you already run, behind your own admin sign-in, with `createStudioHandler` from `orgcraft/studio/handler` ([docs/studio-in-your-app.md](studio-in-your-app.md)). It publishes through your own GitHub App, or, with `controlPlane: { url, team, hostToken, dpopKey }`, through the team's deployment: your server signs in to it once, and the deployment reads the repository and opens the pull request for your signed-in user. A change to the commands the team runs is never published through your site; the page links the deployment's own Studio for that.
 
 **Chat** talks to your team's chief of staff through the control plane (set `AGENT_TEAM_SERVER`, `AGENT_TEAM_SERVER_TOKEN` and `AGENT_TEAM_SERVER_TEAM`). With no run going, **Start a run…** starts one on the team as last published, once you set a daily cap. The Studio signs you in with the link it prints. To open it from a phone, start it with `--host 0.0.0.0` and open the network link it prints. That link is plain HTTP, so use it on trusted networks only.
 
@@ -175,7 +175,7 @@ Open the dashboard and leave it open. It draws your team from the role briefs, a
 
 ```sh
 node scripts/agent-team/dashboard.mjs            # http://localhost:4747
-npx --yes github:ThePurpleVoid/OrgCraft dashboard --demo   # see it work with made-up reports first
+npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 dashboard --demo   # see it work with made-up reports first
 ```
 
 ![The team dashboard: org chart coloured by each thread's last report](images/dashboard-org.png)

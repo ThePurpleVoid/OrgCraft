@@ -1,10 +1,12 @@
 # OrgCraft
 
+*Formerly Agent Team Kit. [What the rename changed, and what it kept](docs/renamed-to-orgcraft.md).*
+
 **Build an organization of AI teammates, publish it, and run it with your approval on everything that matters.**
 
 OrgCraft sits one layer above tools like n8n (which wires apps into flows) and gstack (which gives one coding agent a review-and-ship process). You lay out a team on a chart: roles, who reports to whom, which systems each teammate can use and how far it can go (Read, Change or Act), and what wakes it. Then you publish the team and talk to its lead. The teammates hand work to each other, check each other's work with evidence, and stop to ask you before anything irreversible: sending, paying, deleting or going live. It works for any kind of business, from a product team to a support desk, an online store or an agency. Your team is plain files you own, and you can export them at any time.
 
-> **Status, November 2026:** the kit (0.21) is usable today as files plus an optional dashboard, Studio, control plane and runner. The new Studio design is signed off, and its first screens are being built. OrgCraft was called Agent Team Kit; the files still use `.agent-team/` for compatibility.
+> **Status, November 2026:** OrgCraft 0.22 is usable today as files plus an optional dashboard, Studio, control plane and runner. The new Studio design is signed off, and its first screens are being built.
 
 ## The Studio design
 
@@ -36,7 +38,7 @@ You need git and Node 18 or later.
 
 ```sh
 cd ~/code/my-app
-npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 init --preset engineering --project "My App" --owner "Sam"
+npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 init --preset engineering --project "My App" --owner "Sam"
 ```
 
 That writes the role briefs, protocols and scripts into your repository. Nothing runs in the background, and nothing is sent anywhere. Then open your coding agent and say: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."* Install from npm comes later.

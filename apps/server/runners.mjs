@@ -6,6 +6,7 @@
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import * as store from './store.mjs';
+import { RUNNER_WINDOW, SERVER_VERSION, cleanHealth, upgradeBy, versionWindow } from './deployment.mjs';
 
 export const PROTOCOL = 'runner/1';
 const PATH = '/v1/runners/connect';
@@ -21,9 +22,10 @@ const frameId = () => `f_${randomBytes(9).toString('base64url')}`;
  *               store.Problem to nack it. Anything not listed is nacked as not supported here.
  *   welcome:    async (conn) => extra welcome body fields (sessions to resume, once sessions exist)
  *   onLost:     async (conn, why) => void, when a runner misses three beats or drops (sessions -> unknown)
+ *   version:    the control plane's version, for the runner's supported window (R13); the package version by default
  *   heartbeat:  seconds between pings (welcome tells the runner); three missed beats and the runner is lost
  */
-export function attachRunners(server, { db, ops = {}, welcome = async () => ({}), onLost = async () => {}, heartbeat = 20, helloMs = 10_000, log = console } = {}) {
+export function attachRunners(server, { db, ops = {}, welcome = async () => ({}), onLost = async () => {}, heartbeat = 20, helloMs = 10_000, log = console, version = SERVER_VERSION } = {}) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME });
   const live = new Map(); // runner id -> conn
 
@@ -115,6 +117,7 @@ export function attachRunners(server, { db, ops = {}, welcome = async () => ({})
         try {
           if (f.op === 'hello') return { ok: true, body: await onHello(body) };
           if (!conn.hello) return { ok: false, problem: 'say hello first' };
+          if (f.op === 'runner.health') return { ok: true, body: await onHealth(body) };
           const fn = ops[f.op];
           if (!fn) return { ok: false, problem: `${f.op} is not supported by this control plane` };
           return { ok: true, body: (await fn(conn, body, f)) ?? {} };
@@ -131,15 +134,32 @@ export function attachRunners(server, { db, ops = {}, welcome = async () => ({})
       if (f.op === 'hello' && out.ok) return; // answered with welcome, which refs the hello
       return out.ok ? ack(f.id, out.body) : nack(f.id, out.problem);
 
+      /** runner.health: the runner's model proxy changed state (ok or unreachable). Kept on the link and the row. */
+      async function onHealth(b) {
+        conn.health = cleanHealth(b);
+        await db.tenant(conn.tenant, ({ q }) => q("update runners set health = (health - 'model') || $2::jsonb where id = $1", [conn.runner, JSON.stringify(conn.health)]));
+        return {};
+      }
+
       async function onHello(b) {
         conn.hello = { version: typeof b.version === 'string' ? b.version.slice(0, 50) : null, capabilities: b.capabilities && typeof b.capabilities === 'object' && !Array.isArray(b.capabilities) ? b.capabilities : {},
           // The sessions the runner says it still runs: after a restart, none of the ones it had.
           sessions: Array.isArray(b.sessions) ? b.sessions.filter((x) => typeof x === 'string' && x.length <= 100).slice(0, 500) : [] };
         clearTimeout(helloTimer);
-        await db.tenant(conn.tenant, ({ q }) => q('update runners set last_seen = now(), version = coalesce($2, version), capabilities = $3 where id = $1',
-          [conn.runner, conn.hello.version, JSON.stringify(conn.hello.capabilities).length <= 16 * 1024 ? JSON.stringify(conn.hello.capabilities) : '{}']));
+        // Health (L29): what the runner says about its model provider, and the supported window (R13, N-2). A runner
+        // behind the window is still served, so nothing it holds is lost, but it is told to upgrade by a fixed date.
+        conn.health = cleanHealth(b.health);
+        const win = versionWindow(conn.hello.version, version);
+        const upgrade = await db.tenant(conn.tenant, async ({ q }) => {
+          const [prev] = await q('select health from runners where id = $1', [conn.runner]);
+          const by = upgradeBy(win, prev?.health?.upgradeBy, new Date());
+          await q('update runners set last_seen = now(), version = coalesce($2, version), capabilities = $3, health = $4 where id = $1',
+            [conn.runner, conn.hello.version, JSON.stringify(conn.hello.capabilities).length <= 16 * 1024 ? JSON.stringify(conn.hello.capabilities) : '{}',
+              JSON.stringify({ ...conn.health, ...(by ? { upgradeBy: by } : {}) })]);
+          return by ? { required: true, by, behind: win.behind, current: win.current, supported: RUNNER_WINDOW } : null;
+        });
         const extra = (await welcome(conn)) ?? {};
-        conn.send('welcome', { protocol: PROTOCOL, heartbeat, sessions: [], ...extra }, { ref: f.id });
+        conn.send('welcome', { protocol: PROTOCOL, heartbeat, sessions: [], ...(upgrade ? { upgrade } : {}), ...extra }, { ref: f.id });
         return {};
       }
     });
