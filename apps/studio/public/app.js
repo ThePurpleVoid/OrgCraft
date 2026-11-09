@@ -1296,7 +1296,7 @@ async function setPage(raw) {
     rolloutView ??= createRollout({ root: $('#rollout-page'), titleOf: roleTitle, apiUrl });
     rolloutView.open();
   } else if (p === 'chat') {
-    chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features) });
+    chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features), organization: () => spec?.values?.ORGANIZATION || spec?.values?.PROJECT_NAME || '' });
     if (params.has('card') || params.has('budget')) chat.focus({ card: params.get('card'), budget: params.has('budget') });
     chat.open();
   } else {

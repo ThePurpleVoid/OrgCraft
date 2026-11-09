@@ -94,6 +94,8 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       const c = cards.get(card[1]) ?? [...cards.values()].find((x) => x.subject === `approval/${card[1]}`);
       if (!c) return send(res, 404, { error: 'no such card' });
       if (body.version !== undefined && body.version !== c.version) return send(res, 409, c);
+      // A card this person's role may not answer (card.forbid): the server's 403, with its own words.
+      if (c.forbid) return send(res, 403, { type: 'forbidden', error: 'role member lacks cards.answer for this kind' });
       const option = (c.options ?? []).find((o) => o.id === (body.option ?? (body.decision === 'approved' ? 'approve' : body.decision === 'denied' ? 'deny' : '')));
       if (c.kind === 'approval' || option?.stepUp) {
         const su = req.headers['x-step-up'];
