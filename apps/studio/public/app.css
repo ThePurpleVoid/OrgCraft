@@ -751,6 +751,19 @@
 .ats #publish-result .cmd { display: block; margin-top: 6px; padding: 6px 8px; background: var(--off); border-radius: 6px; font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; user-select: all; overflow-wrap: anywhere; }
 .ats #advanced > summary, .ats .changes details.generated > summary { cursor: pointer; font-size: 13.5px; color: var(--muted); padding: 4px 0; }
 .ats .changes details.generated > summary { padding: 6px 10px; font-family: inherit; }
+/* The Approvals page (L22): standing rules beside the ledger, one column on a phone. */
+.ats:not([data-page="approvals"]) .approvals-only, .ats[data-page="approvals"] :is(main.layout, #agent-editor, .readonly-note, .team-only) { display: none !important; }
+.ats.no-approvals #pages [data-page="approvals"], .ats[data-page="gallery"] .approvals-only { display: none !important; }
+.ats .approvals-page { max-width: 1100px; margin: 0 auto; padding: 18px 16px 40px; }
+.ats .approvals-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 16px; align-items: start; }
+@media (max-width: 860px) { .ats .approvals-grid { grid-template-columns: minmax(0, 1fr); } }
+.ats .approvals-page .rules li.rule { border-bottom: 1px solid var(--line); padding: 8px 0; }
+.ats .approvals-page .rules li.rule p { margin: 2px 0; overflow-wrap: anywhere; }
+.ats .approvals-page .kinds li[aria-disabled="true"] { color: var(--muted); display: flex; gap: 8px; align-items: center; min-height: 32px; }
+.ats .approvals-page .ledger li { border-bottom: 1px solid var(--line); padding: 6px 0; overflow-wrap: anywhere; }
+.ats .approvals-page .ledger li p { margin: 2px 0; }
+.ats .card-msg .declined p { margin: 2px 0; }
+@media (max-width: 640px) { .ats .approvals-page button, .ats .approvals-page summary { min-height: 44px; } }
 /* L27: the sign-in page's second way in, Security › Recovery owners, and the banner on the hosted pages. */
 .ats .auth-or { display: flex; align-items: center; gap: 8px; color: var(--muted); margin: 4px 0; }
 .ats .auth-or::before, .ats .auth-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }

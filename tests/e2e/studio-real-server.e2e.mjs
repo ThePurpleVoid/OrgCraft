@@ -162,7 +162,7 @@ test('Add a runner: a code after step-up, shown once, that registers a runner on
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.goto(`${base}/#chat`);
-  await page.getByRole('button', { name: 'Add a runner…' }).click();
+  await page.getByRole('button', { name: 'Connect a machine…' }).click();
   const dlg = page.locator('#runner-dialog');
   await dlg.getByText('No runner is registered yet.').waitFor();
   await dlg.getByLabel('Name for the machine').fill("Dana's Mac mini");
@@ -184,7 +184,7 @@ test('Add a runner: a code after step-up, shown once, that registers a runner on
 
   // Shown once: closing the dialog clears it, and opening it again lists the runner, not the code.
   await dlg.getByRole('button', { name: 'Close' }).click();
-  await page.getByRole('button', { name: 'Add a runner…' }).click();
+  await page.getByRole('button', { name: 'Connect a machine…' }).click();
   await dlg.getByText("Dana's Mac mini").waitFor();
   assert.equal(await dlg.getByLabel('Runner code').count(), 0);
   assert.equal(await dlg.getByRole('button', { name: 'Get a code' }).isVisible(), true);
