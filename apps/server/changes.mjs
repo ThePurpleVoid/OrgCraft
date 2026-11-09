@@ -19,6 +19,11 @@ import { Problem, publishedId } from './store.mjs';
 import { createHash } from 'node:crypto';
 
 const STATES = new Set(['open', 'accepted', 'closed']);
+/**
+ * The step-up scope for accepting one change (ADR 0013, the L7 scope): the passkey is bound to this team's change
+ * number, so a step-up made for another change, a resume or anything else is refused and stays unspent.
+ */
+export const acceptScope = (team, number) => `accept-change:${team}_${number}`;
 const NUMBER = /^[1-9][0-9]{0,8}$/;
 const actor = (who) => ({ kind: 'person', id: String(who.principal) });
 
@@ -107,7 +112,7 @@ export function createChanges({ db, m3, now = () => new Date(), backendFor = nul
       if (c.needsCode && !atLeast(who.role, 'admin')) throw new Problem(403, 'this change adds or changes commands the team runs, and you are not allowed to accept those; ask an admin who is', { type: 'publish-code' });
       const hash = diffHash(capability);
       if (capability.length) {
-        await m3.requireStepUp(tenant, String(who.principal), stepUp, `Accepting change ${number}, which widens access (${capability.length} item${capability.length > 1 ? 's' : ''}, ${hash.slice(0, 12)})`);
+        await m3.requireStepUp(tenant, String(who.principal), stepUp, `Accepting change ${number}, which widens access (${capability.length} item${capability.length > 1 ? 's' : ''}, ${hash.slice(0, 12)})`, acceptScope(team, number));
       }
       let done;
       try { done = await b.accept(number, { by: { id: String(who.principal) } }); } catch (e) {

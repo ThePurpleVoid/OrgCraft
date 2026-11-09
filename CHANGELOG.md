@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Managed teams: change requests are accepted, closed and rolled back from the control plane** (no-repository start, step L9c; ADR 0012 and 0013, spec L9 sections 4.4 and 4.5). New routes: `GET /v1/teams/{team}/changes` and `/changes/{n}` (viewer), `POST …/changes/{n}/accept` (admin), `…/close` (editor) and `POST …/rollback` (admin). Accept runs the checks and the capability diff again at the change's head against the current `main`, then refuses, in order:
+  - a stale base (409 `stale`, with `proposal.failed` head-moved);
+  - red checks, or files that are not what sync writes (409 `checks`);
+  - a change a teammate drafted that widens its own access or weakens a check (403 `self-widening`);
+  - commands the team runs, from someone who is not an admin (403 `publish-code`);
+  - a non-empty capability diff without a step-up scoped to this change (401, scope `accept-change:<team>_<number>`).
+
+  Then `main` moves, fast-forward only. The person's words and a hash of the diff are audited, and `proposal.accepted` and `team.published` (id `published-<sha>`, via managed) are appended once. Rollback writes the old version as a new commit on top of `main` and opens a change, so the access it puts back needs step-up again. `requireStepUp` takes an optional scope. **What existing teams see:** nothing; GitHub teams answer 409 on these routes.
 - **Start with no repository: the managed team store** (step L9b; ADR 0012, spec L9 section 4). `apps/studio/managed.mjs` `managedBackend({ store, refs })` is a third Studio backend, with the same shape as the GitHub one. It keeps the team's files as real Git objects in OrgCraft's own store.
   - A publish writes a commit and opens change request `cr/<n>`. Accepting it moves `main` by compare-and-swap, fast-forward only. A stale base gets the usual 409 `stale`, and nothing is ever forced.
   - A team with no version yet reads as empty (`base: null`), so the page offers templates.

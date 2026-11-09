@@ -217,9 +217,9 @@ paths:
       x-min-role: admin
       x-interactive-only: true
       tags: [studio]
-      summary: "Accept a change: the checks and the capability diff run again at its head against the current main. Red checks refuse (409 checks); a change a teammate drafted that widens itself or weakens a check refuses (403 self-widening); commands need an admin (403 publish-code); a non-empty capability diff needs x-step-up and is audited with the person's words. Then main moves, fast-forward only (409 stale), and team.published (id published-<sha>, via managed) is appended once"
+      summary: "Accept a change: the checks and the capability diff run again at its head against the current main. Red checks refuse (409 checks); a change a teammate drafted that widens itself or weakens a check refuses (403 self-widening); commands need an admin (403 publish-code); a non-empty capability diff needs x-step-up from a step-up scoped to this change (scope accept-change:<team>_<number>, named in the 401) and is audited with the person's words. Then main moves, fast-forward only (409 stale), and team.published (id published-<sha>, via managed) is appended once"
       requestBody: { content: { application/json: { schema: { type: object, properties: { words: { type: string, maxLength: 2000, description: "What the person says about it, kept in the audit row" } } } } } }
-      responses: { "200": { description: "The change, accepted, with the files it changed" }, "401": { description: "step-up-required" }, "403": { description: "self-widening, publish-code" }, "409": { description: "stale, checks, or the change is not open" } }
+      responses: { "200": { description: "The change, accepted, with the files it changed" }, "401": { description: "step-up-required, with body.scope accept-change:<team>_<number>" }, "403": { description: "self-widening, publish-code" }, "409": { description: "stale, checks, or the change is not open" } }
   /teams/{team}/changes/{change}/close:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: change, in: path, required: true, schema: { type: integer, minimum: 1 } } ]
     post: { x-min-role: editor, tags: [studio], summary: "Close an open change without accepting it; its ref cr/<n> stays for history", responses: { "200": { description: The change, closed } } }

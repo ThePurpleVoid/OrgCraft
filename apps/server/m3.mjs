@@ -808,13 +808,13 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   }
 
   /** For writes outside this module that need step-up (runner codes, secrets: issue #28 D4). Throws when absent. */
-  async function requireStepUp(tenant, by, token, what) {
+  async function requireStepUp(tenant, by, token, what, scope = null) {
     const { result } = await tx(tenant, async (ctx) => {
-      const used = await useStepUp(ctx, by, token);
+      const used = await useStepUp(ctx, by, token, scope);
       if (used) await ctx.audit({ actorKind: 'person', actorId: by, action: 'step-up', target: used, decision: 'used', rule: what });
       return used;
     });
-    if (!result) throw new StepUpRequired(what);
+    if (!result) throw new StepUpRequired(what, scope);
     return result;
   }
 

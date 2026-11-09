@@ -23,7 +23,7 @@ async function managedTeam({ call, db, su }) {
   const draft = await call('POST', '/teams/shop/studio/v1/team/from-template', { id: tpl.id, project: 'Shop', owner: 'Sam', timezone: 'UTC' }, studio());
   const first = await call('POST', '/teams/shop/studio/v1/team/publish', { spec: draft.body.spec, base: null, message: 'Start the team' }, studio({ 'idempotency-key': 'start' }));
   assert.equal(first.status, 200, JSON.stringify(first.body));
-  const ok = await call('POST', '/teams/shop/changes/1/accept', { words: 'Start it' }, await su());
+  const ok = await call('POST', '/teams/shop/changes/1/accept', { words: 'Start it' }, await su('accept-change:shop_1'));
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
   const backend = managedBackend({ store: pgObjects(db, 'acme', 'shop'), refs: pgRefs(db, 'acme', 'shop') });
   /** Publishes `edit(spec)` from main through the Studio, as a person; returns the change number. */
@@ -54,7 +54,12 @@ test('the first version: accepting it needs step-up (every seat is new access), 
     assert.equal(refused.status, 401, JSON.stringify(refused.body));
     assert.equal(refused.body.type, 'step-up-required');
     assert.equal((await db.system("select count(*)::int as n from managed_refs where team = 'shop' and name = 'main'"))[0].n, 0, 'nothing moved');
-    const ok = await call('POST', '/teams/shop/changes/1/accept', { words: 'Yes, start it' }, await su());
+    assert.equal(refused.body.scope ?? refused.body.body?.scope, 'accept-change:shop_1', 'names the scope to step up for');
+    // A step-up without the scope, or for another change, is refused and stays unspent.
+    assert.equal((await call('POST', '/teams/shop/changes/1/accept', {}, await su())).status, 401);
+    assert.equal((await call('POST', '/teams/shop/changes/1/accept', {}, await su('accept-change:shop_2'))).status, 401);
+    assert.equal((await call('POST', '/teams/shop/changes/1/accept', {}, await su('resume:run_1'))).status, 401);
+    const ok = await call('POST', '/teams/shop/changes/1/accept', { words: 'Yes, start it' }, await su('accept-change:shop_1'));
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.deepEqual([ok.body.state, ok.body.acceptedSha], ['accepted', pub.body.commit]);
     const [audit] = await db.system("select actor_id, target, rule, detail from audit where action = 'change-accept'");
@@ -123,7 +128,7 @@ test('a teammate may not widen itself: its own change is refused, the same chang
     await call('POST', `/teams/shop/changes/${mine.pr.number}/close`, {});
     const theirs = await backend.publish({ base: main, message: 'A deeper model for them', changes, authorMember: null });
     assert.equal((await call('POST', `/teams/shop/changes/${theirs.pr.number}/accept`, {})).status, 401, 'widening needs step-up');
-    assert.equal((await call('POST', `/teams/shop/changes/${theirs.pr.number}/accept`, {}, await su())).status, 200);
+    assert.equal((await call('POST', `/teams/shop/changes/${theirs.pr.number}/accept`, {}, await su(`accept-change:shop_${theirs.pr.number}`))).status, 200);
   }, { publicUrl: ORIGIN });
 });
 
@@ -134,13 +139,13 @@ test('rollback opens a change against the current main, so the access it puts ba
     const { spec } = (await call('GET', '/teams/shop/studio/v1/team', undefined, studio())).body;
     const who = Object.keys(spec.roles).find((s) => spec.roles[s].enabled);
     const n = await publish((s) => setField(s, who, 'Model', 'light'), `A lighter model for ${who}`, 'light');
-    assert.equal((await call('POST', `/teams/shop/changes/${n}/accept`, {}, await su())).status, 200);
+    assert.equal((await call('POST', `/teams/shop/changes/${n}/accept`, {}, await su(`accept-change:shop_${n}`))).status, 200);
     assert.equal((await call('POST', '/teams/shop/rollback', { to: '0'.repeat(40) })).status, 404);
     const rb = await call('POST', '/teams/shop/rollback', { to: first });
     assert.equal(rb.status, 201, JSON.stringify(rb.body));
     assert.deepEqual(rb.body.capability.map((x) => [x.kind, x.subject]), [['model-changed', who]]);
     assert.equal((await call('POST', `/teams/shop/changes/${rb.body.number}/accept`, {})).status, 401);
-    const ok = await call('POST', `/teams/shop/changes/${rb.body.number}/accept`, {}, await su());
+    const ok = await call('POST', `/teams/shop/changes/${rb.body.number}/accept`, {}, await su(`accept-change:shop_${rb.body.number}`));
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     // A new commit with the old tree, on top of main: history only moves forward.
     const [main] = await db.system("select sha, version from managed_refs where team = 'shop' and name = 'main'");
