@@ -603,7 +603,7 @@
 .ats .wline.outside { stroke: var(--warn, #9a6700); stroke-dasharray: 6 4; }
 .ats .wline.warn { stroke: var(--warn, #9a6700); }
 .ats .wiring-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 220px) minmax(0, 1fr); gap: 48px; align-items: start; position: relative; z-index: 1; }
-.ats .wcol h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+.ats .wcol h3 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 8px; } /* sentence case: the column headings are whole phrases */
 .ats .wcol .plain { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .ats .wcol.mid { align-self: center; }
 .ats .wcard { display: grid; gap: 2px; padding: 12px; border: 2px solid var(--accent); border-radius: 10px; background: var(--panel, #fff); }
@@ -673,4 +673,8 @@
 
 /* The screen's h1 is its page name, for screen readers (ALL-3); the gallery shows its own. Phones: 44 px targets. */
 .ats[data-page="gallery"] #page-title { display: none; }
-@media (max-width: 640px) { .ats .skip, .ats #views button { min-height: 44px; } }
+@media (max-width: 640px) { .ats .skip, .ats #views button, .ats #live { min-height: 44px; } }
+.ats .skip:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* Phones: whatever scrolls into view lands above the bottom bar, not under it. */
+@media (max-width: 640px) { html:has(.ats) { scroll-padding-bottom: 80px; } .ats main.layout { padding-bottom: 72px; } }

@@ -185,7 +185,7 @@ export function wireWiring(el, ctx, current) {
     const pick = e.target.closest('[data-pick-level]');
     if (pick) { const p = el.querySelector('#wire-pick'); p.hidden = true; return bind(p.dataset.res, pick.dataset.pickLevel); }
   });
-  el.addEventListener('change', (e) => { if (e.target.id === 'wd-level') setLevel(e.target.dataset.res, e.target.value); });
+  el.addEventListener('change', (e) => { if (e.target.id === 'wd-level' && !ctx.locked?.()) setLevel(e.target.dataset.res, e.target.value); });
   // B2.1-3: drag a system onto the teammate, then pick Read, Change or Act where it dropped.
   el.addEventListener('dragstart', (e) => { const c = e.target.closest('[data-sys]'); if (c) { e.dataTransfer.setData('text/x-system', c.dataset.sys); e.dataTransfer.effectAllowed = 'link'; } });
   el.addEventListener('dragover', (e) => { if (e.target.closest('#wiring-drop')) { e.preventDefault(); e.target.closest('#wiring-drop').classList.add('drop'); } });

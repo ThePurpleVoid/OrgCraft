@@ -371,6 +371,7 @@ const wiringCtx = {
   resolved: (slug) => view.bySlug.get(slug)?.md ?? '',
   setSection: (slug, name, m, text) => change(() => setExtSection(slug, name, m, text)),
   close: () => openWiring(null),
+  locked: () => locked(),
 };
 let wiringWired = false;
 /** Opens teammate `slug`'s wiring view in place of the chart (null closes it), with its own address (ALL-6). */
@@ -387,6 +388,8 @@ function renderCanvas() {
   if (wiring) {
     if (!wiringWired) { wireWiring($('#canvas'), wiringCtx, () => wiring); wiringWired = true; }
     renderWiring($('#canvas'), wiringCtx, wiring);
+    // On a phone (or in a preview) the wiring reads but does not change (B1.7): wires open, nothing is added or deleted.
+    if (locked()) for (const c of $$('#canvas :is(select, input, textarea, [data-del], #w-bind, #w-hand, .chip)')) { c.disabled = true; c.draggable = false; }
     $('#summary').textContent = view.draft.count ? t('canvas.changes', { n: view.draft.count }) : '';
     return;
   }
@@ -626,7 +629,7 @@ function renderLibrary() {
   const block = (list) => {
     const groups = new Map();
     for (const c of list) { if (!groups.has(c.group)) groups.set(c.group, []); groups.get(c.group).push(c); }
-    return [...groups.keys()].sort(order).map((g) => `<h3 class="group-title" data-group="${esc(g)}"><span class="dot" data-paint="${groupColor(g)}" aria-hidden="true"></span>${esc(g)}</h3><ul class="plain cat-list">${groups.get(g).sort(byTitle).map(row).join('')}</ul>`).join('');
+    return [...groups.keys()].sort(order).map((g) => `<h2 class="group-title" data-group="${esc(g)}"><span class="dot" data-paint="${groupColor(g)}" aria-hidden="true"></span>${esc(g)}</h2><ul class="plain cat-list">${groups.get(g).sort(byTitle).map(row).join('')}</ul>`).join('');
   };
   // While searching, everything that matches; otherwise the team's own roles, then the whole catalog folded.
   const ours = q ? rows : rows.filter((c) => c.used || c.custom);
@@ -773,7 +776,8 @@ function renderInspector() {
         const name = s.heading.replace(/^##\s+/, '');
         const shown = name.replace(/\s*\(writes\)$/i, ''); // "Owns (writes)" reads as "Owns" (ALL-5)
         const m = mine.get(name.toLowerCase());
-        return `<details class="section"${m ? ' open' : ''}><summary>${esc(shown)}${m ? `<span class="badge changed">${esc(t('inspector.changed'))} · ${m.mode === 'replace' ? 'replaced' : 'added to'}</span>` : ''}</summary>
+        // B1.3-3: Rules is where an owner adds a rule, so it starts open.
+        return `<details class="section"${m || /^rules$/i.test(shown) ? ' open' : ''}><summary>${esc(shown)}${m ? `<span class="badge changed">${esc(t('inspector.changed'))} · ${m.mode === 'replace' ? 'replaced' : 'added to'}</span>` : ''}</summary>
           <div class="kit-text">${esc(s.body.join('\n').trim())}</div>
           <div class="field"><span>Your text</span><textarea data-section="${esc(name)}" aria-label="${esc(shown)}: your text" rows="3" placeholder="Added after the kit's text">${esc(m?.text ?? '')}</textarea></div>
           <label class="row hint"><input type="checkbox" data-replace="${esc(name)}" ${m?.mode === 'replace' ? 'checked' : ''}> Replace the kit's text instead of adding to it</label></details>`;
@@ -931,7 +935,8 @@ function render() {
   renderIssues();
   $('#undo').disabled = !undo.length;
   $('#redo').disabled = !redo.length;
-  if (locked()) for (const el of $$('#inspector :is(input, select, textarea, button), #library input')) el.disabled = true;
+  // Read-only: nothing that changes the team works, but looking does (the wiring view, the info buttons).
+  if (locked()) for (const el of $$('#inspector :is(input, select, textarea, button):not(#i-wiring, .info), #library input')) el.disabled = true;
   renderTemplateBar();
 }
 

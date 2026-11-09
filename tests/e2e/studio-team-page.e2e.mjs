@@ -141,7 +141,6 @@ test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { 
   await page.locator('#i-name').press('Enter');
   // B1.3-3: add a rule. It goes on top of the kit's role as an extension, so the kit's text stays (B1.3-8).
   const rules = insp.locator('details.section', { has: page.locator('summary', { hasText: /^Rules/ }) });
-  await rules.locator('summary').click();
   await rules.locator('textarea').fill('Every migration has a rollback note.');
   await rules.locator('textarea').blur();
   await insp.locator('details.section', { has: page.locator('summary', { hasText: /^Rules/ }) }).locator('.badge.changed', { hasText: 'added to' }).waitFor();
