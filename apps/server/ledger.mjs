@@ -232,20 +232,26 @@ export async function coveredBy(ctx, team, { action, bound, session }) {
  */
 const TARGET = /^(to|cc|bcc|recipients?|customer|payee|account|email|user|channel|phone|number|destination|member|contact)(_?id)?$|(_id|Id)$/i;
 
-/** The (tool, target value) pairs of a set of signed calls, or null when a call names no target (then only the exact calls match). */
+/**
+ * The (tool, target value) pairs of a set of signed calls, looking into nested objects (three levels: `customer: { id }`
+ * counts as the customer). A call with no target adds nothing; null only when no call names one, and then only the
+ * exact calls match (code review sev 4).
+ */
 export function targetsOf(calls) {
   if (!Array.isArray(calls) || !calls.length) return null;
   const out = new Set();
-  for (const c of calls) {
-    const mine = [];
-    for (const [k, v] of Object.entries(c.input ?? {})) {
-      if (!TARGET.test(k)) continue;
-      for (const x of Array.isArray(v) ? v : [v]) if ((typeof x === 'string' && x.trim()) || typeof x === 'number') mine.push(`${c.tool}\n${String(x).trim().toLowerCase()}`);
+  const walk = (tool, obj, depth, under) => {
+    if (depth > 3 || !obj || typeof obj !== 'object') return;
+    for (const [k, v] of Object.entries(obj)) {
+      const hit = under || TARGET.test(k);
+      for (const x of Array.isArray(v) ? v : [v]) {
+        if (x && typeof x === 'object') walk(tool, x, depth + 1, hit);
+        else if (hit && ((typeof x === 'string' && x.trim()) || typeof x === 'number')) out.add(`${tool}\n${String(x).trim().toLowerCase()}`);
+      }
     }
-    if (!mine.length) return null;
-    for (const m of mine) out.add(m);
-  }
-  return [...out].sort();
+  };
+  for (const c of calls) walk(c.tool, c.input ?? {}, 0, false);
+  return out.size ? [...out].sort() : null;
 }
 
 /**

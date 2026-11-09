@@ -237,4 +237,7 @@ test('targetsOf: the tool and the values it acts on, whatever field carries them
   assert.ok(!overlap(targetsOf([{ tool: 'mcp__other__refund', input: { customer: 'cus_zed', amount: 9000 } }]), a), 'another system');
   assert.deepEqual(targetsOf([{ tool: 'mcp__mail__send', input: { to: 'a@b.example', body: 'Hi' } }]), targetsOf([{ tool: 'mcp__mail__send', input: { to: 'a@b.example', body: 'Hello there' } }]));
   assert.equal(targetsOf([{ tool: 'mcp__x__do', input: { text: 'no target' } }]), null);
+  // Nested targets count, and a call without one in the set does not hide the others (code review sev 4).
+  assert.ok(overlap(targetsOf([{ tool: 'mcp__payments__refund', input: { customer: { id: 'cus_zed' }, amount: 1 } }]), a));
+  assert.ok(overlap(targetsOf([refund('cus_zed', 9000), { tool: 'mcp__notes__add', input: { text: 'refunded' } }]), a));
 });
