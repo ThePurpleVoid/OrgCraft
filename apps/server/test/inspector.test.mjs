@@ -167,3 +167,23 @@ test('proof 5: retention deletes for real, follows a shortened io_days, and writ
     await assert.rejects(p.db.tenant('acme', ({ q }) => q('delete from step_io')), 'the app role never deletes step I/O');
   }, { tickMs: 0 });
 });
+
+test('review fix: an event in another team that names this team\'s session gets no task, and a huge bytes is clamped', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams', { id: 'other' });
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const [chat] = await events(p.call, 'chat.message');
+    const s = (await start(runner, 'chief-of-staff')).body;
+    const named = { ...env(s, 'chief-of-staff', 'report.status', { status: 'working', task: 'Steal a task', session: s.session }), source: '/tenants/acme/teams/other', team: 'other' };
+    await p.inject('other', [named]);
+    const [stored] = (await p.call('GET', '/teams/other/events?type=report.status')).body.events;
+    assert.deepEqual([stored.task, stored.cause], [undefined, undefined], 'shop\'s task and cause stay in shop');
+    const [t] = await p.db.system('select title from tasks where id = $1', [chat.task]);
+    assert.equal(t.title, 'go', 'and shop\'s task row is untouched');
+    const io = ULID();
+    const r = await runner.request('step.io', { session: s.session, id: io, part: 'output', body: 'cut', truncated: true, bytes: 2 ** 40 });
+    assert.equal(r.op, 'ack', JSON.stringify(r.body));
+    assert.equal((await p.db.system('select bytes from step_io where id = $1', [io]))[0].bytes, 2 ** 31 - 1);
+  }, { tickMs: 0 });
+});
