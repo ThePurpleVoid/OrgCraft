@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Change safety for teammates (team-json-0.22 §5.4, local PR L14, kit half).** `diffTeams` now compares a teammate's brief the way sync writes it, and has five new kinds: `member-added` (instead of `role-added` for a teammate), `member-renamed` (the name alone; `impact` applies it at once), `type-changed` (Based on; treated as a brief change), `pool` (shrinking lets the extra sessions finish their task first) and `hands-to` (the structured targets, with `removed` and `added`). A prose change in Hands to is still a `brief` change. In `impact`, a dropped Hands to target with hand-offs still queued from that teammate (`inventory.roles[target].queuedFrom`) offers `reroute-queued` (recommended) or `keep-queued`. Switching off a teammate with hand-offs addressed to its role (`queuedByType`) adds `reroute-queued` to its choices.
+- **What a change widens: `capabilityDiff(published, draft, kit)`** (ADR 0013 rule 2, architecture S2-09). It returns typed items, each with the seat it widens:
+  - a seat added, or its Based on changed;
+  - a binding added or widened;
+  - an area gained;
+  - the model tier changed;
+  - Pool raised;
+  - a Hands to line to a reviewer or quality role removed;
+  - a gate check removed or changed (subject `*`, every seat);
+  - a bound system that gains a secret or changes its settings.
+
+  `selfCapability(items, author)` lists the items a change drafted by that seat may not make. The Studio's preview now returns `capability`, and the pull request it opens starts with a **Widens access** section. The sheet itself is web-dev's half of L14.
+- **What existing teams see on sync:** nothing; these are Studio and package changes.
+
 ## 0.22.0
 
 - **Teammates: several agents of one role, each with its own name** (ADR 0011, `docs/specs/team-json-0.22.md`, local PRs L11 and L12). A file `.agent-team/roles/<id>.extend.md` with `**Based on:** <role>` adds a teammate: `backend-dev-2` called Maya, based on Backend dev. Sync writes `docs/team/roles/<id>.md` for each teammate. Its brief is the role's kit brief, then the team's edits to that role (minus the role's own seat settings: title, Based on, Reports to, Pool, Group, Owns and Hands to), then the teammate's own file (§1.2a). Its header says `**Type:** Backend dev (backend-dev)`, and with subagents on it gets its own `.claude/agents/<id>.md`. The org tree in the project instructions (and AGENTS.md) lists each teammate as `Maya (backend-dev-2), Backend dev (standard)`. A team without teammates gets the same tree as before. `packages/team-model` exports `briefOfMember`, `listMembers`, `setDisplayName` and the members' checks: nobody hands work to a teammate, two teammates doing the same job in one lane (use Pool), and a Hands to line that has to pick which of several teammates.

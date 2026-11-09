@@ -323,7 +323,7 @@ export function createStudioHandler(opts = {}) {
     const out = await backend.publish({
       base, into: info.defaultBranch, branch, message: core.commitMessage(message, user),
       changes: p.changes.map(({ path, content, mode }) => ({ path, content, mode })),
-      pr: core.pullRequestBody(message, { commands: p.commands, kitUpgrade, via: user.via ?? null }),
+      pr: core.pullRequestBody(message, { commands: p.commands, kitUpgrade, via: user.via ?? null, capability: p.capability }),
     });
     try { logger({ event: 'agent-team-studio.publish', user: user.id, branch: out.branch, commit: out.commit, pr: out.pr?.url ?? null, files: out.files.length, ...(user.via ? { via: user.via } : {}) }); } catch { /* the host's logger */ }
     return json(200, { branch: out.branch, commit: out.commit, files: out.files, pr: out.pr, commands: p.commands });

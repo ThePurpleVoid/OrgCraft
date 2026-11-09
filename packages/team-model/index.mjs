@@ -1160,10 +1160,17 @@ function sectionsOf(md) {
 export function diffTeams(published, draft, kit) {
   // Each role's own text (brief plus extension), before sync fits reporting lists to the team and adds Systems: a role
   // switching off must not show up as a brief change on every manager, and bindings are compared on their own below.
-  const own = (spec) => new Map(Object.entries(spec.roles).filter(([s, r]) => r.enabled && (r.brief ?? kit.roles[s]) !== undefined)
-    .map(([s, r]) => [s, { slug: s, md: emptyExtension(r.extension) ? (r.brief ?? kit.roles[s]) : applyExtension(r.brief ?? kit.roles[s], r.extension) }]));
+  // A teammate's text is its type's brief with the type's and its own edits (§1.2a), as sync writes it.
+  const text = (spec, s, r) => {
+    if (r.source === 'member') { const base = typeBrief(spec, kit, r.type); return base === undefined ? undefined : memberBrief(base, r, s, kit, spec.roles[r.type]?.extension); }
+    const base = r.brief ?? kit.roles[s];
+    return base === undefined ? undefined : emptyExtension(r.extension) ? base : applyExtension(base, r.extension);
+  };
+  const own = (spec) => new Map(Object.entries(spec.roles).filter(([, r]) => r.enabled).map(([s, r]) => [s, { slug: s, md: text(spec, s, r) }]).filter(([, x]) => x.md !== undefined));
   const before = own(published);
   const after = own(draft);
+  const roster = [...new Set([...Object.keys(kit.roles ?? {}), ...Object.keys(published.roles), ...Object.keys(draft.roles)])];
+  const titleOfMd = (md) => splitBrief(md).header[0]?.replace(/^#\s+/, '').trim() ?? '';
   const changes = [];
   const add = (c) => changes.push(c);
   for (const [slug, r] of before) {
@@ -1172,14 +1179,41 @@ export function diffTeams(published, draft, kit) {
     if (!dormant(r.md) && dormant(a.md)) add({ kind: 'role-dormant', role: slug, from: statusOf(r.md), to: statusOf(a.md), detail: `${slug} becomes dormant` });
     if (managerOf(r.md) !== managerOf(a.md)) add({ kind: 'reports-to', role: slug, from: managerOf(r.md), to: managerOf(a.md), detail: `${slug} reports to ${managerOf(a.md)} instead of ${managerOf(r.md)}` });
     if (tierOf(r.md) !== tierOf(a.md)) add({ kind: 'tier', role: slug, from: tierOf(r.md), to: tierOf(a.md), detail: `${slug} model tier ${tierOf(r.md)} → ${tierOf(a.md)}` });
+    // Kit 0.22 (team-json-0.22 §5.4): Based on, Pool, the name and the structured Hands to each have their own kind.
+    const typeBefore = typeOf(published, slug);
+    const typeAfter = typeOf(draft, slug);
+    const retyped = typeBefore !== typeAfter;
+    if (retyped) add({ kind: 'type-changed', role: slug, from: typeBefore, to: typeAfter, detail: `${slug} is now based on ${typeAfter} instead of ${typeBefore}` });
+    const pb = poolOf(r.md);
+    const pa = poolOf(a.md);
+    if (pb !== pa && !(Number.isNaN(pb) && Number.isNaN(pa))) add({ kind: 'pool', role: slug, from: pb, to: pa, detail: `${slug} pool ${pb} → ${pa}` });
+    if (titleOfMd(r.md) !== titleOfMd(a.md)) add({ kind: 'member-renamed', role: slug, from: titleOfMd(r.md), to: titleOfMd(a.md), detail: `${slug} is now called ${titleOfMd(a.md)} (was ${titleOfMd(r.md)})` });
+    const hb = handsTo(r.md, roster);
+    const ha = handsTo(a.md, roster);
+    const key2 = (t) => `${t.to}\u0000${t.what ?? ''}`;
+    const tb = new Set(hb.targets.map(key2));
+    const ta = new Set(ha.targets.map(key2));
+    const wiringChanged = tb.size !== ta.size || [...tb].some((k) => !ta.has(k));
+    if (wiringChanged) {
+      const toB = new Set(hb.targets.map((t) => t.to));
+      const toA = new Set(ha.targets.map((t) => t.to));
+      const removed = [...toB].filter((t) => !toA.has(t)).sort();
+      const added = [...toA].filter((t) => !toB.has(t)).sort();
+      add({ kind: 'hands-to', role: slug, removed, added, detail: `${slug} hands to ${[...added.map((t) => `+${t}`), ...removed.map((t) => `-${t}`)].join(', ') || 'changes what it hands over'}` });
+    }
+    if (retyped) continue; // type-changed already covers the brief (it is treated as a brief change).
     const sb = sectionsOf(r.md);
     const sa = sectionsOf(a.md);
-    const names = [...new Set([...sb.keys(), ...sa.keys()])].filter((n) => sb.get(n) !== sa.get(n));
-    if (names.length || splitBrief(r.md).header[0] !== splitBrief(a.md).header[0]) {
-      add({ kind: 'brief', role: slug, sections: names, detail: `${slug} brief changes${names.length ? `: ${names.join(', ')}` : ' (title)'}` });
-    }
+    const proseChanged = hb.text.join('\n') !== ha.text.join('\n');
+    const names = [...new Set([...sb.keys(), ...sa.keys()])].filter((n) => sb.get(n) !== sa.get(n) && (n.toLowerCase() !== 'hands to' || proseChanged || !wiringChanged));
+    if (names.length) add({ kind: 'brief', role: slug, sections: names, detail: `${slug} brief changes: ${names.join(', ')}` });
   }
-  for (const slug of after.keys()) if (!before.has(slug)) add({ kind: 'role-added', role: slug, detail: `${slug} joins the team` });
+  for (const slug of after.keys()) {
+    if (before.has(slug)) continue;
+    const r = draft.roles[slug];
+    if (r.source === 'member') add({ kind: 'member-added', role: slug, type: r.type, detail: `${slug} joins the team as a ${r.type}` });
+    else add({ kind: 'role-added', role: slug, detail: `${slug} joins the team` });
+  }
 
   // Ownership: a path whose writer changes, or that loses or gains a writer.
   const rows = (spec) => new Map((spec.ownership?.rows ?? []).map((r) => [r.path, r.writer]));
@@ -1215,6 +1249,90 @@ export function diffTeams(published, draft, kit) {
   if (JSON.stringify(published.rules ?? {}) !== JSON.stringify(draft.rules ?? {})) add({ kind: 'rules', detail: 'the team rules change' });
   if (JSON.stringify(published.values ?? {}) !== JSON.stringify(draft.values ?? {})) add({ kind: 'values', detail: 'project values change' });
   return changes;
+}
+
+/**
+ * What a change widens (ADR 0013 rule 2, architecture S2-09): the "Widens access" block of the Publish sheet, computed
+ * the same way for every draft, change request or pull request, whoever wrote it. Pure, next to diffTeams.
+ *
+ * [{ kind, subject, subjects?, ...from/to, detail }], where subject is the seat whose access grows ('*' for a check: every
+ * seat; null with subjects when several seats gain). Kinds that exist in a team spec today:
+ *   seat-added       a role or teammate switched on or added (it brings its bindings and areas)
+ *   type-changed     Based on changed (the seat takes on another job)
+ *   binding-added, binding-widened
+ *   owns-added       an area gains a writer, or moves to a new one
+ *   model-changed    the model tier changed, either way
+ *   cap-raised       Pool raised (more sessions at once)
+ *   review-removed   a structured Hands to line to a reviewer (a *-reviewer role) or a quality role (QA, testers) is gone
+ *   check-removed, check-changed   a gate command is gone or runs something else
+ *   resource-widened a bound system gains a secret or its settings change (subjects: the seats bound to it)
+ * Connector effects, egress hosts, standing rules and person grants join here when the spec carries them (ADR 0013).
+ */
+export function capabilityDiff(published, draft, kit) {
+  const items = [];
+  const add = (x) => items.push(x);
+  const group = (spec, id) => {
+    const r = spec.roles[id];
+    if (!r) return '';
+    const base = r.source === 'member' ? typeBrief(spec, kit, r.type) : (r.brief ?? kit.roles?.[id]);
+    return field(base ?? '', 'Group').toLowerCase();
+  };
+  for (const c of diffTeams(published, draft, kit)) {
+    switch (c.kind) {
+      case 'role-added': case 'member-added': add({ kind: 'seat-added', subject: c.role, ...(c.type ? { type: c.type } : {}), detail: `${c.role} joins the team` }); break;
+      case 'type-changed': add({ kind: 'type-changed', subject: c.role, from: c.from, to: c.to, detail: c.detail }); break;
+      case 'binding-added': case 'binding-widened': add({ kind: c.kind, subject: c.role, resource: c.resource, ...(c.from ? { from: c.from } : {}), to: c.to, detail: c.detail }); break;
+      case 'path-added': add({ kind: 'owns-added', subject: c.to, path: c.path, detail: c.detail }); break;
+      case 'path-moved': add({ kind: 'owns-added', subject: c.to, path: c.path, from: c.from, detail: c.detail }); break;
+      case 'tier': add({ kind: 'model-changed', subject: c.role, from: c.from, to: c.to, detail: c.detail }); break;
+      case 'pool': if (!(c.to <= c.from)) add({ kind: 'cap-raised', subject: c.role, cap: 'pool', from: c.from, to: c.to, detail: c.detail }); break;
+      case 'hands-to':
+        for (const t of c.removed ?? []) {
+          if ([published, draft].some((spec) => group(spec, t) === 'quality' || /-reviewer$/.test(typeOf(spec, t) || t))) add({ kind: 'review-removed', subject: c.role, reviewer: t, detail: `${c.role} no longer hands its work to ${t}` });
+        }
+        break;
+      default: break;
+    }
+  }
+  // Gates, check by check: a check that goes away, or that runs another command, is a weaker gate for everyone.
+  const checks = (gates) => {
+    const out = new Map();
+    for (const [i, run] of (gates?.all ?? []).entries()) out.set(`all\u0000${run}`, { target: 'all', name: run, run, i });
+    for (const [t, list] of Object.entries(gates?.targets ?? {})) for (const g of list ?? []) out.set(`${t}\u0000${g.name}`, { target: t, name: g.name, run: g.run });
+    return out;
+  };
+  const gb = checks(published.gates);
+  const ga = checks(draft.gates);
+  for (const [k, g] of gb) {
+    const n = ga.get(k);
+    if (!n) add({ kind: 'check-removed', subject: '*', target: g.target, check: g.name, detail: `the ${g.target} gate no longer runs ${g.name}` });
+    else if (n.run !== g.run) add({ kind: 'check-changed', subject: '*', target: g.target, check: g.name, from: g.run, to: n.run, detail: `the ${g.target} gate's ${g.name} runs \`${n.run}\` instead of \`${g.run}\`` });
+  }
+  // Systems: a bound resource that gains a secret or changes its settings widens every seat bound to it.
+  const res = (spec) => new Map((spec.resources?.resources ?? []).map((x) => [x.id, x]));
+  const rb = res(published);
+  const ra = res(draft);
+  for (const [id, x] of ra) {
+    const was = rb.get(id);
+    if (!was) continue; // a new system reaches nobody until a binding, which is its own item
+    const secrets = (x.secrets ?? []).filter((n) => !(was.secrets ?? []).includes(n));
+    const settings = JSON.stringify(x.config ?? {}) !== JSON.stringify(was.config ?? {}) || x.type !== was.type;
+    if (!secrets.length && !settings) continue;
+    const subjects = [...new Set((draft.resources?.bindings ?? []).filter((b) => b.resource === id).map((b) => b.role))].sort();
+    if (!subjects.length) continue;
+    add({ kind: 'resource-widened', subject: subjects.length === 1 ? subjects[0] : null, subjects, resource: id, ...(secrets.length ? { secrets } : {}), detail: `${id} ${secrets.length ? `gains ${secrets.join(', ')}` : 'changes its settings'}` });
+  }
+  return items;
+}
+
+/**
+ * The items a change authored by one seat may not make (ADR 0013 rule 2, "refused: self-capability"): any item about
+ * that seat, any item that covers every seat (a weaker check), and a reviewer taken off its own work. Another role, or a
+ * person, may propose the same change. [] means the author may propose it.
+ */
+export function selfCapability(items, author) {
+  if (!author) return [];
+  return items.filter((x) => x.subject === author || x.subject === '*' || (x.subjects ?? []).includes(author));
 }
 
 const BUSY = new Set(['working', 'waiting', 'blocked', 'review']);
@@ -1308,11 +1426,14 @@ export function impact(changes, inventory = { roles: {} }) {
     switch (c.kind) {
       case 'role-off': case 'role-removed': case 'role-dormant': {
         if (runner && w?.approvals) return set('blocking', ['reassign-approvals', 'cancel-approvals'], 'reassign-approvals', `${w.approvals} pending approval(s) would have no one to run them`);
-        if (!inFlight) return set('safe', ['off-at-merge'], 'off-at-merge');
-        if (!runner) return set('choice', ['finish', 'handoff', 'pause'], 'finish');
+        // §5.4: hand-offs addressed to the role (the type), not to this teammate, can be routed again against the new team.
+        const byType = c.kind !== 'role-dormant' && w?.queuedByType ? ['reroute-queued'] : [];
+        const note = byType.length ? `${w.queuedByType} hand-off(s) addressed to the role are queued for it` : undefined;
+        if (!inFlight) return byType.length ? set('choice', ['reroute-queued', 'off-at-merge'], 'reroute-queued', note) : set('safe', ['off-at-merge'], 'off-at-merge');
+        if (!runner) return set('choice', ['finish', 'handoff', 'pause', ...byType], 'finish', note);
         // Near done: in review or waiting with a PR open. Otherwise hand the work to someone who stays.
         const near = w.pr && ['review', 'waiting'].includes(w.state);
-        return set('choice', ['finish', 'handoff', 'pause', 'apply-now', 'stop-drop'], near ? 'finish' : 'handoff');
+        return set('choice', ['finish', 'handoff', 'pause', 'apply-now', 'stop-drop', ...byType], near ? 'finish' : 'handoff', note);
       }
       case 'path-moved': case 'path-removed': {
         const owner = at(c.from);
@@ -1323,15 +1444,23 @@ export function impact(changes, inventory = { roles: {} }) {
       }
       case 'binding-removed': case 'binding-narrowed':
         return inFlight && runner ? set('choice', ['next-task', 'revoke-now'], 'next-task') : set('safe', ['next-task'], 'next-task');
-      case 'tier': case 'brief':
+      case 'tier': case 'brief': case 'type-changed':
         return inFlight && runner ? set('choice', ['next-task', 'apply-now'], 'next-task') : set('safe', ['next-task'], 'next-task');
+      // Names are resolved when shown and events keep ids, so a rename applies at once.
+      case 'member-renamed': return set('safe', ['apply-now'], 'apply-now');
+      case 'pool': return set('safe', ['next-task'], 'next-task', c.to < c.from ? 'the extra sessions finish their task first' : undefined);
+      case 'hands-to': {
+        // inventory.roles[target].queuedFrom: { <sender>: n } hand-offs from this sender still waiting for that target.
+        const queued = (c.removed ?? []).reduce((n, t) => n + (at(t)?.queuedFrom?.[c.role] ?? 0), 0);
+        return queued ? set('choice', ['reroute-queued', 'keep-queued'], 'reroute-queued', `${queued} hand-off(s) from ${c.role} queued for a role it no longer hands to`) : set('safe', ['next-task'], 'next-task');
+      }
       case 'reports-to': {
         const old = at(c.from);
         return old?.queued ? set('choice', ['reroute-queued', 'keep-queued'], 'reroute-queued', `${old.queued} hand-off(s) queued for ${c.from}`) : set('safe', ['next-task'], 'next-task');
       }
       case 'gate': return runner ? set('choice', ['old-gate-open-prs', 'new-gate-all'], 'old-gate-open-prs') : set('safe', ['next-task'], 'next-task');
       case 'meeting': return set('safe', ['finish-meeting'], 'finish-meeting');
-      default: return set('safe', ['next-task'], 'next-task'); // role-added, path-added, binding-added/widened, rules, values
+      default: return set('safe', ['next-task'], 'next-task'); // role-added, member-added, path-added, binding-added/widened, rules, values
     }
   });
   const order = { blocking: 0, choice: 1, safe: 2 };
