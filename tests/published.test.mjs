@@ -95,3 +95,27 @@ test('the CLI posts to the report URL and the mirror with their tokens, never th
   server.close();
   rmSync(root, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
 });
+
+// L40b: team.published carries systemsHash; the kit, the Studio (team-model) and the server's stored form agree.
+test('systemsHash: the same resources.json hashes the same in report.mjs, team-model and the server\'s stored form', async () => {
+  const { canonicalSystemsHash, normalizeSystems } = await import('../packages/team-model/node.mjs');
+  const { checkSystems } = await import('../apps/server/credentials.mjs');
+  const { root } = repo();
+  assert.equal(publishedBody(root).systemsHash, undefined, 'no resources.json: the field is left out');
+  // Keys in an odd order, defaults missing and a config the server does not keep.
+  const file = {
+    bindings: [{ permission: 'write', role: 'filer', resource: 'slack' }],
+    resources: [{ type: 'slack', id: 'slack', config: { channel: '#ops' }, secrets: ['SLACK_TOKEN'], tools: { url: 'https://mcp.slack.example/' }, permissions: { read: ['slack.read*'] } }],
+  };
+  put(root, '.agent-team/resources.json', `${JSON.stringify(file, null, 2)}\n`);
+  git(root, 'add', '.'); git(root, 'commit', '-qm', 'Add Slack');
+  const body = publishedBody(root);
+  assert.match(body.systemsHash, /^[0-9a-f]{64}$/);
+  assert.equal(body.systemsHash, canonicalSystemsHash(file), 'the Studio hashes the draft file the same');
+  assert.equal(body.systemsHash, canonicalSystemsHash(checkSystems(file)), 'and the server its stored row');
+  assert.deepEqual(normalizeSystems(normalizeSystems(file)), normalizeSystems(file), 'normalizing twice changes nothing');
+  assert.equal(canonicalSystemsHash({ ...file, resources: [{ ...file.resources[0], tier: 'custom', egress: [], effects: {} }] }), body.systemsHash, 'spelled-out defaults are the same systems');
+  assert.notEqual(canonicalSystemsHash({ ...file, bindings: [{ ...file.bindings[0], permission: 'read' }] }), body.systemsHash);
+  assert.equal(canonicalSystemsHash({ resources: [], bindings: [] }), null);
+  rmSync(root, { recursive: true, force: true });
+});
