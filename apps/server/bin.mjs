@@ -19,6 +19,8 @@
 //                           Local mode makes a secret in --data/step-up.secret
 //   CRON_SECRET             lets a cron call POST /v1/internal/tick (the server also ticks itself every 15 s), and the
 //                           deploy smoke check GET /v1/internal/caller
+//   AGENT_TEAM_MODE         local, self-hosted or hosted: the "Where OrgCraft runs" tile (GET /v1/deployment). Default:
+//                           local without DATABASE_URL, self-hosted with it. deploy/fly/server.toml sets hosted
 //
 // Signing in (hosted, docs/specs/m4-sign-in.md; off unless GITHUB_APP_CLIENT_ID is set, so local mode is unchanged):
 //   GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET   the deployment's GitHub App (its user authorization flow)

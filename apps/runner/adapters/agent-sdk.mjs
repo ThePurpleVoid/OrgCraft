@@ -59,9 +59,16 @@ export function agentSdkAdapter({ effort, settingSources = [], executable, sdk: 
       });
       const guard = async (input) => {
         if (input.hook_event_name !== 'PreToolUse') return {};
-        const d = await o.preToolUse(input.tool_name, input.tool_input ?? {});
+        const d = await o.preToolUse(input.tool_name, input.tool_input ?? {}, { id: input.tool_use_id });
         // An approved call runs as signed (ADR 0013): the policy hands back the signed input, which replaces the model's.
         return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: d.allow ? 'allow' : 'deny', permissionDecisionReason: d.allow ? 'allowed by the team policy' : d.reason, ...(d.allow && d.input ? { updatedInput: d.input } : {}) } };
+      };
+      // After a tool ran: its result, for the run inspector's step (N1). Never changes what the model sees.
+      const after = async (input) => {
+        if (input.hook_event_name === 'PostToolUse') await o.postToolUse?.(input.tool_name, input.tool_input ?? {}, input.tool_response, { id: input.tool_use_id });
+        // The SDK reports a call that failed as PostToolUseFailure, never as PostToolUse: its step ends here too.
+        else if (input.hook_event_name === 'PostToolUseFailure') await o.postToolUse?.(input.tool_name, input.tool_input ?? {}, { is_error: true, error: input.error, interrupted: input.is_interrupt === true }, { id: input.tool_use_id });
+        return {};
       };
       const abortController = new AbortController();
       const onAbort = () => abortController.abort();
@@ -77,10 +84,10 @@ export function agentSdkAdapter({ effort, settingSources = [], executable, sdk: 
           systemPrompt: { type: 'preset', preset: 'claude_code', append: o.systemPrompt },
           ...(o.resume && !String(o.resume).startsWith('stub-') ? { resume: o.resume } : {}),
           mcpServers: { ...o.mcp, team },
-          hooks: { PreToolUse: [{ hooks: [guard], timeout: HOOK_TIMEOUT_S }] },
+          hooks: { PreToolUse: [{ hooks: [guard], timeout: HOOK_TIMEOUT_S }], PostToolUse: [{ hooks: [after], timeout: HOOK_TIMEOUT_S }], PostToolUseFailure: [{ hooks: [after], timeout: HOOK_TIMEOUT_S }] },
           // Anything the hook did not settle is decided by the same policy.
-          canUseTool: async (name, input) => {
-            const d = await o.preToolUse(name, input);
+          canUseTool: async (name, input, opts) => {
+            const d = await o.preToolUse(name, input, { id: opts?.toolUseID });
             return d.allow ? { behavior: 'allow', updatedInput: d.input ?? input } : { behavior: 'deny', message: d.reason };
           },
           settingSources,

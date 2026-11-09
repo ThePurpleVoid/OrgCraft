@@ -1,4 +1,4 @@
-# Agent Team Studio: deployment
+# OrgCraft Studio: deployment
 
 Owner: infra, secrets and on-call. Status: draft 2, 2026-11-06. Reads with the [architecture](architecture.md) and [ADR 0005](../adr/0005-online-first-built-to-last.md).
 

@@ -25,7 +25,7 @@ const start = githubStart(q.get('interaction'));
 if (err && MESSAGES[err]) {
   const m = MESSAGES[err];
   title.textContent = m.title;
-  document.title = `${m.title} · Agent Team Studio`;
+  document.title = `${m.title} · OrgCraft Studio`;
   body.innerHTML = `<p>${m.text()}</p>${again}`;
 } else if (err) {
   title.textContent = 'Sign-in did not finish';

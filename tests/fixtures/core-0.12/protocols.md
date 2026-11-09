@@ -112,11 +112,11 @@ A brief with `Status: dormant` exists on paper only. The chief of staff or the l
 
 ## Changing the team
 
-The briefs, these protocols and the scripts are generated from Agent Team Kit. Never edit them in place:
+The briefs, these protocols and the scripts are generated from OrgCraft. Never edit them in place:
 
 - To change a role, add `.agent-team/roles/<role>.extend.md` (extra rules, a different model tier, more tools) or replace it with `.agent-team/roles/<role>.md`.
 - To add a role, add `.agent-team/roles/<new-role>.md`; to drop one, list it under `exclude` in `.agent-team/team.json`.
 - Project-wide rules go in `.agent-team/protocols.extend.md`.
 - Then run `scripts/agent-team/sync.sh` and commit the result with the change.
 
-A change that would help every team (a better rule, a script fix) goes upstream to Agent Team Kit as a pull request; the next kit version brings it back.
+A change that would help every team (a better rule, a script fix) goes upstream to OrgCraft as a pull request; the next kit version brings it back.

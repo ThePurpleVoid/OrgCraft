@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Agent Team Studio API
+  title: OrgCraft Studio API
   version: "1"
   summary: The public API. The Studio, the CLI, the kit's hooks and integrations use only this.
   description: |
@@ -392,7 +392,19 @@ paths:
       security: []
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name], properties: { code: { type: string }, name: { type: string }, capabilities: { type: object } } } } } }
       responses: { "201": { description: "Runner id and key (`<id>.<secret>`, shown once)" }, "401": { description: The code is unknown, used or expired } }
-    get: { x-min-role: admin, tags: [runners], summary: "Registered runners: name, capabilities, version, last seen, revoked (never keys)", responses: { "200": { description: Runners } } }
+    get: { x-min-role: admin, tags: [runners], summary: "Registered runners: name, capabilities, version, last seen, revoked (never keys); and the runner card (L29): state (connected, quiet, offline, never-connected, revoked), window (status current, supported, upgrade-required, ahead or unknown; behind; current; supported 2; upgradeBy) and model (state, since, provider, error)", responses: { "200": { description: Runners } } }
+  /deployment:
+    get:
+      x-min-role: viewer
+      tags: [runners]
+      summary: "Where OrgCraft runs and outage mode (L29, O19.1, O37.1, O37.8): mode (local, self-hosted, hosted), version, region, startedAt, db.kind, the runner window (N-2), a runner summary with no names, the code host and model provider (state ok, unreachable or unknown; since; lastError), and outage { active, down, publish: ok or waiting, work: ok or queued }"
+      responses: { "200": { description: The deployment view (plans/build/L29-data.md) } }
+  /deployment/check:
+    post:
+      x-min-role: editor
+      tags: [runners]
+      summary: "Check again: probes the code host once (at most every 30 s per server) and answers the deployment view with checked, or checked false and retryIn"
+      responses: { "200": { description: The deployment view after the probe } }
   /runners/codes:
     post:
       x-min-role: admin

@@ -379,7 +379,7 @@ export async function runnerCodeTenant(db, code) {
   return row?.tenant ?? null;
 }
 
-const RUNNER_COLS = 'id, name, capabilities, version, created_at, last_seen, revoked_at';
+const RUNNER_COLS = 'id, name, capabilities, version, created_at, last_seen, revoked_at, health';
 
 /** Redeems a code for a runner key (shown once; only its hash is kept). The code's tenant owns the runner. */
 export async function registerRunner(db, { code, name, capabilities = {}, version = null }) {

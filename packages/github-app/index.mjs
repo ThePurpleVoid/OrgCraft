@@ -10,7 +10,7 @@
 //   - A token is for that one repository and exactly the permissions asked, cached by repository, installation and
 //     permissions until five minutes before it expires.
 //
-//   import { githubApp } from 'agent-team-kit/github-app';
+//   import { githubApp } from 'orgcraft/github-app';
 //   const app = githubApp({ appId, privateKey });
 //   const { token } = await app.tokenFor('acme/shop', [12345], { permissions: { contents: 'write' } });
 import { createPrivateKey, createSign } from 'node:crypto';
@@ -36,7 +36,7 @@ export class InstallationError extends Error {
 /** The installation ids a server sent, as positive integers only (anything else does not count as bound). */
 export const boundIds = (bound) => (Array.isArray(bound) ? bound.filter((i) => Number.isSafeInteger(i) && i > 0) : []);
 
-export function githubApp({ appId, privateKey, api = 'https://api.github.com', fetch = globalThis.fetch, userAgent = 'agent-team-kit' } = {}) {
+export function githubApp({ appId, privateKey, api = 'https://api.github.com', fetch = globalThis.fetch, userAgent = 'orgcraft' } = {}) {
   if (!appId || !privateKey) throw new Error('the GitHub App needs an app id and a private key');
   const base = api.replace(/\/+$/, '');
   const tokens = new Map(); // slug#installation#permissions -> { value, until }
