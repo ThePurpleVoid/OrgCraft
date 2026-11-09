@@ -298,12 +298,23 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
    * and the secret names it gets are the power to read a credential, so this is where that power is granted, and the
    * audit row records the diff, with every command that receives secrets (security review sev2).
    */
-  async function putSystems(tenant, team, who, body, stepUp) {
+  async function putSystems(tenant, team, who, body, stepUp, { ifMatch = null } = {}) {
     await getTeam(db, tenant, team);
     const next = checkSystems(body ?? {}) ?? { resources: [], bindings: [] };
+    // The version the person confirmed the change against (L40, security): `expect` in the body or If-Match. When the
+    // stored set moved since, 409 with the current one, so a concurrent PUT can't change the base under a confirmation.
+    const raw = body?.expect ?? (ifMatch ? String(ifMatch).replace(/^W\//, '').replace(/"/g, '') : null);
+    const expect = raw === null || raw === undefined ? null : Number(raw);
+    if (expect !== null && (!Number.isInteger(expect) || expect < 0)) throw new Problem(400, 'expect is the systems version you saw (0 when there were none)');
+    // Checked before the step-up is spent, and again under the lock.
+    if (expect !== null) {
+      const [row] = await db.tenant(tenant, ({ q }) => q('select version from team_systems where team = $1', [team]));
+      if ((row?.version ?? 0) !== expect) throw new Problem(409, 'the team\'s systems changed since you saw them; look again', { type: 'systems-changed', body: await getSystems(tenant, team) });
+    }
     await m3.requireStepUp(tenant, who, stepUp, 'Changing what the team can reach', systemsScope(team));
     const { result } = await m3.tx(tenant, async (ctx) => {
       const [prev] = await ctx.q('select resources, bindings, version from team_systems where team = $1 for update', [team]);
+      if (expect !== null && (prev?.version ?? 0) !== expect) throw new Problem(409, 'the team\'s systems changed since you saw them; look again', { type: 'systems-changed' });
       const was = new Map((prev?.resources ?? []).map((r) => [r.id, JSON.stringify(r)]));
       const now = new Map(next.resources.map((r) => [r.id, JSON.stringify(r)]));
       const key = (b) => `${b.role} → ${b.resource} (${b.permission})`;

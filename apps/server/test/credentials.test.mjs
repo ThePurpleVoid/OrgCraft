@@ -210,6 +210,15 @@ test('a run request cannot carry systems; only an admin sets them, with a step-u
     assert.equal(row.detail.commands.length, 2, 'the audit row keeps the commands that receive secrets');
     const again = await setSystems(call, su, { resources: systems().resources.slice(0, 1), bindings: systems().bindings.slice(0, 1) });
     assert.deepEqual([again.version, again.removed, again.unbound], [2, ['pay'], ['support → pay (write)']]);
+    // The version the person confirmed against (L40): a moved base is 409 with the current set, before the step-up
+    // is spent; the matching one goes through, by body or If-Match.
+    const token = await su('systems:shop');
+    const stale = await call('PUT', '/teams/shop/systems', { ...systems(), expect: 1 }, token);
+    assert.deepEqual([stale.status, stale.body.type, stale.body.version], [409, 'systems-changed', 2]);
+    assert.equal((await call('PUT', '/teams/shop/systems', { ...systems(), expect: 2 }, token)).body.version, 3, 'the token was not spent by the 409');
+    const viaHeader = await call('PUT', '/teams/shop/systems', systems(), { ...(await su('systems:shop')), 'if-match': '"3"' });
+    assert.equal(viaHeader.body.version, 4);
+    assert.equal((await call('PUT', '/teams/shop/systems', systems(), { ...(await su('systems:shop')), 'if-match': '"3"' })).status, 409);
   });
 });
 
