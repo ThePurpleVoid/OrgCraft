@@ -25,6 +25,7 @@
     "bin/",
     "packages/calls/",
     "packages/events/",
+    "packages/git-store/",
     "packages/github-app/",
     "packages/model-prices/",
     "packages/team-model/",

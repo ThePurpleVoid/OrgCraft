@@ -16,6 +16,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
   const cost = { today: 620, capPerDay: perDay, currency: 'USD', state: 'ok' };
   const started = []; // the RunCreate bodies, for the tests
   const stepUps = new Map(); // su_ token -> expiry (ms)
+  const live = []; // live overrides in force (apps/server/live.mjs): { id, kind, member, state, reason, by, at, text, liveChange }
   let n = 0;
   const id = () => `ev_${String(++n).padStart(6, '0')}`;
 
@@ -48,7 +49,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     usage(amount) { cost.today += amount; append('usage.recorded', role('chief-of-staff'), { inputTokens: 1000, outputTokens: 200, cost: amount, currency: cost.currency }); },
     /** Spends today's budget: the runs pause with reason budget, as the real control plane does at 100%. */
     exhaust() { cost.state = 'exhausted'; for (const r of runs) if (r.state === 'running') { r.state = 'paused'; r.reason = 'budget'; append('run.paused', { kind: 'system', id: 'budget' }, { reason: 'budget' }, `run/${r.id}`); } },
-    events, cards, runs, cost, budget, started,
+    events, cards, runs, cost, budget, started, live,
   };
   const scopes = new Map(); // su -> scope it was bound to (ADR 0013)
   const stepped = (req, scope = null) => { const su = req.headers['x-step-up']; if (!su || !(stepUps.get(su) > Date.now()) || (scopes.get(su) ?? null) !== scope) return false; stepUps.delete(su); scopes.delete(su); return true; };
@@ -93,6 +94,8 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       const c = cards.get(card[1]) ?? [...cards.values()].find((x) => x.subject === `approval/${card[1]}`);
       if (!c) return send(res, 404, { error: 'no such card' });
       if (body.version !== undefined && body.version !== c.version) return send(res, 409, c);
+      // A card this person's role may not answer (card.forbid): the server's 403, with its own words.
+      if (c.forbid) return send(res, 403, { type: 'forbidden', error: 'role member lacks cards.answer for this kind' });
       const option = (c.options ?? []).find((o) => o.id === (body.option ?? (body.decision === 'approved' ? 'approve' : body.decision === 'denied' ? 'deny' : '')));
       if (c.kind === 'approval' || option?.stepUp) {
         const su = req.headers['x-step-up'];
@@ -153,6 +156,42 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       r.state = { pause: 'paused', resume: 'running', stop: 'stopped' }[act[2]];
       r.reason = act[2] === 'pause' ? 'owner' : null;
       return done(200, append(`run.${r.state === 'running' ? 'resumed' : r.state}`, { kind: 'person', id: 'owner', via: 'studio' }, { by: 'owner' }, `run/${r.id}`));
+    }
+    // Live overrides (L18), like apps/server/live.mjs: setting needs no step-up; lifting one needs a step-up bound to
+    // lift:<id>; only a lift clears one (a run that starts does not).
+    if (p === `/v1/teams/${team}/live` && req.method === 'GET') return send(res, 200, { live });
+    const at = () => new Date().toISOString();
+    if (p === `/v1/teams/${team}/live/stop-everything` && req.method === 'POST') {
+      const body = await read(req);
+      let o = live.find((x) => x.kind === 'halt');
+      if (!o) {
+        const paused = runs.filter((r) => r.state === 'running');
+        for (const r of paused) r.state = 'paused';
+        o = { id: `lo_${live.length + 1}`, kind: 'halt', state: 'paused', reason: body.reason ?? null, by: 'owner', at: at(), runs: paused.map((r) => r.id), text: 'Everything is stopped. Resume when you\'re ready.', liveChange: 'Live change by you: everything stopped' };
+        live.push(o);
+        append('live.changed', { kind: 'person', id: 'owner', via: 'studio' }, { op: 'set', override: o.id, kind: 'halt', state: 'paused', by: 'owner' }, 'live');
+      }
+      return send(res, 200, o);
+    }
+    const mem = new RegExp(`^/v1/teams/${team}/live/members/([^/]+)$`).exec(p);
+    if (mem && req.method === 'PUT') {
+      const body = await read(req);
+      const member = decodeURIComponent(mem[1]);
+      const i = live.findIndex((x) => x.kind === 'member' && x.member === member);
+      const o = { id: i >= 0 ? live[i].id : `lo_${live.length + 1}`, kind: 'member', member, state: body.state, reason: body.reason ?? null, by: 'owner', at: at(), text: `${member} is ${body.state === 'off' ? 'switched off' : 'paused'}`, liveChange: `Live change by you: ${member} ${body.state}` };
+      if (i >= 0) live[i] = o; else live.push(o);
+      append('live.changed', { kind: 'person', id: 'owner', via: 'studio' }, { op: 'set', override: o.id, kind: 'member', member, state: o.state, by: 'owner' }, 'live');
+      return send(res, 200, o);
+    }
+    const lift = new RegExp(`^/v1/teams/${team}/live/([^/]+)$`).exec(p);
+    if (lift && req.method === 'DELETE') {
+      const i = live.findIndex((x) => x.id === lift[1]);
+      if (i < 0) return send(res, 404, { error: 'no such live change' });
+      if (!stepped(req, `lift:${lift[1]}`)) return send(res, 401, { type: 'step-up-required', title: 'Lifting a live change needs a recent sign-in', status: 401, scope: `lift:${lift[1]}` });
+      const [o] = live.splice(i, 1);
+      if (o.kind === 'halt') for (const r of runs) if (o.runs.includes(r.id) && r.state === 'paused') r.state = 'running';
+      append('live.changed', { kind: 'person', id: 'owner', via: 'studio' }, { op: 'lifted', override: o.id, kind: o.kind, by: 'owner', stepUp: true }, 'live');
+      return send(res, 200, { ...o, lifted: true });
     }
     if (p === '/v1/me/summary') {
       const r = runs.find((x) => x.state !== 'stopped');

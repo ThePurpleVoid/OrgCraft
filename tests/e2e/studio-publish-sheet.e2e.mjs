@@ -111,7 +111,7 @@ test('demo steps 7, 8 and 13: the first publish, then a small change with Widens
   await generatedFold.waitFor();
   assert.equal(await generatedFold.getAttribute('open'), null);
   assert.match(await generatedFold.locator('> summary').textContent(), /^Updated automatically \(\d+ files\)$/);
-  assert.match(await sheet(page).locator('#changes > details:not(.generated) > summary').first().textContent(), /\.agent-team\/team\.json$/);
+  assert.match(await sheet(page).locator('#changes > details:not(.generated) > summary').first().textContent(), /\.agent-team\/(team\.json|roles\/[a-z0-9-]+\.extend\.md)$/);
   // ALL-5 with everything open: no engineering words in the sheet's sentences (file names and diffs are names, in code style).
   await generatedFold.locator('> summary').click();
   await sheet(page).locator('#advanced > summary').click();

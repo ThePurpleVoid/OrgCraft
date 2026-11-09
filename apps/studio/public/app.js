@@ -12,6 +12,7 @@ import { createAgentEditor } from './agent-editor.js';
 import { QUIET_S, assess, rebaseDraft, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
 import { $, $$, apiUrl, ask, configure, env, feature, paint, request, requestJson, stateEl } from './env.js';
 import { SHELL } from './shell.js';
+import { createLive } from './live.js';
 import { changesHtml, checksHtml, sheetLines, widensHtml } from './publish-sheet.js';
 import { infoButton, installTips } from './tooltip.js';
 
@@ -398,7 +399,7 @@ function nodeSvg(r, p, extra = '') {
   else if (live?.on && mode !== 'systems') extra += l ? ` live s-${l.status}${l.stale ? ' stale' : ''}` : ' live none';
   // The reason replaces the tier on an amber card: it is what the owner needs to read there (criterion 3).
   // A role that reports for itself, with no hook events (another coding agent): its card says so (D46).
-  const subtitle = r.off || !r.enabled ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle });
+  const subtitle = r.off || !r.enabled ? t('canvas.off') : liveCtl?.isPaused(r.slug) ? t('badge.paused') : t('teammate.subtitle.ai', { role: r.typeTitle });
   const tier = r.off ? subtitle : three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : own?.self_reported ? 'self-reported' : ''].filter(Boolean).join(' · '))
     : l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : subtitle;
   const state = three ? (own ? [stateWord(own), taskOf(own)].filter(Boolean).join(' · ') : '') : '';
@@ -521,7 +522,7 @@ function renderList() {
     const off = !r.enabled;
     return `<li class="tree-item${off ? ' off' : ''}${view.draft.changed.has(r.slug) ? ' draft' : ''}" data-depth="${Math.min(depth, 6)}">
       <button type="button" class="tree-btn${r.slug === selected ? ' selected' : ''}" data-node="${esc(r.slug)}" data-slug="${esc(r.slug)}">
-        <span class="name">${esc(r.title)}</span><span class="muted sub">${esc(off ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle }))}</span>
+        <span class="name">${esc(r.title)}</span><span class="muted sub">${esc(off ? t('canvas.off') : liveCtl?.isPaused(r.slug) ? t('badge.paused') : t('teammate.subtitle.ai', { role: r.typeTitle }))}</span>
         ${look ? `<span class="badge-dot" title="${esc(look.text)}" aria-label="${esc(look.text)}">!</span>` : ''}</button></li>`
       + kids.get(r.slug).sort((a, b) => a.title.localeCompare(b.title)).map((c) => item(c, depth + 1)).join('');
   };
@@ -819,7 +820,7 @@ function renderInspector() {
       ${managers.map((m) => `<option value="${m.slug}" ${m.slug === r.reportsTo ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select></div>
     <div class="field"><label for="i-tier">${esc(t('inspector.model'))} ${mark('Model')}</label><select id="i-tier">${TIERS.map((x) => `<option ${x === r.tier ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
     <div class="field"><label for="i-pool">${esc(t('inspector.hands'))} ${infoButton(tip('control.same.job.more.hands'), esc, t('inspector.hands'))} ${mark('Pool')}</label><input id="i-pool" type="number" min="1" max="10" step="1" value="${Number.isInteger(r.pool) ? r.pool : 1}" inputmode="numeric"></div>
-    <p class="row"><button type="button" id="i-wiring" class="primary">${esc(t('teammate.openwiring'))}</button></p>
+    <p class="row"><button type="button" id="i-wiring" class="primary">${esc(t('teammate.openwiring'))}</button>${liveCtl?.connected && r.enabled && !liveCtl.isPaused(r.slug) ? ` <button type="button" id="i-live-pause" data-tip="${esc(t('tip.control.pause'))}">${esc(t('stop.pause'))}</button>` : ''}</p>
     <p class="row"><button type="button" id="i-another" data-tip="${esc(tip('control.add.another.set.up.differently'))}">${esc(t('inspector.another'))}</button>${ownProject || (spec.roles[r.type]?.brief !== undefined) ? `<button type="button" id="i-editjob" data-type="${esc(r.type)}" data-tip="${esc(tip('control.edit.the.job.description'))}">${esc(t('inspector.editjob'))}</button>` : ''}</p>
     <p id="i-editjob-warn" class="notice warn" role="alert" hidden>${esc(t('inspector.editjob.warn', { n: seats }))} <button type="button" class="link" id="i-editjob-go">${esc(t('inspector.editjob'))}</button></p>
     <label class="row"><input type="checkbox" id="i-dormant" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>
@@ -855,7 +856,9 @@ function renderInspector() {
   name.onchange = () => {
     const v = name.value;
     try { const probe = JSON.parse(JSON.stringify(spec)); setDisplayName(probe, r.slug, v, S.kit); } catch (err) {
-      $('#i-name-msg').textContent = err.status === 409 ? t('teammate.dupname', { name: err.message.replace(/^Another teammate is already called /, '') }) : err.message;
+      const dup = /^Another teammate is already called (.+)$/.exec(err.message);
+      const address = /^(.+) is already a teammate's id, a role or "owner"/.exec(err.message);
+      $('#i-name-msg').textContent = dup ? t('teammate.dupname', { name: dup[1] }) : address ? t('teammate.name.address', { name: address[1] }) : err.message;
       name.setAttribute('aria-invalid', 'true'); return;
     }
     name.removeAttribute('aria-invalid');
@@ -864,6 +867,8 @@ function renderInspector() {
   $('#i-pool').onchange = (e) => { const n = Math.max(1, Math.min(10, Math.round(+e.target.value || 1))); change(() => setExtField(r.slug, 'Pool', n === 1 ? '' : String(n))); };
   $('#i-another').onclick = () => addTeammate(r.type, r.reportsTo);
   $('#i-wiring').onclick = () => openWiring(r.slug);
+  // SH-10: Pause works from any screen, a phone too, and needs no publish: it goes to the control plane at once.
+  if ($('#i-live-pause')) $('#i-live-pause').onclick = () => liveCtl.pause(r.slug);
   const job = $('#i-editjob');
   // B1.3-5: the job description is the role's, shared by every teammate based on it, so say so before opening it.
   if (job) job.onclick = () => { if (seats > 1) { $('#i-editjob-warn').hidden = false; $('#i-editjob-go').focus(); } else openEditor(r.type); };
@@ -936,7 +941,13 @@ function renderIssues() {
   $('#issues').innerHTML = looks + (list.length ? list.map((i) => `<li class="${i.level}" data-where="${esc(i.where)}"><strong>${i.level}</strong> · ${esc(i.where)}: ${esc(i.message)}</li>`).join('') : looks ? '' : '<li class="none">No problems.</li>');
 }
 
+/** Read-only: nothing that changes the team works, but looking does (the wiring view, the info buttons) and so does Pause. */
+function lockInspector() {
+  if (locked()) for (const el of $$('#inspector :is(input, select, textarea, button):not(#i-wiring, #i-live-pause, .info), #library input')) el.disabled = true;
+}
+
 let flashTimer = null;
+let liveCtl = null; // the live overrides (L18): Stop everything, Pause, the banner
 function flash(text) {
   const pill = $('#checks');
   pill.className = 'pill error';
@@ -996,8 +1007,7 @@ function render() {
   renderInspector();
   renderIssues();
   syncUndo();
-  // Read-only: nothing that changes the team works, but looking does (the wiring view, the info buttons).
-  if (locked()) for (const el of $$('#inspector :is(input, select, textarea, button):not(#i-wiring, .info), #library input')) el.disabled = true;
+  lockInspector();
   renderTemplateBar();
 }
 
@@ -1286,7 +1296,7 @@ async function setPage(raw) {
     rolloutView ??= createRollout({ root: $('#rollout-page'), titleOf: roleTitle, apiUrl });
     rolloutView.open();
   } else if (p === 'chat') {
-    chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features) });
+    chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features), organization: () => spec?.values?.ORGANIZATION || spec?.values?.PROJECT_NAME || '' });
     if (params.has('card') || params.has('budget')) chat.focus({ card: params.get('card'), budget: params.has('budget') });
     chat.open();
   } else {
@@ -1391,7 +1401,7 @@ function destroy() {
   el.innerHTML = '';
   el.classList.remove('ats', 'ats-embedded', 'small', 'no-team', 'previewing', 'editing', 'no-publish', 'no-chat', 'no-runs', 'no-live', 'no-rollout');
   delete el.dataset.page; delete el.dataset.mode;
-  S = spec = selected = selectedSystem = view = sugg = chat = rolloutView = meetings = editor = gallery = previewing = made = published = board = pop = null;
+  S = spec = selected = selectedSystem = view = sugg = chat = rolloutView = meetings = editor = gallery = previewing = made = published = board = pop = liveCtl = null;
   query = ''; undo.length = 0; redo.length = 0; zoom = 'fit'; mode = 'org'; scale = 1; page = 'team'; initialPage = null;
   flow = { key: '', edges: [], unresolved: [] }; picks = new Map(); followUps = []; booted = false; lastEdit = { key: '', at: 0 };
 }
@@ -1586,6 +1596,15 @@ function load(initial) {
   // A move published to happen after its open work merges lives on in the draft, even across a reload or a restart.
   for (const f of followUps) reapplyFollowUp(spec, f);
   wireImpact();
+  // L18: Stop everything, Pause and the live banner, when a control plane is connected (the Studio asks it).
+  // A host page's Studio (embedded) has no route to the control plane's live state yet: nothing is offered there.
+  if (!S.noTeam && !env.embedded) {
+    liveCtl = createLive({ say: note, titleOf: roleTitle, onChange: () => { if (spec && !editor?.slug && stateEl().dataset.page === 'team') { renderCanvas(); if (selected) { renderInspector(); lockInspector(); } } } });
+    liveCtl.wire(life.signal);
+    liveCtl.load();
+    const again = setInterval(() => liveCtl?.load(), 20_000);
+    life.signal.addEventListener('abort', () => clearInterval(again));
+  }
   wireSheet();
   if (!S.noTeam && feature('live', S.features)) {
     loadBoard();
@@ -1634,6 +1653,7 @@ function load(initial) {
   $('#views').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setMode(b.dataset.view); });
   $('#pages').addEventListener('click', (e) => {
     if (e.target.closest('#more-btn')) { const m = $('#more-menu'); const show = m.hidden; m.hidden = !show; $('#more-btn').setAttribute('aria-expanded', String(show)); if (show) m.querySelector('button')?.focus(); return; }
+    if (e.target.closest('#stop-all')) closeMore();
     const b = e.target.closest('[data-page]'); if (b) setPage(b.dataset.page);
   });
   $('#pages').addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#more-menu').hidden) { closeMore(); $('#more-btn').focus(); } });
