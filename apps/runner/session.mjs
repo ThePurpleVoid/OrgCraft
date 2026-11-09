@@ -2,6 +2,7 @@
 // It owns the session's working copy, its queue of messages, its budget and its liveness. The runner key's events
 // (session.*, usage.recorded, report.heartbeat, and the front door's chat.message) go out through `emit`; role
 // messages go through the team tool server, so the control plane mints them (docs/product/m3-design.md).
+import { callOf, hashCalls, parseCalls, replay } from './calls.mjs';
 import { tierModel } from '../../packages/model-prices/index.mjs';
 import { loadPrices } from '../../packages/model-prices/node.mjs';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -112,6 +113,20 @@ function meetingPrompt(lead, d) {
 // How long to wait between looks for a merge's preview deployment: about ten minutes in all (G-12).
 const PREVIEW_DELAYS = [10e3, 20e3, 30e3, 60e3, 60e3, 60e3, 120e3, 120e3, 120e3];
 
+// How long a call approved through request_approval may wait to be made (ADR 0013): long enough for the next step.
+const GRANT_MS = 15 * 60_000;
+
+/**
+ * Whether an approval.result is for these calls. A control plane that signs calls echoes the hash it bound; one that
+ * echoes a different hash approved something else. A result with no hash is refused: the control plane signs calls
+ * since L6, and the two ship together. ORGCRAFT_SIGNED_CALLS=0 accepts one, for local development against an older
+ * control plane only.
+ */
+export function signedFor(result, hash, { require = process.env.ORGCRAFT_SIGNED_CALLS !== '0' } = {}) {
+  if (typeof result?.callsHash === 'string') return result.callsHash === hash;
+  return !require;
+}
+
 export class Session {
   /**
    * `body` is the session.start body (docs/contracts/runner-protocol.md, with the M3 fields). `deps`:
@@ -135,6 +150,9 @@ export class Session {
     this.woken = new Set();
     this.ended = new Promise((r) => (this._ended = r));
     this.stopped = new Promise((r) => (this._stopped = r));
+    // Calls a person approved through request_approval: canonical hash -> { approval, call, expires }. Each lets
+    // through one call identical to the signed record, once, in this session only (ADR 0013).
+    this.grants = new Map();
     // Step boundaries and I/O for the run inspector (N1): call ids, effects, retries, results; step.io when captured.
     this.steps = new Steps({ capture: body.caps?.capture, send: deps.stepIo, secrets: () => this.namedSecrets(), session: this.id, effectOf: (tool) => this.sidecar?.effectOf(tool) });
     this.cause = null; // the event that woke the turn running now (echoed on events when the team captures steps)
@@ -337,9 +355,12 @@ export class Session {
       }
     }
     if (name === 'request_approval' && local.input.action === 'accept' && this.proposes()) return this.acceptFlow(local.input);
+    // A request_approval that names its calls (as JSON) is bound to them: the hash goes with it for the card to sign.
+    const calls = name === 'request_approval' ? parseCalls(local.input.call) : null;
+    const bound = calls ? { calls, hash: hashCalls(calls) } : null;
     // A sign-off carries the runner's own record of what this session ran and saw succeed (governance G1): the
     // evidence behind its unverified list. The agent can't write it; the tool's shape has no such field.
-    const input = name === 'signoff' ? { ...local.input, checks: this.steps.checks() } : local.input;
+    const input = name === 'signoff' ? { ...local.input, checks: this.steps.checks() } : bound ? { ...local.input, calls: bound.calls, callsHash: bound.hash } : local.input;
     let r;
     try {
       r = await this.deps.tools.call(name, input);
@@ -351,8 +372,15 @@ export class Session {
       this.state = 'waiting';
       const d = await this.untilStopped(this.deps.awaitApproval(r.result.approval, this.id));
       if (this.state === 'waiting') this.state = 'working';
-      const ok = d.decision === 'approved';
-      return { text: JSON.stringify({ approval: r.result.approval, decision: d.decision, note: d.note }) + (ok ? ' Approved: go ahead with exactly that call.' : ' Not approved: do not take the step.'), isError: !ok };
+      const signed = bound && d.decision === 'approved' && signedFor(d, bound.hash);
+      const ok = d.decision === 'approved' && (!bound || signed);
+      const said = JSON.stringify({ approval: r.result.approval, decision: ok ? d.decision : (d.decision === 'approved' ? 'refused' : d.decision), note: d.note });
+      if (!ok) return { text: `${said} ${d.decision === 'approved' ? 'Not approved for these calls: the approval the runner received was signed for other calls. Do not take the step; ask again.' : 'Not approved: do not take the step.'}`, isError: true };
+      if (!bound) return { text: `${said} Approved as a decision. It approves no particular call: any step the team policy keeps for a person is still held when you make it, and asked for with its exact input.` };
+      // What you see is what you sign: only the signed calls ride this approval, each once, and they run as signed.
+      const expires = Date.now() + GRANT_MS;
+      for (const c of bound.calls) this.grants.set(hashCalls([c]), { approval: r.result.approval, call: c, expires });
+      return { text: `${said} Approved for exactly ${bound.calls.length === 1 ? 'this call' : `these ${bound.calls.length} calls`}, each once, within ${GRANT_MS / 60_000} minutes. Make ${bound.calls.length === 1 ? 'it' : 'them'} now with the same tool and input; the runner runs the signed version, and anything that differs is held and asked for again.` };
     }
     return { text: JSON.stringify(r.result) };
   }
@@ -423,15 +451,35 @@ export class Session {
       await this.toolEvent(step, { tool, target: String(d.target ?? '').slice(0, 500), decision: 'refused', rule: 'runner-merges' });
       return { allow: false, reason: `The runner merges this branch's pull request${this.proposal ? ` (#${this.proposal.ref})` : ''} itself, after the owner approves its head. Call request_approval with action "accept" instead; do not merge or push to the base yourself.` };
     }
+    // The signed record of this call (ADR 0013). A call JSON cannot carry exactly is never approved.
+    let signed = null;
+    try { signed = callOf(tool, input); } catch { /* left unsigned: it can be refused or allowed, never approved */ }
+    const hash = signed && hashCalls([signed]);
+    const grant = hash && this.grants.get(hash);
+    if (grant && grant.expires <= Date.now()) this.grants.delete(hash);
+    // A call a person approved through request_approval, identical to what they signed: it runs as signed, once.
+    // A grant never overrides a refusal (an owned-area or other policy rule still applies).
+    if (grant && grant.expires > Date.now() && d.decision !== 'refused') {
+      this.grants.delete(hash);
+      await this.toolEvent(step, { tool, target: String(d.target ?? '').slice(0, 500), decision: 'allowed', rule: d.rule ?? 'approved-call', approval: grant.approval, callsHash: hash });
+      return { allow: true, input: replay(grant.call) };
+    }
     if (d.decision === 'needs-approval') {
       await this.toolEvent(step, { tool, target: String(d.target).slice(0, 500), decision: 'needs-approval', rule: d.rule });
+      if (!signed) {
+        await this.toolEvent(step, { tool, target: String(d.target).slice(0, 500), decision: 'refused', rule: d.rule, detail: 'the call cannot be signed exactly' });
+        return { allow: false, reason: 'This call needs a person, and its input cannot be signed exactly (it carries something JSON cannot hold). Make the call with plain values.' };
+      }
       this.state = 'waiting';
       const call = tool === 'Bash' ? String(input.command ?? '') : JSON.stringify({ tool, input });
-      const a = await this.untilStopped(this.deps.approve({ action: d.rule, call, why: `The team policy keeps this for a person: it ${d.why}.`, ...(d.pr ? { pr: d.pr, headSha: d.headSha, ...(d.repo ? { repo: d.repo } : {}) } : {}) }));
+      const a = await this.untilStopped(this.deps.approve({ action: d.rule, call, calls: [signed], callsHash: hash, why: `The team policy keeps this for a person: it ${d.why}.`, ...(d.pr ? { pr: d.pr, headSha: d.headSha, ...(d.repo ? { repo: d.repo } : {}) } : {}) }));
       if (this.state === 'waiting') this.state = 'working';
-      const ok = a.decision === 'approved';
-      await this.toolEvent(step, { tool, target: String(d.target).slice(0, 500), decision: ok ? 'allowed' : 'refused', rule: d.rule, by: a.by });
-      return ok ? { allow: true } : { allow: false, reason: `A person did not approve this (${a.decision})${a.note ? `: ${a.note}` : ''}. Do not try it another way; tell whoever asked for it.` };
+      const ok = a.decision === 'approved' && signedFor(a, hash);
+      await this.toolEvent(step, { tool, target: String(d.target).slice(0, 500), decision: ok ? 'allowed' : 'refused', rule: d.rule, by: a.by, callsHash: hash, ...(a.decision === 'approved' && !ok ? { detail: 'the approval was signed for other calls' } : {}) });
+      // Held at the call: what runs is the signed record, not whatever the model's object holds by then.
+      if (ok) return { allow: true, input: replay(signed) };
+      if (a.decision === 'approved') return { allow: false, reason: 'The approval the runner received was signed for a different call, so this one does not run. Do not try it another way; tell whoever asked for it.' };
+      return { allow: false, reason: `A person did not approve this (${a.decision})${a.note ? `: ${a.note}` : ''}. Do not try it another way; tell whoever asked for it.` };
     }
     await this.toolEvent(step, { tool, target: String(d.target ?? '').slice(0, 500), decision: d.decision, rule: d.rule ?? undefined });
     return d.decision === 'allowed' ? { allow: true } : { allow: false, reason: d.why };
@@ -585,6 +633,7 @@ export class Session {
 
   /** session.stop: `now` aborts the turn in flight, `finish-step` lets it end first. Either way the work is pushed. */
   stop(mode = 'finish-step', reason = 'stopped') {
+    this.grants.clear(); // nothing approved for a session outlives it
     if (this.state === 'ended' || this.finished) return this.ended;
     this.stopReason = reason;
     this.state = 'stopping';

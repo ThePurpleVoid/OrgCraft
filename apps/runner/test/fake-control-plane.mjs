@@ -24,7 +24,8 @@ export async function fakeControlPlane({ secrets = {}, key = 'rk_test', tenant =
 
   const decided = new Map(); // approval id -> decision, so a resent approval.wait gets its answer again
   function decideLater(approvalId, req) {
-    setTimeout(() => Promise.resolve(decide(req)).then((d) => { decided.set(approvalId, d); send('approval.result', { approval: approvalId, ...d }); check(); }), 50).unref();
+    // Like apps/server since L6: the result echoes the hash the card was bound to (a test's decide may override it).
+    setTimeout(() => Promise.resolve(decide(req)).then((d) => { const r = { ...(req?.callsHash ? { callsHash: req.callsHash } : {}), ...d }; decided.set(approvalId, r); send('approval.result', { approval: approvalId, ...r }); check(); }), 50).unref();
   }
 
   const http = createServer(async (req, res) => {
@@ -45,7 +46,7 @@ export async function fakeControlPlane({ secrets = {}, key = 'rk_test', tenant =
       if (input.action === 'accept' && (!Number.isInteger(input.pr) || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(input.headSha ?? ''))) return reply(422, { problems: ['an accept approval needs pr and headSha, so the merge can only land on the commit that was approved'] });
       const a = id('apr');
       approvals.push({ approval: a, via: 'tool', input, as: who });
-      decideLater(a, { action: input.action, call: input.call, pr: input.pr, headSha: input.headSha });
+      decideLater(a, { action: input.action, call: input.call, pr: input.pr, headSha: input.headSha, ...(input.callsHash ? { calls: input.calls, callsHash: input.callsHash } : {}) });
       return reply(200, { approval: a, card: id('card') });
     }
     if (tool === 'ask_owner') return reply(200, { card: id('card') });

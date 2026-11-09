@@ -101,9 +101,11 @@ export function startRunner({ server, key, root, work = root, sandbox = null, eg
 
   /** The policy path: approval.wait, whose ack names the approval the control plane minted. */
   async function approve(s, req) {
-    const ack = await link.send('approval.wait', { session: s.id, approval: { action: req.action, call: req.call, why: req.why, ...(req.pr ? { pr: req.pr, headSha: req.headSha, ...(req.repo ? { repo: req.repo } : {}) } : {}) } });
+    // calls and callsHash (ADR 0013): the exact calls held, and the hash the card is signed over.
+    const signed = req.calls ? { calls: req.calls, callsHash: req.callsHash } : {};
+    const ack = await link.send('approval.wait', { session: s.id, approval: { action: req.action, call: req.call, ...signed, why: req.why, ...(req.pr ? { pr: req.pr, headSha: req.headSha, ...(req.repo ? { repo: req.repo } : {}) } : {}) } });
     if (ack.nack || !ack.approval) return { decision: 'denied', note: ack.nack ?? 'the control plane did not record the approval' };
-    return awaitApproval(ack.approval, s.id, { action: req.action, call: req.call, why: req.why });
+    return awaitApproval(ack.approval, s.id, { action: req.action, call: req.call, ...signed, why: req.why });
   }
 
   function renew(s) {
@@ -205,7 +207,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, eg
         return;
       }
       case 'approval.result': {
-        const d = { decision: b.decision, by: b.by, note: b.note, ...(b.headSha ? { headSha: b.headSha } : {}) };
+        const d = { decision: b.decision, by: b.by, note: b.note, ...(b.headSha ? { headSha: b.headSha } : {}), ...(typeof b.callsHash === 'string' ? { callsHash: b.callsHash } : {}) };
         const r = approvals.get(b.approval);
         if (r?.resolve) { approvals.delete(b.approval); r.resolve(d); } else approvals.set(b.approval, { early: d });
         return;

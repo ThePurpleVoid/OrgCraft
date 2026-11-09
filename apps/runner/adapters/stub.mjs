@@ -17,9 +17,11 @@ export function stubAdapter(script, { costUsd = 0.0123 } = {}) {
         use: async (tool, input, run, { id = `tu_${++uses}` } = {}) => {
           const d = await o.preToolUse(tool, input, { id });
           if (!d.allow) return { refused: d.reason };
-          const value = run ? await run() : undefined;
+          // What runs is what the policy hands back (an approved call's signed input), as under the Agent SDK.
+          const ran = d.input ?? input;
+          const value = run ? await run(ran) : undefined;
           // The tool's response as the Agent SDK's PostToolUse hook would see it (a run may return { is_error: true }).
-          await o.postToolUse?.(tool, input, value ?? null, { id });
+          await o.postToolUse?.(tool, ran, value ?? null, { id });
           return { ok: true, value };
         },
         /** A completed assistant text block. */
