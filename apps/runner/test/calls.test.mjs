@@ -25,6 +25,9 @@ test('the signed form: sorted keys, notes left out, a list hashed in order, pros
   assert.equal(parseCalls('deploy.sh --production'), null, 'a shell line in words names no call');
   assert.equal(parseCalls('{"tool":"Bash","input":{"command":"x"},"why":"extra"}'), null, 'nothing but tool and input');
   assert.equal(parseCalls('[]'), null);
+  const call = { tool: 'Bash', input: { command: 'x' } };
+  assert.equal(parseCalls(JSON.stringify(Array(5).fill(call))).length, 5);
+  assert.equal(parseCalls(JSON.stringify(Array(6).fill(call))), null, 'at most 5 calls, as a card holds at most 5 asks');
   assert.deepEqual(parseCalls(JSON.stringify([{ tool: 'Bash', input: DEPLOY }])), [a]);
 });
 

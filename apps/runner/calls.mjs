@@ -10,6 +10,7 @@
 import { createHash } from 'node:crypto';
 
 export const CALLS_VERSION = 'calls/1';
+export const MAX_CALLS = 5;
 
 /** Input fields that are notes, not effects. */
 const NOTES = { Bash: ['description'] };
@@ -53,7 +54,8 @@ export function parseCalls(text) {
   let v;
   try { v = JSON.parse(String(text ?? '')); } catch { return null; }
   const list = Array.isArray(v) ? v : [v];
-  if (!list.length || list.length > 20) return null;
+  // At most 5 calls: an approval card holds at most 5 asks (L22), so one request never signs more than a card shows.
+  if (!list.length || list.length > MAX_CALLS) return null;
   const out = [];
   for (const c of list) {
     if (!c || typeof c !== 'object' || Array.isArray(c) || typeof c.tool !== 'string' || !c.input || typeof c.input !== 'object' || Array.isArray(c.input)) return null;
