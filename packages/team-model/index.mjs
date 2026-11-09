@@ -1377,7 +1377,7 @@ export function capabilityDiff(published, draft, kit) {
  *   system-added      a new system; `subjects` are the seats bound to it (none yet is still an item: it can be bound)
  *   binding-added     a seat gets a system, at `to` (read, write or deploy, shown as Read, Change, Act)
  *   binding-widened   a seat's permission on a system goes up, `from` → `to`
- *   resource-widened  a system gains `secrets`; its type, settings (`config`) or tools command or URL change; a
+ *   resource-widened  a system gains `secrets`; its type, settings (`config`, `settings: true`) or tools command or URL change; a
  *                     permission grants a tool it didn't (`tools`: [{ tool, at, from? }]); a tool's effect asks less, or
  *                     its entry is added or removed (`effects`: [{ tool, from, to }]); it can reach a new host (`egress`);
  *                     or its tier drops, verified → community → custom (`tier`: { from, to }). `subjects` are its seats.
@@ -1386,6 +1386,8 @@ export function capabilityDiff(published, draft, kit) {
 /** JSON with object keys sorted, so two equal values compare equal whatever their key order. */
 const canonical = (v) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x));
 
+/** Resource fields systemsCapability compares one by one; every other field but these is a setting. */
+const SYSTEM_FIELDS = new Set(['id', 'name', 'secrets', 'tools', 'permissions', 'effects', 'egress', 'tier']);
 const TIER_RANK = { custom: 0, community: 1, verified: 2 };
 // How much an effect is asked about before it runs, least first; a tool moving down this list asks less (L40).
 const EFFECT_RANK = { read: 0, write: 1, send: 2, deploy: 3, destructive: 4, payment: 5 };
@@ -1434,8 +1436,7 @@ export function systemsCapability(before, after) {
     const command = canonical(x.tools ?? null) !== canonical(was.tools ?? null);
     // Settings: type, config, and any field this function does not compare one by one (a field added later widens
     // until it is taught to narrow); name is a label only. Compared canonically, so key order is not a change.
-    const KNOWN = new Set(['id', 'name', 'secrets', 'tools', 'permissions', 'effects', 'egress', 'tier']);
-    const rest = (r) => canonical(Object.fromEntries(Object.entries(r).filter(([k, v]) => !KNOWN.has(k) && v !== undefined && !(k === 'config' && v && !Object.keys(v).length))));
+    const rest = (r) => canonical(Object.fromEntries(Object.entries(r).filter(([k, v]) => !SYSTEM_FIELDS.has(k) && v !== undefined && !(k === 'config' && v && !Object.keys(v).length))));
     const settings = rest(x) !== rest(was);
     const tools = toolsWidened(was.permissions, x.permissions);
     const effects = effectsWidened(was.effects, x.effects);
@@ -1449,7 +1450,7 @@ export function systemsCapability(before, after) {
       tier ? `is no longer ${tier.from}` : '',
     ].filter(Boolean).join(', ');
     items.push({
-      kind: 'resource-widened', ...who(id), resource: id, ...(secrets.length ? { secrets } : {}), ...(command ? { command: true } : {}),
+      kind: 'resource-widened', ...who(id), resource: id, ...(secrets.length ? { secrets } : {}), ...(command ? { command: true } : {}), ...(settings ? { settings: true } : {}),
       ...(tools.length ? { tools } : {}), ...(effects.length ? { effects } : {}), ...(egress.length ? { egress } : {}), ...(tier ? { tier } : {}), detail: `${id} ${what}`,
     });
   }
