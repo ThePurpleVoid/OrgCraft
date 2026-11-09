@@ -33,23 +33,32 @@ export async function cleanChecks(q, session, checks) {
   return out;
 }
 
-/** The newest sign-off from each role (and instance) on pull request `pr` in `team`, oldest first. */
+/**
+ * The newest sign-off from each role (and instance) on pull request `pr` in `team`, oldest first. Only sign-offs a
+ * runner session sent through the signoff tool count: the server audited those itself (action tool, target signoff).
+ * One posted through the API or a report token is the sender's word and can't stand in for a role's own.
+ */
 export async function latestSignoffs(q, team, pr) {
-  const rows = await q(`select distinct on (actor_id, coalesce(envelope->'actor'->>'instance', '')) envelope from events
-                        where team = $1 and type = 'message.signoff' and envelope->'data'->>'pr' = $2
-                        order by actor_id, coalesce(envelope->'actor'->>'instance', ''), seq desc`, [team, String(pr)]);
+  const rows = await q(`select distinct on (e.actor_id, coalesce(e.envelope->'actor'->>'instance', '')) e.envelope from events e
+                        where e.team = $1 and e.type = 'message.signoff' and e.envelope->'data'->>'pr' = $2
+                          and exists (select 1 from audit a where a.team = e.team and a.event = e.id and a.action = 'tool' and a.target = 'signoff' and a.decision = 'allowed')
+                        order by e.actor_id, coalesce(e.envelope->'actor'->>'instance', ''), e.seq desc`, [team, String(pr)]);
   return rows.map((r) => r.envelope).sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
 }
 
-/** One sign-off against the version being shipped: { signoff, by, version, fresh, problem }. */
-export function judge(e, version) {
+/**
+ * One sign-off against the version being shipped: { signoff, by, version, fresh, problem }. `kind` is what is shipped:
+ * a merge ships a commit, so a sign-off that names a revision or a draft on that pull request is not compared with
+ * the head (nothing could ever match it); it still blocks when it failed or left something unchecked.
+ */
+export function judge(e, version, { kind = null } = {}) {
   const d = e.data ?? {};
   const by = who(e);
   const base = { signoff: e.id, by, version: d.version ?? null, versionKind: d.versionKind ?? null, result: d.result ?? null, unverified: Array.isArray(d.unverified) ? d.unverified : null };
   let problem = null;
   if (!d.version) problem = `${by}'s sign-off names no version; it needs to check again and name it`;
-  else if (d.version !== version) problem = `needs a fresh sign-off from ${by} (theirs was for ${short(d.version)})`;
-  else if (d.result !== 'pass') problem = `${by}'s sign-off on ${short(version)} did not pass`;
+  else if (d.version !== version && !(kind && d.versionKind && d.versionKind !== kind)) problem = `needs a fresh sign-off from ${by} (theirs was for ${short(d.version)})`;
+  else if (d.result !== 'pass') problem = `${by}'s sign-off on ${short(d.version)} did not pass`;
   else if (!Array.isArray(d.unverified)) problem = `${by}'s sign-off does not say what it did not check (Unverified: not stated)`;
   else if (d.unverified.length) problem = `${by}'s sign-off has unchecked items: "${String(d.unverified[0]).slice(0, 200)}"${d.unverified.length > 1 ? ` and ${d.unverified.length - 1} more` : ''}`;
   return { ...base, fresh: !problem, ...(problem ? { problem } : {}) };
@@ -57,7 +66,7 @@ export function judge(e, version) {
 
 /** The gate for shipping `version` of pull request `pr`: every sign-off on it, and what is missing. */
 export async function gate(q, team, pr, version) {
-  const signoffs = (await latestSignoffs(q, team, pr)).map((e) => judge(e, version));
+  const signoffs = (await latestSignoffs(q, team, pr)).map((e) => judge(e, version, { kind: 'commit' }));
   const missing = signoffs.filter((s) => !s.fresh).map((s) => s.problem);
   return { signoffs, missing, ok: !missing.length };
 }

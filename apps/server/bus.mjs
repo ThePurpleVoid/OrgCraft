@@ -369,6 +369,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         if (tool === 'blocked') await ctx.emit(sess.team, 'report.status', { status: 'blocked', task: i.task, issue: i.issue, detail: i.need }, opts);
         out = { event: ev.id };
         await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: ev.id });
+        if (tool === 'signoff' && i.pr) await m3.refreshShipCards(ctx, sess.team, i.pr);
       } else if (tool === 'meeting_reply' || tool === 'meeting_close' || tool === 'meeting_start') {
         const r = tool === 'meeting_start' ? await meetings.startAdhoc(ctx, sess, i, roster) : await meetings.tool(ctx, sess, tool, i, roster);
         if (r.problems) {

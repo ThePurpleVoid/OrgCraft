@@ -153,3 +153,25 @@ test('the gate counts every role that signed the pull request: one stale reviewe
     assert.equal((await p.call('POST', `/approvals/${ask.body.approval}`, { decision: 'denied' })).status, 200, 'deny is never gated');
   }, { tickMs: 0 });
 });
+
+test('review fixes: only a runner session\'s own sign-off counts, and a revision on a pull request is not compared with its head', async () => {
+  await plane(async (p) => {
+    const { front, qa } = await team(p);
+    assert.equal((await tool(p.call, qa, 'signoff', so(B, { result: 'fail' }))).status, 200);
+    // A pass for B posted through the API in QA's name is the sender's word: QA's own failing one still stands.
+    const posted = { ...env(front, 'message.signoff', so(B)), actor: { kind: 'role', id: 'qa', session: qa.session, via: 'tool' } };
+    assert.equal((await p.call('POST', '/teams/shop/events', { events: [posted] })).status, 200);
+    const ask = await tool(p.call, front, 'request_approval', { action: 'accept', call: 'merge #7', why: 'ready', pr: 7, headSha: B });
+    let r = await p.call('POST', `/approvals/${ask.body.approval}`, { decision: 'approved', version: 1 }, await p.su());
+    assert.deepEqual([r.status, r.body.missing], [409, [`qa's sign-off on bbbbbbb did not pass`]]);
+    // A docs revision signed on the same pull request passes or blocks on its own words, never on the head.
+    assert.equal((await tool(p.call, qa, 'signoff', so('docs r3', { versionKind: 'revision', unverified: ['the German copy'] }))).status, 200);
+    let c = (await p.db.system('select card from cards where id = $1', [ask.body.card]))[0].card;
+    assert.match(c.data.blocked, /unchecked items: "the German copy"/, 'the card refreshed from the tool route');
+    assert.equal((await tool(p.call, qa, 'signoff', so('docs r3', { versionKind: 'revision' }))).status, 200);
+    c = (await p.db.system('select card from cards where id = $1', [ask.body.card]))[0].card;
+    assert.deepEqual([c.data.blocked, c.options[0].disabled], [undefined, undefined]);
+    r = await p.call('POST', `/approvals/${ask.body.approval}`, { decision: 'approved', version: c.version }, await p.su());
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  }, { tickMs: 0 });
+});

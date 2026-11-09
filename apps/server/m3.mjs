@@ -118,7 +118,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   /** Projections that run for every stored event, whatever path appended it (the API, a runner, the tick). */
   async function project(ctx, { event }) {
     if (event.type === 'usage.recorded' && event.team) await recordUsage(ctx, event);
-    if ((event.type === 'message.signoff' || event.type === 'signoff.stale') && event.team && Number.isSafeInteger(Number(event.data?.pr)) && event.data.pr) await refreshShipCards(ctx, event.team, event.data.pr);
+    // A new sign-off refreshes them from the tool route, once its audit row (what makes it count) is written.
+    if (event.type === 'signoff.stale' && event.team && Number.isSafeInteger(Number(event.data?.pr)) && event.data.pr) await refreshShipCards(ctx, event.team, event.data.pr);
     if (hooks.project) await hooks.project(ctx, { event });
     return [];
   }
@@ -868,7 +869,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   return {
     appendIn: appendInTx, onStored: (fn) => listeners.push(fn), hooks,
-    requireStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
+    requireStepUp, refreshShipCards, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
     createCard, changeCard, getCard, answerCard, requestApproval, decideApproval, readyToTry, previewArrived, checkPreviewed, previewForMerge,
     stepUp, mintStepUp, postChat, getChat, inbox, teamExtras,
