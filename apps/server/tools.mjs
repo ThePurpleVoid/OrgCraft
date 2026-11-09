@@ -8,6 +8,8 @@ const MAX = 4000;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const ROLE = /^[a-z0-9][a-z0-9-]*(#[A-Za-z0-9._-]+)?$/;
 const STATUSES = ['idle', 'working', 'waiting', 'blocked', 'review', 'done'];
+const FULL_SHA = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
+const VERSION_KINDS = ['commit', 'revision', 'draft'];
 
 const isLink = (s) => typeof s === 'string' && s.length <= 2000 && (/^https:\/\/\S+$/.test(s) || (/^[^/\s][^\s]*$/.test(s) && !s.split('/').includes('..') && !/^[a-z]+:/i.test(s)));
 
@@ -42,7 +44,27 @@ function fields(input, problems) {
     if (v !== undefined && !ROLE.test(v)) problems.push(`${k} must be a role slug, such as web-dev or code-reviewer#57`);
     return v;
   };
-  return { a, text, int, links, role };
+  // Governance G1: what the sender passes on without having checked it. [] is "none"; left out is "not stated".
+  const unverified = () => {
+    const v = a.unverified;
+    if (v === undefined || v === null) return undefined;
+    if (!Array.isArray(v) || v.length > 20 || v.some((x) => typeof x !== 'string' || !x.trim() || x.length > 500)) { problems.push('unverified is a list of at most 20 items of at most 500 characters each'); return undefined; }
+    return v;
+  };
+  return { a, text, int, links, role, unverified };
+}
+
+/** Governance G2: the exact version a sign-off checked; a commit in full. Sets versionKind when the version says it. */
+function version(f, out, problems) {
+  out.version = f.text('version', { max: 200 });
+  const kind = f.a.versionKind;
+  if (kind !== undefined && !VERSION_KINDS.includes(kind)) { problems.push(`versionKind is one of ${VERSION_KINDS.join(', ')}`); return; }
+  if (kind && !out.version) { problems.push('versionKind needs the version it describes'); return; }
+  if (!out.version) return;
+  const k = kind ?? (FULL_SHA.test(out.version) ? 'commit' : null);
+  if (!k) problems.push('say what the version is with versionKind: commit, revision or draft');
+  else if (k === 'commit' && !FULL_SHA.test(out.version)) problems.push('a commit version is the full commit id (40 or 64 hex characters), so the sign-off can only count for exactly that commit');
+  else out.versionKind = k;
 }
 
 const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
@@ -64,26 +86,27 @@ export function checkTool(name, input, ctx) {
     case 'report': {
       const status = f.a.status;
       if (!STATUSES.includes(status)) problems.push(`status must be one of ${STATUSES.join(', ')}`);
-      out = { status, task: f.text('task', { max: 200 }), waitingOn: f.text('waitingOn', { max: 200 }), issue: f.int('issue'), pr: f.int('pr'), branch: f.text('branch', { max: 200 }), commit: f.text('commit', { max: 80 }), detail: f.text('detail') };
+      out = { status, task: f.text('task', { max: 200 }), waitingOn: f.text('waitingOn', { max: 200 }), issue: f.int('issue'), pr: f.int('pr'), branch: f.text('branch', { max: 200 }), commit: f.text('commit', { max: 80 }), detail: f.text('detail'), unverified: f.unverified() };
       if (['working', 'waiting'].includes(status) && !out.task?.trim()) problems.push(`a ${status} report needs the task`);
       if (status === 'waiting' && !out.waitingOn?.trim()) problems.push('a waiting report needs waitingOn: a role, or a short reason such as "CI on PR 57"');
       break;
     }
     case 'handoff':
-      out = { to: f.role('to', { need: true }), ...work(), changed: f.text('changed', { need: true }), verify: f.text('verify', { need: true }), doneWhen: f.text('doneWhen', { need: true }), branch: f.text('branch', { max: 200 }), commit: f.text('commit', { max: 80 }), pr: f.int('pr') };
+      out = { to: f.role('to', { need: true }), ...work(), changed: f.text('changed', { need: true }), verify: f.text('verify', { need: true }), doneWhen: f.text('doneWhen', { need: true }), branch: f.text('branch', { max: 200 }), commit: f.text('commit', { max: 80 }), pr: f.int('pr'), unverified: f.unverified() };
       if (f.a.artifact !== undefined && !isLink(f.a.artifact)) problems.push('artifact must be an https:// URL or a path in the workspace');
       else out.artifact = f.a.artifact;
       break;
     case 'bug':
-      out = { to: f.role('to', { need: true }), ...work(), where: f.text('where', { need: true, max: 500 }), steps: f.text('steps', { need: true }), expected: f.text('expected', { need: true }), actual: f.text('actual', { need: true }), severity: f.int('severity', { min: 1, max: 4, need: true }), evidence: f.links('evidence', { need: true }), build: f.text('build', { max: 200 }) };
+      out = { to: f.role('to', { need: true }), ...work(), where: f.text('where', { need: true, max: 500 }), steps: f.text('steps', { need: true }), expected: f.text('expected', { need: true }), actual: f.text('actual', { need: true }), severity: f.int('severity', { min: 1, max: 4, need: true }), evidence: f.links('evidence', { need: true }), build: f.text('build', { max: 200 }), unverified: f.unverified() };
       break;
     case 'signoff':
-      out = { to: f.role('to', { need: true }), ...work(), testedOn: f.text('testedOn', { need: true, max: 500 }), walked: f.text('walked', { need: true }), result: f.a.result, evidence: f.links('evidence', { need: true }), pr: f.int('pr') };
+      out = { to: f.role('to', { need: true }), ...work(), testedOn: f.text('testedOn', { need: true, max: 500 }), walked: f.text('walked', { need: true }), result: f.a.result, evidence: f.links('evidence', { need: true }), pr: f.int('pr'), unverified: f.unverified() };
       if (!['pass', 'fail'].includes(out.result)) problems.push('result must be pass or fail');
+      version(f, out, problems);
       if (problems.some((p) => p.startsWith('evidence'))) problems.push('A SIGNOFF without evidence is refused');
       break;
     case 'blocked': {
-      out = { ...work(), need: f.text('need', { need: true }), needFrom: f.text('needFrom', { need: true, max: 200 }), meanwhile: f.text('meanwhile', { need: true }), to: f.role('to'), recommendation: f.text('recommendation') };
+      out = { ...work(), need: f.text('need', { need: true }), needFrom: f.text('needFrom', { need: true, max: 200 }), meanwhile: f.text('meanwhile', { need: true }), to: f.role('to'), recommendation: f.text('recommendation'), unverified: f.unverified() };
       if (out.needFrom !== undefined && out.needFrom !== 'owner' && !SLUG.test(out.needFrom)) problems.push('needFrom must be a role slug or owner');
       if (out.needFrom === 'owner' && !out.recommendation?.trim()) problems.push('a question for the owner needs your recommendation');
       break;
@@ -193,8 +216,9 @@ export function detailOf(name, i) {
   const parts = {
     handoff: [['Changed', i.changed], ['Verify', i.verify], ['Done when', i.doneWhen]],
     bug: [['Where', i.where], ['Steps', i.steps], ['Expected', i.expected], ['Actual', i.actual], ['Build', i.build]],
-    signoff: [['Tested on', i.testedOn], ['Walked', i.walked], ['Result', i.result]],
+    signoff: [['Tested on', i.testedOn], ['Walked', i.walked], ['Result', i.result], ['Version', i.version]],
     blocked: [['Need', i.need], ['From', i.needFrom], ['Meanwhile', i.meanwhile], ['Recommendation', i.recommendation]],
   }[name] ?? [];
+  if (Array.isArray(i.unverified)) parts.push(['Unverified', i.unverified.length ? i.unverified.join('; ') : 'none']);
   return parts.filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(' ').slice(0, 4000);
 }

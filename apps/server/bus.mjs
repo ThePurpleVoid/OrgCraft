@@ -12,6 +12,7 @@ import { personActor } from './m3.mjs';
 import { createMeetings } from './meetings.mjs';
 import { canWork } from './deployment.mjs';
 import { checkIoRefs, ingestStepIo, projectTask, purgeIo } from './inspector.mjs';
+import { cleanChecks, markStale } from './signoffs.mjs';
 
 export const SESSION_TOKEN_MINUTES = 15;
 const ACK_SECONDS = 30;
@@ -58,6 +59,10 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     } else if (event.type === 'meeting.turn') {
       // A turn goes to the role; a pool role's lowest-numbered live instance takes it (meetings, A8).
       add(event.data?.to, await meetings.instanceFor(q, run.id, event.data?.to));
+    } else if (event.type === 'signoff.stale') {
+      // The role that signed checks again (governance G2).
+      const [role, instance] = String(event.data?.by ?? '').split('#');
+      add(role, instance || null);
     } else if ((event.type === 'decision.answered' || event.type === 'approval.decided') && event.data?.session) {
       const [s] = await q('select role, instance from sessions where id = $1', [event.data.session]);
       if (s) add(s.role, s.instance);
@@ -75,7 +80,9 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       await q('update sessions set state = $2, last_seen = now() where id = $1 and state <> $2', [event.actor.session, SESSION_STATE[event.type]]);
       if (event.type === 'session.ended') ctx.after.push(() => startQueued(ctx.tenant, event.team));
     }
-    if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided', 'meeting.turn'].includes(event.type)) return;
+    // A pull request's head moved: sign-offs on an earlier commit go stale (governance G2).
+    if (event.type === 'proposal.opened' || event.type === 'proposal.updated') await markStale(ctx, event);
+    if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'signoff.stale', 'decision.answered', 'approval.decided', 'meeting.turn'].includes(event.type)) return;
     const run = await activeRun(q, event.team);
     if (!run) return;
     for (const t of await targets(q, run, event)) {
@@ -353,6 +360,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         const data = tool === 'report'
           ? { status: i.status, task: i.task, issue: i.issue, pr: i.pr, branch: i.branch, commit: i.commit, detail: i.detail, ...(i.waitingOn && roster.roles?.some((r) => r.slug === i.waitingOn) ? { to: i.waitingOn } : {}), ...(i.waitingOn ? { waitingOn: i.waitingOn } : {}) }
           : { ...i, ...(tool === 'blocked' && !i.to ? { to: i.needFrom === 'owner' ? roster.frontDoor : i.needFrom !== sess.role ? i.needFrom : undefined } : {}), detail: detailOf(tool, i), ...(i.artifact ? { evidence: [i.artifact] } : {}) };
+        // The runner's own record of what this session ran (governance G2): only a runner session sends it, here.
+        if (tool === 'signoff') data.checks = await cleanChecks(ctx.q, sess.id, input?.checks);
         const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
         const ev = await ctx.emit(sess.team, TOOL_EVENT[tool], clean, opts);
         if (tool === 'blocked') await ctx.emit(sess.team, 'report.status', { status: 'blocked', task: i.task, issue: i.issue, detail: i.need }, opts);
