@@ -21,8 +21,22 @@ export const ROUTES = [
   ['GET', '/me/summary', 'viewer'],
   ['GET', '/me/stream', 'viewer'],
   ['GET', '/me/inbox', 'viewer'],
+  // L25: a person's own quiet hours and daily digest, per workspace.
+  ['GET', '/me/notifications', 'viewer'],
+  ['PUT', '/me/notifications', 'viewer'],
   ['POST', '/auth/step-up', 'viewer'],
   ['POST', '/runs/{run}/{action}', 'editor'],
+  ['GET', '/teams/{team}/hooks', 'viewer'],
+  ['POST', '/teams/{team}/hooks', 'admin'],
+  ['POST', '/teams/{team}/hooks/{hook}/rotate', 'admin'],
+  ['DELETE', '/teams/{team}/hooks/{hook}', 'admin'],
+  ['GET', '/teams/{team}/triggers/{trigger}/history', 'viewer'],
+  ['POST', '/teams/{team}/triggers/test', 'editor'],
+  ['POST', '/live/stop-everything', 'editor'],
+  ['GET', '/teams/{team}/live', 'viewer'],
+  ['POST', '/teams/{team}/live/stop-everything', 'editor'],
+  ['PUT', '/teams/{team}/live/members/{member}', 'editor'],
+  ['DELETE', '/teams/{team}/live/{override}', 'editor'],
   ['POST', '/approvals/{approval}', 'approver'],
   ['GET', '/cards/{card}', 'viewer'],
   ['POST', '/cards/{card}', 'approver'],
@@ -90,6 +104,8 @@ export const ROUTES = [
   ['POST', '/teams/{team}/emails/{email}/verify', 'viewer'],
   // Slack (CPO story "Slack notifications", D55): anyone who can see the team may link their own Slack for DMs; only
   // owners and admins pick the team's channels.
+  // The delivery log (L25): a member sees their own rows; ?all=1 (everyone's) is checked again for admin in the handler.
+  ['GET', '/teams/{team}/notifications/log', 'viewer'],
   ['GET', '/teams/{team}/slack', 'viewer'],
   ['POST', '/teams/{team}/slack/connect', 'viewer'],
   ['POST', '/teams/{team}/slack/link', 'viewer'],
@@ -144,6 +160,8 @@ export function routeOf(method, path) {
 export const HOST_ROUTES = new Set([
   'GET /me/summary', 'GET /me/stream', 'GET /me/inbox', 'GET /deployment',
   'POST /runs/{run}/{action}',
+  // Stop everything and pausing a teammate (L18) stay one tap from a host; lifting needs step-up, so never through one.
+  'POST /live/stop-everything', 'GET /teams/{team}/live', 'POST /teams/{team}/live/stop-everything', 'PUT /teams/{team}/live/members/{member}',
   'GET /cards/{card}', 'POST /cards/{card}',
   'GET /teams', 'GET /teams/{team}', 'GET /teams/{team}/events', 'GET /teams/{team}/events/stream', 'POST /teams/{team}/stream-tickets',
   'GET /teams/{team}/budget',

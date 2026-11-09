@@ -23,10 +23,12 @@ export const KINDS = {
   blocked: { type: 'message.blocked', label: 'A role is blocked', breakthrough: false },
   minutes: { type: 'meeting.minutes', label: 'Meeting minutes', breakthrough: false },
   ready: { type: 'ready.posted', label: 'Ready to try', breakthrough: false },
+  // L25: one email a day at the person's own time, with what their digest settings name and what quiet hours held.
+  digest: { type: null, label: 'Daily digest', breakthrough: false },
 };
 /** Suggested the first time (D49); everything else starts off. */
 export const SUGGESTED = ['approval', 'budget100'];
-const KIND_OF_TYPE = Object.fromEntries(Object.entries(KINDS).map(([k, v]) => [v.type, k]));
+const KIND_OF_TYPE = Object.fromEntries(Object.entries(KINDS).filter(([, v]) => v.type).map(([k, v]) => [v.type, k]));
 export const kindOfEvent = (type) => KIND_OF_TYPE[type] ?? null;
 
 export const CODE_MINUTES = 15;
@@ -388,12 +390,30 @@ export async function deliver(db, key, sink, row, { providers = PROVIDERS, readS
   if (!kind) return null;
   const { tenant, team } = sink;
   const subs = await db.tenant(tenant, ({ q }) => q(`select s.id, s.email, (select name from teams where id = s.team) as team_name,
-      exists(select 1 from email_deliveries d where d.subscription = s.id and d.event = $3 and d.status = 'sent') as done
-    from email_subscriptions s where s.team = $1 and s.verified_at is not null and $2 = any(s.kinds)
+      exists(select 1 from email_deliveries d where d.subscription = s.id and d.event = $3 and (d.status = 'sent' or d.held)) as done,
+      p.timezone, p.quiet_start, p.quiet_end
+    from email_subscriptions s left join notification_prefs p on p.tenant = s.tenant and p.principal = s.principal
+    where s.team = $1 and s.verified_at is not null and $2 = any(s.kinds)
       and ${stillIn('s')}`, [team, kind, event.id]));
-  const todo = subs.filter((s) => !s.done);
+  // Quiet hours (L25): a kind that does not break through waits, logged as held. It goes in the person's digest, or,
+  // for an address without one, out on its own when quiet hours end (flushHeld; review sev 2).
+  const quiet = KINDS[kind].breakthrough ? [] : subs.filter((s) => !s.done && inQuiet(s, now));
+  for (const s of quiet) await db.tenant(tenant, ({ q }) => q("insert into email_deliveries(tenant, team, subscription, event, kind, status, held, error) values ($1, $2, $3, $4, $5, 'skipped', true, 'quiet hours: kept for the digest')", [tenant, team, s.id, event.id, kind]));
+  const todo = subs.filter((s) => !s.done && !quiet.includes(s));
   if (!todo.length) return null;
   return (await sendTo(db, key, sink, event, kind, todo, { providers, readSecret, publicUrl, now, fetch: send })).error;
+}
+
+/** Is it inside this person's quiet hours, in their own time zone? (minutes of the day; may wrap past midnight) */
+export function inQuiet({ timezone, quiet_start: a, quiet_end: b }, at = new Date()) {
+  if (a === null || a === undefined || b === null || b === undefined || a === b) return false;
+  const m = minuteOfDay(at, timezone || 'UTC');
+  return a < b ? m >= a && m < b : m >= a || m < b;
+}
+
+export function minuteOfDay(at, timeZone) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', hour: 'numeric', minute: 'numeric' }).formatToParts(at).map((x) => [x.type, x.value]));
+  return (Number(p.hour) % 24) * 60 + Number(p.minute);
 }
 
 /** Sends one event to the given subscriptions through the sink's provider, logging each try. */
@@ -440,3 +460,215 @@ export async function emailFallback(db, key, { tenant, team, principal, event },
   if (!subs.length) return 0;
   return (await sendTo(db, key, sink, event, kind, subs, opts)).sent;
 }
+
+// ---- quiet hours and the daily digest (L25) ---------------------------------------------------------------------
+
+export const DIGEST_MAX_LINES = 20;
+const DIGEST_TRIES = 3;
+
+/** The person's local date (YYYY-MM-DD) in their zone. */
+export function localDate(at, timeZone) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(at);
+}
+
+/** Is this an IANA zone the server understands? */
+export function isZone(z) {
+  if (typeof z !== 'string' || !z || z.length > 64) return false;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return true; } catch { return false; }
+}
+
+/** The digest email for one subscription: what quiet hours held plus the digest kinds, newest last. Pure. */
+export function composeDigest(events, { team, teamName, date }) {
+  const items = events.map((e) => compose(e, { teamName })).filter(Boolean);
+  const tag = `[${teamName || team}]`;
+  const shown = items.slice(-DIGEST_MAX_LINES).map((m) => `- ${m.subject.replace(`${tag} `, '')}`);
+  const more = items.length - shown.length;
+  return {
+    kind: 'digest',
+    subject: cutSubject(`${tag} Daily digest: ${items.length} ${items.length === 1 ? 'update' : 'updates'} (${date})`),
+    lines: [items.length ? `Here is what happened while your emails were held or set to the digest.` : 'Nothing new since your last digest.', ...shown,
+      more > 0 ? `And ${more} more in the Studio.` : null].filter(Boolean),
+    link: { label: 'Open the team in the Studio', path: `/teams/${encodeURIComponent(team)}/inbox` },
+  };
+}
+
+/**
+ * One digest pass (run by the sink worker): for every subscription with "digest" turned on whose person's digest
+ * time has passed today in their own zone, sends one digest, logged as event digest-<local date>. A sent or skipped
+ * digest is not tried again that day; a failed one is tried up to three times.
+ */
+export async function digests(db, key, { providers = PROVIDERS, readSecret, publicUrl = '', now = new Date(), fetch: send = fetch } = {}) {
+  const due = await db.system(`select s.id, s.tenant, s.team, s.email, s.principal, t.name as team_name, p.timezone, p.digest_at, p.digest_kinds
+    from email_subscriptions s join teams t on t.id = s.team join notification_prefs p on p.tenant = s.tenant and p.principal = s.principal
+    where s.verified_at is not null and 'digest' = any(s.kinds) and p.digest_at is not null and ${stillIn('s')}`);
+  let sent = 0;
+  for (const s of due) {
+    const zone = isZone(s.timezone) ? s.timezone : 'UTC';
+    if (minuteOfDay(now, zone) < s.digest_at) continue;
+    const event = `digest-${localDate(now, zone)}`;
+    const [state] = await db.tenant(s.tenant, ({ q }) => q(`select count(*) filter (where status in ('sent', 'skipped'))::int as done, count(*) filter (where status = 'failed')::int as failed
+      from email_deliveries where subscription = $1 and event = $2`, [s.id, event]));
+    if (state.done || state.failed >= DIGEST_TRIES) continue;
+    const [sink] = await db.tenant(s.tenant, ({ q }) => q('select id, tenant, team, provider, sender, secret from email_sinks where team = $1 order by created_at limit 1', [s.team]));
+    if (!sink) continue;
+    // Since the last digest that went out, at most a week back.
+    const types = (s.digest_kinds ?? []).map((k) => KINDS[k]?.type).filter(Boolean);
+    const events = await db.tenant(s.tenant, ({ q }) => q(`with since as (
+        select greatest(coalesce(max(at), $3::timestamptz - interval '1 day'), $3::timestamptz - interval '7 days') as at
+        from email_deliveries where subscription = $1 and kind = 'digest' and status = 'sent')
+      select e.envelope from events e, since where e.team = $2 and e.received_at > since.at and e.received_at <= $3 and (
+        e.type = any($4) or exists(select 1 from email_deliveries d where d.subscription = $1 and d.held and d.event = e.id))
+      order by e.seq`, [s.id, s.team, now, types]));
+    // Nothing new: no email (the window carries on from the last digest that went out).
+    if (!events.length) continue;
+    const mail = composeDigest(events.map((r) => r.envelope), { team: s.team, teamName: s.team_name, date: event.slice(7) });
+    const r = await sendMail(db, key, sink, { id: event }, mail, s, { providers, readSecret, publicUrl, now, fetch: send });
+    sent += r;
+  }
+  return sent;
+}
+
+/**
+ * When quiet hours end (run with the digests, once a minute): held mail for an address without a digest goes out as
+ * usual, each event once. An address with the digest on keeps its held mail for the digest.
+ */
+export async function flushHeld(db, key, { providers = PROVIDERS, readSecret, publicUrl = '', now = new Date(), fetch: send = fetch } = {}) {
+  const held = await db.system(`select s.id, s.tenant, s.team, s.email, t.name as team_name, p.timezone, p.quiet_start, p.quiet_end, d.kind, e.envelope
+    from email_deliveries d join email_subscriptions s on s.id = d.subscription join teams t on t.id = s.team
+    join events e on e.team = d.team and e.id = d.event
+    left join notification_prefs p on p.tenant = s.tenant and p.principal = s.principal
+    where d.held and d.at > $1::timestamptz - interval '7 days' and s.verified_at is not null and d.kind = any(s.kinds)
+      and not ('digest' = any(s.kinds) and p.digest_at is not null)
+      and not exists(select 1 from email_deliveries x where x.subscription = d.subscription and x.event = d.event and x.status = 'sent')
+      -- A failing send is tried 3 times, like a digest (review sev 4).
+      and (select count(*) from email_deliveries f where f.subscription = d.subscription and f.event = d.event and f.status = 'failed') < 3
+      -- Still inside the person's quiet hours: not yet, and not counted against the limit (review sev 4).
+      and not coalesce((with z as (select case when exists(select 1 from pg_timezone_names n where n.name = p.timezone) then p.timezone else 'UTC' end as tz),
+        m as (select (extract(hour from $1::timestamptz at time zone z.tz) * 60 + extract(minute from $1::timestamptz at time zone z.tz))::int as v from z)
+        select case when p.quiet_start < p.quiet_end then m.v >= p.quiet_start and m.v < p.quiet_end else m.v >= p.quiet_start or m.v < p.quiet_end end from m), false)
+      -- What a digest already carried is not sent again (the digest was on when it was held).
+      and not exists(select 1 from email_deliveries g where g.subscription = d.subscription and g.kind = 'digest' and g.status = 'sent' and g.at >= d.at)
+      and ${stillIn('s')}
+    order by e.seq limit 200`, [now]);
+  let sent = 0;
+  for (const h of held) {
+    if (inQuiet(h, now)) continue;
+    const [sink] = await db.tenant(h.tenant, ({ q }) => q('select id, tenant, team, provider, sender, secret from email_sinks where team = $1 order by created_at limit 1', [h.team]));
+    if (!sink) continue;
+    sent += (await sendTo(db, key, sink, h.envelope, h.kind, [h], { providers, readSecret, publicUrl, now, fetch: send })).sent;
+  }
+  return sent;
+}
+
+/** Sends one composed mail to one subscription and logs it (the digest path; events go through sendTo). */
+async function sendMail(db, key, sink, event, mail, s, { providers, readSecret, publicUrl, now, fetch: send }) {
+  const { tenant, team } = sink;
+  const log = (status, extra = {}) => db.tenant(tenant, ({ q }) => q('insert into email_deliveries(tenant, team, subscription, event, kind, status, provider_id, error) values ($1, $2, $3, $4, $5, $6, $7, $8)',
+    [tenant, team, s.id, event.id, mail.kind, status, extra.id ?? null, extra.error ?? null]));
+  const provider = providers[sink.provider];
+  const apiKey = provider && sink.secret ? await readSecret(db, key, tenant, sink.secret) : null;
+  if (!provider || !apiKey) { await log('skipped', { error: provider ? `no provider key stored as ${sink.secret}` : `unknown provider ${sink.provider}` }); return 0; }
+  const msg = render(key, mail, { base: publicUrl, tenant, team, teamName: s.team_name, subscription: s.id, now });
+  try {
+    const r = await provider.send({ apiKey, from: sink.sender, to: s.email, ...msg }, { fetch: send });
+    await log('sent', { id: r?.id });
+    return 1;
+  } catch (e) {
+    await log('failed', { error: String(e.message ?? e).slice(0, 200) });
+    return 0;
+  }
+}
+
+const hm = (m) => (m === null || m === undefined ? null : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+const mins = (v, field) => {
+  if (v === null) return null;
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(v ?? ''));
+  if (!m) throw new Problem(400, `${field} is a local time like "22:00", or null`);
+  return Number(m[1]) * 60 + Number(m[2]);
+};
+const prefsView = (p) => ({
+  timezone: p?.timezone ?? 'UTC',
+  quietHours: p?.quiet_start === null || p?.quiet_start === undefined ? null : { from: hm(p.quiet_start), to: hm(p.quiet_end) },
+  digest: p?.digest_at === null || p?.digest_at === undefined ? null : { at: hm(p.digest_at), kinds: p.digest_kinds ?? [] },
+  breakthrough: Object.entries(KINDS).filter(([, k]) => k.breakthrough).map(([id]) => id),
+});
+
+/** GET/PUT /v1/me/notifications and the team delivery log. */
+export function createNotifications({ db }) {
+  return {
+    async get(tenant, principal) {
+      const [p] = await db.tenant(tenant, ({ q }) => q('select * from notification_prefs where tenant = $1 and principal = $2', [tenant, principal]));
+      return prefsView(p);
+    },
+
+    /** Replaces the fields sent; a field left out keeps its value. */
+    async put(tenant, principal, body = {}) {
+      const [old] = await db.tenant(tenant, ({ q }) => q('select * from notification_prefs where tenant = $1 and principal = $2', [tenant, principal]));
+      const next = { timezone: old?.timezone ?? 'UTC', quiet_start: old?.quiet_start ?? null, quiet_end: old?.quiet_end ?? null, digest_at: old?.digest_at ?? null, digest_kinds: old?.digest_kinds ?? [] };
+      if ('timezone' in body) {
+        // Both the server (Intl) and the database (flushHeld's `at time zone`) must know it (review sev 4).
+        const known = isZone(body.timezone) && (await db.tenant(tenant, ({ q }) => q('select 1 from pg_timezone_names where name = $1', [body.timezone]))).length > 0;
+        if (!known) throw new Problem(400, 'timezone is an IANA zone like "America/Los_Angeles"');
+        next.timezone = body.timezone;
+      }
+      if ('quietHours' in body) {
+        const qh = body.quietHours;
+        if (qh === null) Object.assign(next, { quiet_start: null, quiet_end: null });
+        else {
+          if (typeof qh !== 'object') throw new Problem(400, 'quietHours is { from, to } or null');
+          Object.assign(next, { quiet_start: mins(qh.from, 'quietHours.from'), quiet_end: mins(qh.to, 'quietHours.to') });
+          if (next.quiet_start === null || next.quiet_end === null || next.quiet_start === next.quiet_end) throw new Problem(400, 'quietHours needs two different times');
+        }
+      }
+      if ('digest' in body) {
+        const d = body.digest;
+        if (d === null) Object.assign(next, { digest_at: null });
+        else {
+          if (typeof d !== 'object') throw new Problem(400, 'digest is { at, kinds } or null');
+          next.digest_at = mins(d.at, 'digest.at');
+          if (next.digest_at === null) throw new Problem(400, 'digest.at is a local time like "08:00"');
+          if ('kinds' in d) {
+            const kinds = d.kinds;
+            if (!Array.isArray(kinds) || kinds.some((k) => !KINDS[k] || k === 'digest')) throw new Problem(400, `digest.kinds from ${Object.keys(KINDS).filter((k) => k !== 'digest').join(', ')}`);
+            next.digest_kinds = [...new Set(kinds)];
+          }
+        }
+      }
+      const [p] = await db.tenant(tenant, ({ q }) => q(`insert into notification_prefs(tenant, principal, timezone, quiet_start, quiet_end, digest_at, digest_kinds) values ($1, $2, $3, $4, $5, $6, $7)
+        on conflict (tenant, principal) do update set timezone = $3, quiet_start = $4, quiet_end = $5, digest_at = $6, digest_kinds = $7, updated_at = now() returning *`,
+      [tenant, principal, next.timezone, next.quiet_start, next.quiet_end, next.digest_at, next.digest_kinds]));
+      return prefsView(p);
+    },
+
+    /**
+     * The team's delivery log, newest first: email and Slack, one row per try. A member sees only their own rows; an
+     * admin (or owner) sees everyone's with all, including Slack channel posts (nobody's own). `to` (masked) is only
+     * on the caller's own rows.
+     */
+    async log(tenant, team, principal, { all = false, limit = 50, before = null } = {}) {
+      const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
+      const cursor = before === null || before === undefined || before === '' ? null : String(before);
+      if (cursor !== null && !/^\d{1,30}$/.test(cursor)) throw new Problem(400, 'before is the `at` of the last row, in ms');
+      return db.tenant(tenant, async ({ q }) => {
+        const rows = await q(`select * from (
+            select 'email' as channel, d.at, d.event, d.kind, case when d.held then 'held' else d.status end as status, d.error, s.principal, s.email as target
+              from email_deliveries d join email_subscriptions s on s.id = d.subscription where d.team = $1
+            union all
+            select 'slack' as channel, d.at, d.event, d.kind, d.status, d.error, l.principal, coalesce(l.slack_user, d.target) as target
+              from slack_deliveries d left join slack_links l on l.id = d.target where d.team = $1
+          ) x where ($2::boolean or x.principal = $3) and ($4::bigint is null or x.at < to_timestamp($4::bigint / 1000.0))
+          order by x.at desc limit $5`, [team, all, principal, cursor, n]);
+        const items = rows.map((r) => ({ channel: r.channel, at: r.at, event: r.event, kind: r.kind, status: r.status, why: r.error ?? null,
+          // Only your own rows say where they went: an admin's all=1 never shows someone else's address, even masked.
+          ...(r.principal === principal ? { to: r.channel === 'email' ? maskEmail(r.target) : r.target } : {}), ...(all ? { principal: r.principal } : {}) }));
+        const last = rows.at(-1);
+        return { items, next: rows.length === n && last ? String(new Date(last.at).getTime()) : null };
+      });
+    },
+  };
+}
+
+export const maskEmail = (e) => {
+  const [u, d] = String(e ?? '').split('@');
+  return d ? `${u.slice(0, 1)}${'*'.repeat(Math.max(u.length - 1, 1))}@${d}` : '';
+};

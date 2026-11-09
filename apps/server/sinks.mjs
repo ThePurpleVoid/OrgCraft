@@ -3,7 +3,7 @@
 // team already runs accepts, so connecting a team to the product never takes its own board away.
 import { toKitRow } from '../../packages/events/index.mjs';
 import { readSecret } from './store.mjs';
-import { deliver } from './email.mjs';
+import { deliver, digests, flushHeld } from './email.mjs';
 import { deliverSlack } from './slack.mjs';
 
 const BATCH = 50;
@@ -54,7 +54,7 @@ async function drainOne(db, key, { id, tenant, team, tbl }, send, timeoutMs, ema
 async function emailRows(db, key, sink, rows, opts) {
   let cursor = Number(sink.cursor), moved = 0, error = null;
   for (const r of rows) {
-    error = await deliver(db, key, sink, r, { ...opts, now: new Date() });
+    error = await deliver(db, key, sink, r, { ...opts, now: typeof opts.now === 'function' ? opts.now() : new Date() });
     if (error) break;
     cursor = Number(r.seq);
     moved++;
@@ -90,13 +90,19 @@ async function settle(db, tenant, sink, cursor, moved, error, failed = null, pos
 }
 
 /** Runs drain every `everyMs` until stopped. Wake it early with wake() after an append. */
-export function startSinks(db, key, { everyMs = 2000, ...opts } = {}) {
-  let timer = null, running = false, again = false, stopped = false;
+export function startSinks(db, key, { everyMs = 2000, digestEveryMs = 60_000, ...opts } = {}) {
+  let timer = null, running = false, again = false, stopped = false, lastDigest = 0;
   const tick = async () => {
     if (stopped) return;
     if (running) { again = true; return; }
     running = true;
     try { while (!stopped && (await drain(db, key, opts)) > 0); } catch (e) { if (!stopped) console.error(`sinks: ${e.message}`); }
+    // L25: the daily digests (each once per local day) and held mail whose quiet hours are over, once a minute.
+    if (!stopped && Date.now() - lastDigest >= digestEveryMs) {
+      lastDigest = Date.now();
+      const o = { readSecret, fetch: opts.fetch ?? fetch, ...opts.email, now: typeof opts.email?.now === 'function' ? opts.email.now() : new Date() };
+      try { await digests(db, key, o); await flushHeld(db, key, o); } catch (e) { if (!stopped) console.error(`digests: ${e.message}`); }
+    }
     running = false;
     if (again) { again = false; setImmediate(tick); }
   };
