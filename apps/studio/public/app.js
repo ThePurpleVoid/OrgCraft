@@ -1264,7 +1264,7 @@ async function confirmPublish() {
     // L40: a commit in this checkout is what runs from here start on, so the control plane gets its systems now,
     // whatever this publish changed (an earlier cancelled send is caught too). A pull request's wait as a pending set
     // bound to its commit, which the owner switches on once the code host reports it accepted (L40b).
-    if (r.commit && approvalsOn()) await publishSystems(out, r.pr ? { pr: Number(/\/pull\/(\d+)/.exec(r.pr.url ?? '')?.[1]) || null } : null);
+    if (r.commit && approvalsOn()) await publishSystems(out, r.pr ? { pr: Number(/\/(?:pull|merge_requests|pull-requests)\/(\d+)/.exec(r.pr.url ?? '')?.[1]) || null } : null);
     const fresh = await api('/v1/team');
     const wasNew = !!S.noTeam;
     S = fresh;
