@@ -30,8 +30,9 @@ export function changeLines(c, name, system = (x) => x) {
     case 'reports-to': return [t('change.reports-to', { teammate: who, to: name(c.to) })];
     case 'tier': return [t('change.tier', { teammate: who, from: c.from, to: c.to })];
     case 'brief': case 'role-dormant': return [t('change.brief', { teammate: who })];
-    case 'binding-added': case 'binding-widened': return [t('change.binding-added', { teammate: who, system: system(c.resource), level: levelWord(c.to) })];
-    case 'binding-removed': case 'binding-narrowed': return [t('change.binding-removed', { teammate: who, system: system(c.resource) })];
+    // A lowered level still uses the system: name the level it keeps (qa-web L40 S2).
+    case 'binding-added': case 'binding-widened': case 'binding-narrowed': return [t('change.binding-added', { teammate: who, system: system(c.resource), level: levelWord(c.to) })];
+    case 'binding-removed': return [t('change.binding-removed', { teammate: who, system: system(c.resource) })];
     case 'path-moved': return [t('change.path-moved', { area: c.path, from: name(c.from), to: name(c.to) })];
     default: return [t('change.other', { detail: c.detail })];
   }
@@ -56,7 +57,7 @@ export function widensLine(x, name, system = (s) => s) {
       // One kind of widening gets its own line; more than one, or new secrets or settings, the general one.
       const sys = { ...v, system: system(x.resource ?? x.subject ?? '') };
       const only = [x.secrets?.length && 'secrets', x.command && 'command', x.tools?.length && 'tools', x.effects?.length && 'effects', x.egress?.length && 'egress', x.tier && 'tier'].filter(Boolean);
-      const settings = / changes its settings/.test(x.detail ?? '');
+      const settings = x.settings === true;
       if (only.length === 1 && !settings) {
         if (only[0] === 'command') return t('widens.resource-command', sys);
         if (only[0] === 'tools') return t('widens.resource-tools', { ...sys, tools: x.tools.map((g) => g.tool).join(', ') });

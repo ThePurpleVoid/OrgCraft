@@ -9,7 +9,7 @@ import { sameSystems } from '../apps/studio/server.mjs';
 // The page imports /team-model.mjs, which the Studio serves from the team model package.
 const MODEL = new URL('../packages/team-model/index.mjs', import.meta.url).href;
 mod.registerHooks?.({ resolve: (spec, ctx, next) => (spec.endsWith('/team-model.mjs') || spec === './team-model.mjs' ? { url: MODEL, shortCircuit: true } : next(spec, ctx)) });
-const { widensLine } = mod.registerHooks ? await import('../apps/studio/public/publish-sheet.js') : {};
+const { widensLine, changeLines } = mod.registerHooks ? await import('../apps/studio/public/publish-sheet.js') : {};
 
 const drive = { id: 'drive', type: 'mcp', name: 'Shared drive', config: { folder: 'x' }, secrets: ['B', 'A'] };
 const here = { resources: [drive], bindings: [{ role: 'cos', resource: 'drive', permission: 'read' }] };
@@ -41,6 +41,12 @@ test('widensLine: one line per kind of systems widening', { skip: !widensLine &&
   assert.match(line({ command: true }), /runs different software/);
   // More than one kind, or settings: the general line.
   assert.equal(line({ egress: ['a'], tier: { from: 'verified', to: 'custom' } }), line({ secrets: ['X'] }));
-  assert.equal(line({ egress: ['a'], detail: 'drive changes its settings, can reach a' }), line({ secrets: ['X'] }));
+  assert.equal(line({ egress: ['a'], settings: true }), line({ secrets: ['X'] }));
   assert.match(widensLine({ kind: 'system-added', resource: 'drive', type: 'mcp' }, name, sys), /Shared drive/);
+});
+
+test('changeLines: a lowered level names the level kept, not "can no longer use"', { skip: !changeLines && 'needs module.registerHooks (Node 22.15 or later)' }, () => {
+  const [line] = changeLines({ kind: 'binding-narrowed', role: 'cos', resource: 'drive', from: 'deploy', to: 'read' }, (s) => ({ cos: 'Chief of staff' })[s] ?? s, (s) => ({ drive: 'Shared drive' })[s] ?? s);
+  assert.doesNotMatch(line, /no longer/);
+  assert.match(line, /Chief of staff can use Shared drive: Read/);
 });

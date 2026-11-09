@@ -6,6 +6,7 @@
 import { apiUrl, ask, askText, requestJson } from './env.js';
 import { t } from './i18n.js';
 import { ruleLine } from './approvals.js';
+import { sendSystems, showItems, systemsState } from './systems.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -172,6 +173,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
         <h2>Start a run</h2>
         <p class="muted">The team runs as it was last published, not as the canvas shows it now. It keeps going until you pause or stop it, or today's cap is reached.</p>
         <p id="start-plan" class="plan" role="status">Reading the published team…</p>
+        <p id="start-systems" class="plan" hidden></p>
         <label for="start-cap">Daily cap</label>
         <div class="money"><input id="start-cap" type="number" inputmode="decimal" min="0.01" step="0.01" required placeholder="e.g. 20.00"><span id="start-currency" class="muted"></span></div>
         <p class="hint" id="start-cap-hint">The most the team may spend in a day (UTC). A run cannot start without one. Raising it later asks you to confirm it is you.</p>
@@ -531,11 +533,12 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   }
 
   /** Asks for the step-up in a dialog, naming `action` (a stepup.action.* string). Resolves true once the Studio server holds a step-up token. */
-  function stepUp(action, scope) {
+  function stepUp(action, scope, lines = []) {
     const dlg = $('#stepup-dialog', root);
     const form = $('#stepup-form', root);
     const input = $('#stepup-secret', root);
     $('#stepup-why', root).textContent = t('stepup.body', { action });
+    showItems($('#stepup-why', root), lines);
     $('#stepup-result', root).textContent = '';
     input.value = '';
     return new Promise((done) => {
@@ -620,6 +623,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     else if (!st.plan.ok) plan.textContent = st.plan.error;
     else plan.textContent = `${st.plan.summary}${st.plan.repo?.url ? ` Repository: ${st.plan.repo.url} (${st.plan.repo.ref}).` : ''}`;
     plan.classList.toggle('refused', !!st.plan && !st.plan.ok);
+    renderSystems();
     $('#start-currency', root).textContent = currency();
     const d = minorDigits(currency());
     $('#start-cap', root).step = d ? String(10 ** -d) : '1';
@@ -627,14 +631,43 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     // Start stays off until there is a published team and a daily cap: the control plane refuses a run without one.
     $('#start-go', root).disabled = st.busy || !st.plan?.ok || toMinor($('#start-cap', root).value) === null;
   }
+  // L40: the control plane's systems against the published ones. When they differ, the plan says so and offers to
+  // send them now, behind the same systems:<team> step-up as a publish (CTO ruling on the L40 review: no new screen).
+  function renderSystems() {
+    const el = $('#start-systems', root);
+    const s = st.systems;
+    const sending = s === 'sending';
+    const done = s?.result === 'done' && s.inSync;
+    el.hidden = !sending && !done && (!s || s.inSync || s.connected === false);
+    if (el.hidden) return;
+    if (sending) { el.textContent = t('start.systems.sending'); return; }
+    if (done) { el.textContent = t('publish.systems.done'); return; }
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'link'; b.id = 'start-systems-send'; b.textContent = t('start.systems.send');
+    b.onclick = sendSystemsNow;
+    el.replaceChildren(`${t(s.result === 'failed' ? 'start.systems.failed' : 'start.systems.behind')} `, b);
+  }
+  async function sendSystemsNow() {
+    const was = st.systems;
+    st.systems = 'sending'; renderSystems();
+    const result = await sendSystems({ stepUp });
+    const fresh = await systemsState();
+    st.systems = fresh ? { ...fresh, result: result === 'none' ? null : result } : was;
+    renderSystems();
+    const el = $('#start-systems', root);
+    el.tabIndex = -1;
+    if (!el.hidden) ($('#start-systems-send', root) ?? el).focus();
+  }
   async function openStart() {
     st.plan = null; st.budget = null;
+    st.systems = null;
     $('#start-result', root).textContent = '';
     $('#start-result', root).classList.remove('error');
     $('#start-cap', root).value = '';
     renderStart();
     $('#start-dialog', root).showModal();
-    const [plan, budget] = await Promise.all([api('/v1/team/run/plan'), api('/v1/team/budget')]);
+    const [plan, budget, systems] = await Promise.all([api('/v1/team/run/plan'), api('/v1/team/budget'), systemsState().catch(() => null)]);
+    st.systems = systems;
     st.plan = plan.ok ? plan.data : { ok: false, error: plan.data.error ?? `HTTP ${plan.status}` };
     st.budget = budget.ok && budget.data.connected !== false ? budget.data : null;
     if (st.budget?.perDay != null) $('#start-cap', root).value = (st.budget.perDay / 10 ** minorDigits(currency())).toFixed(minorDigits(currency()));

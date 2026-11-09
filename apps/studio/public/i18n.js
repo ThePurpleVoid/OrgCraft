@@ -6,6 +6,11 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
+  // L40 (asked of the CPO): the run-start plan when OrgCraft's systems aren't the published ones.
+  'start.systems.behind': "OrgCraft isn't using the systems you published yet, so new work would still use the old ones.",
+  'start.systems.send': 'Send now',
+  'start.systems.failed': "The system changes didn't go through. New work would still use the old ones.",
+  'start.systems.sending': 'Sending the system changes…',
 };
 
 export function t(key, vars = {}) {

@@ -8,6 +8,7 @@ import { createMeetings } from './meetings.js';
 import { createRollout } from './rollout.js';
 import { createApprovals } from './approvals.js';
 import { stepUp } from './live.js';
+import { sendSystems } from './systems.js';
 import { createGallery, rolesLine, rulesLine } from './gallery.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
@@ -1206,33 +1207,26 @@ async function openPublish() {
 }
 
 /**
- * L40: sends the published systems (resources.json at HEAD) to the control plane: PUT /v1/teams/{team}/systems with a
- * step-up scoped systems:<team>, which the control plane names when it asks. Says how it went under the publish result,
- * with "Send the systems" to try again; a run never starts on systems the owner didn't confirm.
+ * L40: after a publish, sends the published systems when the control plane's differ (systems.js). The passkey dialog
+ * lists what the control plane gains. One line under the result says how it went, with a retry that compares again.
  */
-async function sendSystems(out) {
+async function publishSystems(out) {
+  const result = await sendSystems({ stepUp, name: (s) => roleTitle(s), system: systemName });
+  out.querySelector('.systems-result')?.remove();
+  if (result === 'none') return;
   const line = document.createElement('p');
   line.className = 'systems-result';
-  const say = (key, retry = false) => {
-    line.textContent = t(key);
-    if (retry) {
-      const b = document.createElement('button');
-      b.type = 'button'; b.className = 'link'; b.textContent = t('publish.systems.retry');
-      b.onclick = () => { line.remove(); sendSystems(out); };
-      line.append(' ', b);
-    }
-    out.append(line);
-  };
-  const key = `systems-${Date.now().toString(36)}`;
-  try {
-    // No control plane connected: runs read the systems from the repository, so there is nothing to say.
-    if ((await api('/v1/team/systems', { key }))?.connected === false) return;
-    return say('publish.systems.done');
-  } catch (e) {
-    if (!(e.status === 401 && /step-up-required$/.test(e.type ?? ''))) return say('publish.systems.failed', true);
-    if (!(await stepUp(t('stepup.action.systems'), e.scope ?? null))) return say('publish.systems.cancelled', true);
-    try { await api('/v1/team/systems', { key }); return say('publish.systems.done'); } catch { return say('publish.systems.failed', true); }
+  line.textContent = t(`publish.systems.${result}`);
+  if (result !== 'done') {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'link'; b.textContent = t('publish.systems.retry');
+    b.onclick = () => publishSystems(out);
+    line.append(' ', b);
   }
+  out.append(line);
+  // The step-up dialog gave focus back to a sheet control that may be gone: put it on the outcome (qa-web L40 S3).
+  line.tabIndex = -1;
+  (line.querySelector('button') ?? line).focus();
 }
 
 async function confirmPublish() {
@@ -1246,8 +1240,6 @@ async function confirmPublish() {
     const plan = renderImpact();
     const { spec: toPublish, deferred } = publishable(spec, published, items, picks);
     const draft = spec;
-    // L40: the systems go to the control plane after the publish, from what was published, behind a step-up.
-    const systemsChanged = JSON.stringify(published?.resources ?? null) !== JSON.stringify(toPublish.resources ?? null);
     const message = plan ? `${$('#message').value.trim()}\n\n${plan}` : $('#message').value;
     const r = await api('/v1/team/publish', { spec: toPublish, branch: $('#branch').value.trim(), message });
     out.className = 'result ok';
@@ -1268,7 +1260,9 @@ async function confirmPublish() {
       cmd.textContent = `git push -u origin ${r.branch}`;
       out.replaceChildren(done, cmd);
     } else out.textContent = t('canvas.publish.none');
-    if (systemsChanged && r.commit && approvalsOn()) await sendSystems(out);
+    // L40: a commit in this checkout is what runs from here start on, so the control plane gets its systems now,
+    // whatever this publish changed (an earlier cancelled send is caught too). A pull request applies at merge (L40b).
+    if (r.commit && !r.pr && approvalsOn()) await publishSystems(out);
     const fresh = await api('/v1/team');
     const wasNew = !!S.noTeam;
     S = fresh;

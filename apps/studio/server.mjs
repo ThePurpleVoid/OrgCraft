@@ -8,13 +8,13 @@
 // and commits the result on a branch. The repository stays the source of truth (docs/adr/0001).
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_KIT_SPEC, KIT, VERSION } from '../../bin/agent-team.mjs';
-import { resolveSpec, teamTargets, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
+import { resolveSpec, systemsCapability, teamTargets, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
 import { hostGuard } from '../../tools/hosts.mjs';
@@ -62,6 +62,22 @@ export function sameSystems(here, there) {
   });
   return norm(here ?? { resources: [], bindings: [] }) === norm(there);
 }
+
+/** A hash of the published systems, so a send goes only when HEAD still holds what the person confirmed. */
+export const systemsHash = (here) => createHash('sha256').update(JSON.stringify(here ?? { resources: [], bindings: [] })).digest('hex');
+
+/**
+ * What sending the published systems would change on the control plane (L40 security review sev2): the control
+ * plane's systems against HEAD's, never the local previous commit against the draft, so whatever the control plane
+ * is behind on (a cancelled send, a teammate's merged change, a publish with no control plane) is what is shown.
+ */
+export async function systemsPlan(root, chat) {
+  const there = await chat.systems();
+  const here = publishedSystems(root) ?? { resources: [], bindings: [] };
+  const inSync = sameSystems(here, there);
+  return { connected: true, version: there.version ?? 0, inSync, items: inSync ? [] : systemsCapability(there, here), hash: systemsHash(here), here };
+}
+
 const PUBLIC = join(HERE, 'public');
 const MODEL = join(KIT, 'packages/team-model/index.mjs');
 const PRICES = join(KIT, 'packages/model-prices/prices.json');
@@ -330,11 +346,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       // L40: are the published systems the ones the control plane holds? Compared on content, never versions.
       if (req.method === 'GET' && url.pathname === '/v1/team/systems') {
         if (!chat.connected) return send(res, 200, { connected: false });
-        return relay(res, async () => {
-          const there = await chat.systems();
-          const here = publishedSystems(root);
-          return { connected: true, version: there.version ?? 0, inSync: sameSystems(here, there), published: !!here };
-        });
+        return relay(res, async () => { const { here, ...plan } = await systemsPlan(root, chat); return { ...plan, published: !!publishedSystems(root) }; });
       }
       if (req.method === 'GET' && url.pathname === '/v1/team/runners') {
         if (!chat.connected) return send(res, 200, { connected: false, runners: [] });
@@ -411,9 +423,12 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (url.pathname === '/v1/team/systems') {
           // No control plane: the repository is the only place systems live, so there is nothing to send.
           if (!chat.connected) return send(res, 200, { connected: false });
-          const here = publishedSystems(root);
-          if (!here) throw new HttpError(409, 'nothing published sets systems yet', { type: 'no-systems' });
-          return relay(res, () => chat.setSystems(here, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
+          // Only what the person was shown: HEAD must still hash to it, and the control plane must still be at the
+          // version it was compared with (it answers 409 when it moved).
+          if (!Number.isInteger(input.version) || typeof input.hash !== 'string') throw new HttpError(400, 'send the version and hash from GET /v1/team/systems');
+          const here = publishedSystems(root) ?? { resources: [], bindings: [] };
+          if (systemsHash(here) !== input.hash) throw new HttpError(409, 'the published systems changed since they were shown', { type: 'systems-moved' });
+          return relay(res, () => chat.setSystems({ ...here, expect: input.version }, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
         }
         const withdraw = /^\/v1\/team\/standing-rules\/([^/]+)\/withdraw$/.exec(url.pathname);
         if (withdraw) return relay(res, () => chat.withdrawRule(decodeURIComponent(withdraw[1])));
