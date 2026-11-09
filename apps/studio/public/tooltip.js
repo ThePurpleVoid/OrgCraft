@@ -73,8 +73,11 @@ export function installTips(root, signal) {
   root.dataset.hintsOff = readHints().join(' ');
 }
 
-/** An ⓘ button for `text`, for touch screens and anyone who wants the tooltip without hovering. */
-export const infoButton = (text, esc) => (text ? `<button type="button" class="info" data-tip="${esc(text)}" aria-label="${esc(t('tip.more'))}">ⓘ</button>` : '');
+/**
+ * An ⓘ button for `text`, for touch screens and anyone who wants the tooltip without hovering. Its name says what it
+ * explains ("About Act"), so a screen-reader user tabbing through can tell the buttons apart.
+ */
+export const infoButton = (text, esc, term) => (text ? `<button type="button" class="info" data-tip="${esc(text)}" aria-label="${esc(t('tip.button', { term }))}">ⓘ</button>` : '');
 
 /** A screen's one-line first-time hint (`hint.<screen>`), with its dismiss button. Hidden by CSS once dismissed. */
 export const hintHtml = (screen, esc) => `<p class="first-hint hint" data-hint-once="${esc(screen)}" role="note"><span>${esc(t(`hint.${screen}`))}</span> <button type="button" class="link" data-hint-close>${esc(t('hint.dismiss'))}</button></p>`;
