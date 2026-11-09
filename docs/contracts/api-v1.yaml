@@ -412,9 +412,9 @@ paths:
       x-interactive-only: true
       tags: [connectors]
       summary: "Set the team's systems (L20). Needs step-up scoped systems:<team>; audited with the diff and every command that receives secrets. A run freezes them at start; a run request never carries them"
-      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { resources: { type: array, maxItems: 50 }, bindings: { type: array, maxItems: 500 } } } } } }
-      responses: { "200": { description: "{ resources, bindings, version, added, removed, changed, bound, unbound, commands }" }, "401": { description: "Step-up required (problem type step-up-required)" } }
+      parameters: [ { $ref: "#/components/parameters/stepUp" }, { name: If-Match, in: header, required: false, schema: { type: string }, description: "The version seen, like \"3\" (or expect in the body)" } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { resources: { type: array, maxItems: 50 }, bindings: { type: array, maxItems: 500 }, expect: { type: integer, description: "The systems version the person confirmed against (0 when none); a moved one is 409 systems-changed, checked before the step-up is spent" } } } } } }
+      responses: { "200": { description: "{ resources, bindings, version, added, removed, changed, bound, unbound, commands }" }, "401": { description: "Step-up required (problem type step-up-required)" }, "409": { description: "systems-changed: the body is the current set" } }
   /credentials/{id}/test:
     parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
     post: { x-min-role: admin, tags: [connectors], summary: "Test connection: one read-only call to the service (slack auth.test, github /user, stripe /v1/balance) through the gateway's pacing. A repeat within a minute answers the last result with again true", responses: { "200": { description: "{ ok, at, detail }" } } }
