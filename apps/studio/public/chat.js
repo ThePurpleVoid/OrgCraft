@@ -486,7 +486,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
       // The server's own words go to the console only (CPO); who can answer is the plain default until the server's
       // role table names the least role per card kind.
       if (r.data.error) console.info('card refused:', r.data.error);
-      const org = organization() || 'this organization';
+      const org = organization() || t('org.fallback');
       st.notes.set(cardId, { kind: 'error', text: card.kind === 'budget' ? t('card.forbidden.budget', { organization: org }) : t('card.forbidden', { organization: org, 'who can': t('card.forbidden.who') }) });
     } else if (!r.ok) {
       st.notes.set(cardId, { kind: 'error', text: r.data.error ?? `HTTP ${r.status}` });

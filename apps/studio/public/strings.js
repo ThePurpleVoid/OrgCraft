@@ -155,6 +155,7 @@ export const EN = {
   "nav.skip": "Skip to content",
   "nav.team": "Team",
   "nav.work": "Work",
+  "org.fallback": "this organization",
   "perm.act": "Act",
   "perm.act.hint": "Act covers sending, paying, deleting and going live.",
   "perm.change": "Change",
