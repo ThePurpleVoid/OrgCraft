@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Agent Team Studio, local mode: a visual editor for this repository's team. No dependencies; Node 18 or later.
+// OrgCraft Studio, local mode: a visual editor for this repository's team. No dependencies; Node 18 or later.
 //
 //   agent-team studio [--dir <repo>] [--port 4848] [--host 127.0.0.1] [--open]
 //
@@ -167,7 +167,7 @@ export function publish(root, spec, { branch, message, pr = false } = {}, env = 
     git(root, 'checkout', '-q', '-b', branch);
   }
   if (!changes.length) return { branch: gitState(root).branch, commit: null, files: [], note: 'nothing changed' };
-  const text = message?.trim() || 'Update the agent team (Agent Team Studio)';
+  const text = message?.trim() || 'Update the agent team (OrgCraft Studio)';
   try {
     apply(root, changes);
     git(root, 'add', '-A', '--', ...changes.map((c) => c.path));
@@ -244,7 +244,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       if (!same(cookieOf(req), session)) {
         if (url.pathname.startsWith('/v1/')) throw new HttpError(401, 'open the Studio with the link it printed when it started (it ends in ?t=…)');
         res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        return res.end('<!doctype html><meta charset="utf-8"><title>Agent Team Studio</title><p style="font:15px system-ui;margin:2em">Open the Studio with the link it printed when it started. It ends in <code>?t=…</code>.</p>');
+        return res.end('<!doctype html><meta charset="utf-8"><title>OrgCraft Studio</title><p style="font:15px system-ui;margin:2em">Open the Studio with the link it printed when it started. It ends in <code>?t=…</code>.</p>');
       }
       // The Studio's API, versioned like the public API it will become (ADR 0005): additive changes only within /v1/.
       if (req.method === 'GET' && url.pathname === '/v1/team') return send(res, 200, state(root));
@@ -381,7 +381,7 @@ export function run(argv) {
       const lan = host === '0.0.0.0' || host === '::'
         ? Object.values(networkInterfaces()).flat().filter((i) => i && !i.internal && i.family === 'IPv4').map((i) => `http://${i.address}:${p}${t}`)
         : [];
-      console.log(`Agent Team Studio for ${root}\n  ${where}${lan.map((u) => `\n  ${u}   (from a phone on this network; plain HTTP, so trusted networks only)`).join('')}\nOpen a link to sign in to this Studio. Ctrl-C stops it.`);
+      console.log(`OrgCraft Studio for ${root}\n  ${where}${lan.map((u) => `\n  ${u}   (from a phone on this network; plain HTTP, so trusted networks only)`).join('')}\nOpen a link to sign in to this Studio. Ctrl-C stops it.`);
       if (argv.includes('--open')) { try { execFileSync(process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open', [where], { stdio: 'ignore' }); } catch { /* no browser */ } }
     });
     server.on('close', () => done(0));

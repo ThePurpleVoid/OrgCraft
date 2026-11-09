@@ -2,7 +2,7 @@
   "name": "@agent-team/server",
   "version": "0.1.0",
   "private": true,
-  "description": "Agent Team Studio control plane: the event log, the board, the public API.",
+  "description": "OrgCraft Studio control plane: the event log, the board, the public API.",
   "type": "module",
   "license": "MIT",
   "engines": {

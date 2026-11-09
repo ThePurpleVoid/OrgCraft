@@ -2,7 +2,7 @@
 // host's server mounts behind its own admin sign-in. The same routes as the local Studio, through the `github`
 // backend and the shared core, so a publish here writes the same files as one from a laptop and opens a pull request.
 //
-//   import { createStudioHandler } from 'agent-team-kit/studio/handler';
+//   import { createStudioHandler } from 'orgcraft/studio/handler';
 //   export const handler = createStudioHandler({ repo, basePath, allowedOrigins, authorize, getInstallationToken });
 //
 // Needs a Node runtime (node:fs and a writable temp dir). Security: E1 to E10 and S1 to S7 of the spec.

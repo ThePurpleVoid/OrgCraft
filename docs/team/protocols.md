@@ -121,7 +121,7 @@ The briefs, these protocols and the scripts are generated from Agent Team Kit. N
 
 A change that would help every team (a better rule, a script fix) goes upstream to Agent Team Kit as a pull request; the next kit version brings it back.
 
-## Agent Team Kit rules
+## OrgCraft rules
 
 - **We run on the last release.** This repository's own team is pinned to a released kit tag in `.agent-team/team.json`, never to `main`. A change to the kit reaches this team the same way it reaches every other team: release, then bump the pin and sync. The release manager bumps the pin in the PR after each release.
 - **Two kinds of folder named team.** `team/` is the kit's source (the briefs every team gets). `docs/team/` is this repository's own generated team. Fix a brief for everyone in `team/`; change this team in `.agent-team/`.
