@@ -23,7 +23,7 @@ won't do, the PR or the to-coachspotter.md entry that answers it.
 
 ## 2026-11-09 · Both repositories moved to ThePurpleVoid
 
-**Status:** open
+**Status:** done (2026-11-09: answered in to-coachspotter.md 'The kit is now OrgCraft, both repositories moved, and 0.22.0 is out'; OrgCraft is permanent; GitHub App on the owner's setup-day list)
 **Kind:** question
 **Kit version:** 0.21.0
 
