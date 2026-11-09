@@ -21,21 +21,21 @@ const fmt = (t) => (t ? new Date(t).toLocaleDateString(undefined, { year: 'numer
 
 function render() {
   const ws = (me.workspaces ?? []).map((w) => `<li>${esc(w.name ?? w.tenant)} <span class="pill">${esc(roleWord(w.role))}</span>${w.role === 'member' ? ` ${infoButton(t('role.member.tip'), esc, roleWord(w.role))}` : ''}</li>`).join('');
-  const rows = keys.map((k) => `<li class="passkey row"><span><strong>${esc(k.name || 'Passkey')}</strong> <span class="muted">added ${esc(fmt(k.createdAt))}${k.lastUsed ? `, last used ${esc(fmt(k.lastUsed))}` : ''}</span></span><button type="button" class="danger" data-remove="${esc(k.id)}">Remove</button></li>`).join('');
+  const rows = keys.map((k) => `<li class="passkey row"><span><strong>${esc(k.name || t('account.passkey.fallback'))}</strong> <span class="muted">${esc(t('account.passkey.added', { date: fmt(k.createdAt) }))}${k.lastUsed ? ` · ${esc(t('account.passkey.used', { date: fmt(k.lastUsed) }))}` : ''}</span></span><button type="button" class="danger" data-remove="${esc(k.id)}">${esc(t('account.passkey.remove'))}</button></li>`).join('');
   root.innerHTML = `
     ${noticesBanner(me)}
     ${recoveryBanner(rec, me)}
-    <p>Signed in as <strong>${esc(me.name || me.login)}</strong>${me.name && me.login ? ` <span class="muted">(${esc(me.login)} on GitHub)</span>` : ''}.</p>
+    <p>${esc(t('account.signedin', { name: '\u0000' })).replace('\u0000', `<strong>${esc(me.name || me.login)}</strong>`)}${me.name && me.login ? ` <span class="muted">${esc(t('account.signedin.via', { login: me.login }))}</span>` : ''}</p>
     <h2>${esc(t('account.orgs.heading'))}</h2>
     <p class="muted">${esc(t('account.orgs.intro'))}</p>
-    ${ws ? `<ul class="plain">${ws}</ul>` : '<p class="muted">None yet.</p>'}
-    <h2>Passkeys</h2>
-    ${keys.length ? '' : '<p class="notice" role="status">Add a passkey before you can approve anything. It takes a few seconds.</p>'}
+    ${ws ? `<ul class="plain">${ws}</ul>` : `<p class="muted">${esc(t('account.none'))}</p>`}
+    <h2>${esc(t('account.passkeys'))}</h2>
+    ${keys.length ? '' : `<p class="notice" role="status">${esc(t('account.passkeys.needed'))}</p>`}
     ${rows ? `<ul class="plain">${rows}</ul>` : ''}
-    <p><button type="button" class="${keys.length ? '' : 'primary'}" id="add">Add a passkey</button></p>
+    <p><button type="button" class="${keys.length ? '' : 'primary'}" id="add">${esc(t('account.passkey.add'))}</button></p>
     ${note ? `<p class="result error" role="alert">${esc(note)}</p>` : ''}
     ${recoveryHtml()}
-    <p class="signout"><button type="button" id="signout">Sign out</button></p>`;
+    <p class="signout"><button type="button" id="signout">${esc(t('account.signout'))}</button></p>`;
 }
 
 /** Security › Recovery owners (L27, mockup v19 G38.9): who can let someone back in, and naming or removing one. */
@@ -133,7 +133,7 @@ function openAdd() {
 document.getElementById('passkey-add-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const out = document.getElementById('passkey-add-result');
-  const name = document.getElementById('passkey-name').value.trim() || 'Passkey';
+  const name = document.getElementById('passkey-name').value.trim() || t('account.passkey.fallback');
   const button = e.submitter ?? dlg.querySelector('button[type="submit"]');
   button.disabled = true;
   out.textContent = '';
@@ -187,7 +187,7 @@ root.addEventListener('click', async (e) => {
   if (b.id === 'signout') return signOut();
   if (b.dataset.remove) {
     const k = keys.find((x) => x.id === b.dataset.remove);
-    if (!confirm(`Remove the passkey "${k?.name || 'Passkey'}"? That device can no longer confirm it is you.`)) return;
+    if (!confirm(t('account.passkey.remove.confirm', { name: k?.name || t('account.passkey.fallback') }))) return;
     const r = await withStepUp(t('stepup.action.passkey.remove'), 'DELETE', `/v1/me/passkeys/${encodeURIComponent(b.dataset.remove)}`);
     note = r.ok || r.cancelled ? '' : r.data.error ?? `HTTP ${r.status}`;
     await load();
@@ -195,4 +195,13 @@ root.addEventListener('click', async (e) => {
 });
 
 installTips(document.body);
+// The add-passkey dialog's words are the CPO's (account.passkey.dialog.*); the static page carries no copy of its own.
+if (dlg) {
+  dlg.querySelector('#passkey-add-title').textContent = t('account.passkey.dialog.title');
+  dlg.querySelector('#passkey-add-intro').textContent = t('account.passkey.dialog.hint');
+  dlg.querySelector('#passkey-name-label').textContent = t('account.passkey.dialog.name');
+  dlg.querySelector('#passkey-name-hint').textContent = t('account.passkey.dialog.name.hint');
+  dlg.querySelector('#passkey-add-cancel').textContent = t('account.passkey.dialog.later');
+  dlg.querySelector('#passkey-add-create').textContent = t('account.passkey.dialog.create');
+}
 load().catch((e) => { root.innerHTML = `<p class="result error" role="alert">${esc(e.message)}</p>`; });
