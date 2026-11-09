@@ -134,3 +134,17 @@ test('estimates (G15.2): no history says so; a role\'s sessions, a teammate\'s w
     for (const q of ['kind=lunch', 'kind=meeting', 'kind=meeting&attendees=0', 'kind=trial', 'kind=trial&role=Bad Role']) assert.equal((await p.call('GET', `/teams/shop/estimate?${q}`)).status, 400, q);
   }, { tickMs: 0 });
 });
+
+test('B8: a hosted deployment keeps budgets in US dollars (runners price in USD and nothing converts yet); local mode may label another', async () => {
+  await plane(async (p) => {
+    await p.call('POST', '/teams', { id: 'shop' });
+    const eur = await p.call('PUT', '/teams/shop/budget', { perDay: 100, currency: 'EUR' }, await p.su());
+    assert.deepEqual([eur.status, eur.body.type], [422, 'currency']);
+    assert.match(eur.body.error ?? eur.body.title ?? JSON.stringify(eur.body), /US dollars for now/);
+    assert.equal((await p.call('PUT', '/teams/shop/budget', { perDay: 100, currency: 'USD' }, await p.su())).status, 200);
+    // A budget stored in another currency before (or by another path): no run starts until it is USD.
+    await p.db.system("update budgets set currency = 'EUR' where team = 'shop'");
+    const run = await p.call('POST', '/teams/shop/runs', { team: roster() });
+    assert.deepEqual([run.status, run.body.type], [422, 'currency']);
+  }, { tickMs: 0, mode: 'hosted' });
+});

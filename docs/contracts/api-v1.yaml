@@ -991,7 +991,7 @@ components:
         perRun: { type: [integer, "null"] }
         sessions: { type: integer, default: 3, description: Live sessions at once }
         meetingCap: { type: [integer, "null"], description: "Additive (G-15). The cap of a meeting started without one, in minor units; null means a tenth of perDay. At most perDay (lowering perDay below it brings it down too); raising it needs step-up" }
-        currency: { type: string }
+        currency: { type: string, description: "ISO 4217. A hosted deployment accepts only USD for now (422, type currency; also on run start), since runners price usage in US dollars and nothing converts (B8). Local and self-hosted ones may name another; amounts are then US dollars under that label" }
         timeZone: { type: string, default: UTC, description: "Additive (L24s, R14). The IANA time zone of the team's budget day: it runs from local midnight to local midnight (23 or 25 hours when the clocks change). Changing it needs step-up, as it can start a new day sooner" }
         today: { type: object, readOnly: true, properties: { day: { type: string, format: date }, timeZone: { type: string }, startedAt: { type: string, format: date-time }, resetsAt: { type: string, format: date-time }, spent: { type: integer }, raised: { type: integer }, state: { type: string } } }
     ToolResult:

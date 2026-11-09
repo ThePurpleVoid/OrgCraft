@@ -38,6 +38,9 @@ import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, desc
  * packages/events), usage that a subagents or agent-teams integration reports, and the Studio's fast-path
  * team.published (it collapses with the CI's report by id).
  */
+/** B8: the words for a hosted budget in another currency (CPO to review). */
+export const USD_ONLY = 'Budgets are in US dollars for now: set the currency to USD. Other currencies are coming later, and nothing is converted until then.';
+
 export const POSTABLE_EVENTS = Object.freeze({ prefixes: ['report.', 'message.'], types: ['usage.recorded', 'team.published'] });
 export const postable = (type) => POSTABLE_EVENTS.types.includes(type) || POSTABLE_EVENTS.prefixes.some((pre) => type.startsWith(pre) && type.length > pre.length);
 
@@ -723,10 +726,17 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       // The cap tree and cost estimates (L24s; vision G15.1, G15.2): reads, for anyone who can see the budget.
       if (b === 'caps' && !c && m === 'GET') return send(res, 200, await caps.tree(t, team));
       if (b === 'estimate' && !c && m === 'GET') return send(res, 200, await caps.estimate(t, team, Object.fromEntries(url.searchParams)));
-      if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
+      if (b === 'budget' && !c && m === 'PUT') {
+        const body = await readJson(req, 16 * 1024);
+        // B8 (CTO, L24s): runners price usage in US dollars and nothing converts yet, so a hosted deployment keeps
+        // budgets in USD. A local or self-hosted one may name another currency; amounts are then USD under its label.
+        if (deployMode === 'hosted' && body?.currency !== undefined && body.currency !== 'USD') throw new Problem(422, USD_ONLY, { type: 'currency' });
+        return send(res, 200, await did(m3.putBudget(t, team, body, me, { stepUp })));
+      }
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
       if (b === 'runs' && !c && m === 'POST') {
         const body = (await readJson(req, MAX_BODY)) ?? {};
+        if (deployMode === 'hosted' && (await m3.getBudget(t, team)).currency !== 'USD') throw new Problem(422, USD_ONLY, { type: 'currency' });
         // A run on a GitHub repository needs an installation the workspace has proven it owns (S9): the runner gets
         // only those, as repo.installations on session.start.
         const ids = installations?.enabled ? await installations.forRepo(t, body?.team?.repo?.url) : null;
