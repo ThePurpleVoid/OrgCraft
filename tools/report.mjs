@@ -343,12 +343,18 @@ export function parseArgs(argv, role = '') {
     else if (kind === 'signoff' && a.startsWith('--') && signoff[name]) f[signoff[name]] = args.shift() ?? '';
     else if (kind === 'signoff' && a === '--unverified') {
       // Repeat it once per item; "none" says you checked everything (an empty list). Left out is "not stated".
+      // An empty or missing value is refused, never read as none: a script passing an empty "$GAPS" must not claim
+      // full coverage (code review L23s). Only a literal "none" is the empty list, and only on its own.
       const v = (args.shift() ?? '').trim();
+      if (!v) throw new Error('--unverified needs what you did not check, or none');
+      const none = v.toLowerCase() === 'none';
+      if (none ? (f.unverified?.length || f.unverifiedNone) : f.unverifiedNone) throw new Error('--unverified none can\'t be mixed with items');
       f.unverified ??= [];
-      if (v && v.toLowerCase() !== 'none') f.unverified.push(v);
+      if (none) f.unverifiedNone = true; else f.unverified.push(v);
     } else process.stderr.write(`team-status: unknown option ${a}\n`);
   }
   if (MESSAGES.includes(kind) && !f.to) throw new Error(`${kind} needs --to <role>`);
+  delete f.unverifiedNone;
   if (kind === 'signoff') checkSignoff(f);
   return f;
 }

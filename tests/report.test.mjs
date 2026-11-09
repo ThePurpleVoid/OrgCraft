@@ -250,6 +250,13 @@ test('signoff: version, version kind, result and unverified are parsed and check
   assert.deepEqual([f.version, f.result, f.unverified], [SHA40, 'pass', ['Android', 'Safari 17']]);
   assert.deepEqual(parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--unverified', 'none']).unverified, [], 'none is an empty list');
   assert.equal(parseArgs(['qa-web', 'signoff', '-', '--to', 'cto']).unverified, undefined, 'left out is not stated');
+  // An empty or missing value is never none (code review L23s), and none doesn't mix with items.
+  assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--unverified', '']), /needs what you did not check/);
+  assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--unverified', '  ']), /needs what you did not check/);
+  assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--unverified']), /needs what you did not check/);
+  assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--unverified', 'none', '--unverified', 'Android']), /can't be mixed/);
+  assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--unverified', 'Android', '--unverified', 'none']), /can't be mixed/);
+  assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--unverified', 'none', '--unverified', 'none']), /can't be mixed/);
   assert.deepEqual(parseArgs(['editor', 'signoff', '-', '--to', 'cto', '--version', 'reply-881 r2', '--version-kind', 'draft']).versionKind, 'draft');
   assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--version', 'abc1234']), /full commit id/);
   assert.throws(() => parseArgs(['qa-web', 'signoff', '-', '--to', 'cto', '--version', 'abc1234', '--version-kind', 'commit']), /full commit id/);
