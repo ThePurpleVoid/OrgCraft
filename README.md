@@ -190,7 +190,7 @@ Open the dashboard and leave it open. It draws your team from the role briefs, a
 
 ```sh
 node scripts/agent-team/dashboard.mjs            # http://localhost:4747
-npx --yes github:ThePurpleVoid/OrgCraft dashboard --demo   # see it work with made-up reports first
+npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 dashboard --demo   # see it work with made-up reports first
 ```
 
 ![The team dashboard: org chart coloured by each thread's last report](docs/images/dashboard-org.png)
