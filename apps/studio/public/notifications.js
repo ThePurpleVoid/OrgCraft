@@ -95,7 +95,7 @@ export function logHtml(st) {
     <h2 id="log-title">${esc(t('notify.log.heading'))}</h2>
     <p class="muted">${esc(t('notify.log.explainer'))}</p>
     ${st.owner ? `<div class="row" role="group" aria-labelledby="log-scope"><span id="log-scope">${esc(t('notify.scope.label'))}</span><button type="button" data-log-all="" aria-pressed="${!everyone}">${esc(t('notify.scope.me'))}</button><button type="button" data-log-all="1" aria-pressed="${everyone}">${esc(t('notify.scope.all'))}</button></div>` : ''}
-    ${lg.error ? `<p class="result error" role="alert">${esc(lg.error)}</p>` : ''}
+    ${lg.error ? `<p class="result error" role="alert">${esc(lg.error)} <button type="button" id="log-retry">${esc(t('action.retry'))}</button></p>` : ''}
     ${rows ? `<div class="table-wrap" tabindex="0" aria-labelledby="log-title"><table class="log"><thead><tr>${head.map((h) => `<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : lg.error ? '' : `<p class="muted">${esc(t('notify.log.empty'))}</p>`}
     ${lg.next ? `<button type="button" id="log-older">${esc(t('notify.older'))}</button>` : ''}
   </section>`;
@@ -377,6 +377,7 @@ function start() {
     if (b.id === 'notices-ok') { dismissNotices(st.me); return render(); }
     if (b.id === 'zone-device') { const sel = root.querySelector('#prefs-form select[name="timezone"]'); if (sel) { if (![...sel.options].some((o) => o.value === st.device)) sel.add(new Option(st.device)); sel.value = st.device; } return; }
     if (b.dataset.logAll !== undefined) { await loadLog(false, b.dataset.logAll === '1'); render(); return root.querySelector(`[data-log-all="${b.dataset.logAll}"]`)?.focus(); }
+    if (b.id === 'log-retry') { await loadLog(false); render(); return root.querySelector('#log-title')?.focus?.(); }
     if (b.id === 'log-older') { const n = st.log.items.length; await loadLog(true); render(); return root.querySelectorAll('#log tbody tr')[n]?.querySelector('td')?.setAttribute('tabindex', '-1'), root.querySelectorAll('#log tbody tr')[n]?.querySelector('td')?.focus(); }
     if (b.id === 'email-another') { st.adding = true; say('add', 'ok', ''); render(); return root.querySelector('#email-add input')?.focus(); }
     if (b.dataset.remove) {

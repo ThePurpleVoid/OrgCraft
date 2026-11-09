@@ -6,8 +6,6 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
-  // L25w code review sev4: the log failed to load (asked of the CPO).
-  'notify.log.failed': "The delivery log couldn't load. Try again in a moment.",
 };
 
 export function t(key, vars = {}) {

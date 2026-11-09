@@ -329,6 +329,7 @@ test('quiet hours and the digest render what is saved, and the log never shows a
   assert.doesNotMatch(log, /<th scope="col">Who<\/th>|per_kim|per_octo/, 'no raw person ids');
   assert.match(log, /aria-pressed="true">Everyone/);
   assert.match(log, /id="log-older"/);
+  assert.match(logHtml({ kinds, owner: false, log: { items: [], next: null, all: false, error: "The delivery log couldn't load. Try again in a moment." } }), /couldn&#39;t load\. Try again in a moment\. <button type="button" id="log-retry">Retry<\/button>/);
   assert.match(logHtml({ kinds, owner: false, log: { items: [], next: null, all: false } }), /Nothing sent yet\. Messages show here as soon as the team needs you\./);
 });
 
