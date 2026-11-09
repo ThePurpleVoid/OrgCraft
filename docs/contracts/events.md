@@ -49,7 +49,7 @@ These are the reports teams on the kit send today. `data` holds the kit report f
 | `report.status` | `status` | `status` (idle, working, waiting, blocked, review, done), `task`, `issue`, `pr`, `branch`, `commit`, `platform`, `detail` |
 | `report.heartbeat` | `heartbeat` | as `report.status`, with `status` optional |
 | `report.note` | `note` | `detail`, plus any of the above |
-| `message.handoff`, `message.bug`, `message.signoff`, `message.blocked` | `handoff`, `bug`, `signoff`, `blocked` | `to` (role slug, `#instance` allowed), `task`, `issue`, `pr`, `branch`, `severity` (bug, 1 to 4), `evidence` (links, at most 20), `detail` |
+| `message.handoff`, `message.bug`, `message.signoff`, `message.blocked` | `handoff`, `bug`, `signoff`, `blocked` | `to` (role slug, `#instance` allowed; the resolved member id since 0.22, with `toAsked` and `routedBy` when it was resolved from a name or type, and `offWiring` when the member is not in the sender's Hands to), `task`, `issue`, `pr`, `branch`, `severity` (bug, 1 to 4), `evidence` (links, at most 20), `detail` |
 
 Messages sent with the team tools ([team-tools.md](team-tools.md)) also carry their structured fields in `data`, next to the kit fields and a composed `detail`: `changed`, `verify`, `doneWhen`, `artifact` (handoff); `where`, `steps`, `expected`, `actual`, `build` (bug); `testedOn`, `walked`, `result`, `version`, `versionKind` (`commit`, `revision`, `draft`) and the runner's `checks` (signoff); `need`, `needFrom`, `meanwhile`, `recommendation` (blocked); and `unverified` on all four and on `report.status` (governance G1: an empty list is none, absent is not stated). Readers that only know the kit fields lose nothing they need.
 
