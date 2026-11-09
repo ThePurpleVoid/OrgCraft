@@ -5,6 +5,7 @@
 
 import { apiUrl, ask, askText, requestJson } from './env.js';
 import { t } from './i18n.js';
+import { ruleLine } from './approvals.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -233,7 +234,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     if (card.state === 'answered' && card.answer) {
       const a = card.answer;
       // Done under a standing rule (L22): the rule's number and line, never "rule:sr_…".
-      if (Number.isInteger(a.ruleNumber) && a.ruleLine) return t('ledger.byrule', { time: a.at ? fmtTime(a.at) : '', n: a.ruleNumber, what: a.ruleLine }).replace(/^ · /, '');
+      if (Number.isInteger(a.ruleNumber) && (a.ruleForm || a.ruleLine)) return t('ledger.byrule', { time: a.at ? fmtTime(a.at) : '', n: a.ruleNumber, what: a.ruleForm ? ruleLine(a.ruleForm) : a.ruleLine }).replace(/^ · /, '');
       const label = (card.options ?? []).find((o) => o.id === a.option)?.label ?? human(a.option);
       const by = typeof a.by === 'object' ? a.by?.name ?? a.by?.id : a.by;
       return `${label}${by ? ` · ${by}` : ''}${a.at ? ` at ${fmtTime(a.at)}` : ''}${a.note ? `: ${a.note}` : ''}`;

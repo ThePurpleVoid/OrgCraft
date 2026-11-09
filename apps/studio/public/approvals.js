@@ -20,7 +20,8 @@ export function fill(key, vars) {
 
 /** Minor units in the rule's currency: 2000 USD is "$20.00". */
 export const money = (minor, currency = 'USD') => {
-  try { return new Intl.NumberFormat([], { style: 'currency', currency }).format(minor / 100); } catch { return `${minor / 100} ${currency}`; }
+  // "$20", or "$20.50" when there are cents (CPO §6b; the server says the same).
+  try { return new Intl.NumberFormat([], { style: 'currency', currency, ...(minor % 100 === 0 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}) }).format(minor / 100); } catch { return `${minor / 100} ${currency}`; }
 };
 
 /** Every input field a covered call may carry: the recipient, amount and currency fields, the free ones, the fixed ones. */
@@ -41,7 +42,7 @@ export function ruleLine(form = {}, { marked = false } = {}) {
 }
 function ruleLineMarked(form) {
   const period = form.period ? t(`rule.period.${form.period}`) : null;
-  const base = fill(`rule.${form.kind}`, { amount: form.maxEach != null ? money(form.maxEach, form.currency) : null, total: form.total != null ? money(form.total, form.currency) : null, all: form.totalAll != null ? money(form.totalAll, form.currency) : null, system: form.system, channel: form.channel, n: form.n, period });
+  const base = fill(`rule.${form.kind}`, { amount: form.maxEach != null ? money(form.maxEach, form.currency) : null, total: form.total != null ? money(form.total, form.currency) : null, all: form.all != null ? money(form.all, form.currency) : null, system: form.system, channel: form.channel, n: form.n, period });
   // Every field a covered call may carry, so the line never reads narrower than the rule (security sev 2, code review).
   const fixed = Object.entries(form.fixed ?? {}).map(([field, value]) => t('rule.part.with', { field: mark(field), value: String(value) }));
   const fields = fieldsOf(form);
@@ -67,8 +68,9 @@ export function usedLine(r) {
   const n = r.used?.n ?? 0;
   const left = f.amountField ? money(Math.max(0, (f.total ?? 0) - (r.used?.amount ?? 0)), f.currency) : String(Math.max(0, (f.n ?? 0) - n));
   const thisPeriod = t(`rule.this.${f.period}`);
-  let line = t(n === 1 ? 'rule.used.one' : 'rule.used', { n, 'this period': thisPeriod, left, reset: r.resetsAt ? fmtAt(r.resetsAt) : '\u0000' });
-  if (!r.resetsAt) line = line.replace(/\s*[^.]*\u0000[^.]*\./, '');
+  const resets = r.used?.resetsAt ?? r.resetsAt;
+  let line = t(n === 1 ? 'rule.used.one' : 'rule.used', { n, 'this period': thisPeriod, left, reset: resets ? fmtAt(resets) : '\u0000' });
+  if (!resets) line = line.replace(/\s*[^.]*\u0000[^.]*\./, '');
   const out = [line];
   if (f.amountField ? (r.used?.amount ?? 0) >= f.total : n >= f.n) out.push(t('rule.limit.hit', { 'this period': thisPeriod }));
   return out.join(' ');

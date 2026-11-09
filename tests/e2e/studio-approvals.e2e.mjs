@@ -23,23 +23,24 @@ try { ({ chromium } = require('playwright')); } catch { /* reported by the skip 
 if (!chromium && process.env.CI) throw new Error('CI is set but the playwright package is not installed');
 const skip = !chromium && 'the playwright package is not installed';
 
-const REFUND = { kind: 'refund', tool: 'mcp__payments__refund', recipientField: 'customer', period: 'week', amountField: 'amount', currency: 'USD', maxEach: 2000, total: 6000, system: 'Payments' };
+const REFUND = { kind: 'refund', tool: 'mcp__payments__refund', recipientField: 'customer', period: 'week', amountField: 'amount', currencyField: 'currency', currency: 'USD', maxEach: 2000, total: 6000, system: 'Payments' };
 const SEND = { kind: 'send.known', tool: 'mcp__mail__send', recipientField: 'to', period: 'day', n: 50, channel: null };
 const day = (d) => new Date(Date.now() + d * 86_400_000).toISOString();
 
 test('rule lines, use and ledger lines are the CPO\'s patterns, with unset parts left out and never an id', () => {
-  assert.equal(ruleLine(REFUND), 'Refunds · up to $20.00 each · at most $60.00 per customer a week · in Payments · may include: customer, amount');
+  assert.equal(ruleLine(REFUND), 'Refunds · up to $20 each · at most $60 per customer a week · in Payments · may include: customer, amount, currency');
   // Never narrower than the rule: fixed values and free fields are on the line too (security sev 2).
-  assert.equal(ruleLine({ ...REFUND, fixed: { reason: 'damaged' }, free: ['note'] }), 'Refunds · up to $20.00 each · at most $60.00 per customer a week · in Payments · only when reason is "damaged" · may include: customer, amount, note, reason');
+  assert.equal(ruleLine({ ...REFUND, fixed: { reason: 'damaged' }, free: ['note'] }), 'Refunds · up to $20 each · at most $60 per customer a week · in Payments · only when reason is "damaged" · may include: customer, amount, currency, note, reason');
   assert.equal(ruleLine(SEND), 'Messages to people the team has written to before · at most 50 a day · may include: to');
-  assert.equal(usedLine({ form: REFUND, used: { n: 2, amount: 3500 } }), 'Used 2 times this week. $25.00 left.');
-  assert.equal(usedLine({ form: REFUND, used: { n: 1, amount: 1000 } }), 'Used once this week. $50.00 left.');
-  assert.match(usedLine({ form: REFUND, used: { n: 1, amount: 1000 }, resetsAt: '2026-11-16T00:00:00Z' }), /^Used once this week\. \$50\.00 left\. Resets .+\.$/);
+  assert.equal(usedLine({ form: REFUND, used: { n: 2, amount: 3500 } }), 'Used 2 times this week. $25 left.');
+  assert.equal(usedLine({ form: REFUND, used: { n: 1, amount: 1000 } }), 'Used once this week. $50 left.');
+  assert.equal(ruleLine({ ...REFUND, maxEach: 2050, all: 50000 }), 'Refunds · up to $20.50 each · at most $60 per customer a week · at most $500 a week in all · in Payments · may include: customer, amount, currency');
+  assert.match(usedLine({ form: REFUND, used: { n: 1, amount: 1000, resetsAt: '2026-11-16T00:00:00Z' } }), /^Used once this week\. \$50 left\. Resets .+\.$/);
   assert.equal(usedLine({ form: SEND, used: { n: 50 } }), "Used 50 times today. 0 left. This rule's limit for today is used up, so the next one asks you.");
   const me = 'per_owner';
   assert.match(ledgerLine({ at: day(0), kind: 'approved', by: me, words: 'yes, refund her', letter: 'A', what: 'Refund $64.00 to Dana R.', channel: 'chat' }, me), / · You approved A: Refund \$64\.00 to Dana R\. · "yes, refund her" · in Chat$/);
   assert.match(ledgerLine({ at: day(0), kind: 'denied', by: 'per_kim', name: 'Kim Lo', words: null, what: 'Email 1,240 customers' }, me), / · Kim Lo declined Email 1,240 customers · \(no words given\)$/);
-  assert.match(ledgerLine({ at: day(0), kind: 'rule-used', by: 'rule:sr_1', ruleNumber: 9, ruleLine: 'Refunds · up to $20.00 each' }, me), / · Done under standing rule #9: Refunds · up to \$20\.00 each$/);
+  assert.match(ledgerLine({ at: day(0), kind: 'rule-used', by: 'rule:sr_1', ruleNumber: 9, ruleLine: 'Refunds · up to $20 each' }, me), / · Done under standing rule #9: Refunds · up to \$20 each$/);
   assert.doesNotMatch(ledgerLine({ at: day(0), kind: 'denied', by: 'per_kim', what: 'x' }, me), /per_kim/);
   // Withdraw only for an owner: the control plane's DELETE is owner-only (code review).
   const live = { kinds: [], never: [], rules: [{ id: 'sr_x', number: 1, form: REFUND, words: 'w', createdBy: me, createdAt: day(0), expiresAt: day(9), live: true, used: { n: 0, amount: 0 } }] };
@@ -87,8 +88,8 @@ test('the Approvals page: rules with Withdraw, kinds not available yet, the neve
   cp.ledger.push(
     { at: day(0), kind: 'approved', by: 'per_owner', words: 'yes, refund her', letter: 'A', what: 'Refund $64.00 to Dana R.', channel: 'chat' },
     { at: day(0), kind: 'denied', by: 'per_kim', name: 'Kim Lo', words: long, letter: 'B', what: 'Email 1,240 customers', channel: 'approvals' },
-    { at: day(-1), kind: 'rule-used', by: 'rule:sr_a', ruleNumber: 1, ruleLine: 'Refunds · up to $20.00 each' },
-    { at: day(-2), kind: 'rule-added', by: 'per_owner', words: 'small refunds don\'t need me', ruleNumber: 1, ruleLine: 'Refunds · up to $20.00 each' },
+    { at: day(-1), kind: 'rule-used', by: 'rule:sr_a', ruleNumber: 1, ruleLine: 'Refunds · up to $20 each' },
+    { at: day(-2), kind: 'rule-added', by: 'per_owner', words: 'small refunds don\'t need me', ruleNumber: 1, ruleLine: 'Refunds · up to $20 each' },
   );
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
@@ -101,11 +102,11 @@ test('the Approvals page: rules with Withdraw, kinds not available yet, the neve
 
   const rules = page.locator('#rules');
   const a = rules.locator('li.rule', { hasText: '#1' });
-  await a.getByText('Refunds · up to $20.00 each · at most $60.00 per customer a week · in Payments · may include: customer, amount').waitFor();
+  await a.getByText('Refunds · up to $20 each · at most $60 per customer a week · in Payments · may include: customer, amount, currency').waitFor();
   await a.getByText('Decided by You on').waitFor();
   await a.getByText('"small refunds don\'t need me"', { exact: false }).waitFor();
-  await a.getByText('Used once this week. $48.00 left.', { exact: false }).waitFor();
-  assert.deepEqual(await a.locator('code').allTextContents(), ['customer', 'amount'], 'field names in code style (CPO)');
+  await a.getByText('Used once this week. $48 left.', { exact: false }).waitFor();
+  assert.deepEqual(await a.locator('code').allTextContents(), ['customer', 'amount', 'currency'], 'field names in code style (CPO)');
   assert.match(await a.locator('button.info').getAttribute('data-tip'), /^Every detail an action under this rule may carry, named as Payments names them\. Anything not listed makes it ask you\.$/);
   for (const k of ['Replies to customers', 'Merges', 'Tasks that cost more than usual']) await rules.locator('.kinds li', { hasText: k }).getByText('Not available yet').waitFor();
   assert.equal(await rules.locator('.kinds button').count(), 0, 'nothing to pick for a kind not enforced yet');
@@ -121,7 +122,7 @@ test('the Approvals page: rules with Withdraw, kinds not available yet, the neve
   await ledger.getByText('Show all').click();
   await ledger.getByText(`“${long}”`).waitFor();
   await ledger.getByRole('button', { name: 'Show older' }).click();
-  await ledger.getByText(/ · You made a standing rule: Refunds · up to \$20\.00 each · "small refunds don't need me"$/).waitFor();
+  await ledger.getByText(/ · You made a standing rule: Refunds · up to \$20 each · "small refunds don't need me"$/).waitFor();
   assert.doesNotMatch(await ledger.textContent(), /per_|rule:sr_/);
 
   // Withdraw: at once, no passkey; the ledger says so.
@@ -129,7 +130,7 @@ test('the Approvals page: rules with Withdraw, kinds not available yet, the neve
   await rules.getByText('No standing rules yet. Until you make one, every decision comes to you.').waitFor();
   assert.equal(cp.rules[0].live, false);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'rules-title', 'focus lands on the rules heading');
-  await ledger.getByText(/ · You withdrew standing rule #1: Refunds · up to \$20\.00 each · at most \$60\.00 per customer a week · in Payments · may include: customer, amount$/).waitFor();
+  await ledger.getByText(/ · You withdrew standing rule #1: Refunds · up to \$20 each · at most \$60 per customer a week · in Payments · may include: customer, amount, currency$/).waitFor();
 
   // A phone: one column, no sideways scroll, 44 px targets.
   await page.setViewportSize({ width: 360, height: 780 });
