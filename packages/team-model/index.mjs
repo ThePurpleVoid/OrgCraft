@@ -1573,7 +1573,12 @@ export function checkTemplate(files, kit) {
   for (const s of t.roles ?? []) if (!(s in kit.roles) && !agentSlugs.has(s)) add('error', 'template.json', `roles lists "${s}", which is neither a kit role nor one of the template's agents`);
   for (const s of t.dormant ?? []) if (!(s in kit.roles) && !agentSlugs.has(s)) add('error', 'template.json', `dormant lists "${s}", which is not on the team`);
   if (t.off !== undefined && !Array.isArray(t.off)) add('error', 'template.json', 'off must be a list of role ids');
-  for (const s of Array.isArray(t.off) ? t.off : []) if (!(s in kit.roles)) add('error', 'template.json', `off lists "${s}", which is not a kit role`);
+  // Code review L34: a template's own agent can start off too; an off role the template doesn't include is a no-op.
+  const onTeam = new Set([...(Array.isArray(t.roles) ? t.roles : kit.presets[t.preset ?? 'minimal'] ?? []), ...agentSlugs]);
+  for (const s of Array.isArray(t.off) ? t.off : []) {
+    if (!(s in kit.roles) && !agentSlugs.has(s)) add('error', 'template.json', `off lists "${s}", which is neither a kit role nor one of the template's agents`);
+    else if (!onTeam.has(s)) add('warning', 'template.json', `off lists "${s}", which the template doesn't put on the team, so it changes nothing`);
+  }
   for (const s of Object.keys(t.extensions ?? {})) if (!(s in kit.roles)) add('error', `extensions/${s}`, 'extends a role the kit does not have');
   for (const s of t.systems ?? []) {
     if (!String(s.type ?? '').trim() || !String(s.name ?? '').trim()) add('error', 'template.json', 'every suggested system needs a type and a name');

@@ -206,3 +206,20 @@ test('a template\'s "off" roles start switched off but listed, and switching one
   assert.deepEqual(Object.keys({ ...out, ...after }).filter((k) => out[k] !== after[k]), ['team.json']);
   assert.ok(checkTemplate({ 'template.json': files['template.json'].replace('"off": ["performance-tester"]', '"off": ["no-such-role"]') }, kit).some((i) => /off lists "no-such-role"/.test(i.message)));
 });
+
+test('a template\'s own agent can start off, and an off role the template leaves out gets a warning (code review L34)', async () => {
+  const { templateSpec, compileLayer, importLayer, checkTemplate } = await import('../packages/team-model/index.mjs');
+  const { loadKit } = await import('../packages/team-model/node.mjs');
+  const kit = loadKit();
+  const dir = join(KIT, 'team/templates/customer-support-team');
+  const files = Object.fromEntries(readdirSync(join(dir, 'roles')).map((f) => [`roles/${f}`, readFileSync(join(dir, 'roles', f), 'utf8')]));
+  const t = JSON.parse(readFileSync(join(dir, 'template.json'), 'utf8'));
+  files['template.json'] = JSON.stringify({ ...t, meetings: [], off: ['knowledge-base-writer'] }); // an attendee can't start off; checkTemplate says so
+  assert.deepEqual(checkTemplate(files, kit).filter((i) => i.level === 'error'), []);
+  const spec = templateSpec(files, kit, { project: 'Acme' });
+  assert.equal(spec.roles['knowledge-base-writer'].enabled, false);
+  const back = importLayer(compileLayer(spec, kit), kit);
+  assert.equal(back.roles['knowledge-base-writer'].enabled, false, 'stays off after a round trip');
+  files['template.json'] = JSON.stringify({ ...t, off: ['cmo'] });
+  assert.ok(checkTemplate(files, kit).some((i) => i.level === 'warning' && /off lists "cmo", which the template doesn't put on the team/.test(i.message)));
+});
