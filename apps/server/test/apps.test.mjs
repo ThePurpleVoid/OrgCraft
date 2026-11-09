@@ -27,7 +27,7 @@ async function app(gh, browser, local, user) {
   const b = browser({ ip: `app-${user.login}` });
   const first = await b.go(`${ORIGIN}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: 'agent-team-ios', redirect_uri: redirect, scope: 'openid profile', state: 's', nonce: 'n', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' })}`);
   const uid = new URL(first.at).searchParams.get('interaction');
-  const code = new URL((await b.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at).searchParams.get('code');
+  const code = new URL((await b.go(`${ORIGIN}/oauth/authorize/${uid}/github`)).at).searchParams.get('code');
   const phone = await device();
   const res = await fetch(`${local}/oauth/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-ip': 'phone', dpop: await proof(phone, 'POST', `${ORIGIN}/oauth/token`) },
     body: new URLSearchParams({ client_id: 'agent-team-ios', grant_type: 'authorization_code', code, redirect_uri: redirect, code_verifier: verifier }) });

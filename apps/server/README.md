@@ -212,7 +212,7 @@ own OIDC issuer ([ADR 0007](../../docs/adr/0007-deployment-is-its-own-identity-p
 OpenID-Certified library: `identity.mjs` holds its storage adapter and our policy, and no protocol code of our own.
 
 - **Web.** The Studio opens `/oauth/authorize?client_id=agent-team-web&return=<path>`. With no session, that leads to
-  `/sign-in?interaction=<uid>` (the Studio's page), then GitHub (`/oauth/interaction/<uid>/github`), then the
+  `/sign-in?interaction=<uid>` (the Studio's page), then GitHub (`/oauth/authorize/<uid>/github`, only in the browser that started the sign-in), then the
   issuer's callback. The web leg's code is consumed on the server, which sets `__Host-agent-team` (HttpOnly, Secure,
   SameSite=Lax; 12 hours idle, 7 days in all) and returns to `return`, checked with the Studio's own `safeReturn`.
   Unsafe methods with the cookie need this deployment's `Origin` and `content-type: application/json`. Sign out is

@@ -6,7 +6,7 @@
 //
 // The API (apps/server, kit #101): GET/POST /v1/teams/{team}/emails, POST …/emails/{id}/verify { code },
 // PATCH …/emails/{id} { kinds }, DELETE …/emails/{id}. The page only calls its own origin, with the session cookie.
-import { call, dismissNotices, ensureSignedIn, esc, noticesBanner } from './auth.js';
+import { call, dismissNotices, ensureSignedIn, esc, loadRecovery, noticesBanner, recoveryBanner } from './auth.js';
 import { t } from './i18n.js';
 import { infoButton, installTips } from './tooltip.js';
 
@@ -283,7 +283,7 @@ function start() {
   const slackBase = () => `/v1/teams/${encodeURIComponent(team)}/slack`;
 
   function render() {
-    root.innerHTML = `${noticesBanner(st.me)}
+    root.innerHTML = `${noticesBanner(st.me)}${recoveryBanner(st.rec, st.me)}
       <p class="muted">For ${esc(st.teamName)}. Only you see these settings.</p>
       ${emailsHtml(st)}
       ${prefsHtml(st)}
@@ -505,6 +505,7 @@ function start() {
     st.me = await ensureSignedIn();
     if (!st.me) return;
     st.owner = (st.me.workspaces ?? []).some((w) => w.role === 'owner' || w.role === 'admin');
+    st.rec = await loadRecovery(st.me);
     await load();
     // Back from /slack/callback: what happened there.
     let back = null;

@@ -737,6 +737,24 @@ paths:
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }
       responses: { "200": { description: Budget, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }, "401": { description: "Step-up required (problem type step-up-required)" } }
+  /teams/{team}/caps:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [runs]
+      summary: "Additive (L24s, vision G15.1). The cap tree, in the budget's currency: { currency, timeZone, caps: [...] }. Each cap has id, scope (team, run, meeting), cap (null when unset), spent, leased (what open spend leases hold), remaining, and steps: what happens at each fraction ({ at: 0.8, then: warn }, { at: 1, then: pause, ask: owner }; a meeting closes). The day cap adds day, timeZone, startedAt, resetsAt, set, raised and state (ok, warned, exhausted, unset: no run starts). One entry per running or paused run, and the meeting cap (default: true when it is a tenth of perDay)"
+      responses: { "200": { description: Caps }, "404": { description: No such team } }
+  /teams/{team}/estimate:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [runs]
+      summary: "Additive (L24s, vision G15.2). What something usually costs here before the owner starts it, from the last 30 days: kind=meeting&attendees=N (past completed meetings' spend per attendee, times N), kind=trial&role=R (one session of the role), kind=teammate&role=R (a working day of the role, in the team's time zone). A role with fewer than 5 samples uses the whole team's. Answers { kind, currency, estimate: { low, typical, high } (p25, median, p75; null with no history), basis: { from: role|team|meetings|none, samples, days }, per, remainingToday, mayNotFit }. mayNotFit is a warning, never a block"
+      parameters:
+        - { name: kind, in: query, required: true, schema: { enum: [meeting, trial, teammate] } }
+        - { name: role, in: query, schema: { type: string } }
+        - { name: attendees, in: query, schema: { type: integer, minimum: 1, maximum: 50 } }
+      responses: { "200": { description: Estimate }, "400": { description: A bad kind, role or attendees } }
   /me:
     get:
       tags: [me]
@@ -805,6 +823,27 @@ paths:
       parameters: [ { name: card, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [option, version], properties: { option: { type: string }, version: { type: integer }, note: { type: string } } } } } }
       responses: { "200": { description: The answer event }, "409": { description: The card changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
+  /recovery:
+    get:
+      x-min-role: admin
+      tags: [people]
+      summary: "Recovery owners (L27, B15): { owners: [{ person, login, name, methods (github, passkey), addedBy, addedAt, effectiveAt, counts, why? (pending | no-passkey | not-owner) }], wanted: 2, warnings: [{ code (fewer-than-two | no-passkey | not-owner), person?, text }] }. Only an owner of the workspace with a passkey counts"
+      responses: { "200": { description: Recovery owners } }
+    post:
+      x-min-role: owner
+      tags: [people]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "Name a recovery owner: { person } (an owner of the workspace with a passkey). Widening access, so it counts after 24 hours and every owner is told (GET /v1/me notices: recovery-owner.added). The one exception: in a workspace with none, an owner naming themselves counts at once. The step-up is scoped: recovery:<tenant>_<person>"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [person], properties: { person: { type: string } } } } } }
+      responses: { "201": { description: "{ person, effectiveAt, pending }" }, "401": { description: Step-up required }, "403": { description: Not an owner }, "404": { description: No such member }, "409": { description: "not-owner, no-passkey or already" } }
+  /recovery/{person}:
+    parameters: [ { name: person, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: owner
+      tags: [people]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "End someone's recovery ownership at once (also undoes a pending one); every owner is told. The step-up is scoped: recovery:<tenant>_<person>. Removing the last one who counts is refused (409 last-owner) unless the body is { confirm: no-recovery, words } and the step-up is scoped remove-last-recovery-owner:<person>; that is audited as recovery-owner.removed-last with the words, and answers { ok, last: true }"
+      responses: { "200": { description: Removed }, "401": { description: Step-up required }, "404": { description: Not a recovery owner }, "409": { description: "last-owner: the last recovery owner who counts" } }
   /members:
     get:
       x-min-role: viewer
@@ -1077,8 +1116,9 @@ components:
         perRun: { type: [integer, "null"] }
         sessions: { type: integer, default: 3, description: Live sessions at once }
         meetingCap: { type: [integer, "null"], description: "Additive (G-15). The cap of a meeting started without one, in minor units; null means a tenth of perDay. At most perDay (lowering perDay below it brings it down too); raising it needs step-up" }
-        currency: { type: string }
-        today: { type: object, readOnly: true, properties: { day: { type: string, format: date }, spent: { type: integer }, raised: { type: integer }, state: { type: string } } }
+        currency: { type: string, description: "ISO 4217. A hosted deployment accepts only USD for now (422, type currency; also on run start), since runners price usage in US dollars and nothing converts (B8). Local and self-hosted ones may name another; amounts are then US dollars under that label" }
+        timeZone: { type: string, default: UTC, description: "Additive (L24s, R14). The IANA time zone of the team's budget day: it runs from local midnight to local midnight (23 or 25 hours when the clocks change). Changing it needs step-up, as it can start a new day sooner" }
+        today: { type: object, readOnly: true, properties: { day: { type: string, format: date }, timeZone: { type: string }, startedAt: { type: string, format: date-time }, resetsAt: { type: string, format: date-time }, spent: { type: integer }, raised: { type: integer }, state: { type: string } } }
     ToolResult:
       type: object
       properties: { event: { type: string }, card: { type: string }, approval: { type: string } }

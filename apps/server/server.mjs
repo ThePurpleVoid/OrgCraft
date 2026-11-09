@@ -22,8 +22,11 @@ import { createBus } from './bus.mjs';
 import { createInspector } from './inspector-api.mjs';
 import { createTriggers } from './triggers.mjs';
 import { createLive } from './live.mjs';
+import { createCaps } from './caps.mjs';
 import { createLedger } from './ledger.mjs';
+import { createGateway } from './gateway.mjs';
 import { createPasskeys } from './passkeys.mjs';
+import { createRecovery } from './recovery.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
 import { appCaller } from './dpop.mjs';
@@ -41,6 +44,9 @@ import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, desc
  * packages/events), usage that a subagents or agent-teams integration reports, and the Studio's fast-path
  * team.published (it collapses with the CI's report by id).
  */
+/** B8: the words for a hosted budget in another currency (CPO; the Studio's key is budget.usd.only, strings-now.md §6e). */
+export const USD_ONLY = 'Budgets are in US dollars for now. Enter the amount in USD. Other currencies are coming, and nothing is converted until then.';
+
 export const POSTABLE_EVENTS = Object.freeze({ prefixes: ['report.', 'message.'], types: ['usage.recorded', 'team.published'] });
 export const postable = (type) => POSTABLE_EVENTS.types.includes(type) || POSTABLE_EVENTS.prefixes.some((pre) => type.startsWith(pre) && type.length > pre.length);
 
@@ -56,7 +62,7 @@ const { Problem } = store;
 const REPORTS_PER_MINUTE = 30;
 
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-const NOTICE_ACTIONS = ['passkey.added', 'passkey.removed', 'passkey.sign-count-flagged', 'step-up.locked', 'sessions.ended', 'member.role-changed', 'member.removed'];
+const NOTICE_ACTIONS = ['passkey.added', 'passkey.removed', 'passkey.sign-count-flagged', 'step-up.locked', 'sessions.ended', 'member.role-changed', 'member.removed', 'recovery-owner.added', 'recovery-owner.removed'];
 
 /** The JSON body for a Problem: { error }, plus RFC 9457 type, title and status when it has a type, plus any body
  *  it carries (a 409 for a changed card carries the current card itself, as api-v1.yaml says). */
@@ -121,16 +127,18 @@ function hub() {
 export function createControlPlane(opts) {
   const server = createServer();
   const m3 = opts.m3 ?? createM3({ db: opts.db, now: opts.now, publicUrl: opts.publicUrl });
+  // The outbound governor and effect idempotency (L20g): shared by the bus (runner ops) and the code-host fetch.
+  const gateway = opts.gateway ?? createGateway({ db: opts.db, m3, ...(opts.now ? { now: opts.now } : {}), ...(opts.gatewayLimits ? { limits: opts.gatewayLimits } : {}) });
   let runners = null;
   // The bus: what wakes whom, and sending it to runners (m3-design sections 2 to 4, 7).
   // Triggers (N2, L21): webhooks, schedules and events inside the team that wake a teammate.
   const triggers = opts.triggers ?? createTriggers({ db: opts.db, key: opts.key, m3, publicUrl: opts.publicUrl, ...(opts.now ? { now: opts.now } : {}) });
-  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl, meetingTurnMinutes: opts.meetingTurnMinutes, triggers,
+  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl, meetingTurnMinutes: opts.meetingTurnMinutes, triggers, gateway,
     installationsFor: opts.installationsFor ?? (opts.identity?.installations?.enabled ? (tn, url) => opts.identity.installations.forRepo(tn, url) : null) });
   wireBus(m3, bus);
   // Runners connect here over a WebSocket (runner-protocol.md).
   runners = attachRunners(server, { db: opts.db, ops: bus.ops, welcome: bus.welcome, onLost: bus.onLost, ...(opts.serverVersion ? { version: opts.serverVersion } : {}), ...(opts.runnerOptions ?? {}) });
-  const handler = createHandler({ ...opts, runners, m3, bus, triggers });
+  const handler = createHandler({ ...opts, runners, m3, bus, triggers, gateway });
   server.on('request', handler);
   // The tick runs in-process every 15 s; a deployment can also call POST /v1/internal/tick from a cron.
   const tickMs = opts.tickMs ?? 15_000;
@@ -149,12 +157,13 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, triggers: givenTriggers = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, triggers: givenTriggers = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION , gateway: givenGateway = null, gatewayLimits = null}) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
   const inspector = createInspector({ db, m3 });
   const passkeys = identity ? createPasskeys({ db, m3, origin: identity.origin, now }) : null;
+  const recovery = identity ? createRecovery({ db, requireStepUp: passkeys.requireStepUp, now }) : null;
   const members = identity ? createMembers({ db, lookup: identity.lookup, endSessions: (p) => identity.endSessions(p), requireStepUp: passkeys.requireStepUp, now }) : null;
   const emailProviders = emailOpts.providers ?? PROVIDERS;
   const email = createEmail({ db, key, publicUrl, providers: emailProviders, readSecret: store.readSecret, now, fetch: emailOpts.fetch ?? fetch });
@@ -168,7 +177,9 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   // Where OrgCraft runs and outage mode (L29): what this process saw of the code host, from its own calls to it.
   const reach = reachability ?? createReachability({ now });
   const codeHostApi = String(studioOpts?.api ?? 'https://api.github.com').replace(/\/+$/, '');
-  const codeHostFetch = reach.wrap('code-host', studioOpts?.fetch ?? globalThis.fetch);
+  // Every code-host call is paced on the App and its installation, and a "slow down" answer holds them (R1a, L20g).
+  const gateway = givenGateway ?? createGateway({ db, m3, now, ...(gatewayLimits ? { limits: gatewayLimits } : {}) });
+  const codeHostFetch = reach.wrap('code-host', gateway.wrapFetch(studioOpts?.fetch ?? globalThis.fetch));
   const startedAt = now().toISOString();
   const deployMode = ['local', 'self-hosted', 'hosted'].includes(mode) ? mode : db.kind === 'pglite' ? 'local' : 'self-hosted';
   let lastCheck = 0;
@@ -201,10 +212,11 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   } : null);
   let tickMisses = [];
   const triggers = givenTriggers ?? createTriggers({ db, key, m3, publicUrl, now });
-  const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl, triggers, installationsFor: installations ? (tn, url) => installations.forRepo(tn, url) : null });
+  const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl, triggers, gateway, installationsFor: installations ? (tn, url) => installations.forRepo(tn, url) : null });
   if (!givenBus) wireBus(m3, bus);
   m3.hooks.drainTriggers = (tn, tm) => triggers.drain(tn, tm);
   const overrides = createLive({ db, m3 });
+  const caps = createCaps({ db, getTeam: store.getTeam, now });
   const ledger = createLedger({ db, m3, now });
   // Every write of the m3 module and the bus reaches the live streams and the sinks once it commits.
   m3.onStored((stored) => { const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); });
@@ -547,7 +559,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     const notices = await db.system(`select action, at, detail from identity_audit where person = $1 and at > now() - interval '30 days'
       and action = any($2) order by at desc, id desc limit 20`, [who.principal, NOTICE_ACTIONS]);
     return { id: who.principal, login: who.session.login, name: who.session.name ?? who.session.login, workspaces: who.workspaces.map((w) => ({ tenant: w.tenant, role: w.role })), passkeys: Number(n), authTime: who.session.authTime,
-      notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}) })) };
+      notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}), ...(r.detail?.person ? { person: r.detail.person } : {}), ...(r.detail?.effectiveAt ? { effectiveAt: r.detail.effectiveAt } : {}) })) };
   }
 
   const html = (res, status, body, headers = {}) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'", ...headers }); res.end(body); };
@@ -739,7 +751,16 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       }
       if (b === 'events' && c === 'stream' && m === 'GET') return stream(req, res, t, team, url);
       if (b === 'budget' && !c && m === 'GET') return send(res, 200, await m3.getBudget(t, team));
-      if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
+      // The cap tree and cost estimates (L24s; vision G15.1, G15.2): reads, for anyone who can see the budget.
+      if (b === 'caps' && !c && m === 'GET') return send(res, 200, await caps.tree(t, team));
+      if (b === 'estimate' && !c && m === 'GET') return send(res, 200, await caps.estimate(t, team, Object.fromEntries(url.searchParams)));
+      if (b === 'budget' && !c && m === 'PUT') {
+        const body = await readJson(req, 16 * 1024);
+        // B8 (CTO, L24s): runners price usage in US dollars and nothing converts yet, so a hosted deployment keeps
+        // budgets in USD. A local or self-hosted one may name another currency; amounts are then USD under its label.
+        if (deployMode === 'hosted' && body?.currency !== undefined && body.currency !== 'USD') throw new Problem(422, USD_ONLY, { type: 'currency' });
+        return send(res, 200, await did(m3.putBudget(t, team, body, me, { stepUp })));
+      }
       if (b === 'tasks' && !c && m === 'GET') { await store.getTeam(db, t, team); return send(res, 200, await inspector.list(t, team, Object.fromEntries(url.searchParams))); }
       if (b === 'tasks' && c && !parts[5] && m === 'GET') return send(res, 200, await inspector.get(t, team, c));
       if (b === 'io' && c && !parts[5] && m === 'GET') return send(res, 200, await inspector.read(t, team, c, me));
@@ -747,6 +768,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
       if (b === 'runs' && !c && m === 'POST') {
         const body = (await readJson(req, MAX_BODY)) ?? {};
+        if (deployMode === 'hosted' && (await m3.getBudget(t, team)).currency !== 'USD') throw new Problem(422, USD_ONLY, { type: 'currency' });
         // A run on a GitHub repository needs an installation the workspace has proven it owns (S9): the runner gets
         // only those, as repo.installations on session.start.
         const ids = installations?.enabled ? await installations.forRepo(t, body?.team?.repo?.url) : null;
@@ -825,6 +847,12 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (!team && m === 'GET') return send(res, 200, await members.list(who));
       if (team && m === 'PATCH') return send(res, 200, await members.update(who, team, await readJson(req, 4 * 1024), stepUp));
       if (team && m === 'DELETE') return send(res, 200, await members.remove(who, team, stepUp));
+    }
+    // Recovery owners (L27): who can still get in and put things right when an owner loses their way in.
+    if (recovery && a === 'recovery' && !b) {
+      if (!team && m === 'GET') return send(res, 200, await recovery.list(who));
+      if (!team && m === 'POST') return send(res, 201, await recovery.add(who, await readJson(req, 4 * 1024), stepUp));
+      if (team && m === 'DELETE') return send(res, 200, await recovery.remove(who, team, stepUp, (await readJson(req, 4 * 1024)) ?? {}));
     }
     if (members && a === 'invitations' && !b) {
       if (!team && m === 'GET') return send(res, 200, await members.invitations(who));

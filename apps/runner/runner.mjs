@@ -23,7 +23,7 @@ const RENEW_BEFORE_MS = 2 * 60_000;
  * clones, worktrees and memory files, `adapter` the runtime (agentSdkAdapter() or stubAdapter(...)).
  * Returns { sessions, link, ready, close() }; ready resolves with the first welcome.
  */
-export function startRunner({ server, key, root, work = root, sandbox = null, egressEnforced = false, sidecarUnsandboxed = false, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
+export function startRunner({ server, key, root, work = root, sandbox = null, egressEnforced = false, sidecarUnsandboxed = false, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect, leaseWaitMs, leaseWindowMs }) {
   // The model key stays in this process; sessions reach the model through the loopback proxy (modelproxy.mjs).
   const proxy = modelProxy === undefined ? startModelProxy({ log, onHealth: (h) => reportHealth(h) }) : modelProxy;
   // Outage mode (L29): the control plane hears when the model provider stops or starts answering, and starts no new
@@ -99,6 +99,17 @@ export function startRunner({ server, key, root, work = root, sandbox = null, eg
     return ack.value;
   }
 
+  /**
+   * spend.lease (R4, L24s): money for the next turn. The ack is { lease, amount, ... } or { amount: 0, reason, held };
+   * a control plane without leases nacks it as not supported or acks without an amount, and only then does the
+   * session spend as before; any other nack or no answer is retried and, after a minute, stops the turn for budget.
+   */
+  function lease(body) {
+    let timer;
+    const late = new Promise((resolve) => { timer = setTimeout(() => resolve({ nack: 'no answer in 30 s' }), 30_000); timer.unref?.(); });
+    return Promise.race([link.send('spend.lease', body), late]).finally(() => clearTimeout(timer));
+  }
+
   /** The policy path: approval.wait, whose ack names the approval the control plane minted. */
   async function approve(s, req) {
     // calls and callsHash (ADR 0013): the exact calls held, and the hash the card is signed over.
@@ -143,7 +154,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, eg
     }
     let s;
     const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
-    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online, egressEnforced, sidecarUnsandboxed, secretGet,
+    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online, egressEnforced, sidecarUnsandboxed, secretGet, lease, leaseWaitMs, leaseWindowMs,
       // step.io (N1): sent before the event that names it; a control plane that does not keep step I/O refuses it, harmlessly.
       stepIo: (frame) => { Promise.resolve(link.send('step.io', frame)).catch(() => {}); } });
     s.tools = tools;
