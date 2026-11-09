@@ -311,7 +311,7 @@ paths:
         - { name: all, in: query, schema: { enum: ["1"] } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
         - { name: before, in: query, description: The next value of the previous page, schema: { type: string } }
-      responses: { "200": { description: "{ items: [{ channel, at, event, kind, status, why, to, principal? }], next }" }, "403": { description: all=1 without admin } }
+      responses: { "200": { description: "{ items: [{ channel, at, event, kind, status, reason, why, to?, principal?, name? }], next }. reason is a stable code for rows that did not go out (final, retry, nochannel, removed; off and unconfirmed reserved), null otherwise; show a sentence for it, never why (raw provider text). name (all=1) is the person's display name, or null when not a member of the tenant" }, "403": { description: all=1 without admin } }
   /teams/{team}/slack:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get: { x-min-role: viewer, tags: [notifications], summary: "Is Slack connected and working (health), the kinds, and the caller's own link", responses: { "200": { description: "{ connected, ready, canLink, health, kinds: [{ id, label, suggested, channelDefault }], me }: suggested kinds are ticked, not saved, the first time a person sees the DM switches" } } }

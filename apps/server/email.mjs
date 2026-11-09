@@ -38,6 +38,8 @@ const CODE_RESEND_SECONDS = 60;
 export const CODES_PER_DAY = 10;
 export const WRONG_PER_DAY = 20;
 const DAY = 86_400_000;
+/** Held mail is tried this many times after quiet hours, then given up (reason `final` in the log). */
+const HELD_TRIES = 3;
 export const LINK_TTL = { approval: DAY, default: 7 * DAY };
 
 // ---- providers --------------------------------------------------------------------------------------------------
@@ -541,7 +543,7 @@ export async function flushHeld(db, key, { providers = PROVIDERS, readSecret, pu
       and not ('digest' = any(s.kinds) and p.digest_at is not null)
       and not exists(select 1 from email_deliveries x where x.subscription = d.subscription and x.event = d.event and x.status = 'sent')
       -- A failing send is tried 3 times, like a digest (review sev 4).
-      and (select count(*) from email_deliveries f where f.subscription = d.subscription and f.event = d.event and f.status = 'failed') < 3
+      and (select count(*) from email_deliveries f where f.subscription = d.subscription and f.event = d.event and f.status = 'failed') < ${HELD_TRIES}
       -- Still inside the person's quiet hours: not yet, and not counted against the limit (review sev 4).
       and not coalesce((with z as (select case when exists(select 1 from pg_timezone_names n where n.name = p.timezone) then p.timezone else 'UTC' end as tz),
         m as (select (extract(hour from $1::timestamptz at time zone z.tz) * 60 + extract(minute from $1::timestamptz at time zone z.tz))::int as v from z)
@@ -651,21 +653,44 @@ export function createNotifications({ db }) {
       if (cursor !== null && !/^\d{1,30}$/.test(cursor)) throw new Problem(400, 'before is the `at` of the last row, in ms');
       return db.tenant(tenant, async ({ q }) => {
         const rows = await q(`select * from (
-            select 'email' as channel, d.at, d.event, d.kind, case when d.held then 'held' else d.status end as status, d.error, s.principal, s.email as target
+            select 'email' as channel, d.at, d.event, d.kind, case when d.held then 'held' else d.status end as status, d.error, s.principal, s.email as target,
+                d.status = 'failed' and exists(select 1 from email_deliveries h where h.subscription = d.subscription and h.event = d.event and h.held)
+                  and (select count(*) from email_deliveries f where f.subscription = d.subscription and f.event = d.event and f.status = 'failed') >= ${HELD_TRIES} as final
               from email_deliveries d join email_subscriptions s on s.id = d.subscription where d.team = $1
             union all
-            select 'slack' as channel, d.at, d.event, d.kind, d.status, d.error, l.principal, coalesce(l.slack_user, d.target) as target
+            select 'slack' as channel, d.at, d.event, d.kind, d.status, d.error, l.principal, coalesce(l.slack_user, d.target) as target, false as final
               from slack_deliveries d left join slack_links l on l.id = d.target where d.team = $1
           ) x where ($2::boolean or x.principal = $3) and ($4::bigint is null or x.at < to_timestamp($4::bigint / 1000.0))
           order by x.at desc limit $5`, [team, all, principal, cursor, n]);
-        const items = rows.map((r) => ({ channel: r.channel, at: r.at, event: r.event, kind: r.kind, status: r.status, why: r.error ?? null,
+        // L25 follow-up: on all=1 each row names its person (name, else login), from members of this tenant only.
+        const ids = all ? [...new Set(rows.map((r) => r.principal).filter(Boolean))] : [];
+        const names = new Map(ids.length ? (await db.system(`select distinct p.id, coalesce(nullif(p.name, ''), p.login) as name from people p
+          join members m on m.person = p.id and m.tenant = $1 where p.id = any($2)`, [tenant, ids])).map((x) => [x.id, x.name]) : []);
+        const items = rows.map((r) => ({ channel: r.channel, at: r.at, event: r.event, kind: r.kind, status: r.status, reason: reasonOf(r), why: r.error ?? null,
           // Only your own rows say where they went: an admin's all=1 never shows someone else's address, even masked.
-          ...(r.principal === principal ? { to: r.channel === 'email' ? maskEmail(r.target) : r.target } : {}), ...(all ? { principal: r.principal } : {}) }));
+          ...(r.principal === principal ? { to: r.channel === 'email' ? maskEmail(r.target) : r.target } : {}),
+          ...(all ? { principal: r.principal, name: r.principal ? names.get(r.principal) ?? null : null } : {}) }));
         const last = rows.at(-1);
         return { items, next: rows.length === n && last ? String(new Date(last.at).getTime()) : null };
       });
     },
   };
+}
+
+/**
+ * A stable code for why a row in the delivery log was not sent, so the page can show the CPO's sentence and never the
+ * provider's raw text: `final` (failed, and no more tries: held mail gives up after its last try), `retry` (failed,
+ * tried again later), `nochannel` (no key or token for the channel, or a token of the wrong kind), `removed` (Slack
+ * said the channel or person is gone). `off` and `unconfirmed` are reserved: today nothing is sent to, or logged for,
+ * a kind that is off or an address that is not confirmed. Null for sent, held and emailed rows.
+ */
+export function reasonOf(r) {
+  if (r.status === 'failed') return r.final ? 'final' : 'retry';
+  if (r.status !== 'skipped') return null;
+  if (/^(no provider key|unknown provider|no Slack token)/.test(r.error ?? '') || /not a bot token/i.test(r.error ?? '')) return 'nochannel';
+  if (r.channel !== 'slack') return 'nochannel';
+  // A Slack failure no retry can fix: the channel or person is gone, or the message itself was refused.
+  return /channel_not_found|not_in_channel|is_archived|user_not_found|user_disabled|cannot_dm_bot|messages_tab_disabled/.test(r.error ?? '') ? 'removed' : 'final';
 }
 
 export const maskEmail = (e) => {
