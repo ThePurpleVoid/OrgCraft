@@ -79,12 +79,12 @@ test('addMember: <type>-2 with the computed name "<Type> 2", the type\'s manager
   assert.throws(() => addMember(spec, kit, { type: 'backend-dev-2' }), /teammate, not a role/);
 });
 
-test('setDisplayName: only the title line changes, the id stays, and a duplicate is refused with 409', () => {
+test('setDisplayName: only the name changes (a legacy "# " name becomes the Name field), the id stays, and a duplicate is refused with 409', () => {
   const files = layer({ 'roles/backend-dev-2.extend.md': MAYA, 'ownership.json': JSON.stringify({ rows: [{ path: 'api/', writer: 'backend-dev-2' }] }, null, 2) + '\n' });
   const spec = importLayer(files, kit);
   setDisplayName(spec, 'backend-dev-2', '  Maya   Silva ', kit);
   const out = compileLayer(spec, kit);
-  assert.equal(out['roles/backend-dev-2.extend.md'], MAYA.replace('# Maya', '# Maya Silva'));
+  assert.equal(out['roles/backend-dev-2.extend.md'], MAYA.replace('# Maya\n\n', '**Name:** Maya Silva\n'));
   assert.equal(out['ownership.json'], files['ownership.json']);
   assert.ok(spec.roles['backend-dev-2']);
   const e = assert.throws(() => setDisplayName(spec, 'backend-dev', 'maya  silva', kit), (err) => err.status === 409 && err.message === 'Another teammate is already called Maya Silva');
@@ -125,7 +125,7 @@ test('validate: orphan, overlap, and Hands to targets that are off or need picki
   assert.ok(!ww.some((m) => /hands to qa-web/.test(m)));
 });
 
-test('handsTo: structured lines and prose; every kit brief parses with no targets and no problems', () => {
+test('handsTo: structured lines and prose; every kit brief parses with no problems and only kit targets', () => {
   const md = '# X\n\n## Hands to\n- qa-web: the change, with its plan\n- owner\nSecurity reviewer (always)\n- someone-else: nope\n';
   const h = handsTo(md, ['qa-web']);
   assert.deepEqual(h.targets, [{ to: 'qa-web', what: 'the change, with its plan' }, { to: 'owner' }]);
@@ -136,7 +136,9 @@ test('handsTo: structured lines and prose; every kit brief parses with no target
   const roster = Object.keys(kit.roles);
   for (const f of readdirSync(join(KIT, 'team/roles')).filter((x) => x.endsWith('.md') && !x.startsWith('_'))) {
     const r = handsTo(readFileSync(join(KIT, 'team/roles', f), 'utf8'), roster);
-    assert.deepEqual([r.targets, r.problems], [[], []], f);
+    assert.deepEqual(r.problems, [], f);
+    for (const t of r.targets) assert.ok(t.to === 'owner' || roster.includes(t.to), `${f}: ${t.to}`);
+    assert.ok(!r.text.some((l) => /^[-*]\s*[a-z][a-z0-9]*(?:-[a-z0-9]+)+\s*(?::|$)/.test(l)), `${f}: a slug line that is not a kit role`);
   }
 });
 
@@ -144,9 +146,11 @@ test('listMembers: members and catalog as GET /v1/team returns them', () => {
   const spec = importLayer(layer({ 'roles/backend-dev-2.extend.md': MAYA.replace('**Reports to:** cto', '**Reports to:** cto\n**Pool:** 2') }), kit);
   const { members, catalog } = listMembers(spec, kit);
   const maya = members.find((m) => m.id === 'backend-dev-2');
+  const kitHands = handsTo(kit.roles['backend-dev'], Object.keys(kit.roles)).targets;
+  assert.ok(kitHands.length, 'the kit brief wires Backend dev to its usual hand-offs');
   assert.deepEqual({ ...maya, problems: undefined, handsToNotes: undefined }, {
     id: 'backend-dev-2', name: 'Maya', type: 'backend-dev', typeTitle: 'Backend dev', source: 'member', enabled: true, reportsTo: 'cto', lane: 'cto',
-    pool: 2, owns: [], handsTo: [], handsToNotes: undefined, wakesOn: [], bindings: [], model: 'standard', problems: undefined,
+    pool: 2, owns: [], handsTo: kitHands, handsToNotes: undefined, wakesOn: [], bindings: [], model: 'standard', problems: undefined,
   });
   assert.ok(maya.problems.some((p) => p.message === 'Nobody hands work to Maya, and nothing wakes them'));
   assert.equal(catalog.find((c) => c.type === 'backend-dev').count, 2);

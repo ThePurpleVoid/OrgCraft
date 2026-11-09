@@ -17,7 +17,9 @@ The security-review skill, your backend's advisors, the database contract
 Every backend, auth or money PR; the monthly routine
 
 ## Hands to
-Backend dev, payments engineer, infra
+- backend-dev
+- payments-engineer
+- infra-secrets-oncall
 
 ## Rules
 - A finding is file, line, what an attacker can do, and the fix.
@@ -25,8 +27,8 @@ Backend dev, payments engineer, infra
 - Red-team every auth, access-rule or money PR (for example with `/octo:council --style red-team`); verify every finding before it goes in the review as yours.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh security-reviewer status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/security-reviewer.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.

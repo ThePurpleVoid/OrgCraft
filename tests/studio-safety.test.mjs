@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 const dir = mkdtempSync(join(tmpdir(), 'studio-safety-'));
 copyFileSync(new URL('../apps/studio/public/safety.js', import.meta.url), join(dir, 'safety.mjs'));
 writeFileSync(join(dir, 'team-model.mjs'), `export * from ${JSON.stringify(new URL('../packages/team-model/index.mjs', import.meta.url).href)};\n`);
-const { revert, clauseOf } = await import(pathToFileURL(join(dir, 'safety.mjs')).href);
+const { revert, clauseOf, rebaseDraft } = await import(pathToFileURL(join(dir, 'safety.mjs')).href);
 
 const brief = (tier, rules, owns) => `# Clerk\n\n**Model:** ${tier}\n**Reports to:** chief-of-staff\n**Status:** active\n\n## Identity\nYou file things.\n\n## Rules\n${rules}\n\n## Owns (writes)\n${owns}\n`;
 const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -116,4 +116,20 @@ test('a deferred move comes back into a draft read from disk (code review of #10
   assert.match(reloaded.roles.filer.brief, /^- `other\/`$/m);
   assert.doesNotMatch(reloaded.roles.clerk.brief, /`files\/`/);
   assert.equal(reapplyFollowUp(reloaded, deferred[0]), false, 'once is enough');
+});
+
+test('a kept draft made before someone else published comes back on top of their version (publish.stale, B1.1-10)', () => {
+  const from = { values: { PROJECT_NAME: 'Acme' }, roles: { a: { enabled: true }, b: { enabled: true }, c: { enabled: false } }, meetings: { meetings: [] } };
+  // Mine: switched b off and c on, and added a meeting.
+  const mine = { ...clone(from), roles: { a: { enabled: true }, b: { enabled: false }, c: { enabled: true } }, meetings: { meetings: [{ id: 'weekly' }] } };
+  // Theirs, published meanwhile: a renamed, a new role d, and the project name changed.
+  const now = { values: { PROJECT_NAME: 'Acme Inc' }, roles: { a: { enabled: true, extension: { title: 'Alpha' } }, b: { enabled: true }, c: { enabled: false }, d: { enabled: true } }, meetings: { meetings: [] } };
+  const out = rebaseDraft(from, mine, now);
+  assert.deepEqual(out.roles, { a: { enabled: true, extension: { title: 'Alpha' } }, b: { enabled: false }, c: { enabled: true }, d: { enabled: true } }, 'their work stays, mine is on top');
+  assert.equal(out.values.PROJECT_NAME, 'Acme Inc');
+  assert.deepEqual(out.meetings, { meetings: [{ id: 'weekly' }] });
+  // A role I removed stays removed; nothing of mine changes theirs when I did not touch it.
+  const gone = rebaseDraft(from, { ...clone(from), roles: { a: { enabled: true }, b: { enabled: true } } }, now);
+  assert.equal(gone.roles.c, undefined);
+  assert.deepEqual(gone.roles.d, { enabled: true });
 });

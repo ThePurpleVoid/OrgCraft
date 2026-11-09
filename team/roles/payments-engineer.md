@@ -17,15 +17,19 @@ Your payment provider's docs and test mode, the pricing doc
 A spec touching money; a webhook failure
 
 ## Hands to
-Backend dev, platform devs, security reviewer (always), store and compliance owner
+- backend-dev
+- web-dev
+- mobile-dev
+- security-reviewer: always
+- store-compliance-owner
 
 ## Rules
 - Never lose money on a customer: every price path is checked against the pricing doc.
 - Test mode only until the owner says otherwise.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh payments-engineer status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/payments-engineer.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.

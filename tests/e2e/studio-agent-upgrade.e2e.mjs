@@ -85,6 +85,7 @@ test('a custom agent the kit now ships a role for: an error with Rename mine and
   assert.equal(await isOn(page, 'analytics-lead'), true);
   // Publish shows what goes with it: the binding and the area row are gone, not handed to the kit's role.
   await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
   for (const f of ['resources.json', 'ownership.json']) {
     await page.locator('summary', { hasText: f }).click();
   }

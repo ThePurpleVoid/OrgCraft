@@ -47,6 +47,8 @@ test('reachability: two failures in a row make it unreachable, one answer makes 
 });
 
 test('GET /v1/deployment: the local tile, version and window, no runner yet, and any member may read it', async () => {
+  // The mode is set, never read from the machine: CI runs these tests on Postgres (TEST_DATABASE_URL), where the
+  // fallback for a server with no AGENT_TEAM_MODE is self-hosted.
   await plane(async ({ call }) => {
     const d = await call('GET', '/deployment');
     assert.equal(d.status, 200, JSON.stringify(d.body));
@@ -57,7 +59,12 @@ test('GET /v1/deployment: the local tile, version and window, no runner yet, and
     assert.deepEqual(d.body.dependencies.map((x) => [x.id, x.state]), [['code-host', 'unknown'], ['model', 'unknown']]);
     assert.deepEqual(d.body.outage, { active: false, down: [], publish: 'ok', work: 'queued' }, 'with no runner, work waits in the queue');
     assert.equal((await call('GET', '/deployment', undefined, {})).status, 401);
-  }, { mode: 'self-hosted-typo' });
+  }, { mode: 'local' });
+});
+
+test('GET /v1/deployment: self-hosted when set, and an unknown mode falls back by database (PGlite local, Postgres self-hosted)', async () => {
+  await plane(async ({ call }) => assert.equal((await call('GET', '/deployment')).body.mode, 'self-hosted'), { mode: 'self-hosted' });
+  await plane(async ({ call, db }) => assert.equal((await call('GET', '/deployment')).body.mode, db.kind === 'pglite' ? 'local' : 'self-hosted'), { mode: 'self-hosted-typo' });
 });
 
 test('a runner whose model provider is unreachable gets no new work: the wake waits unspent, and starts once it is back', async () => {
