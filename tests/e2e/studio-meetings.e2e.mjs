@@ -115,7 +115,7 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   await page.locator('#files > summary').click();
   await page.locator('#changes summary', { hasText: '.agent-team/meetings.json' }).waitFor();
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   const file = JSON.parse(readFileSync(join(root, '.agent-team/meetings.json'), 'utf8'));
   const m = file.meetings[0];
   assert.equal(m.id, 'daily-standup');

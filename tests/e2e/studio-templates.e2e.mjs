@@ -117,9 +117,10 @@ test('from the gallery to a published support team, and the repository opens its
   await page.locator('#publish').click();
   await page.locator('#files > summary').click();
   await page.locator('#changes summary', { hasText: '.agent-team/team.json' }).waitFor();
+  await page.locator('#advanced').evaluate((d) => { d.open = true; });
   await page.locator('#branch').fill('team');
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   const team = JSON.parse(execFileSync('git', ['-C', root, 'show', 'team:.agent-team/team.json'], { encoding: 'utf8' }));
   assert.match(team.from, /^customer-support-team@/);
   assert.equal(team.values.PROJECT_NAME, 'Help desk');

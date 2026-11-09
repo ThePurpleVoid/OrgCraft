@@ -165,6 +165,7 @@ test('a Contract reviewer from Blank: every section, live preview, undo per fiel
   await page.getByRole('button', { name: 'Back to the team' }).click();
   await page.locator('#publish').click();
   await page.locator('#files > summary').click();
+  await page.locator('#advanced').evaluate((d) => { d.open = true; });
   await page.locator('#branch').fill('team/contract-reviewer');
   await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: /team\/contract-reviewer/ }).waitFor();

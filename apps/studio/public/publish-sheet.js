@@ -123,5 +123,5 @@ export function checksHtml(issues, looks) {
 /** What changes: one line per change, each with its own Undo (unless `undo` is off, as for a team's first publish). */
 export function changesHtml(lines, { undo = true } = {}) {
   return `<h3>${esc(t('publish.section.changes'))}</h3>
-    <ul class="clist">${lines.map((l, i) => `<li><span class="dot accent" aria-hidden="true"></span><span class="ctext">${esc(l.text)}</span>${undo ? `<button type="button" class="link" data-undo-line="${i}" aria-label="${esc(t('publish.undo.aria', { 'change line': l.text }))}">${esc(t('publish.undo'))}</button>` : ''}</li>`).join('')}</ul>`;
+    <ul class="clist">${lines.map((l, i) => `<li><span class="dot accent" aria-hidden="true"></span><span class="ctext">${esc(l.text)}</span>${undo && lines[i - 1]?.change !== l.change ? `<button type="button" class="link" data-undo-line="${i}" aria-label="${esc(t('publish.undo.aria', { 'change line': l.text }))}">${esc(t('publish.undo'))}</button>` : ''}</li>`).join('')}</ul>`;
 }

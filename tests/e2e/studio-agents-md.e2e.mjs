@@ -61,10 +61,12 @@ test('the AGENTS.md switch publishes AGENTS.md and keeps the repository\'s own t
   await sw.check();
   await page.locator('#publish').click();
   await page.locator('#files > summary').click();
+  await page.locator('#changes details.generated > summary').click();
   await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
+  await page.locator('#advanced').evaluate((d) => { d.open = true; });
   await page.locator('#branch').fill('agents-md');
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   const agents = readFileSync(join(root, 'AGENTS.md'), 'utf8');
   assert.match(agents, /^# Sample app\n\nRun the tests with npm test\./, 'the repository\'s own text stays');
   assert.match(agents, /<!-- agent-team:start/);
@@ -77,11 +79,12 @@ test('the AGENTS.md switch publishes AGENTS.md and keeps the repository\'s own t
   await page.getByLabel('Also keep an AGENTS.md file, for AI coding tools other than Claude Code').uncheck();
   await page.locator('#publish').click();
   await page.locator('#files > summary').click();
+  await page.locator('#changes details.generated > summary').click();
   await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
   // The review shows what sync does: the kit's block goes, the owner's text stays (QA of #119).
   assert.equal(await page.locator('#changes summary', { hasText: /^changedAGENTS\.md$/ }).count(), 1);
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   assert.equal(readFileSync(join(root, 'AGENTS.md'), 'utf8'), '# Sample app\n\nRun the tests with npm test.\n');
   assert.equal(JSON.parse(readFileSync(join(root, '.agent-team/team.json'), 'utf8')).targets, undefined);
   assert.deepEqual(errors, []);
@@ -111,9 +114,10 @@ test('a kit-made AGENTS.md: the review shows only real changes, switching off co
   await page.getByLabel(label).check();
   await page.locator('#publish').click();
   await page.locator('#files > summary').click();
+  await page.locator('#changes details.generated > summary').click();
   await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   await page.locator('#publish-dialog').getByRole('button', { name: 'Keep editing' }).click();
   // Nothing left to publish: the review reads the repository's AGENTS.md, so it is not shown as changed.
   await page.locator('#publish', { hasText: 'Nothing to publish' }).waitFor();
@@ -123,9 +127,10 @@ test('a kit-made AGENTS.md: the review shows only real changes, switching off co
   await page.getByLabel(label).uncheck();
   await page.locator('#publish').click();
   await page.locator('#files > summary').click();
+  await page.locator('#changes details.generated > summary').click();
   await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   assert.equal(git('status', '--porcelain'), '', 'the deletion is committed');
   assert.throws(() => git('show', 'HEAD:AGENTS.md'));
   assert.deepEqual(errors, []);

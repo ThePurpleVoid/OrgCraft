@@ -723,3 +723,6 @@
 .ats #files > summary { cursor: pointer; font-size: 14px; color: var(--ink); padding: 4px 0; }
 .ats #files[open] > summary { margin-bottom: 6px; }
 @media (max-width: 640px) { .ats .sheet-sec .clist li { min-height: 44px; } .ats .sheet-sec .clist [data-undo-line] { min-height: 44px; padding: 0 8px; } }
+.ats #publish-result .cmd { display: block; margin-top: 6px; padding: 6px 8px; background: var(--off); border-radius: 6px; font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; user-select: all; overflow-wrap: anywhere; }
+.ats #advanced > summary, .ats .changes details.generated > summary { cursor: pointer; font-size: 13.5px; color: var(--muted); padding: 4px 0; }
+.ats .changes details.generated > summary { padding: 6px 10px; font-family: inherit; }

@@ -112,7 +112,10 @@ function derive() {
     try {
       draft.lines = sheetLines(diffTeams(published, spec, S.kit), { name: (id) => byAll.get(id)?.title ?? roleName(id), system: systemName, changedRoles: [...draft.changed], changedData: draft.data });
       draft.count = draft.lines.length;
-    } catch { draft.lines = []; }
+    } catch {
+      draft.lines = sheetLines([], { name: (id) => byAll.get(id)?.title ?? roleName(id), changedRoles: [...draft.changed], changedData: draft.data });
+      draft.count = draft.lines.length;
+    }
   } else draft.lines = [];
   return { all, bySlug: byAll, team, issues: checksOf(spec), safety, draft, looks: thingsToLook(team, bySlug) };
 }
@@ -197,7 +200,7 @@ function syncUndo() {
   // first publish counts each teammate.
   const n = pendingCount();
   const pub = $('#publish');
-  if (pub) { pub.textContent = n ? t('canvas.publish', { n }) : t('canvas.publish.none'); pub.disabled = !n; }
+  if (pub) { pub.textContent = n ? t('publish.button', { n }) : t('canvas.publish.none'); pub.disabled = !n; }
 }
 const pendingCount = () => (S?.noTeam ? view?.team.length ?? 0 : view?.draft.count ?? 0);
 function step(from, to) {
@@ -1097,10 +1100,22 @@ function wireImpact() {
 }
 
 /** The file review, of what will be published: a deferred move keeps its writer in these files (criterion 11). */
+/** B5.1-2: the files the owner's changes touch first, then what OrgCraft regenerates, folded and not counted. */
+const generated = (path) => !/^\.agent-team\//.test(path) || /^\.agent-team\/(kit\.lock\.json|roles\/README\.md)$/.test(path);
+function filesHtml(changes) {
+  const row = (c) => `<details><summary><span class="st ${c.status}">${c.status}</span>${esc(c.path)}</summary><pre class="diff">${diff(c.before, c.after)}</pre></details>`;
+  const mine = changes.filter((c) => !generated(c.path));
+  const auto = changes.filter((c) => generated(c.path));
+  return mine.map(row).join('') + (auto.length ? `<details class="generated"><summary data-tip="${esc(t('publish.files.generated.tip'))}">${esc(t('publish.files.generated', { n: auto.length }))}</summary>${auto.map(row).join('')}</details>` : '');
+}
+
+let previewSeq = 0;
 async function previewPublish() {
+  const seq = ++previewSeq;
   try {
     const { spec: out } = publishable(spec, published, view.safety.on ? view.safety.items : [], picks);
     const { changes, issues, needsCode, capability } = await api('/v1/team/preview', { spec: out });
+    if (seq !== previewSeq) return; // a newer preview is on its way
     // Widens access, first (ADR 0013 rule 2): what the server computed for this draft, whoever wrote it.
     const name = (id) => view.bySlug.get(id)?.title ?? roleName(id);
     $('#widens').innerHTML = widensHtml(capability ?? [], name, systemName);
@@ -1111,22 +1126,22 @@ async function previewPublish() {
     // published from the deployment's own Studio, never through the host (embed spec section 6).
     const elsewhere = needsCode && S.features?.publishCode === false;
     $('#confirm').disabled = !changes.length || errors.length > 0 || elsewhere;
-    $('#changes').innerHTML = errors.length ? `<p class="result error pad">Fix ${errors.length} error${errors.length > 1 ? 's' : ''} before publishing.</p>` :
-      changes.length ? changes.map((c) => `<details><summary><span class="st ${c.status}">${c.status}</span>${esc(c.path)}</summary><pre class="diff">${diff(c.before, c.after)}</pre></details>`).join('')
-        : '<p class="muted pad">Nothing to publish: the repository already has this team.</p>';
+    $('#changes').innerHTML = errors.length ? `<p class="result error pad">${esc(t('publish.errors', { n: errors.length }))}</p>` :
+      changes.length ? filesHtml(changes) : `<p class="muted pad">${esc(t('canvas.publish.none'))}</p>`;
     if (elsewhere && !errors.length) {
       const note = document.createElement('p');
       note.className = 'result pad';
-      note.textContent = 'This change adds or changes commands the team runs, so it is published from the team\'s own Studio, not from this site. ';
+      note.textContent = `${t('publish.elsewhere')} `;
       if (/^https:\/\//.test(S.features.studio ?? '')) {
         const a = document.createElement('a');
         a.href = S.features.studio; a.target = '_blank'; a.rel = 'noopener noreferrer';
-        a.textContent = 'Use the deployment\'s Studio';
+        a.textContent = t('publish.elsewhere.link');
         note.append(a, '.');
       }
       $('#changes').prepend(note);
     }
   } catch (e) {
+    if (seq !== previewSeq) return;
     $('#changes').innerHTML = `<p class="result error pad">${esc(e.message)}</p>`;
     $('#confirm').disabled = true;
   }
@@ -1162,10 +1177,11 @@ async function openPublish() {
   $('#files').open = false;
   $('#publish-result').textContent = '';
   $('#publish-result').className = 'result';
-  $('#changes').innerHTML = '<p class="muted pad">Working out what changes…</p>';
+  $('#changes').innerHTML = `<p class="muted pad">${esc(t('publish.working'))}</p>`;
+  $('#advanced').open = false;
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
   $('#branch').value ||= `agent-team/publish-${stamp}`;
-  $('#message').value ||= 'Update the agent team (OrgCraft Studio)';
+  $('#message').value ||= t('publish.local.message.default', { team: spec.values?.PROJECT_NAME ?? '' });
   renderImpact();
   dlg.showModal();
   await previewPublish();
@@ -1175,7 +1191,8 @@ async function confirmPublish() {
   const out = $('#publish-result');
   $('#confirm').disabled = true;
   out.className = 'result';
-  out.textContent = 'Publishing…';
+  out.textContent = t('publish.sending');
+  const n = pendingCount();
   try {
     const items = view.safety.on ? view.safety.items : [];
     const plan = renderImpact();
@@ -1186,12 +1203,21 @@ async function confirmPublish() {
     out.className = 'result ok';
     if (r.pr?.url && /^https:\/\//.test(r.pr.url)) {
       // Mounted in a host (and gh locally): the pull request is open. The link is set through the DOM, never markup.
-      out.textContent = `Opened a pull request for ${r.files.length} file${r.files.length === 1 ? '' : 's'} on ${r.branch}: `;
+      // "Sent for review. See the change": the second sentence is the link (B5.1-3), set through the DOM, never markup.
+      const [sent, see] = t('publish.sent').split(/(?<=\.)\s+/);
       const a = document.createElement('a');
       a.href = r.pr.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-      a.textContent = r.pr.number ? `#${r.pr.number}` : r.pr.url;
-      out.append(a, '. Review and merge it as usual.');
-    } else out.textContent = r.commit ? `Committed ${r.commit} on ${r.branch} (${r.files.length} files). Push it and open a pull request: git push -u origin ${r.branch}` : r.branch ? `Nothing changed on ${r.branch}.` : 'Nothing changed: the repository already has this team.';
+      a.textContent = see ?? r.pr.url;
+      out.replaceChildren(`${sent} `, a);
+    } else if (r.commit) {
+      // Saved locally: what happened in words, then the command to send it for review on its own line, as code.
+      const done = document.createElement('span');
+      done.textContent = `${t('publish.local.done', { n })} ${t('publish.local.share')}`;
+      const cmd = document.createElement('code');
+      cmd.className = 'cmd';
+      cmd.textContent = `git push -u origin ${r.branch}`;
+      out.replaceChildren(done, cmd);
+    } else out.textContent = t('canvas.publish.none');
     const fresh = await api('/v1/team');
     const wasNew = !!S.noTeam;
     S = fresh;
@@ -1208,7 +1234,7 @@ async function confirmPublish() {
     render();
   } catch (e) {
     out.className = 'result error';
-    out.textContent = e.type === 'stale' ? 'The team changed in the repository since this page read it. Reload the page to get the latest, then publish again; your changes here are not kept.' : e.message;
+    out.textContent = e.type === 'stale' ? t('publish.stale') : e.message;
     $('#confirm').disabled = e.type === 'stale';
   }
 }

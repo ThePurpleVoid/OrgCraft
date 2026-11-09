@@ -68,9 +68,10 @@ test('demo steps 7, 8 and 13: the first publish, then a small change with Widens
   await sheet(page).locator('#files-title', { hasText: /^Files that will change \(\d+\)$/ }).waitFor();
   await sheet(page).locator('#files > summary').click();
   await sheet(page).locator('#changes summary', { hasText: '.agent-team/team.json' }).waitFor();
+  await page.locator('#advanced').evaluate((d) => { d.open = true; });
   await page.locator('#branch').fill('first-team');
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   await sheet(page).getByRole('button', { name: 'Keep editing' }).click();
   // B5.1-8: the same draft can't be published twice.
   assert.equal(await page.locator('#publish').isDisabled(), true);
@@ -99,14 +100,27 @@ test('demo steps 7, 8 and 13: the first publish, then a small change with Widens
   // Undo one line: only that change goes, the sheet and the button agree, and the keyboard stays in the list.
   const undo = sheet(page).getByRole('button', { name: 'Undo: Backend dev works on up to 2 tasks at once (was 1)' });
   await undo.click();
-  await page.locator('#publish', { hasText: 'Publish 1 change' }).waitFor();
+  await page.locator('#publish', { hasText: /^Publish 1 change$/ }).waitFor();
   assert.deepEqual(await lines(page), want.filter((x) => x.startsWith('Performance tester')));
   assert.equal(await sheet(page).getByRole('heading', { level: 2 }).textContent(), await page.locator('#publish').textContent());
   assert.match(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.id ?? ''), /^Undo: |publish-title/);
   await page.locator('#files-title', { hasText: /^Files that will change \(\d\)$/ }).waitFor();
   await sheet(page).locator('#files > summary').click();
+  // B5.1-2: the owner's own files first; what OrgCraft regenerates is folded under Updated automatically.
+  const generatedFold = sheet(page).locator('#changes details.generated');
+  await generatedFold.waitFor();
+  assert.equal(await generatedFold.getAttribute('open'), null);
+  assert.match(await generatedFold.locator('> summary').textContent(), /^Updated automatically \(\d+ files\)$/);
+  assert.match(await sheet(page).locator('#changes > details:not(.generated) > summary').first().textContent(), /\.agent-team\/team\.json$/);
+  // ALL-5 with everything open: no engineering words in the sheet's sentences (file names and diffs are names, in code style).
+  await generatedFold.locator('> summary').click();
+  await sheet(page).locator('#advanced > summary').click();
+  const words = await sheet(page).evaluate((d) => { const c = d.cloneNode(true); for (const x of c.querySelectorAll('.changes > details > summary, .changes details:not(.generated) summary, pre, input')) x.remove(); return c.innerText; });
+  assert.doesNotMatch(words, /\b(writes?|sync|commit(ted|s)?|pull request|agents?|run|deploys?|workspaces?|members?|instances?)\b/i);
+  assert.equal(await sheet(page).locator('#confirm').textContent(), 'Publish');
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved 1 change in your files\. Your teammates pick it up once the change is approved\. To send it for review, run this in your project folder:/ }).waitFor();
+  assert.equal(await page.locator('#publish-result code.cmd').textContent(), 'git push -u origin first-team');
   const changed = execFileSync('git', ['-C', root, 'show', '--name-only', '--format=', 'HEAD'], { encoding: 'utf8' }).trim().split('\n');
   assert.ok(changed.includes('.agent-team/team.json'), changed.join(', '));
   assert.ok(!changed.some((f) => /backend-dev/.test(f)), 'the undone change is not published');

@@ -182,6 +182,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   // Commit it, then open the repository again: the same agents, with the same text (PRD E7).
   const before = Object.fromEntries(await Promise.all(['accessibility-auditor', 'qa-a11y', 'translator'].map(async (s) => [s, await page.evaluate(async (slug) => (await (await fetch('/v1/team')).json()).spec.roles[slug] ?? null, s)])));
   assert.deepEqual(before, { 'accessibility-auditor': null, 'qa-a11y': null, translator: null }, 'nothing is written before publish');
+  await page.locator('#advanced').evaluate((d) => { d.open = true; });
   await page.locator('#branch').fill('team/new-agents');
   await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: /team\/new-agents/ }).waitFor();

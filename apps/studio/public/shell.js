@@ -74,12 +74,12 @@ export const SHELL = `
     <div id="impact"></div>
     <div id="plan" class="plan-preview" hidden></div>
     <details id="files" class="sheet-sec"><summary id="files-title">${t('publish.files', { n: '…' })}</summary>
-      <p class="muted local-only">Writes <code>.agent-team/</code>, runs sync, and commits the result on a branch. Review the changes, then open a pull request as usual.</p>
-      <p class="muted embedded-only">Writes the team's files on a new branch and opens a pull request. Nothing changes until someone merges it.</p>
       <div id="changes" class="changes"></div>
     </details>
-    <label>Branch <input id="branch" required pattern="[A-Za-z0-9._\\/\\-]+"></label>
-    <label>Commit message <input id="message"></label>
+    <details id="advanced" class="sheet-sec advanced"><summary>${t('publish.local.advanced')}</summary>
+      <label>${t('publish.local.branch')} <input id="branch" required pattern="[A-Za-z0-9._\\/\\-]+"></label>
+      <label>${t('publish.local.message')} <input id="message"></label>
+    </details>
     <p class="hint">${t('publish.hint')}</p>
     <p id="publish-result" class="result" role="status"></p>
     <p id="confirm-sub" class="hint confirm-sub"><span class="local-only">${t('publish.confirm.sub.local')}</span><span class="embedded-only">${t('publish.confirm.sub.review')}</span></p>
