@@ -65,7 +65,7 @@ test('from the gallery to a published support team, and the repository opens its
   }
   assert.equal(await page.locator('#publish').isVisible(), false);
   // Neutral protocols criterion 5: each card says which shared rules it uses.
-  await gallery.locator('.g-card', { hasText: 'Startup product team' }).getByText('Shared rules: the core and engineering (pull requests, the merge gate, deploys)').waitFor();
+  await gallery.locator('.g-card', { hasText: 'Startup product team' }).getByText('Shared rules: the core and engineering (pull requests, the merge gate, going live)').waitFor();
   await gallery.locator('.g-card', { hasText: 'Customer support team' }).getByText('Shared rules: the core only').waitFor();
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'gallery-light.png') });
   await gallery.getByLabel('Search starting teams').fill('help articles');

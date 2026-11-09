@@ -108,6 +108,12 @@ function derive() {
  * B1.1-6: what changed since the last publish, per teammate (its seat: on or off, brief, changes, name) plus the
  * team's data files, so the canvas can draw changed cards dashed and count them. Nothing is published yet: all of it.
  */
+/**
+ * An off teammate that keeps its place on the chart (B1.1-3): a teammate of its own (a member), or a role that is on in
+ * the published team and switched off in this draft. A kit role the team never had is not one (B4.1-3).
+ */
+const offSeat = (r) => !r.enabled && (r.source === 'member' || !!published?.roles?.[r.slug]?.enabled);
+
 function draftChanges() {
   const seat = (sp, slug) => { const r = sp?.roles?.[slug]; return r ? JSON.stringify([r.enabled, r.brief ?? null, r.extension ?? null]) : JSON.stringify([false, null, null]); };
   const slugs = new Set([...Object.keys(spec.roles), ...Object.keys(published?.roles ?? {})]);
@@ -171,7 +177,13 @@ function change(fn, { quiet = false, key = '' } = {}) {
 function syncUndo() {
   $('#undo').disabled = !undo.length;
   $('#redo').disabled = !redo.length;
+  // "Publish {n} changes"; with nothing to publish it is disabled and says so (CPO ruling on L10). A new team's
+  // first publish counts each teammate.
+  const n = pendingCount();
+  const pub = $('#publish');
+  if (pub) { pub.textContent = n ? t('canvas.publish', { n }) : t('canvas.publish.none'); pub.disabled = !n; }
 }
+const pendingCount = () => (S?.noTeam ? view?.team.length ?? 0 : view?.draft.count ?? 0);
 function step(from, to) {
   if (!from.length) return;
   lastEdit = { key: '', at: 0 };
@@ -228,7 +240,9 @@ const ctx = {
 
 // ------------------------------------------------------------------------------------------------ canvas
 
-const W = 176, GX = 22, GY = 48, IND = 22;
+const W = 208, GX = 22, GY = 48, IND = 22;
+// B1.1-11: the smallest card text is 13 px, so the chart never draws smaller than 12/13 of its size; a wider org scrolls.
+const MIN_SCALE = 0.93;
 let H = 54, ROW = H + 12; // a third line, the board state, when the team is running (change safety, criterion 1)
 
 /**
@@ -357,8 +371,8 @@ function nodeSvg(r, p, extra = '') {
   return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${r.off ? ' off' : ''}${extra}" data-slug="${r.slug}" data-node="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}, ${esc(r.off ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle }))}${hot ? `, ${esc(hot.map(reasonOf).join(', '))}, work in progress` : ''}${look ? `, ${esc(look.text)}` : ''}">
     <rect class="card" width="${W}" height="${H}"></rect>
     <rect class="stripe" width="4" height="${H - 16}" x="8" y="8" fill="${groupColor(r.group)}"></rect>
-    <text class="title" x="20" y="23">${esc(r.title.length > 21 ? r.title.slice(0, 20) + '…' : r.title)}${flag}</text>
-    <text class="meta" x="20" y="41"${tier === subtitle ? ` data-tip="${esc(glossary(r.off || !r.enabled ? 'grey.dot' : 'ai.teammate'))}"` : ''}>${esc(tier.length > 28 ? tier.slice(0, 27) + '…' : tier)}</text>
+    <text class="title" x="20" y="23">${esc(r.title.length > 24 ? r.title.slice(0, 23) + '…' : r.title)}${flag}</text>
+    <text class="meta" x="20" y="41"${tier === subtitle ? ` data-tip="${esc(glossary(r.off || !r.enabled ? 'grey.dot' : 'ai.teammate'))}"` : ''}>${esc(tier.length > 27 ? tier.slice(0, 26) + '…' : tier)}</text>
     ${look ? `<g class="badge-warn" transform="translate(${W - 10},-6)" data-tip="${esc(look.text)}"><circle r="9"></circle><text text-anchor="middle" y="4">!</text></g>` : ''}
     ${three ? `${state ? `<circle class="dot" cx="24" cy="${H - 15}" r="4"></circle><text class="state" x="33" y="${H - 11}">${esc(state.length > 25 ? state.slice(0, 24) + '…' : state)}</text>` : ''}${tip ? `<title>${esc(tip)}</title>` : ''}`
     : `${replaces && !l ? `<title>${esc(view.issues.find((i) => i.where === `roles/${r.slug}` && /replaces the kit/.test(i.message))?.message ?? 'Replaces the kit role of this name on this team')}</title>` : ''}
@@ -417,7 +431,8 @@ function renderCanvas() {
   const shown = new Set([...view.team, ...ghosts].map((r) => r.slug));
   for (const r of view.all) {
     if (r.enabled || shown.has(r.slug)) continue;
-    if (r.source === 'member' || (spec.layout?.exclude ?? []).includes(r.slug) || published?.roles?.[r.slug]?.enabled) { ghosts.push({ ...r, off: true }); shown.add(r.slug); }
+    // B4.1-3: a kit role the team never had (another industry's, left out by its template) stays in the catalog only.
+    if (offSeat(r)) { ghosts.push({ ...r, off: true }); shown.add(r.slug); }
   }
   const cards = [...view.team, ...ghosts];
   const lay = layout(cards);
@@ -430,7 +445,7 @@ function renderCanvas() {
   }
   const PAD = 24;
   const fit = Math.min(1, ($('#canvas').clientWidth - 8) / (w + PAD * 2));
-  scale = zoom === 'fit' ? Math.max(0.4, fit) : zoom;
+  scale = Math.max(MIN_SCALE, zoom === 'fit' ? fit : zoom);
   $('#zoom-level').textContent = `${Math.round(scale * 100)}%`;
   const owner = pos.get('owner');
   const nodes = cards.filter((r) => pos.has(r.slug)).map((r) => nodeSvg(r, pos.get(r.slug))).join('');
@@ -452,7 +467,7 @@ function renderCanvas() {
 function renderList() {
   for (const b of $$('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
   $('#summary').textContent = view.draft.count ? t('canvas.changes', { n: view.draft.count }) : '';
-  const shown = [...view.team, ...view.all.filter((r) => !r.enabled && (r.source === 'member' || (spec.layout?.exclude ?? []).includes(r.slug)))];
+  const shown = [...view.team, ...view.all.filter((r) => !r.enabled && offSeat(r))];
   const on = new Set(shown.map((r) => r.slug));
   const kids = new Map([['owner', []], ...shown.map((r) => [r.slug, []])]);
   for (const r of shown) (on.has(r.reportsTo) && r.reportsTo !== r.slug ? kids.get(r.reportsTo) : kids.get('owner')).push(r);
@@ -614,7 +629,7 @@ function catalogRows() {
   for (const r of view.all) {
     if (r.source === 'member' || r.source === 'missing') continue;
     const md = spec.roles[r.slug]?.brief ?? S.kit.roles[r.slug] ?? r.md;
-    types.set(r.slug, { type: r.slug, title: titleOf(md, r.slug), group: field(md, 'Group').toLowerCase() || 'other', custom: isCustom(spec.roles[r.slug]), count: membersOf(spec, r.slug).length, used: r.enabled || membersOf(spec, r.slug, { enabledOnly: false }).length > 1 || (spec.layout?.exclude ?? []).includes(r.slug) });
+    types.set(r.slug, { type: r.slug, title: titleOf(md, r.slug), group: field(md, 'Group').toLowerCase() || 'other', custom: isCustom(spec.roles[r.slug]), count: membersOf(spec, r.slug).length, used: r.enabled || membersOf(spec, r.slug, { enabledOnly: false }).length > 1 || offSeat(r) });
   }
   return [...types.values()];
 }
@@ -645,7 +660,7 @@ function addTeammate(type, manager) {
   if (locked()) return flash(lockedNote());
   let id = type;
   const own = spec.roles[type];
-  const free = own && !own.enabled && membersOf(spec, type, { enabledOnly: false }).length === 1 && !(spec.layout?.exclude ?? []).includes(type);
+  const free = own && !own.enabled && membersOf(spec, type, { enabledOnly: false }).length === 1 ;
   // A custom role with an error in its checks stays off until it is fixed (CPO story D2), however it is switched on.
   const why = free && isCustom(own) && switchOnRefusal(spec, S.kit, type);
   if (why) { render(); return flash(why); }
@@ -719,8 +734,8 @@ function teamHtml() {
     ...(from ? [['Started from', `${tpl?.title ?? from[1]}${from[2] ? ` (kit ${from[2]})` : ''}`]] : []),
   ].filter(([, x]) => x);
   return `<h2>Team</h2><dl class="team-facts">${rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('')}</dl>
-    <h2>Coding agents</h2>
-    <label class="switch"><input type="checkbox" id="t-agents-md"${teamTargets(spec.options).includes('agents-md') ? ' checked' : ''}> Also keep AGENTS.md, for coding agents other than Claude Code</label>
+    <h2>${esc(t('settings.agentsmd.heading'))}</h2>
+    <label class="switch row-target"><input type="checkbox" id="t-agents-md"${teamTargets(spec.options).includes('agents-md') ? ' checked' : ''}> ${esc(t('settings.agentsmd'))}</label>
     <p class="hint">Publish puts the team's instructions into AGENTS.md at the top of the repository. Text you added to that file yourself stays. Teammates working through those agents show "self-reported" on the board: without hooks, a card changes only when the role reports.</p>
     <p class="hint">Every team gets the core rules: one door for the owner's requests, the owner's words passed on unchanged, one owner per area, the four message kinds and the board. A team's template or preset adds the rest.</p>
     <p class="muted">Pick a role on the canvas or in the library.</p>`;
@@ -929,14 +944,14 @@ function openEditor(slug, origin) {
 
 function render() {
   view = derive();
-  if (stateEl().dataset.page === 'meetings') { renderIssues(); syncUndo(); meetings?.render(); return; }
+  if (stateEl().dataset.page === 'meetings') { saveDraft(); renderIssues(); syncUndo(); meetings?.render(); return; }
+  saveDraft();
   if (editor?.slug) { renderLibrary(); renderIssues(); syncUndo(); editor.draw(); return; }
   renderCanvas();
   renderLibrary();
   renderInspector();
   renderIssues();
-  $('#undo').disabled = !undo.length;
-  $('#redo').disabled = !redo.length;
+  syncUndo();
   // Read-only: nothing that changes the team works, but looking does (the wiring view, the info buttons).
   if (locked()) for (const el of $$('#inspector :is(input, select, textarea, button):not(#i-wiring, .info), #library input')) el.disabled = true;
   renderTemplateBar();
@@ -1228,7 +1243,7 @@ async function start() {
   small.addEventListener('change', () => { stateEl().classList.toggle('small', small.matches); if (spec) render(); }, { signal: life.signal });
   stateEl().classList.toggle('small', small.matches);
   wireTemplates();
-  if (S.noTeam) return showGallery();
+  if (S.noTeam) return restoreNewTeam() || showGallery();
   load(S.spec);
   setPage(initialPage ?? pageFromUrl());
 }
@@ -1371,7 +1386,7 @@ function renderTemplateBar() {
   if (S.noTeam) {
     bar.hidden = false;
     bar.innerHTML = `<div class="tb-text"><strong>${made ? `A new team from the ${esc(made.title)} template.` : 'A new team.'}</strong> <span class="muted">Nothing is written to the repository until you publish.</span></div>
-      <div class="tb-actions"><button type="button" id="tb-back">Start over</button></div>`;
+      <div class="tb-actions"><button type="button" id="tb-back">${esc(t('canvas.discard'))}</button></div>`;
     return;
   }
   bar.hidden = true;
@@ -1384,9 +1399,10 @@ function wireTemplates() {
     if (b.id === 'tb-use') return useTemplate(b.dataset.template);
     if (b.id === 'tb-back') {
       return (async () => {
-        if (!previewing && undo.length && !(await ask('Discard this team? Nothing has been written yet.', { ok: 'Discard', cancel: 'Keep it', danger: true }))) return;
+        if (!previewing && undo.length && !(await ask(t('canvas.discard.confirm', { n: pendingCount() }), { ok: t('canvas.discard'), cancel: t('publish.keep'), danger: true }))) return;
         made = null;
         spec = null;
+        try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
         showGallery();
       })();
     }
@@ -1396,9 +1412,63 @@ function wireTemplates() {
 }
 
 /** Opens a team in the editor: the repository's, a template preview, or a new draft. Wires the page once. */
+// ------------------------------------------------------------------------------------------------ the draft
+// B1.1-10: unpublished changes survive a reload. The draft is kept in this browser per repository and branch, with
+// the published team it was made on; it comes back only on that same published team, and the owner can discard it.
+const draftKey = () => `orgcraft.draft:${where()}:${S.git?.branch ?? ''}`;
+const fingerprint = (x) => { const s = JSON.stringify(x); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return `${s.length}:${h}`; };
+function saveDraft() {
+  {
+    if (!spec || !published || previewing) return;
+    try {
+      // A new team, not published yet: all of it is the draft, with the template it came from.
+      if (S.noTeam) localStorage.setItem(draftKey(), JSON.stringify({ base: 'new', template: made?.id ?? 'almost-empty', spec, at: Date.now() }));
+      else if (JSON.stringify(spec) === JSON.stringify(published)) localStorage.removeItem(draftKey());
+      else localStorage.setItem(draftKey(), JSON.stringify({ base: fingerprint(published), spec, at: Date.now() }));
+    } catch { /* private mode or full: this session only */ }
+  }
+}
+const readDraft = () => { try { return JSON.parse(localStorage.getItem(draftKey()) ?? 'null'); } catch { return null; } };
+const restoredNote = (kept) => {
+  const box = $('#restored');
+  box.hidden = false;
+  box.querySelector('span').textContent = t('canvas.draft.restored', { time: new Date(kept.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+};
+/** A new team made from a template and not published yet comes back too (the repository still has no team). */
+function restoreNewTeam() {
+  const kept = readDraft();
+  if (kept?.base !== 'new' || !kept.spec) return false;
+  made = kept.template === 'almost-empty' ? null : cardOf(kept.template);
+  load(kept.spec);
+  restoredNote(kept);
+  setPage('team');
+  return true;
+}
+function restoreDraft() {
+  if (S.noTeam || previewing) return false;
+  const kept = readDraft();
+  if (!kept?.spec || kept.base === 'new') return false;
+  // Made on another published team (someone published since): it would undo their work, so it is not brought back.
+  if (kept.base !== fingerprint(published)) { try { localStorage.removeItem(draftKey()); } catch { /* ignore */ } return false; }
+  spec = kept.spec;
+  restoredNote(kept);
+  return true;
+}
+async function discardDraft() {
+  if (!(await ask(t('canvas.discard.confirm', { n: pendingCount() }), { ok: t('canvas.discard'), cancel: t('publish.keep'), danger: true }))) return;
+  try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
+  $('#restored').hidden = true;
+  if (S.noTeam) { made = null; spec = null; return showGallery(); }
+  spec = structuredClone(published);
+  undo.length = 0; redo.length = 0;
+  render();
+}
+
 function load(initial) {
   spec = initial;
   published = structuredClone(initial);
+  $('#restored').hidden = true;
+  restoreDraft();
   undo.length = 0; redo.length = 0;
   sugg = null; selected = null; selectedSystem = null; pop = null; picks = new Map();
   stateEl().classList.toggle('no-team', !!S.noTeam);
@@ -1416,8 +1486,10 @@ function load(initial) {
   wireCanvas();
   wireLibrary();
   $('#zoom-in').onclick = () => { zoom = Math.min(1.5, scale + 0.1); renderCanvas(); };
-  $('#zoom-out').onclick = () => { zoom = Math.max(0.3, scale - 0.1); renderCanvas(); };
-  $('#zoom-fit').onclick = () => { zoom = zoom === 'fit' ? 1 : 'fit'; renderCanvas(); };
+  $('#zoom-out').onclick = () => { zoom = Math.max(MIN_SCALE, scale - 0.05); renderCanvas(); };
+  $('#zoom-fit').onclick = () => { zoom = 'fit'; renderCanvas(); };
+  $('#zoom-level').onclick = () => { zoom = 1; renderCanvas(); };
+  $('#restored-discard').onclick = discardDraft;
   addEventListener('resize', () => zoom === 'fit' && renderCanvas(), { signal: life.signal });
   $('#undo').onclick = () => step(undo, redo);
   $('#redo').onclick = () => step(redo, undo);

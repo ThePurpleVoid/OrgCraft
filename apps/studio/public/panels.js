@@ -166,7 +166,7 @@ export function renderAreas(el, ctx, sugg) {
   };
   if (!own) {
     const md = sugg?.fromMarkdown ?? [];
-    el.innerHTML = `<div class="panel"><h2>Owned areas</h2>
+    el.innerHTML = `<div class="panel"><h2>${t('canvas.view.areas')}</h2>
       <p>Each area of the repository has exactly one role that writes it. Anyone else sends that role a request. Today this team's areas are hand-written in <code>docs/team/ownership.md</code>.</p>
       <p>Manage them here instead, and publishing writes <code>.agent-team/ownership.json</code> and generates <code>ownership.md</code> from it.</p>
       <div class="row"><button type="button" class="primary" id="a-fresh">Start from this repository's folders</button>
@@ -179,7 +179,7 @@ export function renderAreas(el, ctx, sugg) {
   const dupes = new Set(rows.map((r) => r.path).filter((p, i, a) => a.indexOf(p) !== i));
   const unowned = (sugg?.areas ?? []).filter((a) => !rows.some((r) => r.path === a.path));
   const noArea = team.filter((r) => r.group !== 'executive' && !r.dormant && !rows.some((x) => x.writer === r.slug));
-  el.innerHTML = `<div class="panel"><h2>Owned areas</h2>
+  el.innerHTML = `<div class="panel"><h2>${t('canvas.view.areas')}</h2>
     <p class="hint">One writer per area. A role changes only what it owns; anything else is a request to the owner.</p>
     ${unowned.length ? `<div class="callout"><div class="row between"><strong>${unowned.length} folder${unowned.length > 1 ? 's have' : ' has'} no owner yet</strong>
         <button type="button" id="a-accept-all" ${unowned.some((u) => u.writer) ? '' : 'disabled'}>Accept all suggestions</button></div>

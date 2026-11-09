@@ -11,7 +11,7 @@ export function rolesLine(card) {
 }
 
 /** What each pack of shared rules adds to the core, in plain words (neutral protocols story, criterion 5). */
-export const PACK_WORDS = { engineering: 'engineering (pull requests, the merge gate, deploys)' };
+export const PACK_WORDS = { engineering: 'engineering (pull requests, the merge gate, going live)' };
 
 /** "Shared rules: the core and engineering (…)", or "the core only" for a team with no packs. */
 export function rulesLine(packs) {
