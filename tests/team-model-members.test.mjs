@@ -166,3 +166,43 @@ test('setDisplayName needs the kit, and a name clashes with a teammate who is sw
   assert.throws(() => setDisplayName(spec, 'backend-dev', 'Maya', kit), (e) => e.status === 409 && /already called Maya/.test(e.message));
   assert.throws(() => setDisplayName(spec, 'backend-dev-2', 'CTO', kit), (e) => e.status === 409, 'a kit role\'s own title counts');
 });
+
+test('§1.2a: the team\'s edits to a role reach every teammate; the role\'s own seat settings stay with that seat', () => {
+  const typeExt = '**Reports to:** chief-of-staff\n**Pool:** 3\n**Model:** deep\n\n## Rules\n- Every migration ships with a rollback note.\n\n## Owns (writes) (replace)\n- `api/`\n\n## Hands to (replace)\n- qa-web: the change\n';
+  const spec = importLayer(layer({ 'roles/backend-dev.extend.md': typeExt, 'roles/backend-dev-2.extend.md': MAYA }), kit);
+  const md = resolveSpec(spec, kit).roles.find((r) => r.slug === 'backend-dev-2').md;
+  assert.match(md, /Every migration ships with a rollback note/, 'a rule added to the role reaches the second teammate');
+  assert.match(md, /^\*\*Model:\*\* deep$/m, 'so does a model change');
+  assert.match(md, /^\*\*Reports to:\*\* cto$/m, 'the role seat\'s manager does not');
+  assert.doesNotMatch(md, /Pool:|`api\/`|qa-web: the change/, 'nor its Pool, owned areas or Hands to');
+  assert.match(md, /## Owns \(writes\)\nNothing yet\./);
+});
+
+test('a teammate that is off raises no "has changes but is switched off" warning', () => {
+  const spec = importLayer(layer({ 'roles/backend-dev-2.extend.md': MAYA }, { exclude: ['backend-dev-2'] }), kit);
+  assert.deepEqual(resolveSpec(spec, kit).warnings, []);
+});
+
+test('S1: Hands to a role that is off but has one teammate on is not a warning', () => {
+  const hands = MAYA.replace('# Maya', '# Leo') + '\n## Hands to (replace)\n- backend-dev: review\n';
+  const spec = importLayer(layer({ 'roles/backend-dev-2.extend.md': MAYA, 'roles/qa-web.extend.md': hands.replace(/\*\*Based on:\*\* backend-dev\n/, '') }, { exclude: ['backend-dev'] }), kit);
+  assert.ok(!warnings(validate(spec, kit)).some((m) => /hands to backend-dev, which is off/.test(m)));
+});
+
+test('S2 and S4: one meaning of a seat; numbering among the seats the team lists', () => {
+  const spec = importLayer(layer({ 'roles/backend-dev-2.extend.md': MAYA.replace('# Maya\n\n', '') }), kit);
+  spec.roles['backend-dev'].enabled = false; // off and not listed in exclude: not a seat
+  assert.equal(displayName(spec, kit, 'backend-dev-2'), 'Backend dev');
+  const ids = listMembers(spec, kit).members.map((m) => m.id);
+  assert.ok(!ids.includes('backend-dev'));
+  setDisplayName(spec, 'backend-dev-2', 'Backend dev', kit); // no clash with a role that is not on the team
+  const kept = importLayer(layer({ 'roles/backend-dev-2.extend.md': MAYA.replace('# Maya\n\n', '') }, { exclude: ['backend-dev'] }), kit);
+  assert.equal(displayName(kept, kit, 'backend-dev-2'), 'Backend dev 2', 'the kept seat is listed, off, as Backend dev');
+  assert.ok(listMembers(kept, kit).members.some((m) => m.id === 'backend-dev' && !m.enabled));
+});
+
+test('S3: a teammate invited to a meeting by role is not an orphan', () => {
+  const meetings = JSON.stringify({ meetings: [{ id: 'standup', name: 'Standup', attendees: { types: ['backend-dev'] } }] }, null, 2) + '\n';
+  const spec = importLayer(layer({ 'roles/backend-dev-2.extend.md': MAYA, 'meetings.json': meetings }), kit);
+  assert.ok(!warnings(validate(spec, kit)).some((m) => /Nobody hands work to Maya/.test(m)));
+});

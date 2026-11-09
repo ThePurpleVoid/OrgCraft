@@ -271,6 +271,17 @@ function typeBrief(spec, kit, type) {
   return t && t.brief !== undefined ? t.brief : kit.roles[type];
 }
 
+/** The settings that belong to one seat, not to the job: they never pass from a role's own seat to its other teammates. */
+const SEAT_FIELDS = ['based on', 'reports to', 'pool', 'group'];
+const SEAT_SECTIONS = ['owns (writes)', 'owns', 'hands to'];
+function withoutSeat(extension) {
+  if (!extension) return undefined;
+  return {
+    fields: (extension.fields ?? []).filter((f) => !SEAT_FIELDS.includes(f.name.toLowerCase())),
+    sections: (extension.sections ?? []).filter((x) => !SEAT_SECTIONS.includes(x.name.toLowerCase())),
+  };
+}
+
 /** The type's title, from its brief's "# " line. */
 function typeTitle(spec, kit, type) {
   return briefTitle(typeBrief(spec, kit, type), type);
@@ -283,9 +294,13 @@ const briefTitle = (md, fallback) => (/^#\s+(.+)$/m.exec(md ?? '')?.[1] ?? fallb
  * type's slug becomes the member's id in "Every thread, every task" only (the status command and the memory path);
  * the rest of the brief describes the job in the type's words.
  */
-function memberBrief(base, r, id, kit) {
+function memberBrief(base, r, id, kit, typeExtension) {
+  // team-json-0.22 §1.2a: the type's brief, then the team's edits to the type without its seat settings (they
+  // belong to the type's own seat), then the member's own extension.
+  const shared = withoutSeat(typeExtension);
   const extension = { ...r.extension, fields: (r.extension?.fields ?? []).filter((f) => f.name.toLowerCase() !== 'based on') };
-  const md = emptyExtension(extension) ? base : applyExtension(base, extension);
+  let md = emptyExtension(shared) ? base : applyExtension(base, shared);
+  md = emptyExtension(extension) ? md : applyExtension(md, extension);
   const b = splitBrief(md);
   const title = briefTitle(base, r.type);
   const last = b.header.map((l, j) => (l.startsWith('**') ? j : -1)).filter((j) => j >= 0).at(-1);
@@ -344,13 +359,16 @@ export function displayName(spec, kit, id) {
   if (r.extension?.title) return r.extension.title;
   const type = typeOf(spec, id);
   const title = r.source === 'member' ? typeTitle(spec, kit, type) : briefTitle(r.brief ?? kit.roles?.[id], id);
-  const untitled = Object.keys(spec.roles).filter((x) => typeOf(spec, x) === type && !spec.roles[x].extension?.title && (x === type ? spec.roles[x].source !== 'missing' : true)).sort(byId);
+  // Numbered among the seats the team lists (on, or off but kept), so a visible teammate never says "2" alone.
+  const untitled = Object.keys(spec.roles).filter((x) => typeOf(spec, x) === type && !spec.roles[x].extension?.title && isSeat(spec, x)).sort(byId);
   const i = untitled.indexOf(id);
   return i <= 0 ? title : `${title} ${i + 1}`;
 }
 
 /** The seats on the team, on or off: switched on, a teammate of its own, listed as off, or given a name. */
-const isSeat = (spec, id) => { const r = spec.roles[id]; return r.enabled || r.source === 'member' || !!r.extension?.title || (spec.layout?.exclude ?? []).includes(id); };
+/** The seats on the team, on or off: switched on, a teammate of its own, listed as off, or given a name. The one
+ *  predicate for names (checkName, displayName) and for the Team page's list (listMembers). */
+const isSeat = (spec, id) => { const r = spec.roles[id]; return !!r && r.source !== 'missing' && (r.enabled || r.source === 'member' || !!r.extension?.title || (spec.layout?.exclude ?? []).includes(id)); };
 
 function checkName(spec, kit, id, name) {
   const n = normName(name);
@@ -445,11 +463,12 @@ function checkMembers(spec, kit, roles, manager) {
       if (several.length > 1) {
         const mine = laneOf(slug, manager);
         if (several.filter((x) => laneOf(x, manager) === mine).length !== 1) add('warning', `roles/${slug}`, `${name(slug)} hands to ${t.to}: pick which ${typeTitle(spec, kit, t.to)}`);
-      } else if (!on.has(t.to)) add('warning', `roles/${slug}`, `${name(slug)} hands to ${t.to}, which is off`);
+      } else if (!several.length && !on.has(t.to)) add('warning', `roles/${slug}`, `${name(slug)} hands to ${t.to}, which is off`);
     }
   }
   const handedTo = new Set([...handsOf.values()].flat().map((t) => t.to));
-  const met = new Set((spec.meetings?.meetings ?? []).flatMap((m) => [...(m.attendees?.roles ?? []), ...(m.facilitator ? [m.facilitator] : [])]));
+  // attendees.types (§1.4) invites every teammate of a role.
+  const met = new Set((spec.meetings?.meetings ?? []).flatMap((m) => [...(m.attendees?.roles ?? []), ...(m.attendees?.types ?? []).flatMap((x) => membersOf(spec, x)), ...(m.facilitator ? [m.facilitator] : [])]));
   const triggered = new Set((spec.triggers?.triggers ?? spec.triggers ?? []).map?.((t) => t.to) ?? []);
   for (const [id, r] of members) {
     if (!on.has(id)) continue;
@@ -482,11 +501,10 @@ export function listMembers(spec, kit) {
   const issues = validate(spec, kit);
   const roster = Object.keys(spec.roles);
   const members = Object.entries(spec.roles)
-    .filter(([id, r]) => r.enabled || r.source === 'member' || r.extension?.title)
-    .filter(([id, r]) => r.source !== 'missing')
+    .filter(([id]) => isSeat(spec, id))
     .sort(([a], [b]) => byId(a, b))
     .map(([id, r]) => {
-      const brief = md.get(id) ?? (r.source === 'member' ? (typeBrief(spec, kit, r.type) !== undefined ? memberBrief(typeBrief(spec, kit, r.type), r, id, kit) : '') : applyIfAny(r.brief ?? kit.roles[id] ?? '', r.extension));
+      const brief = md.get(id) ?? (r.source === 'member' ? (typeBrief(spec, kit, r.type) !== undefined ? memberBrief(typeBrief(spec, kit, r.type), r, id, kit, spec.roles[r.type]?.extension) : '') : applyIfAny(r.brief ?? kit.roles[id] ?? '', r.extension));
       const type = typeOf(spec, id);
       const h = handsTo(brief, roster);
       return {
@@ -516,11 +534,12 @@ export function resolveSpec(spec, kit) {
   const roles = [];
   const warnings = [];
   for (const [slug, r] of Object.entries(spec.roles).sort(([a], [b]) => a.localeCompare(b))) {
-    if (!r.enabled) { if (!emptyExtension(r.extension)) warnings.push(`${slug} has changes but is switched off`); continue; }
+    // A teammate based on a role always has an extension (it is the seat itself), so being off is not a warning.
+    if (!r.enabled) { if (!emptyExtension(r.extension) && r.source !== 'member') warnings.push(`${slug} has changes but is switched off`); continue; }
     if (r.source === 'member') {
       const base = typeBrief(spec, kit, r.type);
       if (base === undefined) { warnings.push(`${slug} is based on "${r.type}", which is neither a kit role nor one of the team's own`); continue; }
-      roles.push({ slug, md: memberBrief(base, r, slug, kit), source: `member of ${r.type}`, type: r.type });
+      roles.push({ slug, md: memberBrief(base, r, slug, kit, spec.roles[r.type]?.extension), source: `member of ${r.type}`, type: r.type });
       continue;
     }
     let md = r.brief ?? kit.roles[slug];
