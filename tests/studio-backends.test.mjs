@@ -427,3 +427,23 @@ test('GET /v1/team adds the computed members and catalog (team-json-0.22 section
     assert.ok(body.catalog.some((c) => c.count === 0), 'roles nobody on the team has are still in the catalog');
   } finally { await m.gh.close(); }
 });
+
+test('ADR 0013 rule 2: preview and publish carry the capability diff, and the pull request opens with Widens access', async () => {
+  const r = repos();
+  const m = await mounted(r.bare);
+  try {
+    const { spec, base } = (await m.call('GET', '/v1/team')).body;
+    const quiet = await m.call('POST', '/v1/team/preview', { spec, base });
+    assert.deepEqual(quiet.body.capability, [], 'an unchanged team widens nothing');
+    const slug = 'web-dev';
+    const wider = JSON.parse(JSON.stringify(spec));
+    setField(wider, slug, 'Model', 'deep');
+    const pre = await m.call('POST', '/v1/team/preview', { spec: wider, base });
+    assert.deepEqual(pre.body.capability.map((x) => [x.kind, x.subject]), [['model-changed', slug]], JSON.stringify(pre.body.capability));
+    const pub = await m.call('POST', '/v1/team/publish', { spec: wider, base, message: 'A deeper model' });
+    assert.equal(pub.status, 200, JSON.stringify(pub.body));
+    assert.match(m.gh.pulls.at(-1).body, new RegExp(`### Widens access\\n\\n- ${slug} model tier .* \\(\`model-changed\`\\)`));
+  } finally { await m.gh.close(); }
+  assert.equal(core.capabilitySection([]), '');
+  assert.equal(core.capabilitySection([{ kind: 'binding-added', detail: 'x gets `db` @here' }]), "### Widens access\n\n- x gets 'db' &#64;here (`binding-added`)");
+});

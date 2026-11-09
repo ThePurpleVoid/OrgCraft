@@ -18,7 +18,8 @@ test('every brief has a known tier, a group and the shared footer', () => {
   for (const r of roles) {
     assert.ok(TIERS.includes(r.tier), r.slug);
     assert.ok(r.group, r.slug);
-    assert.match(r.body, new RegExp(`roles/${r.slug}\\.md`), r.slug);
+    // Kit 0.22: a brief names its own slug as {{ROLE}}, which sync fills with each teammate's id.
+    assert.match(r.body, /roles\/\{\{ROLE\}\}\.md/, r.slug);
   }
 });
 
