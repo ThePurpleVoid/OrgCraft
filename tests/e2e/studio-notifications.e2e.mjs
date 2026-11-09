@@ -358,7 +358,7 @@ test('L25: set quiet hours and a digest, then read the delivery log, mine and ev
   await prefs.getByLabel('Quiet from').fill('22:00');
   await prefs.getByLabel('to', { exact: true }).fill('22:00');
   await prefs.getByRole('button', { name: 'Save' }).click();
-  await prefs.getByRole('alert').getByText('Quiet hours need two different times.').waitFor();
+  await prefs.getByRole('alert').getByText('Quiet hours need a start and an end that are different.').waitFor();
   await prefs.getByLabel('No quiet hours').check();
   await prefs.getByRole('button', { name: "Use this device's time zone (Europe/Paris)" }).click();
   await prefs.getByLabel('No quiet hours').uncheck();
