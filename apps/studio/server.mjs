@@ -29,6 +29,39 @@ import { openPullRequest, prSupport, pullRequestText } from './pr.mjs';
 import { linkHash, resolveMeeting } from './public/links.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The systems as published: .agent-team/resources.json at HEAD, as { resources, bindings }, or null when the published
+ * team has none. Read from Git, so a draft on the canvas or an uncommitted edit is never what the control plane gets.
+ */
+export function publishedSystems(root) {
+  let text;
+  try { text = execFileSync('git', ['-C', root, 'show', 'HEAD:.agent-team/resources.json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return null; }
+  let json;
+  try { json = JSON.parse(text); } catch { return null; }
+  return { resources: Array.isArray(json?.resources) ? json.resources : [], bindings: Array.isArray(json?.bindings) ? json.bindings : [] };
+}
+
+/**
+ * Same systems, whatever the order: each resource's id, connector, secret names, tools, permissions, effects, egress
+ * and tier, and every binding. Compared on what decides access, with the defaults the control plane fills in (no
+ * permission grants, no effects, no egress, tier custom), since it keeps no `config` (L40 review sev3).
+ */
+export function sameSystems(here, there) {
+  const sorted = (a) => [...(Array.isArray(a) ? a : [])].map(String).sort();
+  const resource = (r) => JSON.stringify([
+    r.id, r.type, sorted(r.secrets),
+    r.tools?.command ? { command: r.tools.command, args: r.tools.args ?? [] } : r.tools?.url ? { url: r.tools.url } : null,
+    ['read', 'write', 'deploy'].map((p) => sorted(r.permissions?.[p])),
+    Object.entries(r.effects ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+    sorted(r.egress), r.tier ?? 'custom',
+  ]);
+  const norm = (s) => JSON.stringify({
+    resources: [...(s?.resources ?? [])].map(resource).sort(),
+    bindings: [...(s?.bindings ?? [])].map((b) => `${b.role}\u0000${b.resource}\u0000${b.permission}`).sort(),
+  });
+  return norm(here ?? { resources: [], bindings: [] }) === norm(there);
+}
 const PUBLIC = join(HERE, 'public');
 const MODEL = join(KIT, 'packages/team-model/index.mjs');
 const PRICES = join(KIT, 'packages/model-prices/prices.json');
@@ -294,6 +327,15 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           return { connected: true, me: me?.id ?? me?.person?.id ?? null, owner: (me?.workspaces ?? []).some((w) => w.role === 'owner'), ...(rules ? { rules } : {}), ledger };
         });
       }
+      // L40: are the published systems the ones the control plane holds? Compared on content, never versions.
+      if (req.method === 'GET' && url.pathname === '/v1/team/systems') {
+        if (!chat.connected) return send(res, 200, { connected: false });
+        return relay(res, async () => {
+          const there = await chat.systems();
+          const here = publishedSystems(root);
+          return { connected: true, version: there.version ?? 0, inSync: sameSystems(here, there), published: !!here };
+        });
+      }
       if (req.method === 'GET' && url.pathname === '/v1/team/runners') {
         if (!chat.connected) return send(res, 200, { connected: false, runners: [] });
         return relay(res, async () => ({ connected: true, ...(await chat.runners()) }));
@@ -363,6 +405,15 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (member) {
           if (!['paused', 'off'].includes(input.state)) throw new HttpError(400, 'state is paused or off');
           return relay(res, () => chat.setMember(decodeURIComponent(member[1]), input.state, reason, key));
+        }
+        // L40: sends the systems as published (the repository's HEAD, never the page's draft) to the control plane.
+        // The control plane asks for a step-up scoped systems:<team>; the page gets it and calls again.
+        if (url.pathname === '/v1/team/systems') {
+          // No control plane: the repository is the only place systems live, so there is nothing to send.
+          if (!chat.connected) return send(res, 200, { connected: false });
+          const here = publishedSystems(root);
+          if (!here) throw new HttpError(409, 'nothing published sets systems yet', { type: 'no-systems' });
+          return relay(res, () => chat.setSystems(here, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
         }
         const withdraw = /^\/v1\/team\/standing-rules\/([^/]+)\/withdraw$/.exec(url.pathname);
         if (withdraw) return relay(res, () => chat.withdrawRule(decodeURIComponent(withdraw[1])));

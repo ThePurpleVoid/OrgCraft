@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Studio: a published systems change reaches the control plane** (L40, web half; ADR 0013). When a publish changes `resources.json`, the Studio sends the published file (the repository's HEAD, never the draft) with PUT `/v1/teams/{team}/systems`, behind a step-up scoped `systems:<team>` that the control plane names. Under the publish result one line says how it went: done, not sent (the step-up was cancelled) or failed, with "Send the systems" to try again. A Studio with no control plane says nothing, since runs read the systems from the repository. GET `/v1/team/systems` tells whether the published systems match the control plane's, compared on everything that decides access (secrets, tools, permissions, effects, egress, tier, bindings), with the control plane's defaults. The Publish sheet gives a new system, a new program, more tools, fewer questions before an effect, a new host and a lower tier their own "Widens access" lines (words pending with the CPO). Not yet: a publish that opens a pull request sends no systems.
+
 - **What a systems change widens: `systemsCapability(before, after)`** (L40, kit half; ADR 0013 rule 2). It takes two resources.json shapes, as GET and PUT `/v1/teams/{team}/systems` carry them, and lists what the change widens:
   - `system-added`: a new system, whether or not a seat is bound to it yet;
   - `binding-added`: a seat gets a system;

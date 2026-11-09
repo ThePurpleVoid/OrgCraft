@@ -112,6 +112,10 @@ export function chatSource(env = process.env) {
     // Approvals (L22, apps/server/ledger.mjs): the standing rules with their use this period, and the ledger, newest
     // first. Withdrawing narrows what the team may do, so it needs no step-up. `me` names the viewer for "You".
     me: () => call('GET', '/me'),
+    // L40: the team's systems (resources.json) live on the control plane, set only by an admin with a step-up scoped
+    // systems:<team> (apps/server/credentials.mjs putSystems); runs freeze them at start.
+    systems: () => call('GET', `/teams/${t}/systems`),
+    setSystems: (body, key) => call('PUT', `/teams/${t}/systems`, body, { ...(key ? { 'idempotency-key': key } : {}), ...spendStepUp() }),
     rules: () => call('GET', `/teams/${t}/standing-rules`),
     withdrawRule: (id) => call('DELETE', `/teams/${t}/standing-rules/${encodeURIComponent(id)}`),
     ledger: (before) => call('GET', `/teams/${t}/ledger${before ? `?before=${encodeURIComponent(before)}` : ''}`),

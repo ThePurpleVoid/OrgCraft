@@ -52,7 +52,22 @@ export function widensLine(x, name, system = (s) => s) {
     case 'review-removed': return t('widens.review-removed', { ...v, reviewer: name(x.reviewer) });
     case 'check-removed': return t('widens.check-removed', { target: x.target, check: x.check });
     case 'check-changed': return t('widens.check-changed', { target: x.target, check: x.check });
-    case 'resource-widened': return t('widens.resource-widened', { ...v, system: system(x.resource ?? x.subject ?? '') });
+    case 'resource-widened': {
+      // One kind of widening gets its own line; more than one, or new secrets or settings, the general one.
+      const sys = { ...v, system: system(x.resource ?? x.subject ?? '') };
+      const only = [x.secrets?.length && 'secrets', x.command && 'command', x.tools?.length && 'tools', x.effects?.length && 'effects', x.egress?.length && 'egress', x.tier && 'tier'].filter(Boolean);
+      const settings = / changes its settings/.test(x.detail ?? '');
+      if (only.length === 1 && !settings) {
+        if (only[0] === 'command') return t('widens.resource-command', sys);
+        if (only[0] === 'tools') return t('widens.resource-tools', { ...sys, tools: x.tools.map((g) => g.tool).join(', ') });
+        if (only[0] === 'effects') return t('widens.resource-effects', { ...sys, tools: x.effects.map((g) => g.tool).join(', ') });
+        if (only[0] === 'egress') return t('widens.resource-egress', { ...sys, hosts: x.egress.join(', ') });
+        if (only[0] === 'tier') return t('widens.resource-tier', { ...sys, tier: t(`tier.${x.tier.from}`) });
+      }
+      return t('widens.resource-widened', sys);
+    }
+    // L40 (kit-core-dev systemsCapability): a new system is listed before anyone is bound to it.
+    case 'system-added': return t('widens.system-added', { system: system(x.resource ?? ''), type: x.type ?? '' });
     default: return x.detail ?? '';
   }
 }
