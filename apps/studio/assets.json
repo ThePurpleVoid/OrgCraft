@@ -17,6 +17,10 @@
       "path": "apps/studio/public/app.js",
       "type": "text/javascript; charset=utf-8"
     },
+    "approvals.js": {
+      "path": "apps/studio/public/approvals.js",
+      "type": "text/javascript; charset=utf-8"
+    },
     "auth.js": {
       "path": "apps/studio/public/auth.js",
       "type": "text/javascript; charset=utf-8"
@@ -91,6 +95,10 @@
     },
     "studio.js": {
       "path": "apps/studio/public/studio.js",
+      "type": "text/javascript; charset=utf-8"
+    },
+    "systems.js": {
+      "path": "apps/studio/public/systems.js",
       "type": "text/javascript; charset=utf-8"
     },
     "tooltip.js": {

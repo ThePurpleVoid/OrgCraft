@@ -136,3 +136,88 @@ test('selfCapability: a seat may not widen itself or weaken a check, and another
   assert.deepEqual(selfCapability(items, null), [], 'a person is not a seat');
   assert.deepEqual(selfCapability([{ kind: 'seat-added', subject: 'backend-dev-3' }], 'cto'), []);
 });
+
+// L40: systems (resources.json), as GET/PUT /v1/teams/{team}/systems carry them. Adding widens; removing never does.
+test('systemsCapability: each kind of widening, and nothing for removing or narrowing', async () => {
+  const { systemsCapability } = await import('../packages/team-model/index.mjs');
+  const gh = { id: 'code', type: 'github', config: { repo: 'acme/shop' }, secrets: ['GITHUB_TOKEN'] };
+  const db = { id: 'db', type: 'postgres', config: {}, secrets: [] };
+  const before = { resources: [gh], bindings: [{ role: 'backend-dev', resource: 'code', permission: 'read' }] };
+  const kinds = (after) => systemsCapability(before, after).map((x) => [x.kind, x.subject, x.resource, x.from ?? null, x.to ?? null]);
+  // A new system, bound or not.
+  assert.deepEqual(kinds({ ...before, resources: [gh, db] }), [['system-added', null, 'db', null, null]]);
+  const added = systemsCapability(before, { resources: [gh, db], bindings: [...before.bindings, { role: 'web-dev', resource: 'db', permission: 'write' }] });
+  assert.deepEqual(added.map((x) => [x.kind, x.subject]), [['system-added', 'web-dev'], ['binding-added', 'web-dev']]);
+  // Read, then Change, then Act.
+  assert.deepEqual(kinds({ ...before, bindings: [{ role: 'backend-dev', resource: 'code', permission: 'write' }] }), [['binding-widened', 'backend-dev', 'code', 'read', 'write']]);
+  assert.deepEqual(kinds({ ...before, bindings: [{ role: 'backend-dev', resource: 'code', permission: 'deploy' }] }), [['binding-widened', 'backend-dev', 'code', 'read', 'deploy']]);
+  // A secret, a command or settings on an existing system.
+  const two = { ...before, bindings: [...before.bindings, { role: 'qa-web', resource: 'code', permission: 'read' }] };
+  const sec = systemsCapability(two, { ...two, resources: [{ ...gh, secrets: ['GITHUB_TOKEN', 'NPM_TOKEN'] }] });
+  assert.deepEqual(sec.map((x) => [x.kind, x.subject, x.subjects, x.secrets]), [['resource-widened', null, ['backend-dev', 'qa-web'], ['NPM_TOKEN']]]);
+  assert.equal(systemsCapability(before, { ...before, resources: [{ ...gh, tools: { command: 'npx', args: ['x'] } }] })[0].command, true);
+  assert.match(systemsCapability(before, { ...before, resources: [{ ...gh, config: { repo: 'acme/other' } }] })[0].detail, /changes its settings/);
+  // Removing a system, a binding or a secret, or narrowing, lists nothing.
+  assert.deepEqual(systemsCapability(before, { resources: [], bindings: [] }), []);
+  assert.deepEqual(systemsCapability(before, { ...before, bindings: [] }), []);
+  assert.deepEqual(systemsCapability({ ...before, bindings: [{ role: 'backend-dev', resource: 'code', permission: 'deploy' }] }, before), []);
+  assert.deepEqual(systemsCapability(before, { ...before, resources: [{ ...gh, secrets: [] }] }), []);
+  assert.deepEqual(systemsCapability(before, before), []);
+  // A seat may not widen its own systems.
+  assert.deepEqual(selfCapability(sec, 'qa-web').length, 1);
+  assert.deepEqual(selfCapability(sec, 'web-dev'), []);
+});
+
+test('capabilityDiff carries the systems items for a resources.json change in a publish', () => {
+  const published = team();
+  const draft = clone(published);
+  draft.resources = { resources: [{ id: 'db', type: 'postgres', config: {}, secrets: ['DATABASE_URL'] }], bindings: [{ role: 'backend-dev', resource: 'db', permission: 'write' }] };
+  assert.deepEqual(capabilityDiff(published, draft, kit).filter((x) => ['system-added', 'binding-added'].includes(x.kind)).map((x) => [x.kind, x.subject]), [['system-added', 'backend-dev'], ['binding-added', 'backend-dev']]);
+  assert.deepEqual(capabilityDiff(draft, published, kit).filter((x) => /system|binding|resource/.test(x.kind)), [], 'taking it away widens nothing');
+});
+
+// L40 review: the server's systems shape (checkSystems) also carries permissions, effects, egress and tier; each widens.
+test('systemsCapability: permissions, effects, egress and tier in the server\'s shape widen; the reverse does not', async () => {
+  const { systemsCapability } = await import('../packages/team-model/index.mjs');
+  const slack = {
+    id: 'slack', type: 'slack', secrets: ['SLACK_TOKEN'], tools: { url: 'https://mcp.slack.example/' },
+    permissions: { read: ['slack.read*'], write: ['slack.post'], deploy: ['slack.delete*'] },
+    effects: { 'slack.post': 'send', 'slack.pay': 'payment' }, egress: ['slack.com'], tier: 'verified',
+  };
+  const before = { resources: [slack], bindings: [{ role: 'support', resource: 'slack', permission: 'read' }] };
+  const one = (r) => { const out = systemsCapability(before, { ...before, resources: [{ ...slack, ...r }] }); assert.equal(out.length, 1); assert.equal(out[0].kind, 'resource-widened'); assert.equal(out[0].subject, 'support'); return out[0]; };
+  // permissions.read gains a tool, or a tool moves down from deploy to read.
+  assert.deepEqual(one({ permissions: { ...slack.permissions, read: ['slack.read*', 'slack.export'] } }).tools, [{ tool: 'slack.export', at: 'read' }]);
+  assert.deepEqual(one({ permissions: { read: ['slack.read*', 'slack.delete*'], write: ['slack.post'], deploy: [] } }).tools, [{ tool: 'slack.delete*', at: 'read', from: 'deploy' }]);
+  // An effect moves from payment to read (it no longer asks a person), or an effect entry is dropped.
+  const eff = one({ effects: { ...slack.effects, 'slack.pay': 'read' } });
+  assert.deepEqual(eff.effects, [{ tool: 'slack.pay', from: 'payment', to: 'read' }]);
+  assert.match(eff.detail, /asks less before slack\.pay/);
+  assert.deepEqual(one({ effects: { 'slack.post': 'send' } }).effects, [{ tool: 'slack.pay', from: 'payment', to: null }]);
+  // A new egress host; the tier leaves verified; the remote URL changes.
+  assert.deepEqual(one({ egress: ['slack.com', 'files.example'] }).egress, ['files.example']);
+  assert.deepEqual(one({ tier: 'custom' }).tier, { from: 'verified', to: 'custom' });
+  assert.deepEqual(one({ tier: undefined }).tier, { from: 'verified', to: 'custom' }, 'no tier is custom, as the server stores it');
+  assert.equal(one({ tools: { url: 'https://elsewhere.example/' } }).command, true);
+  // The reverse of each is narrowing and lists nothing.
+  const narrower = { ...slack, permissions: { read: [], write: ['slack.post', 'slack.read*'], deploy: ['slack.delete*'] }, effects: { 'slack.post': 'destructive', 'slack.pay': 'payment' }, egress: [], tier: 'verified' };
+  assert.deepEqual(systemsCapability(before, { ...before, resources: [narrower] }), []);
+  assert.deepEqual(systemsCapability(before, { ...before, resources: [{ ...slack, permissions: { read: ['slack.read*'], write: ['slack.post'], deploy: [] } }] }), []);
+  // A seat may not make these on its own system.
+  assert.equal((await import('../packages/team-model/index.mjs')).selfCapability([one({ egress: ['x.example'] })], 'support').length, 1);
+});
+
+test('systemsCapability: an unknown field changing widens, a name or key order does not (canonical compare)', async () => {
+  const { systemsCapability } = await import('../packages/team-model/index.mjs');
+  const r = { id: 'pay', type: 'stripe', config: { a: 1, b: 2 }, tools: { command: 'npx', args: ['s'] }, secrets: [] };
+  const before = { resources: [r], bindings: [{ role: 'ops', resource: 'pay', permission: 'read' }] };
+  const after = (x) => systemsCapability(before, { ...before, resources: [x] });
+  assert.deepEqual(after({ ...r, name: 'Payments', config: { b: 2, a: 1 }, tools: { args: ['s'], command: 'npx' } }), []);
+  assert.deepEqual(after({ ...r, config: undefined }).map((x) => x.kind), ['resource-widened'], 'any settings change is listed, even a removal (settings are not ranked)');
+  const odd = after({ ...r, sandbox: 'off' });
+  assert.deepEqual([odd[0].kind, odd[0].subject], ['resource-widened', 'ops']);
+  assert.match(odd[0].detail, /changes its settings/);
+  assert.equal(odd[0].settings, true);
+  assert.equal(after({ ...r, tools: { command: 'npx', args: ['t'] } })[0].settings, undefined, 'a command change alone is not a settings change');
+  assert.equal(after({ ...r, tools: { command: 'npx', args: ['s', '--all'] } })[0].command, true);
+});

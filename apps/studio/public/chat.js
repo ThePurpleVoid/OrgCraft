@@ -5,6 +5,8 @@
 
 import { apiUrl, ask, askText, requestJson } from './env.js';
 import { t } from './i18n.js';
+import { personWord, ruleLine } from './approvals.js';
+import { sendSystems, showItems, systemsState } from './systems.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -117,7 +119,33 @@ function cardFrom(e) {
   return { id: d.cardId || subjectId(e.subject) || e.id, kind: 'decision', subject: e.subject, version: d.version ?? 1, title: d.question ?? d.title ?? 'A decision', body: d.body ?? '', options: opts, recommendation: rec };
 }
 
-export function createChat({ root, onOpen, runs = true, organization = () => '' } = {}) {
+/** A day for the CPO's {date}: "9 Nov". */
+const fmtDay = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleDateString([], { day: 'numeric', month: 'short' }); };
+
+/**
+ * L22, the lines above an approval's facts (strings-now §6b): asked again after a decline (declines stick, AI-10),
+ * what the teammate says changed, and a card that replaced one whose calls changed. `me` is the viewer's id, if known.
+ */
+export function declineHtml(card, me = null, org = '') {
+  const d = card.data ?? {};
+  const out = [];
+  const db = d.declinedBefore;
+  const what = typeof d.changed?.what === 'string' && d.changed.what.trim() ? d.changed.what.trim() : '';
+  if (db && (db.declinedOn || db.at)) {
+    const date = fmtDay(db.declinedOn ?? db.at);
+    const mine = db.declinedBy && me ? db.declinedBy === me : !db.declinedByName;
+    if (mine && what) out.push(t('card.declined.before', { date, reason: what }));
+    else {
+      out.push(t('card.declined.other', { person: mine ? t('notify.log.you') : db.declinedByName || (db.declinedByName === null ? t('notify.log.who.unknown') : t('person.loading', { organization: org || t('org.fallback') })), date }));
+      if (what) out.push(t('card.changed.what', { reason: what }));
+    }
+    if (db.cooldownUntil ?? db.until) out.push(t('card.cooldown', { date: fmtDay(db.cooldownUntil ?? db.until) }));
+  } else if (what) out.push(t('card.changed.what', { reason: what }));
+  if (Array.isArray(d.changed?.from) && d.changed.from.length) out.unshift(t('card.changed'));
+  return out.length ? `<div class="declined notice" role="note">${out.map((x) => `<p>${esc(x)}</p>`).join('')}</div>` : '';
+}
+
+export function createChat({ root, onOpen, runs = true, organization = () => '', me = () => null } = {}) {
   const st = {
     connected: null, error: null, events: [], next: null, cards: new Map(), answers: new Map(), pending: [],
     notes: new Map(), // card id -> note shown above it (changed, step-up)
@@ -134,17 +162,19 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
       <div class="chat-run row">
         <span id="run-state" class="pill" role="status"></span>
         <span id="cost" class="cost" role="status"></span>
-        <button id="run-start" type="button" class="primary" hidden>Start a run…</button>
+        <button id="run-start" type="button" class="primary" hidden>${t('team.start')}…</button>
         <button id="run-pause" type="button"></button>
         <button id="run-stop" type="button" class="danger">Stop</button>
-        <button id="runner-add" type="button" hidden>Add a runner…</button>
+        <button id="runner-add" type="button" data-tip="${esc(t('runner.connect.tip'))}" hidden>${esc(t('runner.connect'))}</button>
       </div>
+      <p id="run-systems" class="run-systems" role="status" hidden></p>
     </div>
     <dialog id="start-dialog" class="start-dialog">
       <form method="dialog" class="dialog" id="start-form">
-        <h2>Start a run</h2>
+        <h2>${t('team.start')}</h2>
         <p class="muted">The team runs as it was last published, not as the canvas shows it now. It keeps going until you pause or stop it, or today's cap is reached.</p>
         <p id="start-plan" class="plan" role="status">Reading the published team…</p>
+        <p id="start-systems" class="plan" hidden></p>
         <label for="start-cap">Daily cap</label>
         <div class="money"><input id="start-cap" type="number" inputmode="decimal" min="0.01" step="0.01" required placeholder="e.g. 20.00"><span id="start-currency" class="muted"></span></div>
         <p class="hint" id="start-cap-hint">The most the team may spend in a day (UTC). A run cannot start without one. Raising it later asks you to confirm it is you.</p>
@@ -203,9 +233,21 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
   }
 
   /** What a closed card says instead of its buttons: its answer (#47 puts it on the card), or why it closed. */
+  // Who answered, by the rule the ledger uses (qa-web L22w/L39w): You; the name given; gone when the name is null;
+  // the neutral "Someone in {organization}" when no name field came at all.
+  const myId = () => me() ?? st.me ?? null;
+  const byId = (a) => (typeof a.by === 'object' ? a.by?.id : a.by) ?? null;
+  const byWord = (a) => personWord(byId(a), typeof a.by === 'object' && a.by && 'name' in a.by ? a.by.name : 'name' in a ? a.name : undefined, myId(), organization());
   function closedText(card) {
     if (card.state === 'answered' && card.answer) {
       const a = card.answer;
+      // Done under a standing rule (L22): the rule's number and line, never "rule:sr_…".
+      // Taken with Do it (L39): the letters the tap covered, in the ledger's words; never words the person didn't type.
+      if (a.tap === 'do-it' && Array.isArray(a.covered)) {
+        const who = byWord(a);
+        return t('ledger.doit', { time: a.at ? fmtTime(a.at) : '', person: who, list: andList(a.covered.filter((x) => LETTER.test(x))), channel: t(`ledger.via.${a.channel === 'approvals' ? 'approvals' : 'chat'}`) }).replace(/^ · /, '');
+      }
+      if (Number.isInteger(a.ruleNumber) && (a.ruleForm || a.ruleLine)) return t('ledger.byrule', { time: a.at ? fmtTime(a.at) : '', n: a.ruleNumber, what: a.ruleForm ? ruleLine(a.ruleForm) : a.ruleLine }).replace(/^ · /, '');
       const label = (card.options ?? []).find((o) => o.id === a.option)?.label ?? human(a.option);
       const by = typeof a.by === 'object' ? a.by?.name ?? a.by?.id : a.by;
       return `${label}${by ? ` · ${by}` : ''}${a.at ? ` at ${fmtTime(a.at)}` : ''}${a.note ? `: ${a.note}` : ''}`;
@@ -237,6 +279,73 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
     return `<div class="facts"><p><strong>It will do exactly this${facts.length > 1 ? `, ${facts.length} steps` : ''}:</strong></p>${facts.map((f) => `<pre><code>${esc(f.text)}</code></pre>`).join('')}${facts.some((f) => f.redacted) ? '<p class="muted">Values that look like passwords or keys are hidden here as [redacted]. Approving still covers the exact steps, hidden values included.</p>' : ''}<p class="muted">Approving signs these exact steps. Anything different is asked for again.</p></div>`;
   }
 
+  // ---- "Do it" (L39; governance G3): the team's open asks are lettered A to E. One tap takes the recommendation on
+  // every ask it can cover, each bound to the card version shown; an ask that needs the person first stays open.
+  const LETTER = /^[A-E]$/;
+  const approvalOf = (card) => card.approval ?? /^approval\/(.+)$/.exec(card.subject ?? '')?.[1] ?? card.id;
+  // A merge held by a missing or stale sign-off needs the person (or the team) to do something before it can go.
+  // Do it approves, so an ask whose recommendation is anything else is held for its own answer too.
+  const needsYou = (card) => (card.recommendation?.option != null && card.recommendation.option !== 'approve') || !!card.data?.blocked || (Array.isArray(card.data?.signoffs) && card.data.signoffs.some((x) => x?.fresh === false));
+  const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+  /** The open lettered asks, the ones Do it covers, and the card it shows on (the newest of them). */
+  function doItPlan(isAnswered) {
+    const open = [...st.cards.values()].filter((c) => c.kind === 'approval' && LETTER.test(c.data?.letter ?? '') && (!c.state || c.state === 'open') && !isAnswered(c));
+    if (!open.length) return null;
+    const order = new Map(st.events.map((e, i) => [/\.requested$|^card\.updated$/.test(e.type) ? cardFrom(e)?.id : null, i]));
+    const host = [...open].sort((a, b) => (order.get(b.id) ?? -1) - (order.get(a.id) ?? -1))[0].id;
+    const byLetter = (a, b) => (a.data.letter < b.data.letter ? -1 : 1);
+    return { host, covered: open.filter((c) => !needsYou(c)).sort(byLetter).slice(0, 5), held: open.filter(needsYou).sort(byLetter), all: open.length };
+  }
+  function doItHtml(p) {
+    if (!p.covered.length) return `<p class="muted doit-none">${esc(t('card.doit.none'))}</p>`;
+    const letters = p.covered.map((c) => c.data.letter);
+    // A passkey is mentioned only when one will be asked: some covered ask is bound to signed calls.
+    const bound = p.covered.some((c) => c.data?.callsHash || (Array.isArray(c.data?.facts) && c.data.facts.length));
+    const held = p.held.map((c) => c.data.letter);
+    const covers = p.all === 1 ? t(bound ? 'card.doit.single' : 'card.doit.single.nopasskey')
+      : !held.length ? t('card.doit.covers.all', { list: andList(letters) })
+      : t(held.length > 1 ? 'card.doit.covers.many' : 'card.doit.covers', { list: andList(letters), other: andList(held) });
+    const acts = bound ? ` ${t('card.doit.acts')}` : '';
+    return `<div class="doit"><button type="button" class="primary big" id="doit" data-tip="${esc(t('tip.control.do.it'))}" ${st.busy ? 'disabled' : ''}>${esc(t('card.doit'))}<small class="doitcov">${esc(covers + acts)}</small></button></div>`;
+  }
+  async function doIt() {
+    const p = st.doit;
+    if (!p?.covered.length) return;
+    const asks = p.covered.map((c) => ({ approval: approvalOf(c), version: c.version }));
+    const list = andList(p.covered.map((c) => c.data.letter));
+    st.busy = true; render();
+    let r = await api('/v1/team/do-it', { asks, key: newId() });
+    // One step-up for the set, bound to exactly these asks as shown (the control plane names the scope).
+    // Each covered ask by its letter and title, so the passkey confirms what acts even with the cards scrolled away
+    // (security L39w low), then its payments and sends from the server's facts.
+    const acts = p.covered.flatMap((c) => [`${c.data.letter}. ${c.title}`, ...(Array.isArray(c.data?.facts) ? c.data.facts : []).filter((f) => f && typeof f.text === 'string').map((f) => f.text)]);
+    if (needsStepUp(r) && await stepUp(t('stepup.action.doit', { list }), r.data.scope, acts)) r = await api('/v1/team/do-it', { asks, key: newId() });
+    st.busy = false;
+    // Focus goes somewhere that says what happened, never back to the page (qa-web L39w F1).
+    const focus = (...els) => { const el = els.find(Boolean); if (!el) return; if (!el.matches('button, a, input')) el.tabIndex = -1; el.focus(); };
+    if (r.status === 409 && Array.isArray(r.data.cards)) {
+      // Something changed since it was shown: nothing was approved. The cards are redrawn as they are now.
+      takeCards(r.data.cards);
+      render();
+      // Answered elsewhere (another window, another person) says who and when; a real change to an action says so.
+      const done = r.data.cards.find((c) => c?.answer || (c?.state && c.state !== 'open'));
+      const a = done?.answer;
+      // A name only when the server gave one (or it is this person): never "no longer has access" on a guess.
+      const who = a && (byId(a) === myId() || (typeof a.by === 'object' && a.by?.name)) ? byWord(a) : null;
+      flashNote(r.data.cards.every((c) => c?.answer || (c?.state && c.state !== 'open'))
+        ? (who && a?.at ? t('card.answered', { person: who, time: fmtTime(a.at) }) : t('card.answered.unknown'))
+        : t('card.changed'));
+      return focus(log.parentElement.querySelector('.focus-miss'), $('#doit', root));
+    }
+    if (!r.ok) { render(); if (!needsStepUp(r)) flashNote(r.data.error ?? `HTTP ${r.status}`); return focus($('#doit', root), log.parentElement.querySelector('.focus-miss')); }
+    for (const d of r.data.decided ?? []) if (d.card?.id) takeCards([d.card]);
+    await load();
+    // The live refresh redraws the cards soon after, replacing the element: keep the focus there for a moment.
+    const sel = ['#doit', '.doit-none', p.covered[0] && `[data-card-id="${CSS.escape(p.covered[0].id)}"]`].filter(Boolean);
+    st.refocus = { sel, until: Date.now() + 3000 };
+    refocus();
+  }
+
   function cardHtml(card, answered) {
     answered = answered || (card.state && card.state !== 'open' ? closedText(card) ?? human(card.state) : answered);
     const note = st.notes.get(card.id);
@@ -253,17 +362,22 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
       <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtWhen(card.expires))}` : ''}</div>
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
       ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="${esc(t('stepup.label.interim'))}" placeholder="${esc(t('stepup.label.interim'))}" required><button type="submit" class="primary">${esc(t('stepup.button'))}</button></form>` : ''}
-      <h3>${esc(card.title)}</h3>
+      <h3>${card.kind === 'approval' && LETTER.test(card.data?.letter ?? '') && !answered ? `<span class="letter">${card.data.letter}.</span> ` : ''}${esc(card.title)}</h3>
+      ${card.kind === 'approval' ? declineHtml(card, me(), organization()) : ''}
       ${boundHtml(card)}
       ${factsHtml(card)}
       ${card.body ? `${factsHtml(card) ? '<p class="muted why-label">Why, in the teammate\'s words:</p>' : ''}<div class="md">${md(card.body)}</div>` : ''}
       ${card.recommendation?.why && !answered ? `<p class="muted why">${esc(card.recommendation.why)}</p>` : ''}
       ${links ? `<p class="links">${links}</p>` : ''}
       ${answered ? `<p class="answer">${esc(answered)}</p>` : `<div class="card-actions">${buttons}</div>`}
+      ${!answered && st.doit?.host === card.id ? doItHtml(st.doit) : ''}
     </article>`;
   }
 
   function answerText(e, card) {
+    // Taken with Do it: the card's answer says which letters the tap covered (L39).
+    const cur = card?.id ? st.cards.get(card.id) ?? card : card;
+    if (cur?.answer?.tap === 'do-it') return closedText(cur);
     const d = e.data ?? {};
     const by = d.by ? (typeof d.by === 'object' ? d.by.name ?? d.by.id : d.by) : e.actor?.kind === 'person' ? 'you' : human(e.actor?.id);
     const what = String(d.decision ?? d.answer ?? d.option ?? 'answered');
@@ -272,8 +386,17 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
   }
 
   /** Draws the chat, then brings a linked card or the budget into view once it is there (a notification's link). */
+  function refocus() {
+    const r = st.refocus;
+    if (!r || Date.now() > r.until) { st.refocus = null; return; }
+    const el = r.sel.map((x) => root.querySelector(x)).find(Boolean);
+    if (!el || document.activeElement === el) return;
+    if (!el.matches('button, a, input')) el.tabIndex = -1;
+    el.focus();
+  }
   function render() {
     draw();
+    refocus();
     if (!st.focus || !st.loaded) return;
     const el = st.focus.card ? log.querySelector(`[data-card-id="${CSS.escape(st.focus.card)}"], [data-subject-id="${CSS.escape(st.focus.card)}"]`) : st.focus.budget ? $('#cost', root) : null;
     if (!el) { const budget = st.focus.budget; st.focus = null; if (budget) return; return flashNote('The card that link points to is not in the recent chat. It may be older, or already answered.'); }
@@ -313,6 +436,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
     // card.updated is (a budget card, or a decision from a source that sends no decision.requested).
     const anchored = new Set(st.events.filter((e) => /\.requested$|^budget\.exhausted$/.test(e.type)).map((e) => (e.type === 'budget.exhausted' ? e.data?.cardId : cardFrom(e).id)).filter(Boolean));
     const drawn = new Set();
+    st.doit = doItPlan((c) => answered.has(c.id) || answered.has(c.subject) || st.answers.has(c.id));
     const cardMsg = (card, e) => {
       drawn.add(card.id);
       const a = answered.get(card.id) ?? answered.get(e.subject ?? card.subject);
@@ -404,9 +528,45 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
     $('#run-start', root).hidden = going || st.connected !== true;
     $('#run-start', root).disabled = st.busy;
     $('#runner-add', root).hidden = st.connected !== true;
+    renderRunSystems(going);
+  }
+
+  // L40 (CTO ruling on qa-web round 2): while the team runs on systems that aren't the published ones, the header says
+  // the run keeps the ones it started with, offers Send now for the next start, and, when the change takes access
+  // away, Stop so the wider access ends now. Read at most every 30 seconds, not on every chat refresh.
+  function renderRunSystems(going) {
+    const el = $('#run-systems', root);
+    if (going && st.connected === true && Date.now() - (st.runSystemsAt ?? 0) > 30_000) {
+      st.runSystemsAt = Date.now();
+      systemsState().then((s) => { st.runSystems = s; renderRunSystems(going); }).catch(() => {});
+    }
+    const s = st.runSystems;
+    const sending = s === 'sending';
+    const sent = s?.result === 'done' && s.inSync;
+    el.hidden = !(going && st.connected === true && (sending || sent || (s && !s.inSync && s.connected !== false)));
+    if (el.hidden) return;
+    if (sending) { el.textContent = t('start.systems.sending'); return; }
+    if (sent) { el.textContent = t('run.systems.sent'); return; }
+    const button = (id, label, onclick) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'link'; b.id = id; b.textContent = label; b.onclick = onclick; return b; };
+    const parts = [`${t(s.result === 'failed' ? 'start.systems.failed' : 'run.systems.behind')} `, button('run-systems-send', t('start.systems.send'), sendRunSystems)];
+    if (s.lost?.length) parts.push(` ${t('run.systems.narrows')} `, button('run-systems-stop', t('run.systems.stop'), () => control('stop')));
+    el.replaceChildren(...parts);
+  }
+  async function sendRunSystems() {
+    const was = st.runSystems;
+    st.runSystems = 'sending'; renderRun();
+    const result = await sendSystems({ stepUp });
+    const fresh = await systemsState();
+    st.runSystems = fresh ? { ...fresh, result: result === 'none' ? null : result } : was;
+    st.runSystemsAt = Date.now();
+    renderRun();
+    const el = $('#run-systems', root);
+    el.tabIndex = -1;
+    if (!el.hidden) ($('#run-systems-send', root) ?? el).focus();
   }
 
   async function load() {
+    if (st.me === undefined) { st.me = null; api('/v1/team/me').then((r) => { if (r.ok && r.data.id) { st.me = r.data.id; render(); } }); }
     const r = await api('/v1/team/chat');
     st.loaded = true;
     if (r.data.connected === false) { st.connected = false; return render(); }
@@ -501,11 +661,12 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
   }
 
   /** Asks for the step-up in a dialog, naming `action` (a stepup.action.* string). Resolves true once the Studio server holds a step-up token. */
-  function stepUp(action, scope) {
+  function stepUp(action, scope, lines = []) {
     const dlg = $('#stepup-dialog', root);
     const form = $('#stepup-form', root);
     const input = $('#stepup-secret', root);
     $('#stepup-why', root).textContent = t('stepup.body', { action });
+    showItems($('#stepup-why', root), lines);
     $('#stepup-result', root).textContent = '';
     input.value = '';
     return new Promise((done) => {
@@ -590,6 +751,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
     else if (!st.plan.ok) plan.textContent = st.plan.error;
     else plan.textContent = `${st.plan.summary}${st.plan.repo?.url ? ` Repository: ${st.plan.repo.url} (${st.plan.repo.ref}).` : ''}`;
     plan.classList.toggle('refused', !!st.plan && !st.plan.ok);
+    renderSystems();
     $('#start-currency', root).textContent = currency();
     const d = minorDigits(currency());
     $('#start-cap', root).step = d ? String(10 ** -d) : '1';
@@ -597,14 +759,43 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
     // Start stays off until there is a published team and a daily cap: the control plane refuses a run without one.
     $('#start-go', root).disabled = st.busy || !st.plan?.ok || toMinor($('#start-cap', root).value) === null;
   }
+  // L40: the control plane's systems against the published ones. When they differ, the plan says so and offers to
+  // send them now, behind the same systems:<team> step-up as a publish (CTO ruling on the L40 review: no new screen).
+  function renderSystems() {
+    const el = $('#start-systems', root);
+    const s = st.systems;
+    const sending = s === 'sending';
+    const done = s?.result === 'done' && s.inSync;
+    el.hidden = !sending && !done && (!s || s.inSync || s.connected === false);
+    if (el.hidden) return;
+    if (sending) { el.textContent = t('start.systems.sending'); return; }
+    if (done) { el.textContent = t('publish.systems.done'); return; }
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'link'; b.id = 'start-systems-send'; b.textContent = t('start.systems.send');
+    b.onclick = sendSystemsNow;
+    el.replaceChildren(`${t(s.result === 'failed' ? 'start.systems.failed' : 'start.systems.behind')} `, b);
+  }
+  async function sendSystemsNow() {
+    const was = st.systems;
+    st.systems = 'sending'; renderSystems();
+    const result = await sendSystems({ stepUp });
+    const fresh = await systemsState();
+    st.systems = fresh ? { ...fresh, result: result === 'none' ? null : result } : was;
+    renderSystems();
+    const el = $('#start-systems', root);
+    el.tabIndex = -1;
+    if (!el.hidden) ($('#start-systems-send', root) ?? el).focus();
+  }
   async function openStart() {
     st.plan = null; st.budget = null;
+    st.systems = null;
     $('#start-result', root).textContent = '';
     $('#start-result', root).classList.remove('error');
     $('#start-cap', root).value = '';
     renderStart();
     $('#start-dialog', root).showModal();
-    const [plan, budget] = await Promise.all([api('/v1/team/run/plan'), api('/v1/team/budget')]);
+    const [plan, budget, systems] = await Promise.all([api('/v1/team/run/plan'), api('/v1/team/budget'), systemsState().catch(() => null)]);
+    st.systems = systems;
     st.plan = plan.ok ? plan.data : { ok: false, error: plan.data.error ?? `HTTP ${plan.status}` };
     st.budget = budget.ok && budget.data.connected !== false ? budget.data : null;
     if (st.budget?.perDay != null) $('#start-cap', root).value = (st.budget.perDay / 10 ** minorDigits(currency())).toFixed(minorDigits(currency()));
@@ -721,6 +912,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
       return raiseCap();
     }
     if (b.dataset.retry) { const p = st.pending.find((x) => x.clientId === b.dataset.retry); if (p) send(p); return; }
+    if (b.id === 'doit') return doIt();
     if (b.dataset.card) answer(b.dataset.card, b.dataset.option);
   });
   $('#run-pause', root).onclick = () => control(st.run?.state === 'paused' || st.summary?.run === 'paused' ? 'resume' : 'pause');

@@ -360,8 +360,12 @@ test('L25: set quiet hours and a digest, then read the delivery log, mine and ev
   // Approvals and budget stops always break through, and say why on hover.
   await prefs.getByText('Approvals and budget stops always reach you, even in quiet hours, because the team is waiting on you.').waitFor();
   assert.match(await prefs.locator('button.info').getAttribute('data-tip'), /^These are a decision only you can make/);
-  await prefs.locator('button.info').focus();
-  await page.getByRole('tooltip').getByText(/^These are a decision only you can make/).waitFor();
+  // A tap shows it. Scrolling hides a tip, and the scroll that brings the button into view can land after the tap
+  // under load, so scroll first and tap again if that happened.
+  const tipBox = page.getByRole('tooltip').getByText(/^These are a decision only you can make/);
+  await prefs.locator('button.info').scrollIntoViewIfNeeded();
+  for (let i = 0; i < 3 && !(await tipBox.isVisible()); i++) { await prefs.locator('button.info').click(); await tipBox.waitFor({ timeout: 2000 }).catch(() => {}); }
+  await tipBox.waitFor();
   // The same start and end is said in words, and nothing is sent.
   await prefs.getByLabel('No quiet hours').uncheck();
   await prefs.getByLabel('Quiet from').fill('22:00');

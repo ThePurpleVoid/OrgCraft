@@ -16,6 +16,9 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
   const cost = { today: 620, capPerDay: perDay, currency: 'USD', state: 'ok' };
   const started = []; // the RunCreate bodies, for the tests
   const stepUps = new Map(); // su_ token -> expiry (ms)
+  // L22 (apps/server/ledger.mjs): standing rules and the ledger, newest first; a test pushes rows.
+  const rules = [];
+  const ledger = [];
   const live = []; // live overrides in force (apps/server/live.mjs): { id, kind, member, state, reason, by, at, text, liveChange }
   let n = 0;
   const id = () => `ev_${String(++n).padStart(6, '0')}`;
@@ -49,8 +52,13 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     usage(amount) { cost.today += amount; append('usage.recorded', role('chief-of-staff'), { inputTokens: 1000, outputTokens: 200, cost: amount, currency: cost.currency }); },
     /** Spends today's budget: the runs pause with reason budget, as the real control plane does at 100%. */
     exhaust() { cost.state = 'exhausted'; for (const r of runs) if (r.state === 'running') { r.state = 'paused'; r.reason = 'budget'; append('run.paused', { kind: 'system', id: 'budget' }, { reason: 'budget' }, `run/${r.id}`); } },
-    events, cards, runs, cost, budget, started, live,
+    events, cards, runs, cost, budget, started, live, rules, ledger,
   };
+  const doIts = [];
+  let systems = { resources: [], bindings: [], version: 0 };
+  const systemsPuts = [];
+  /** Sets the team's systems directly, as an earlier send or another admin would. */
+  const setSystems = (next) => { systems = { resources: next.resources ?? [], bindings: next.bindings ?? [], version: systems.version + 1 }; };
   const scopes = new Map(); // su -> scope it was bound to (ADR 0013)
   const stepped = (req, scope = null) => { const su = req.headers['x-step-up']; if (!su || !(stepUps.get(su) > Date.now()) || (scopes.get(su) ?? null) !== scope) return false; stepUps.delete(su); scopes.delete(su); return true; };
   const needStepUp = (res, what) => send(res, 401, { type: 'step-up-required', title: `${what} needs a recent sign-in`, status: 401 });
@@ -87,6 +95,27 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       const e = append('chat.message', { kind: 'person', id: 'owner', via: 'studio' }, { from: { kind: 'person', id: 'owner' }, text: body.text, clientId: body.clientId });
       setTimeout(() => runner(api, body.text), 30);
       return done(201, e);
+    }
+    // L39 "Do it": the lettered asks as shown, all or nothing; one step-up for the set when any ask is bound (facts).
+    if (p === '/v1/approvals/do-it' && req.method === 'POST') {
+      const body = await read(req);
+      const found = (body.asks ?? []).map((x) => ({ x, c: [...cards.values()].find((c) => c.subject === `approval/${x.approval}`) }));
+      if (found.some(({ c }) => !c)) return send(res, 404, { error: 'no such approval' });
+      const stale = found.filter(({ x, c }) => c.version !== x.version || c.answered || c.state === 'answered' || !c.data?.letter).map(({ c }) => c);
+      if (stale.length) return send(res, 409, { type: 'asks-changed', title: 'these asks changed since you saw them; nothing was approved', status: 409, cards: stale });
+      if (found.some(({ c }) => c.data?.facts)) {
+        const scope = `do-it:${found.map(({ x }) => `${x.approval}@${x.version}`).sort().join(',')}`;
+        if (!stepped(req, scope)) return send(res, 401, { type: 'step-up-required', title: 'Do it needs a recent sign-in', status: 401, scope });
+      }
+      doIts.push(body);
+      const decided = found.sort((a, b) => (a.c.data.letter < b.c.data.letter ? -1 : 1)).map(({ x, c }) => {
+        const event = append('approval.decided', { kind: 'person', id: 'owner', via: 'studio' }, { approval: x.approval, cardId: c.id, decision: 'approved', by: 'owner', words: null, tap: 'do-it' }, c.subject);
+        const done = { ...c, version: c.version + 1, state: 'answered', answer: { option: 'approve', by: { id: 'per_owner', name: 'Owner' }, at: new Date().toISOString(), tap: 'do-it', covered: found.map((f) => f.c.data.letter).sort(), channel: body.via ?? 'approvals' } };
+        cards.set(c.id, done);
+        append('card.updated', { kind: 'system', id: 'cards' }, { card: done }, `card/${c.id}`);
+        return { letter: c.data.letter, approval: x.approval, decision: 'approved', card: done, event };
+      });
+      return send(res, 200, { decided });
     }
     const card = /^\/v1\/cards\/([^/]+)$/.exec(p) ?? /^\/v1\/approvals\/([^/]+)$/.exec(p);
     if (card && req.method === 'POST') {
@@ -159,6 +188,24 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     }
     // Live overrides (L18), like apps/server/live.mjs: setting needs no step-up; lifting one needs a step-up bound to
     // lift:<id>; only a lift clears one (a run that starts does not).
+    if (p === '/v1/me' && req.method === 'GET') return send(res, 200, { id: 'per_owner', login: 'owner', name: 'Owner', workspaces: [{ tenant: 't', role: 'owner' }] });
+    if (p === `/v1/teams/${team}/standing-rules` && req.method === 'GET') {
+      return send(res, 200, { kinds: [['refund', true], ['pay.known', true], ['send.known', true], ['reply', false], ['merge', false], ['cost', false]].map(([id, enforced]) => ({ id, enforced })), never: ['newrecipient', 'live', 'delete', 'passkey', 'outside'], rules });
+    }
+    const sr = new RegExp(`^/v1/teams/${team}/standing-rules/([^/]+)$`).exec(p);
+    if (sr && req.method === 'DELETE') {
+      const r = rules.find((x) => x.id === sr[1] && x.live);
+      if (!r) return send(res, 404, { error: 'no such live rule' });
+      Object.assign(r, { live: false, withdrawnAt: new Date().toISOString(), withdrawnBy: 'per_owner' });
+      ledger.unshift({ at: new Date().toISOString(), kind: 'rule-withdrawn', by: 'per_owner', rule: r.id, ruleNumber: r.number, ruleForm: r.form });
+      return send(res, 200, { id: r.id, withdrawn: true });
+    }
+    if (p === `/v1/teams/${team}/ledger` && req.method === 'GET') {
+      // Pages of three; here `before` is an offset, where the real server's is a row id (both opaque to the Studio).
+      const start = Number(url.searchParams.get('before') ?? 0);
+      const page = ledger.slice(start, start + 3);
+      return send(res, 200, { items: page, next: start + 3 < ledger.length ? String(start + 3) : null });
+    }
     if (p === `/v1/teams/${team}/live` && req.method === 'GET') return send(res, 200, { live });
     const at = () => new Date().toISOString();
     if (p === `/v1/teams/${team}/live/stop-everything` && req.method === 'POST') {
@@ -193,6 +240,16 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       append('live.changed', { kind: 'person', id: 'owner', via: 'studio' }, { op: 'lifted', override: o.id, kind: o.kind, by: 'owner', stepUp: true }, 'live');
       return send(res, 200, { ...o, lifted: true });
     }
+    // L40: a team's systems. Setting them needs a step-up scoped systems:<team> (ADR 0013), as the real server does.
+    if (p === `/v1/teams/${team}/systems` && req.method === 'GET') return send(res, 200, { ...systems });
+    if (p === `/v1/teams/${team}/systems` && req.method === 'PUT') {
+      const body = await read(req);
+      if (body.expect !== undefined && body.expect !== systems.version) return send(res, 409, { type: 'systems-changed', title: 'The systems changed since they were compared', status: 409, version: systems.version });
+      if (!stepped(req, `systems:${team}`)) return send(res, 401, { type: 'step-up-required', title: 'Changing what the team can reach needs a recent sign-in', status: 401, scope: `systems:${team}` });
+      systems = { resources: body.resources ?? [], bindings: body.bindings ?? [], version: systems.version + 1 };
+      systemsPuts.push(body);
+      return send(res, 200, { ...systems });
+    }
     if (p === '/v1/me/summary') {
       const r = runs.find((x) => x.state !== 'stopped');
       return send(res, 200, { asOf: events.at(-1)?.id ?? null, teams: [{ team, name: team, run: r?.state ?? null, cost, inbox: 0 }] });
@@ -210,7 +267,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}`;
   return {
-    url, token, stepUpSecret, team, ...api,
+    url, token, stepUpSecret, team, ...api, doIts, systemsPuts, setSystems, get systems() { return systems; },
     env: { AGENT_TEAM_SERVER: url, AGENT_TEAM_SERVER_TOKEN: token, AGENT_TEAM_SERVER_TEAM: team },
     close: () => { for (const s of streams) s.end(); server.closeAllConnections?.(); server.close(); },
   };

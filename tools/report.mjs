@@ -5,7 +5,10 @@
 //   node report.mjs <role>[#instance] <kind> [<status>|-] [--task "..."] [--issue N] [--pr N] [--branch b]
 //                   [--commit sha] [--platform p] [--to role] [--severity 1-4] [--evidence a,b] [--detail "..."]
 //                   [--session id] [--team-version sha]
+//                   signoff only: [--version <full commit id>|HEAD|<revision>] [--version-kind commit|revision|draft]
+//                   [--result pass|fail] [--unverified "what you did not check"]... (or --unverified none)
 //       The same arguments and the same event as team-status.sh (which hands over to this when jq is missing).
+//       A sign-off also carries kit=<this kit's version>, so the control plane knows it could name a version (0.23.0).
 //
 //   node report.mjs published [--sha <commit>] [--pr N]
 //       Tells the control plane that a team version reached the main branch (team.published), from the repository
@@ -100,7 +103,8 @@ export function makeEvent(fields, now = new Date()) {
   const id = `${now.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
   const evidence = Array.isArray(fields.evidence) ? fields.evidence : String(fields.evidence ?? '').split(',').filter(Boolean);
   const e = { id, at: now.toISOString().replace(/\.\d{3}Z$/, 'Z'), ...fields, role, instance: fields.instance ?? instance, evidence, source: fields.source ?? 'report.mjs' };
-  for (const [k, v] of Object.entries(e)) if (v === '' || v === null || v === undefined || (Array.isArray(v) && !v.length)) delete e[k];
+  // An empty `unverified` stays: it means "Unverified: none"; left out means not stated.
+  for (const [k, v] of Object.entries(e)) if (v === '' || v === null || v === undefined || (Array.isArray(v) && !v.length && k !== 'unverified')) delete e[k];
   toRow(e, now);
   return e;
 }
@@ -289,6 +293,29 @@ export async function hook(input, env = process.env) {
   } catch { return null; }
 }
 
+const FULL_SHA = /^([0-9a-f]{40}|[0-9a-f]{64})$/i;
+/**
+ * A sign-off's version fields, checked the way the control plane judges them (governance G1, L23s), so a report that
+ * would never count says why here instead of being sent: a commit is a full id (HEAD is resolved by the caller),
+ * versionKind is commit, revision or draft, result is pass or fail, and at most 20 unverified items of 500 characters.
+ */
+export function checkSignoff(f) {
+  if (f.versionKind && !['commit', 'revision', 'draft'].includes(f.versionKind)) throw new Error('--version-kind must be commit, revision or draft');
+  if (f.versionKind && !f.version) throw new Error('--version-kind needs --version');
+  if (f.version && !f.versionKind && !FULL_SHA.test(f.version) && f.version !== 'HEAD') throw new Error('--version is a full commit id (or HEAD); for a document or draft add --version-kind revision or draft');
+  if (f.versionKind === 'commit' && f.version !== 'HEAD' && !FULL_SHA.test(f.version)) throw new Error('--version for a commit is the full commit id (or HEAD)');
+  if (f.result && !['pass', 'fail'].includes(f.result)) throw new Error('--result must be pass or fail');
+  if (f.unverified && (f.unverified.length > 20 || f.unverified.some((u) => u.length > 500))) throw new Error('--unverified takes at most 20 items of 500 characters');
+}
+
+/** This kit's version: the team's kit.lock.json (sync writes it), else the kit's own package.json. '' when unknown. */
+export function kitVersion(root) {
+  for (const f of [join(root, '.agent-team/kit.lock.json'), join(dirname(fileURLToPath(import.meta.url)), '../package.json')]) {
+    try { const v = JSON.parse(readFileSync(f, 'utf8')).version; if (/^\d+\.\d+\.\d+$/.test(String(v ?? ''))) return String(v); } catch { /* not there */ }
+  }
+  return '';
+}
+
 /** team-status.sh's arguments as event fields. Throws an Error saying why it will not report. */
 export function parseArgs(argv, role = '') {
   const args = [...argv];
@@ -308,13 +335,27 @@ export function parseArgs(argv, role = '') {
   if (kind === 'status' && !status) throw new Error('a status report needs a status');
   const f = { role: agent, kind, status, session: process.env.AGENT_TEAM_SESSION ?? '' };
   const names = ['task', 'issue', 'pr', 'branch', 'commit', 'platform', 'to', 'severity', 'evidence', 'detail', 'session', 'team_version'];
+  const signoff = { version: 'version', version_kind: 'versionKind', result: 'result' };
   while (args.length) {
     const a = args.shift();
     const name = a.replace(/^--/, '').replace(/-/g, '_');
     if (a.startsWith('--') && names.includes(name)) f[name] = args.shift() ?? '';
-    else process.stderr.write(`team-status: unknown option ${a}\n`);
+    else if (kind === 'signoff' && a.startsWith('--') && signoff[name]) f[signoff[name]] = args.shift() ?? '';
+    else if (kind === 'signoff' && a === '--unverified') {
+      // Repeat it once per item; "none" says you checked everything (an empty list). Left out is "not stated".
+      // An empty or missing value is refused, never read as none: a script passing an empty "$GAPS" must not claim
+      // full coverage (code review L23s). Only a literal "none" is the empty list, and only on its own.
+      const v = (args.shift() ?? '').trim();
+      if (!v) throw new Error('--unverified needs what you did not check, or none');
+      const none = v.toLowerCase() === 'none';
+      if (none ? (f.unverified?.length || f.unverifiedNone) : f.unverifiedNone) throw new Error('--unverified none can\'t be mixed with items');
+      f.unverified ??= [];
+      if (none) f.unverifiedNone = true; else f.unverified.push(v);
+    } else process.stderr.write(`team-status: unknown option ${a}\n`);
   }
   if (MESSAGES.includes(kind) && !f.to) throw new Error(`${kind} needs --to <role>`);
+  delete f.unverifiedNone;
+  if (kind === 'signoff') checkSignoff(f);
   return f;
 }
 
@@ -347,6 +388,11 @@ async function cli(argv) {
   if (!fields.branch) { const b = git(process.cwd(), ['rev-parse', '--abbrev-ref', 'HEAD']); if (b !== 'HEAD') fields.branch = b; }
   if (!fields.commit) fields.commit = git(process.cwd(), ['rev-parse', '--short=12', 'HEAD']);
   if (!fields.team_version) fields.team_version = teamVersionAt(process.cwd());
+  if (fields.kind === 'signoff') {
+    if (fields.version === 'HEAD') fields.version = git(process.cwd(), ['rev-parse', 'HEAD']) || '';
+    if (fields.version && !fields.versionKind && FULL_SHA.test(fields.version)) fields.versionKind = 'commit';
+    fields.kit = kitVersion(ctx.root);
+  }
   let event;
   try { event = makeEvent({ ...fields, source: 'team-status.sh' }); } catch (e) { process.stderr.write(`team-status: not reported (${e.message})\n`); return; }
   for (const p of await send(event, ctx)) process.stderr.write(`team-status: ${p}\n`);

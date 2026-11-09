@@ -15,6 +15,7 @@ import { canWork } from './deployment.mjs';
 import { localDay, nextDay } from './budget-day.mjs';
 import { checkIoRefs, ingestStepIo, projectTask, purgeIo } from './inspector.mjs';
 import { memberHeld } from './live.mjs';
+import { cleanChecks, markStale } from './signoffs.mjs';
 import { resolveTo } from './routing.mjs';
 import { systemsFor } from './credentials.mjs';
 import { createCaps } from './caps.mjs';
@@ -70,6 +71,10 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     } else if (event.type === 'meeting.turn') {
       // A turn goes to the role; a pool role's lowest-numbered live instance takes it (meetings, A8).
       add(event.data?.to, await meetings.instanceFor(q, run.id, event.data?.to));
+    } else if (event.type === 'signoff.stale') {
+      // The role that signed checks again (governance G2).
+      const [role, instance] = String(event.data?.by ?? '').split('#');
+      add(role, instance || null);
     } else if ((event.type === 'decision.answered' || event.type === 'approval.decided') && event.data?.session) {
       const [s] = await q('select role, instance from sessions where id = $1', [event.data.session]);
       if (s) add(s.role, s.instance);
@@ -91,7 +96,9 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (event.type === 'session.ended' || event.type === 'session.idle') await caps.release(q, event.actor.session, ctx.now);
       if (event.type === 'session.ended') ctx.after.push(() => startQueued(ctx.tenant, event.team));
     }
-    if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided', 'meeting.turn', 'trigger.fired'].includes(event.type)) return;
+    // A pull request's head moved: sign-offs on an earlier commit go stale (governance G2).
+    if (event.type === 'proposal.opened' || event.type === 'proposal.updated') await markStale(ctx, event);
+    if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'signoff.stale', 'decision.answered', 'approval.decided', 'meeting.turn', 'trigger.fired'].includes(event.type)) return;
     const run = await activeRun(q, event.team);
     if (!run) return;
     for (const t of await targets(q, run, event)) {
@@ -429,11 +436,16 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         const data = tool === 'report'
           ? { status: i.status, task: i.task, issue: i.issue, pr: i.pr, branch: i.branch, commit: i.commit, detail: i.detail, ...(i.waitingOn && roster.roles?.some((r) => r.slug === i.waitingOn) ? { to: i.waitingOn } : {}), ...(i.waitingOn ? { waitingOn: i.waitingOn } : {}) }
           : { ...i, ...(tool === 'blocked' && !i.to ? { to: i.needFrom === 'owner' ? roster.frontDoor : i.needFrom !== sess.role ? i.needFrom : undefined } : {}), detail: detailOf(tool, i), ...(i.artifact ? { evidence: [i.artifact] } : {}), ...routedFields(check.routed) };
+        // The runner's own record of what this session ran (governance G2): only a runner session sends it, here.
+        if (tool === 'signoff') data.checks = await cleanChecks(ctx.q, sess.id, input?.checks);
+        // Who stands behind it (security ruling on L23s): this one a runner session ran. `source` is the kit's own label.
+        if (tool === 'signoff') data.origin = 'session';
         const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
         const ev = await ctx.emit(sess.team, TOOL_EVENT[tool], clean, opts);
         if (tool === 'blocked') await ctx.emit(sess.team, 'report.status', { status: 'blocked', task: i.task, issue: i.issue, detail: i.need }, opts);
         out = { event: ev.id, ...(check.routed ? { to: check.routed.to, routedBy: check.routed.how, ...(check.routed.offWiring ? { offWiring: true } : {}) } : {}) };
         await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: ev.id });
+        if (tool === 'signoff' && i.pr) await m3.refreshShipCards(ctx, sess.team, i.pr);
       } else if (tool === 'meeting_reply' || tool === 'meeting_close' || tool === 'meeting_start') {
         const r = tool === 'meeting_start' ? await meetings.startAdhoc(ctx, sess, i, roster) : await meetings.tool(ctx, sess, tool, i, roster);
         if (r.problems) {

@@ -7,6 +7,7 @@ import { atLeast } from './roles.mjs';
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
+import { gate, refusal, requireFresh } from './signoffs.mjs';
 import { checkMeetingDefs } from './meetings.mjs';
 import { dayBounds, dayStart, localDay, nextDay, timeZoneOf } from './budget-day.mjs';
 import { approveScope, factsOf, redact as redactText, riskOf } from './signed.mjs';
@@ -21,6 +22,8 @@ export const CHAT_TYPES = ['chat.message', 'decision.requested', 'decision.answe
   'run.started', 'run.paused', 'run.resumed', 'run.stopped', 'budget.warned', 'budget.exhausted'];
 export const STEP_UP_MINUTES = 5;
 export const APPROVAL_HOURS = 24;
+/** Governance G3 (L39): the letters a session's open asks carry; "Do it" takes at most this many at once. */
+const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 const STEP_UP_LOCKOUT = { failures: 5, minutes: 15 };
 
 /** A step-up is needed: 401 with problem type step-up-required (clients.md section 3), never a silent approval. */
@@ -80,6 +83,14 @@ const isInt = (v) => Number.isSafeInteger(v);
  * The context every write runs in: one tenant transaction, an `emit` that appends with the projections, and the
  * list of what was stored. `hooks.afterCommit` lets the bus send frames once the transaction is durable.
  */
+/** A merge card's sign-offs (governance G2): each with its version and whether it is fresh, and what blocks the merge. */
+const signoffData = (g) => ({ signoffs: g.signoffs.map(({ signoff, by, origin, label, version, versionKind, result, unverified, fresh, problem }) => ({ signoff, by, origin, ...(label ? { label } : {}), version, versionKind, result, unverified, fresh, ...(problem ? { problem } : {}) })), ...(g.missing.length ? { blocked: refusal(g.missing) } : {}) });
+/** Approve is off, with the reason, while a sign-off on the pull request is not fresh. Deny always works. */
+const approvalOptions = (g) => [
+  { id: 'approve', label: 'Approve', style: 'primary', stepUp: true, ...(g && g.missing.length ? { disabled: true, reason: refusal(g.missing) } : {}) },
+  { id: 'deny', label: 'Deny', style: 'danger', stepUp: false },
+];
+
 export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   now ??= () => new Date();
   const checking = new Set();
@@ -113,6 +124,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   /** Projections that run for every stored event, whatever path appended it (the API, a runner, the tick). */
   async function project(ctx, { event }) {
     if (event.type === 'usage.recorded' && event.team) await recordUsage(ctx, event);
+    // A new sign-off refreshes them from the tool route, once its audit row (what makes it count) is written.
+    if (event.type === 'signoff.stale' && event.team && Number.isSafeInteger(Number(event.data?.pr)) && event.data.pr) await refreshShipCards(ctx, event.team, event.data.pr);
     if (hooks.project) await hooks.project(ctx, { event });
     return [];
   }
@@ -557,6 +570,17 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
    * A session asks for an approval (request_approval, or the runner's policy through approval.wait). Writes the
    * approval and its card, and emits approval.requested and card.updated. `call` is stored as sent; callers redact it.
    */
+  /**
+   * The first of A to E no live ask of this team holds, or null. Taken under a per-team lock until the transaction
+   * ends, so two asks at the same moment never share a letter; an expired ask no longer holds one.
+   */
+  async function nextLetter(ctx, team) {
+    await ctx.q('select pg_advisory_xact_lock(hashtext($1))', [`letters:${ctx.tenant}:${team}`]);
+    const held = new Set((await ctx.q(`select c.card->'data'->>'letter' as letter from approvals a join cards c on c.id = a.card
+                                       where a.team = $1 and a.state = 'pending' and a.expires_at > $2`, [team, ctx.now])).map((x) => x.letter).filter(Boolean));
+    return LETTERS.find((l) => !held.has(l)) ?? null;
+  }
+
   async function requestApproval(ctx, team, { action, call, why, links = [], session = null, run = null, role = null, hours = APPROVAL_HOURS, bound = null, changedWhat = null }) {
     if (typeof action !== 'string' || !action || action.length > 100) throw new Problem(400, 'action is a policy classification, like accept');
     if (call === undefined || call === null || JSON.stringify(call).length > 16 * 1024) throw new Problem(400, 'call is the exact command or tool call, at most 16 KiB');
@@ -583,6 +607,13 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     // A standing rule the owner made covers it (R11.3 Now), within its limits; never after a decline, never a merge.
     const covered = bound && !declined ? await coveredBy(ctx, team, { action, bound, session }) : null;
     const callText = typeof call === 'string' ? call : JSON.stringify(call);
+    // Governance G3 (L39): the team's open asks are lettered A to E, in the order asked, so the person can take them
+    // together ("Do it") or one by one ("A2"). A sixth open ask has no letter until one is answered. Per team, not per
+    // session: a session holds one bound ask at a time (a changed call supersedes the last, L22).
+    // An ask the server settles at once (declined again, or under a standing rule) waits for no one and takes no letter.
+    const letter = refuse || covered ? null : await nextLetter(ctx, team);
+    // Governance G2: a merge card shows the sign-offs on its pull request, each fresh or not for the head it merges.
+    const shipping = call && typeof call === 'object' && call.pr && call.headSha ? await gate(ctx.q, team, call.pr, call.headSha) : null;
     const card = await createCard(ctx, team, {
       kind: 'approval', subject: `approval/${apr}`, session, run, approval: apr,
       // The person sees exactly what a merge is bound to (D1): the PR and the short head sha, not lost in the body.
@@ -592,14 +623,16 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       // The held call is data, for the client to lay out (and wrap) as code; the body is the role's words only.
       // A bound card (ADR 0013) shows facts the server rendered from the signed calls, never the role's `call` text.
       data: {
+        ...(letter ? { letter } : {}),
         ...(call && typeof call === 'object' && call.pr ? { pr: call.pr, ...(call.headSha ? { headSha: call.headSha } : {}) } : {}),
+        ...(shipping ? signoffData(shipping) : {}),
         ...(bound ? { facts: factsOf(bound.calls, redactText), callsHash: bound.hash } : { call: callText.length > 2000 ? `${callText.slice(0, 2000)}…` : callText }),
         ...(changed.length || (declined && what) ? { changed: { ...(changed.length ? { from: changed.map((o) => o.id) } : {}), ...(declined && what ? { what } : {}) } } : {}),
         // card.declined.before / card.cooldown: the Studio renders these from the fields.
         ...(declined ? { declinedBefore: { approval: declined.id, at: new Date(declined.decided_at).toISOString(), until: declined.until.toISOString(), declinedOn: new Date(declined.decided_at).toISOString(), cooldownUntil: declined.until.toISOString(), declinedBy: declined.decided_by } } : {}),
       },
       body: bound ? why : `${why}\n\n${describeCall(call)}`,
-      options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger', stepUp: false }],
+      options: approvalOptions(shipping),
       risk: r, expiresAt, links: links.filter((l) => l && typeof l.url === 'string').slice(0, 20),
     });
     await ctx.q(`insert into approvals(id, tenant, team, run, session, role, action, call, why, risk, card, expires_at, calls, calls_hash, effect_targets) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
@@ -621,6 +654,42 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       return { approval: apr, card: await settle(ctx, team, { apr, cid: card.id, session, run, decision: 'approved', by: `rule:${covered.rule.id}`, note: `Done under standing rule #${n}: ${ruleLine(covered.rule.spec)}`, kind: 'rule-used', rule: covered.rule.id, hash: bound.hash, extra: { ruleNumber: n, ruleForm: covered.rule.spec, ruleLine: ruleLine(covered.rule.spec) } }) };
     }
     return { approval: apr, card };
+  }
+
+  /**
+   * A sign-off on a pull request arrived or went stale: every open merge card for it shows the sign-offs again, and
+   * its Approve option is off while any is not fresh (governance G2). The card's version moves, as for any change.
+   */
+  async function refreshShipCards(ctx, team, pr) {
+    const open = await ctx.q(`select a.call, c.id from approvals a join cards c on c.id = a.card
+                              where a.team = $1 and a.state = 'pending' and c.state = 'open' and a.call->>'pr' = $2 and a.call ? 'headSha'`, [team, String(pr)]);
+    for (const r of open) {
+      const g = await gate(ctx.q, team, r.call.pr, r.call.headSha);
+      const [row] = await ctx.q(`update cards set version = version + 1,
+                                   card = card || jsonb_build_object('version', version + 1, 'options', $2::jsonb, 'data', coalesce(card->'data', '{}'::jsonb) - 'blocked' || $3::jsonb)
+                                 where id = $1 returning card`, [r.id, JSON.stringify(approvalOptions(g)), JSON.stringify(signoffData(g))]);
+      await ctx.emit(team, 'card.updated', { card: row.card }, { subject: row.card.subject });
+    }
+  }
+
+  /**
+   * Reported sign-offs were stored (the API or a report token): the merge cards of their pull requests show them
+   * (security ruling on L23s). A runner's own sign-off refreshes them from the tool route, after its audit row.
+   */
+  async function refreshForReports(ctx, team, stored) {
+    const prs = new Set();
+    for (const s of stored ?? []) {
+      const e = s?.event ?? s;
+      const pr = Number(e?.data?.pr);
+      if (e?.type === 'message.signoff' && Number.isSafeInteger(pr) && pr > 0) prs.add(pr);
+    }
+    for (const pr of prs) await refreshShipCards(ctx, team, pr);
+  }
+
+  /** The same after the report route appended outside a transaction of this module. */
+  async function reportsStored(tenant, team, stored) {
+    if (!(stored ?? []).some((s) => (s?.event ?? s)?.type === 'message.signoff')) return;
+    await tx(tenant, (ctx) => refreshForReports(ctx, team, stored));
   }
 
   /** Answers an approval for the ledger or a standing rule, in the same transaction that made it (L22). */
@@ -646,24 +715,78 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   async function decideIn(ctx, apr, { decision, note, version, channel = null }, by, stepUp) {
     if (!decision) throw new Problem(400, 'option is approve or deny');
-    const [a] = await ctx.q('select id, team, run, session, card, state, expires_at, calls_hash from approvals where id = $1 for update', [apr]);
+    const [a] = await ctx.q('select id, team, run, session, card, state, expires_at, calls_hash, call from approvals where id = $1 for update', [apr]);
     if (!a) throw new Problem(404, 'no such approval');
     if (a.state === 'pending' && new Date(a.expires_at).getTime() <= ctx.now.getTime()) throw new Problem(409, 'this approval expired', { body: { ...(await currentCard(ctx, a.card)), state: 'expired' } });
     const open = await lockOpenCard(ctx, a.card, version);
     if (a.state !== 'pending') throw new Problem(409, `this approval is ${a.state}`, { body: await currentCard(ctx, a.card) });
+    // Governance G2: a merge is approved only while every sign-off on its pull request is fresh for the head it merges.
+    // Checked before step-up, so a refused approve spends no token.
+    if (decision === 'approved' && a.call && typeof a.call === 'object' && a.call.pr && a.call.headSha) await requireFresh(ctx.q, a.team, a.call.pr, a.call.headSha);
     let stepUpId = null;
     // ADR 0013: approving a bound card needs a step-up bound to it: tenant, team, approval, card version and calls.
     const scope = a.calls_hash ? approveScope({ tenant: ctx.tenant, team: a.team, approval: apr, version: open.version, callsHash: a.calls_hash }) : null;
     if (decision === 'approved' && !(stepUpId = await useStepUp(ctx, by, stepUp, scope))) throw new StepUpRequired('An approval', scope);
+    return applyDecision(ctx, a, apr, { decision, note, channel }, by, stepUpId);
+  }
+
+  /** Records a decision the caller has checked (state, version, freshness, step-up): approval, card, event, audit, ledger. */
+  async function applyDecision(ctx, a, apr, { decision, note, channel, tap = null, letters = null }, by, stepUpId) {
     await ctx.q('update approvals set state = $2, decided_by = $3, decided_at = now() where id = $1', [apr, decision, by]);
-    const card = await changeCard(ctx, a.team, a.card, { state: 'answered', answer: { option: decision === 'approved' ? 'approve' : 'deny', ...(note ? { note } : {}), by, at: ctx.now.toISOString() } });
+    const card = await changeCard(ctx, a.team, a.card, { state: 'answered', answer: { option: decision === 'approved' ? 'approve' : 'deny', ...(note ? { note } : {}), ...(tap ? { tap, covered: letters } : {}), by, at: ctx.now.toISOString() } });
     const ev = await ctx.emit(a.team, 'approval.decided', { approval: apr, decision, by, ...(note ? { note } : {}), session: a.session, cardId: a.card },
       { actor: personActor(by), subject: `approval/${apr}`, ...(a.run ? { run: a.run } : {}) });
     await ctx.audit({ team: a.team, actorKind: 'person', actorId: by, session: a.session, action: 'approval', target: apr, decision, event: ev.id, detail: stepUpId || a.calls_hash ? { ...(stepUpId ? { stepUp: stepUpId } : {}), ...(a.calls_hash ? { callsHash: a.calls_hash } : {}) } : null });
     // The ledger keeps the person's own words (their note), exactly (L22, R11.2).
-    await ledgerRow(ctx.q, ctx.tenant, a.team, { kind: decision, approval: apr, by, words: note ?? null, callsHash: a.calls_hash ?? null, channel });
+    // The ledger keeps only the person's own words (their note, or what they typed); a tap is its own field.
+    await ledgerRow(ctx.q, ctx.tenant, a.team, { kind: decision, approval: apr, by, words: note ?? null, callsHash: a.calls_hash ?? null, channel, tap, letters });
     hooks.approvalDecided && ctx.after.push(() => hooks.approvalDecided(ctx.tenant, a.team, { approval: apr, decision, by, note: note ?? null, session: a.session }));
     return { card, event: ev.id, approval: apr, decision };
+  }
+
+  /**
+   * "Do it" (governance G3, L39): approve up to five lettered asks of one team at once, each bound to the card
+   * version the person saw. Nothing is recorded unless all of them still stand as shown: a changed, answered, expired
+   * or unlettered ask fails the whole tap with 409 and the current cards. One step-up covers the set, bound to every
+   * ask's own approve scope (ADR 0013), so it can't be spent on any other set. One ledger row per ask.
+   */
+  async function doIt(tenant, body, by, { stepUp = null } = {}) {
+    const asks = body?.asks;
+    if (!Array.isArray(asks) || !asks.length || asks.length > LETTERS.length) throw new Problem(400, `asks lists the asks you saw, 1 to ${LETTERS.length}: [{ approval, version }]`);
+    if (asks.some((x) => !x || typeof x.approval !== 'string' || !isInt(x.version))) throw new Problem(400, 'each ask is { approval, version }, the card version you saw');
+    if (new Set(asks.map((x) => x.approval)).size !== asks.length) throw new Problem(400, 'each ask once');
+    const channel = body.via === 'chat' ? 'chat' : 'approvals';
+    const said = typeof body.words === 'string' && body.words.trim() ? body.words.trim().slice(0, 200) : null;
+    return tx(tenant, async (ctx) => {
+      const rows = [];
+      const stale = [];
+      // Locked in id order, so two taps on overlapping sets can't deadlock.
+      for (const ask of [...asks].sort((x, y) => (x.approval < y.approval ? -1 : 1))) {
+        const [a] = await ctx.q('select id, team, run, session, card, state, expires_at, calls_hash, call from approvals where id = $1 for update', [ask.approval]);
+        if (!a) throw new Problem(404, `no such approval ${ask.approval.slice(0, 40)}`);
+        const [c] = await ctx.q('select state, version, card from cards where id = $1 for update', [a.card]);
+        const expired = a.state === 'pending' && new Date(a.expires_at).getTime() <= ctx.now.getTime();
+        if (!c) { stale.push({ id: a.card, approval: a.id, state: 'gone' }); continue; }
+        if (a.state !== 'pending' || expired || c.state !== 'open' || Number(c.version) !== Number(ask.version) || !c.card?.data?.letter) { stale.push(c.card); continue; }
+        rows.push({ a, version: Number(c.version), letter: c.card.data.letter });
+      }
+      if (stale.length) throw new Problem(409, 'these asks changed since you saw them; nothing was approved', { type: 'asks-changed', body: { cards: stale } });
+      if (new Set(rows.map((x) => x.a.team)).size > 1) throw new Problem(400, 'Do it takes the asks of one team');
+      for (const { a } of rows) if (a.call && typeof a.call === 'object' && a.call.pr && a.call.headSha) await requireFresh(ctx.q, a.team, a.call.pr, a.call.headSha);
+      // The set's scope: each bound ask's own approve scope, and each other ask's id and version, so the token covers
+      // exactly this set as shown. With no bound ask, no step-up, as for one approval.
+      const parts = rows.map((x) => (x.a.calls_hash ? approveScope({ tenant: ctx.tenant, team: x.a.team, approval: x.a.id, version: x.version, callsHash: x.a.calls_hash }) : `ask:${x.a.id}@${x.version}`)).sort();
+      const scope = rows.some((x) => x.a.calls_hash) ? `do-it:${sha(['do-it/1', ...parts].join('\n'))}` : null;
+      let stepUpId = null;
+      if (scope && !(stepUpId = await useStepUp(ctx, by, stepUp, scope))) throw new StepUpRequired(`Do it (covers ${rows.filter((x) => x.a.calls_hash).map((x) => x.letter).sort().join(', ')})`, scope);
+      const out = [];
+      const letters = rows.map((x) => x.letter).sort();
+      for (const { a, letter } of rows.sort((x, y) => (x.letter < y.letter ? -1 : 1))) {
+        // `said` is the person's typed words (chat "do it"), kept as words; the tap itself is `tap: do-it`.
+        out.push({ letter, ...(await applyDecision(ctx, a, a.id, { decision: 'approved', note: said, channel, tap: 'do-it', letters }, by, stepUpId)) });
+      }
+      return { decided: out };
+    });
   }
 
   async function currentCard(ctx, cid) { return (await ctx.q('select card from cards where id = $1', [cid]))[0]?.card; }
@@ -913,6 +1036,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       // outside: the sender's actor and data are its own words, so no session it names gives the event a task.
       const s = await appendIn(ctx.q, tenant, team, events, { project: (qq, x) => project(ctx, x), now: ctx.now, outside: true });
       ctx.stored.push(...s);
+      await refreshForReports(ctx, team, s);
       return s;
     });
   }
@@ -938,9 +1062,9 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   return {
     appendIn: appendInTx, onStored: (fn) => listeners.push(fn), hooks,
-    requireStepUp, useStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
+    requireStepUp, useStepUp, refreshShipCards, reportsStored, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
-    createCard, changeCard, getCard, answerCard, requestApproval, decideApproval, readyToTry, previewArrived, checkPreviewed, previewForMerge,
+    createCard, changeCard, getCard, answerCard, requestApproval, decideApproval, doIt, readyToTry, previewArrived, checkPreviewed, previewForMerge,
     stepUp, mintStepUp, postChat, getChat, inbox, teamExtras, useStepUp, today,
   };
 }

@@ -6,6 +6,9 @@ import { drawLines, renderWiring, wireWiring } from './wiring.js';
 import { createChat } from './chat.js';
 import { createMeetings } from './meetings.js';
 import { createRollout } from './rollout.js';
+import { createApprovals } from './approvals.js';
+import { stepUp } from './live.js';
+import { sendSystems } from './systems.js';
 import { createGallery, rolesLine, rulesLine } from './gallery.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
@@ -50,6 +53,7 @@ let scale = 1;
 let live = null; // { on, source, where, board, error, es } when the live board is shown
 let chat = null; // the chief-of-staff chat, made the first time it is opened
 let rolloutView = null; // the rollout page, made the first time it is opened
+let approvalsView = null; // the Approvals page (L22), made the first time it is opened
 let meetings = null; // the Meetings view, made the first time it is opened
 let prices = null; // packages/model-prices/prices.json, for meeting estimates
 let editor = null; // the custom agent editor (agent-editor.js)
@@ -1049,7 +1053,7 @@ async function api(path, body) {
     try { data = await res.json(); } catch { /* not JSON */ }
     return { res, data };
   });
-  if (!res.ok) throw Object.assign(new Error(env.embedded && res.status === 401 ? 'You are not signed in to this site any more. Sign in again, then reopen this page.' : data.error ?? data.title ?? (res.statusText || `HTTP ${res.status}`)), { status: res.status, type: data.type });
+  if (!res.ok) throw Object.assign(new Error(env.embedded && res.status === 401 ? 'You are not signed in to this site any more. Sign in again, then reopen this page.' : data.error ?? data.title ?? (res.statusText || `HTTP ${res.status}`)), { status: res.status, type: data.type, scope: data.scope });
   return data;
 }
 
@@ -1073,6 +1077,8 @@ const onRoles = () => view.team.map((r) => ({ slug: r.slug, title: r.title }));
 const roleTitle = (slug) => (view ??= derive()).bySlug.get(slug)?.title ?? slug;
 /** The rollout page reads the board and the repository through the local Studio's server; an embedded Studio has neither yet. */
 const rolloutOn = () => !env.embedded && feature('live', S.features);
+/** Approvals (L22) come from the control plane through this Studio's server, like chat. */
+const approvalsOn = () => !env.embedded && feature('chat', S.features);
 const managerOfRole = (slug) => view.bySlug.get(slug)?.reportsTo ?? '';
 
 /** The impact step and the commit message it adds (criteria 8 and 9). */
@@ -1200,6 +1206,29 @@ async function openPublish() {
   await previewPublish();
 }
 
+/**
+ * L40: after a publish, sends the published systems when the control plane's differ (systems.js). The passkey dialog
+ * lists what the control plane gains. One line under the result says how it went, with a retry that compares again.
+ */
+async function publishSystems(out) {
+  const result = await sendSystems({ stepUp, name: (s) => roleTitle(s), system: systemName });
+  out.querySelector('.systems-result')?.remove();
+  if (result === 'none') return;
+  const line = document.createElement('p');
+  line.className = 'systems-result';
+  line.textContent = t(`publish.systems.${result}`);
+  if (result !== 'done') {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'link'; b.textContent = t('publish.systems.retry');
+    b.onclick = () => publishSystems(out);
+    line.append(' ', b);
+  }
+  out.append(line);
+  // The step-up dialog gave focus back to a sheet control that may be gone: put it on the outcome (qa-web L40 S3).
+  line.tabIndex = -1;
+  (line.querySelector('button') ?? line).focus();
+}
+
 async function confirmPublish() {
   const out = $('#publish-result');
   $('#confirm').disabled = true;
@@ -1231,6 +1260,9 @@ async function confirmPublish() {
       cmd.textContent = `git push -u origin ${r.branch}`;
       out.replaceChildren(done, cmd);
     } else out.textContent = t('canvas.publish.none');
+    // L40: a commit in this checkout is what runs from here start on, so the control plane gets its systems now,
+    // whatever this publish changed (an earlier cancelled send is caught too). A pull request applies at merge (L40b).
+    if (r.commit && !r.pr && approvalsOn()) await publishSystems(out);
     const fresh = await api('/v1/team');
     const wasNew = !!S.noTeam;
     S = fresh;
@@ -1282,21 +1314,25 @@ function showPage(p) {
 async function setPage(raw) {
   if (!spec) return showGallery();
   const { page: asked, params } = parsePage(raw);
-  const p = (asked === 'meetings' || (asked === 'chat' && !S.noTeam && feature('chat', S.features)) || (asked === 'rollout' && !S.noTeam && rolloutOn())) && !previewing ? asked : 'team';
+  const p = (asked === 'meetings' || (asked === 'chat' && !S.noTeam && feature('chat', S.features)) || (asked === 'rollout' && !S.noTeam && rolloutOn()) || (asked === 'approvals' && !S.noTeam && approvalsOn())) && !previewing ? asked : 'team';
   if (meetings?.dirty && stateEl().dataset.page === 'meetings' && p !== 'meetings' && !(await ask('Discard the changes to this meeting?', { ok: 'Discard', cancel: 'Keep editing' }))) { if (env.urlState) history.replaceState(null, '', '#meetings'); return; }
   stateEl().dataset.page = p;
   for (const b of $$('#pages [data-page]')) { b.setAttribute('aria-pressed', String(b.dataset.page === p)); if (b.dataset.page === p) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
-  $('#more-btn')?.classList.toggle('current', p === 'meetings' || p === 'rollout');
+  $('#more-btn')?.classList.toggle('current', p === 'meetings' || p === 'rollout' || p === 'approvals');
   // ALL-3: one h1 per screen, the page's name (the gallery has its own).
   const title = $(`#pages [data-page="${p}"]`)?.textContent.trim();
   if (title && $('#page-title')) $('#page-title').textContent = title;
   closeMore();
   if (p !== 'rollout') rolloutView?.close();
-  if (p === 'rollout') {
+  if (p !== 'approvals') approvalsView?.close();
+  if (p === 'approvals') {
+    approvalsView ??= createApprovals({ root: $('#approvals-page'), organization: () => spec?.values?.ORGANIZATION || spec?.values?.PROJECT_NAME || '' });
+    approvalsView.open();
+  } else if (p === 'rollout') {
     rolloutView ??= createRollout({ root: $('#rollout-page'), titleOf: roleTitle, apiUrl });
     rolloutView.open();
   } else if (p === 'chat') {
-    chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features), organization: () => spec?.values?.ORGANIZATION || spec?.values?.PROJECT_NAME || '' });
+    chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features), me: () => approvalsView?.me() ?? null, organization: () => spec?.values?.ORGANIZATION || spec?.values?.PROJECT_NAME || '' });
     if (params.has('card') || params.has('budget')) chat.focus({ card: params.get('card'), budget: params.has('budget') });
     chat.open();
   } else {
@@ -1332,6 +1368,7 @@ const meetingsCtx = {
 function applyFeatures() {
   for (const f of ['publish', 'chat', 'runs', 'live']) stateEl().classList.toggle(`no-${f}`, !feature(f, S.features));
   stateEl().classList.toggle('no-rollout', !rolloutOn());
+  stateEl().classList.toggle('no-approvals', !approvalsOn());
 }
 
 /** The view a failed start shows, inside the Studio's own root (never the host's body). */
@@ -1396,12 +1433,13 @@ function destroy() {
   live?.es?.close(); live = null;
   chat?.close?.();
   rolloutView?.close();
+  approvalsView?.close();
   clearTimeout(flashTimer); clearTimeout(flowTimer); flowTimer = null;
   const el = env.root;
   el.innerHTML = '';
-  el.classList.remove('ats', 'ats-embedded', 'small', 'no-team', 'previewing', 'editing', 'no-publish', 'no-chat', 'no-runs', 'no-live', 'no-rollout');
+  el.classList.remove('ats', 'ats-embedded', 'small', 'no-team', 'previewing', 'editing', 'no-publish', 'no-chat', 'no-runs', 'no-live', 'no-rollout', 'no-approvals');
   delete el.dataset.page; delete el.dataset.mode;
-  S = spec = selected = selectedSystem = view = sugg = chat = rolloutView = meetings = editor = gallery = previewing = made = published = board = pop = liveCtl = null;
+  S = spec = selected = selectedSystem = view = sugg = chat = rolloutView = approvalsView = meetings = editor = gallery = previewing = made = published = board = pop = liveCtl = null;
   query = ''; undo.length = 0; redo.length = 0; zoom = 'fit'; mode = 'org'; scale = 1; page = 'team'; initialPage = null;
   flow = { key: '', edges: [], unresolved: [] }; picks = new Map(); followUps = []; booted = false; lastEdit = { key: '', at: 0 };
 }

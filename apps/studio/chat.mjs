@@ -66,6 +66,11 @@ export function chatSource(env = process.env) {
         ? call('POST', `/approvals/${encodeURIComponent(approval)}`, { decision: option === 'deny' ? 'denied' : option === 'approve' ? 'approved' : option, version }, headers)
         : call('POST', `/cards/${encodeURIComponent(card)}`, { option, version }, headers);
     },
+    /**
+     * "Do it" (L39): approves the lettered asks the person saw, each with its card version, in one call. One step-up
+     * covers the set when any ask is bound; the control plane names its scope when it asks.
+     */
+    doIt: ({ asks, key }) => call('POST', '/approvals/do-it', { asks, via: 'chat' }, { ...(key ? { 'idempotency-key': key } : {}), ...spendStepUp() }),
     /** This team's line from /me/summary (cost today against the cap, run state) and the run itself. */
     async run() {
       const [summary, run] = await Promise.all([call('GET', '/me/summary'), currentRun().catch(() => null)]);
@@ -109,6 +114,18 @@ export function chatSource(env = process.env) {
     // step-up and no code host or Git involved (SH-10). Only lifting one needs a step-up, bound to lift:<id>.
     /** The live changes in force: { live: [{ id, kind, member, state, reason, by, at, text, liveChange }] }. */
     live: () => call('GET', `/teams/${t}/live`),
+    // Approvals (L22, apps/server/ledger.mjs): the standing rules with their use this period, and the ledger, newest
+    // first. Withdrawing narrows what the team may do, so it needs no step-up. `me` names the viewer for "You".
+    me: () => call('GET', '/me'),
+    // L40: the team's systems (resources.json) live on the control plane, set only by an admin with a step-up scoped
+    // systems:<team> (apps/server/credentials.mjs putSystems); runs freeze them at start.
+    systems: () => call('GET', `/teams/${t}/systems`),
+    /** Drops a held step-up unspent: a refusal before the send must not leave it to authorise a set never shown. */
+    dropStepUp: () => { spendStepUp(); },
+    setSystems: (body, key) => call('PUT', `/teams/${t}/systems`, body, { ...(key ? { 'idempotency-key': key } : {}), ...spendStepUp() }),
+    rules: () => call('GET', `/teams/${t}/standing-rules`),
+    withdrawRule: (id) => call('DELETE', `/teams/${t}/standing-rules/${encodeURIComponent(id)}`),
+    ledger: (before) => call('GET', `/teams/${t}/ledger${before ? `?before=${encodeURIComponent(before)}` : ''}`),
     stopEverything: (reason, key) => call('POST', `/teams/${t}/live/stop-everything`, reason ? { reason } : {}, key ? { 'idempotency-key': key } : {}),
     setMember: (member, state, reason, key) => call('PUT', `/teams/${t}/live/members/${encodeURIComponent(member)}`, { state, ...(reason ? { reason } : {}) }, key ? { 'idempotency-key': key } : {}),
     /** Lifts one change: it spends the step-up this server holds, if any; without one the control plane asks (401). */

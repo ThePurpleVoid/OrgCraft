@@ -1337,7 +1337,6 @@ export function capabilityDiff(published, draft, kit) {
     switch (c.kind) {
       case 'role-added': case 'member-added': add({ kind: 'seat-added', subject: c.role, ...(c.type ? { type: c.type } : {}), detail: `${c.role} joins the team` }); break;
       case 'type-changed': add({ kind: 'type-changed', subject: c.role, from: c.from, to: c.to, detail: c.detail }); break;
-      case 'binding-added': case 'binding-widened': add({ kind: c.kind, subject: c.role, resource: c.resource, ...(c.from ? { from: c.from } : {}), to: c.to, detail: c.detail }); break;
       case 'path-added': add({ kind: 'owns-added', subject: c.to, path: c.path, detail: c.detail }); break;
       case 'path-moved': add({ kind: 'owns-added', subject: c.to, path: c.path, from: c.from, detail: c.detail }); break;
       case 'tier': add({ kind: 'model-changed', subject: c.role, from: c.from, to: c.to, detail: c.detail }); break;
@@ -1364,19 +1363,103 @@ export function capabilityDiff(published, draft, kit) {
     if (!n) add({ kind: 'check-removed', subject: '*', target: g.target, check: g.name, detail: `the ${g.target} gate no longer runs ${g.name}` });
     else if (n.run !== g.run) add({ kind: 'check-changed', subject: '*', target: g.target, check: g.name, from: g.run, to: n.run, detail: `the ${g.target} gate's ${g.name} runs \`${n.run}\` instead of \`${g.run}\`` });
   }
-  // Systems: a bound resource that gains a secret or changes its settings widens every seat bound to it.
-  const res = (spec) => new Map((spec.resources?.resources ?? []).map((x) => [x.id, x]));
-  const rb = res(published);
-  const ra = res(draft);
+  // Systems (resources.json): new systems, new or wider bindings, and systems that gain a secret or change (L40).
+  for (const x of systemsCapability(published.resources, draft.resources)) add(x);
+  return items;
+}
+
+/**
+ * What a change to the team's systems widens (L40; ADR 0013 rule 2): `before` and `after` are resources.json shapes,
+ * { resources: [{ id, type, config, secrets, tools, permissions, effects, egress, tier }], bindings: [{ role, resource,
+ * permission }] }, as GET and PUT /v1/teams/{team}/systems carry them (the server's shape has no `config`; the Studio's
+ * resources.json does, so both are compared), so the Studio can show the same "Widens access" items for a systems change on
+ * its own. Removing a system or a binding, or narrowing one (deploy → write → read), widens nothing and is not listed.
+ *   system-added      a new system; `subjects` are the seats bound to it (none yet is still an item: it can be bound)
+ *   binding-added     a seat gets a system, at `to` (read, write or deploy, shown as Read, Change, Act)
+ *   binding-widened   a seat's permission on a system goes up, `from` → `to`
+ *   resource-widened  a system gains `secrets`; its type, settings (`config`, `settings: true`) or tools command or URL change; a
+ *                     permission grants a tool it didn't (`tools`: [{ tool, at, from? }]); a tool's effect asks less, or
+ *                     its entry is added or removed (`effects`: [{ tool, from, to }]); it can reach a new host (`egress`);
+ *                     or its tier drops, verified → community → custom (`tier`: { from, to }). `subjects` are its seats.
+ * Each item is { kind, subject, subjects?, resource, …, detail }; subject is the one seat, or null with `subjects`.
+ */
+/** JSON with object keys sorted, so two equal values compare equal whatever their key order. */
+const canonical = (v) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x));
+
+/** Resource fields systemsCapability compares one by one; every other field but these is a setting. */
+const SYSTEM_FIELDS = new Set(['id', 'name', 'secrets', 'tools', 'permissions', 'effects', 'egress', 'tier']);
+const TIER_RANK = { custom: 0, community: 1, verified: 2 };
+// How much an effect is asked about before it runs, least first; a tool moving down this list asks less (L40).
+const EFFECT_RANK = { read: 0, write: 1, send: 2, deploy: 3, destructive: 4, payment: 5 };
+
+/** Tool globs a permission newly grants: a glob at `at` that before was granted only at a higher permission, or not at all. */
+function toolsWidened(before, after) {
+  const lowest = (perms, g) => PERMISSIONS.findIndex((p) => (perms?.[p] ?? []).includes(g));
+  const out = [];
+  for (const [i, at] of PERMISSIONS.entries()) {
+    for (const tool of after?.[at] ?? []) {
+      if (lowest(after, tool) !== i) continue;
+      const was = lowest(before, tool);
+      if (was === -1 || was > i) out.push({ tool, at, ...(was === -1 ? {} : { from: PERMISSIONS[was] }) });
+    }
+  }
+  return out;
+}
+
+/** Effects that ask less: a tool whose effect moves to a lower rank, or one gaining or losing its entry (either can lower how it is classified). */
+function effectsWidened(before = {}, after = {}) {
+  const out = [];
+  for (const tool of [...new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])].sort()) {
+    const was = before?.[tool];
+    const now = after?.[tool];
+    if (was === now) continue;
+    if (was !== undefined && now !== undefined && (EFFECT_RANK[now] ?? -1) > (EFFECT_RANK[was] ?? -1)) continue;
+    out.push({ tool, from: was ?? null, to: now ?? null });
+  }
+  return out;
+}
+
+export function systemsCapability(before, after) {
+  const items = [];
+  const rb = new Map((before?.resources ?? []).map((x) => [x.id, x]));
+  const ra = new Map((after?.resources ?? []).map((x) => [x.id, x]));
+  const bindings = after?.bindings ?? [];
+  const seats = (id) => [...new Set(bindings.filter((b) => b.resource === id).map((b) => b.role))].sort();
+  const who = (id) => { const subjects = seats(id); return { subject: subjects.length === 1 ? subjects[0] : null, subjects }; };
   for (const [id, x] of ra) {
     const was = rb.get(id);
-    if (!was) continue; // a new system reaches nobody until a binding, which is its own item
+    if (!was) {
+      items.push({ kind: 'system-added', ...who(id), resource: id, type: x.type, ...((x.secrets ?? []).length ? { secrets: [...x.secrets] } : {}), detail: `${id} (${x.type}) is added${(x.secrets ?? []).length ? ` with ${x.secrets.join(', ')}` : ''}` });
+      continue;
+    }
     const secrets = (x.secrets ?? []).filter((n) => !(was.secrets ?? []).includes(n));
-    const settings = JSON.stringify(x.config ?? {}) !== JSON.stringify(was.config ?? {}) || x.type !== was.type;
-    if (!secrets.length && !settings) continue;
-    const subjects = [...new Set((draft.resources?.bindings ?? []).filter((b) => b.resource === id).map((b) => b.role))].sort();
-    if (!subjects.length) continue;
-    add({ kind: 'resource-widened', subject: subjects.length === 1 ? subjects[0] : null, subjects, resource: id, ...(secrets.length ? { secrets } : {}), detail: `${id} ${secrets.length ? `gains ${secrets.join(', ')}` : 'changes its settings'}` });
+    const command = canonical(x.tools ?? null) !== canonical(was.tools ?? null);
+    // Settings: type, config, and any field this function does not compare one by one (a field added later widens
+    // until it is taught to narrow); name is a label only. Compared canonically, so key order is not a change.
+    const rest = (r) => canonical(Object.fromEntries(Object.entries(r).filter(([k, v]) => !SYSTEM_FIELDS.has(k) && v !== undefined && !(k === 'config' && v && !Object.keys(v).length))));
+    const settings = rest(x) !== rest(was);
+    const tools = toolsWidened(was.permissions, x.permissions);
+    const effects = effectsWidened(was.effects, x.effects);
+    const egress = (x.egress ?? []).filter((h) => !(was.egress ?? []).includes(h));
+    const tier = (TIER_RANK[x.tier ?? 'custom'] ?? 0) < (TIER_RANK[was.tier ?? 'custom'] ?? 0) ? { from: was.tier ?? 'custom', to: x.tier ?? 'custom' } : null;
+    if (!secrets.length && !settings && !command && !tools.length && !effects.length && !egress.length && !tier) continue;
+    const what = [
+      secrets.length ? `gains ${secrets.join(', ')}` : '', command ? 'runs another command' : '', settings ? 'changes its settings' : '',
+      tools.length ? `grants ${tools.map((t) => `${t.tool} (${t.at})`).join(', ')}` : '',
+      effects.length ? `asks less before ${effects.map((e) => e.tool).join(', ')}` : '', egress.length ? `can reach ${egress.join(', ')}` : '',
+      tier ? `is no longer ${tier.from}` : '',
+    ].filter(Boolean).join(', ');
+    items.push({
+      kind: 'resource-widened', ...who(id), resource: id, ...(secrets.length ? { secrets } : {}), ...(command ? { command: true } : {}), ...(settings ? { settings: true } : {}),
+      ...(tools.length ? { tools } : {}), ...(effects.length ? { effects } : {}), ...(egress.length ? { egress } : {}), ...(tier ? { tier } : {}), detail: `${id} ${what}`,
+    });
+  }
+  const key = (b) => `${b.role}\u0000${b.resource}`;
+  const bb = new Map((before?.bindings ?? []).map((b) => [key(b), b]));
+  for (const b of bindings) {
+    const was = bb.get(key(b));
+    if (!was) items.push({ kind: 'binding-added', subject: b.role, resource: b.resource, to: b.permission, detail: `${b.role} gets ${b.resource} (${b.permission})` });
+    else if ((RANK[b.permission] ?? 99) > (RANK[was.permission] ?? 0)) items.push({ kind: 'binding-widened', subject: b.role, resource: b.resource, from: was.permission, to: b.permission, detail: `${b.role} on ${b.resource}: ${was.permission} → ${b.permission}` });
   }
   return items;
 }
