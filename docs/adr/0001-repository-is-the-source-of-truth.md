@@ -10,6 +10,8 @@ The Studio lets people build a team on a canvas. The team could live in the Stud
 
 A team is its `.agent-team/` folder. The Studio imports it into a `TeamSpec`, edits that, and publishes by compiling back to `.agent-team/` and running the pinned kit `sync`. The Studio's database holds drafts, canvas layout, runs, chat, events, secrets and audit records, never the only copy of a team. A published version is a commit SHA.
 
+Amended 2026-11-09 by [ADR 0012](0012-no-repository-start.md): a team's `.agent-team/` folder lives in the product's repository, or in the managed team store (ADR 0012), which is Git underneath and exportable at any time.
+
 ## Consequences
 
 - No lock-in: a team built in the Studio works with the CLI alone, and a team built by hand opens in the Studio.
