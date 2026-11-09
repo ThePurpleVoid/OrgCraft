@@ -12,6 +12,10 @@ import { personActor } from './m3.mjs';
 import { boundCalls, redact } from './signed.mjs';
 import { createMeetings } from './meetings.mjs';
 import { canWork } from './deployment.mjs';
+import { resolveTo } from './routing.mjs';
+
+/** How a message's `to` was resolved (section 5.3), on its event: only when it was not already a member id. */
+const routedFields = (r) => (!r ? {} : { ...(r.how !== 'id' ? { toAsked: r.asked, routedBy: r.how } : {}), ...(r.offWiring ? { offWiring: true } : {}) });
 
 export const SESSION_TOKEN_MINUTES = 15;
 const ACK_SECONDS = 30;
@@ -171,6 +175,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         secrets: [], caps: { remainingToday: money.remainingToday, remainingRun: money.remainingRun },
         areas: role.areas ?? [], roster: (roster.roles ?? []).map((r) => r.slug), frontDoor: roster.frontDoor === d.role, frontDoorRole: roster.frontDoor,
         ...(role.model ? { model: role.model } : {}),
+        // ADR 0011 (L17): a teammate's type and display name, for its prompt; it is still addressed by its member id.
+        ...(role.type ? { type: role.type } : {}), ...(role.name ? { name: role.name } : {}),
         wake, resume: Boolean(s), ...(s?.checkpoint ? { checkpoint: s.checkpoint } : {}),
         token: tok.token, tokenExpires: tok.expires.toISOString(), delivery: d.id,
       };
@@ -336,7 +342,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       const [run] = await ctx.q('select id, state, roster from runs where id = $1', [sess.run]);
       const roster = run?.roster ?? {};
       const me = roster.roles?.find((r) => r.slug === sess.role);
-      const check = checkTool(tool, input, { role: sess.role, frontDoor: roster.frontDoor === sess.role, frontDoorRole: roster.frontDoor, roster: (roster.roles ?? []).map((r) => r.slug), reportsTo: me?.reportsTo });
+      const check = checkTool(tool, input, { role: sess.role, frontDoor: roster.frontDoor === sess.role, frontDoorRole: roster.frontDoor, roster: (roster.roles ?? []).map((r) => r.slug), reportsTo: me?.reportsTo, resolve: (to, msg) => resolveTo(roster, to, sess.role, msg) });
       const actor = { kind: 'role', id: sess.role, instance: sess.instance ?? null, session: sess.id, via: 'tool' };
       const opts = { actor, run: sess.run, teamVersion: sess.team_version ?? undefined, subject: `role/${sess.role}` };
       if (check.problems) {
@@ -349,11 +355,11 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (TOOL_EVENT[tool]) {
         const data = tool === 'report'
           ? { status: i.status, task: i.task, issue: i.issue, pr: i.pr, branch: i.branch, commit: i.commit, detail: i.detail, ...(i.waitingOn && roster.roles?.some((r) => r.slug === i.waitingOn) ? { to: i.waitingOn } : {}), ...(i.waitingOn ? { waitingOn: i.waitingOn } : {}) }
-          : { ...i, ...(tool === 'blocked' && !i.to ? { to: i.needFrom === 'owner' ? roster.frontDoor : i.needFrom !== sess.role ? i.needFrom : undefined } : {}), detail: detailOf(tool, i), ...(i.artifact ? { evidence: [i.artifact] } : {}) };
+          : { ...i, ...(tool === 'blocked' && !i.to ? { to: i.needFrom === 'owner' ? roster.frontDoor : i.needFrom !== sess.role ? i.needFrom : undefined } : {}), detail: detailOf(tool, i), ...(i.artifact ? { evidence: [i.artifact] } : {}), ...routedFields(check.routed) };
         const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
         const ev = await ctx.emit(sess.team, TOOL_EVENT[tool], clean, opts);
         if (tool === 'blocked') await ctx.emit(sess.team, 'report.status', { status: 'blocked', task: i.task, issue: i.issue, detail: i.need }, opts);
-        out = { event: ev.id };
+        out = { event: ev.id, ...(check.routed ? { to: check.routed.to, routedBy: check.routed.how, ...(check.routed.offWiring ? { offWiring: true } : {}) } : {}) };
         await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: ev.id });
       } else if (tool === 'meeting_reply' || tool === 'meeting_close' || tool === 'meeting_start') {
         const r = tool === 'meeting_start' ? await meetings.startAdhoc(ctx, sess, i, roster) : await meetings.tool(ctx, sess, tool, i, roster);
