@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerates this repository's agent team from .agent-team/, using the Agent Team Kit version pinned in
+# Regenerates this repository's agent team from .agent-team/, using the OrgCraft version pinned in
 # .agent-team/team.json ("kit"). To upgrade the kit, change that pin and run this script.
 #
 #   scripts/agent-team/sync.sh          regenerate docs/team/, scripts/agent-team/ (and .claude/agents/)

@@ -2,7 +2,7 @@
 
 Owner: CTO. Status: draft 1, 2026-11-05.
 
-Agent Team Kit is built by a team defined with Agent Team Kit. Nothing here is special: the team was made with the kit's own `init`, is changed only through `.agent-team/`, and is checked in CI with `sync.sh check`, like any product's team.
+OrgCraft is built by a team defined with OrgCraft. Nothing here is special: the team was made with the kit's own `init`, is changed only through `.agent-team/`, and is checked in CI with `sync.sh check`, like any product's team.
 
 ## The team
 

@@ -168,5 +168,5 @@ test('GitHub remotes give a compare link; other hosts do not', () => {
   for (const r of ['git@github.com:acme/app.git', 'https://github.com/acme/app', 'https://github.com/acme/app.git', 'ssh://git@github.com/acme/app.git']) assert.equal(githubRepo(r), 'https://github.com/acme/app', r);
   assert.equal(githubRepo('https://gitlab.com/acme/app.git'), null);
   assert.equal(compareUrl('git@github.com:acme/app.git', 'main', 'team/x'), 'https://github.com/acme/app/compare/main...team%2Fx?expand=1');
-  assert.deepEqual(pullRequestText('Title only', 'abc1234'), { title: 'Title only', body: 'Published from Agent Team Studio (commit abc1234).' });
+  assert.deepEqual(pullRequestText('Title only', 'abc1234'), { title: 'Title only', body: 'Published from OrgCraft Studio (commit abc1234).' });
 });

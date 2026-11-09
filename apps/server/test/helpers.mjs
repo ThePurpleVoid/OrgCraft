@@ -35,7 +35,7 @@ export async function plane(fn, { now, ...extra } = {}) {
     return { status: res.status, body: await res.json().catch(() => null), headers: res.headers };
   };
   /** Headers with a fresh single-use step-up token, for writes that need one. */
-  const su = async () => ({ authorization: `Bearer ${ADMIN}`, 'x-step-up': (await call('POST', '/auth/step-up', { secret: STEP_UP_SECRET })).body.token });
+  const su = async (scope) => ({ authorization: `Bearer ${ADMIN}`, 'x-step-up': (await call('POST', '/auth/step-up', { secret: STEP_UP_SECRET, ...(scope ? { scope } : {}) })).body.token });
   // Server-written events (approvals, budgets, chat) for a test's fixtures: the API refuses them (#135).
   const inject = (team, events) => server.m3.appendEvents('acme', team, events);
   try { await fn({ db, call, base, server, m3: server.m3, su, inject, woke: () => woke }); } finally { server.runners?.closeAll(); server.closeAllConnections(); server.close(); await db.close(); }
@@ -90,7 +90,7 @@ export async function registerRunner(call, name = 'r1') {
  * A fake runner on the WebSocket: says hello, answers pings, acks what the control plane sends (`reply` picks the ack
  * body per frame, or null to stay silent), and can wait for a frame.
  */
-export async function fakeRunner(base, key, { runner, maxSessions = 4, reply = () => ({}), sessions } = {}) {
+export async function fakeRunner(base, key, { runner, maxSessions = 4, reply = () => ({}), sessions, health, version = 'test' } = {}) {
   const { default: WebSocket } = await import('ws');
   const ws = new WebSocket(base.replace(/^http/, 'ws') + '/runners/connect', { headers: { authorization: `Bearer ${key}` } });
   const frames = [];
@@ -116,7 +116,7 @@ export async function fakeRunner(base, key, { runner, maxSessions = 4, reply = (
   });
   /** Sends a request and resolves with the ack or nack that refs it. */
   const request = async (op, body) => { const id = `q${n++}`; raw({ op, id, body }); return next((f) => f.ref === id && (f.op === 'ack' || f.op === 'nack')); };
-  raw({ op: 'hello', id: 'hello', body: { runner, version: 'test', capabilities: { runtimes: ['agent-sdk'], maxSessions }, ...(sessions ? { sessions } : {}) } });
+  raw({ op: 'hello', id: 'hello', body: { runner, version, capabilities: { runtimes: ['agent-sdk'], maxSessions }, ...(sessions ? { sessions } : {}), ...(health ? { health } : {}) } });
   const welcome = await next((f) => f.op === 'welcome');
   return { ws, frames, next, request, welcome, close: () => ws.close() };
 }

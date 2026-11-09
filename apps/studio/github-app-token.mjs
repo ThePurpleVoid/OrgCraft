@@ -2,7 +2,7 @@
 // It always asks for this one repository and exactly contents: write, pull_requests: write and metadata: read (S7),
 // and keeps the token in memory until five minutes before it expires (E3). Hosts may use @octokit/auth-app instead.
 //
-//   import { githubAppToken } from 'agent-team-kit/studio/github-app-token';
+//   import { githubAppToken } from 'orgcraft/studio/github-app-token';
 //   const getInstallationToken = githubAppToken({ appId, installationId, privateKey: process.env.AGENT_TEAM_GITHUB_APP_KEY });
 import { createPrivateKey, createSign } from 'node:crypto';
 
