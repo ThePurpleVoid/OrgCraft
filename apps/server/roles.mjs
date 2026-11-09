@@ -85,6 +85,12 @@ export const ROUTES = [
   ['POST', '/teams/{team}/studio/v1/team/publish', 'editor'],
   ['GET', '/teams/{team}/studio/assets/{version}/{name}', 'viewer'],
   ['GET', '/teams/{team}/rollout', 'viewer'],
+  // The run inspector (N1, L19s-b): the list and the timeline show summaries only; a step's stored input or output is
+  // for editors and every read is audited; deleting it early is an admin's, with step-up.
+  ['GET', '/teams/{team}/tasks', 'viewer'],
+  ['GET', '/teams/{team}/tasks/{task}', 'viewer'],
+  ['GET', '/teams/{team}/io/{io}', 'editor'],
+  ['DELETE', '/teams/{team}/io', 'admin'],
   ['POST', '/teams/{team}/report-tokens', 'admin'],
   ['DELETE', '/teams/{team}/report-tokens/{token}', 'admin'],
   ['GET', '/teams/{team}/sinks', 'admin'],

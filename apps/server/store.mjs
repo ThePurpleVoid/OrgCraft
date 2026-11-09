@@ -1,5 +1,6 @@
 // The control plane's data: teams, report tokens, the event log, the board projection, sinks and secrets.
 // Everything a tenant owns is read and written inside db.tenant(), so row-level security has the last word.
+import { attribute } from './inspector.mjs';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { summarize, toRow } from '../../tools/board.mjs';
 import { checkEvent, fromKitRow, toKitRow } from '../../packages/events/index.mjs';
@@ -80,10 +81,10 @@ export async function authReport(db, team, token) {
 }
 
 /** Appends envelopes. Ids already stored are skipped, so a retry is safe. Returns the stored rows' { id, seq }. */
-export async function append(db, tenant, team, events, { project = null } = {}) {
+export async function append(db, tenant, team, events, { project = null, outside = true } = {}) {
   return db.tenant(tenant, async ({ q }) => {
     if (!(await q('select 1 from teams where id = $1', [team])).length) throw new Problem(404, 'no such team');
-    return appendIn(q, tenant, team, events, { project });
+    return appendIn(q, tenant, team, events, { project, outside });
   });
 }
 
@@ -99,7 +100,7 @@ export const CLOCK_SKEW_MS = 5 * 60_000;
  * `now` (a Date): when the events were received. An event dated more than CLOCK_SKEW_MS after that is stored at `now`,
  * so a future-dated usage.recorded cannot spend, warn or exhaust a day that has not come yet (security on #149).
  */
-export async function appendIn(q, tenant, team, events, { project = null, now = null } = {}) {
+export async function appendIn(q, tenant, team, events, { project = null, now = null, outside = false } = {}) {
   // One appender per tenant at a time, so seq is commit order: a stream reading "seq > last" never skips an event
   // that took a lower seq but committed later.
   await q('select pg_advisory_xact_lock(4849, hashtext($1))', [tenant]);
@@ -110,10 +111,12 @@ export async function appendIn(q, tenant, team, events, { project = null, now = 
     if (e.tenant !== tenant || (e.team && e.team !== team) || !e.source.startsWith(`/tenants/${tenant}`)) throw new Problem(400, `event ${e.id} is for another tenant or team`);
     const env = { ...e, team };
     if (now && Date.parse(e.time) > now.getTime() + CLOCK_SKEW_MS) env.time = now.toISOString();
+    // The run inspector's task and cause are the server's to set, never the sender's (ADR 0009).
+    await attribute(q, env, { outside });
     const [row] = await q(
-      `insert into events(tenant, team, id, type, version, time, actor_kind, actor_id, envelope)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict (team, id) do nothing returning seq`,
-      [tenant, team, e.id, e.type, e.version, env.time, e.actor.kind, e.actor.id, JSON.stringify(env)]);
+      `insert into events(tenant, team, id, type, version, time, actor_kind, actor_id, envelope, task, cause)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict (team, id) do nothing returning seq`,
+      [tenant, team, e.id, e.type, e.version, env.time, e.actor.kind, e.actor.id, JSON.stringify(env), env.task ?? null, env.cause ?? null]);
     if (!row) continue;
     const stored = { id: e.id, seq: Number(row.seq), event: env };
     out.push(stored);
