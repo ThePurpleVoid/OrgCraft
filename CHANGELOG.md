@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **Templates: roles that start switched off** (L34, demo step 13). `template.json` may list `"off": [role ids]`: those kit roles are on the team but start switched off (team.json excludes them), so the Studio draws them as Off and switching one on is a one-line team.json change. The Startup product team template starts with Performance tester off (27 of 28 on). `checkTemplate` refuses an `off` entry that is not a kit role. **What existing teams see:** nothing; only new teams made from the template.
 
 ## 0.22.0
 
