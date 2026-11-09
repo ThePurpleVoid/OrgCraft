@@ -326,7 +326,7 @@ test('quiet hours and the digest render what is saved, and the log never shows a
   assert.match(log, /Held for the digest<\/td><td>It came in during quiet hours\./);
   assert.doesNotMatch(log, /channel_not_found|quiet hours<\/p>/, 'never a provider\'s own error');
   assert.match(log, /&lt;U1&gt;/);
-  assert.match(log, /<th scope="col">Who<\/th>/);
+  assert.doesNotMatch(log, /<th scope="col">Who<\/th>|per_kim|per_octo/, 'no raw person ids');
   assert.match(log, /aria-pressed="true">Everyone/);
   assert.match(log, /id="log-older"/);
   assert.match(logHtml({ kinds, owner: false, log: { items: [], next: null, all: false } }), /Nothing sent yet\. Messages show here as soon as the team needs you\./);
@@ -375,7 +375,8 @@ test('L25: set quiet hours and a digest, then read the delivery log, mine and ev
   await log.getByRole('button', { name: 'Everyone' }).click();
   await log.locator('tbody tr').nth(2).waitFor();
   assert.equal(await log.getByRole('button', { name: 'Everyone' }).getAttribute('aria-pressed'), 'true');
-  const kim = log.locator('tr', { hasText: 'per_kim' });
+  const kim = log.locator('tr', { hasText: 'A teammate is stuck' });
+  assert.doesNotMatch(await log.textContent(), /per_kim|per_octo/, 'no raw person ids');
   await kim.getByText("Couldn't send").waitFor();
   await kim.getByText("Slack didn't accept it.").waitFor();
   assert.doesNotMatch(await kim.textContent(), /U2|channel_not_found/, "someone else's address, and a provider's own error, are never shown");

@@ -86,13 +86,15 @@ export function logHtml(st) {
   const word = (key, fb) => (t(key) === key ? fb : t(key));
   // Why is always a plain sentence (CPO): held and emailed have one; a provider's own error is never shown.
   const why = (s, channel) => word(`notify.status.${s}.why`, '').replace('{channel}', t(`notify.channel.${channel}`));
-  const who = lg.all;
+  // Who is hidden until the log carries a display name (code review: never a raw per_ id).
+  const who = false;
+  const everyone = !!lg.all;
   const head = [t('notify.log.when'), t('notify.log.what'), t('notify.log.where'), ...(who ? [t('notify.log.who')] : []), t('notify.log.status'), t('notify.log.why')];
   const rows = (lg.items ?? []).map((r) => `<tr class="st-${esc(r.status)}"><td>${esc(when(r.at))}</td><td>${esc(label(r.kind))}</td><td>${esc(t(`notify.channel.${r.channel}`))}${r.to ? ` <span class="muted">${esc(r.to)}</span>` : ''}</td>${who ? `<td>${esc(r.principal ?? '')}</td>` : ''}<td${why(r.status, r.channel) ? ` title="${esc(why(r.status, r.channel))}"` : ''}>${esc(word(`notify.status.${r.status}`, r.status))}</td><td>${esc(why(r.status, r.channel))}</td></tr>`).join('');
   return `<section class="n-section" id="log" aria-labelledby="log-title">
     <h2 id="log-title">${esc(t('notify.log.heading'))}</h2>
     <p class="muted">${esc(t('notify.log.explainer'))}</p>
-    ${st.owner ? `<div class="row" role="group" aria-labelledby="log-scope"><span id="log-scope">${esc(t('notify.scope.label'))}</span><button type="button" data-log-all="" aria-pressed="${!who}">${esc(t('notify.scope.me'))}</button><button type="button" data-log-all="1" aria-pressed="${!!who}">${esc(t('notify.scope.all'))}</button></div>` : ''}
+    ${st.owner ? `<div class="row" role="group" aria-labelledby="log-scope"><span id="log-scope">${esc(t('notify.scope.label'))}</span><button type="button" data-log-all="" aria-pressed="${!everyone}">${esc(t('notify.scope.me'))}</button><button type="button" data-log-all="1" aria-pressed="${everyone}">${esc(t('notify.scope.all'))}</button></div>` : ''}
     ${lg.error ? `<p class="result error" role="alert">${esc(lg.error)}</p>` : ''}
     ${rows ? `<div class="table-wrap" tabindex="0" aria-labelledby="log-title"><table class="log"><thead><tr>${head.map((h) => `<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : lg.error ? '' : `<p class="muted">${esc(t('notify.log.empty'))}</p>`}
     ${lg.next ? `<button type="button" id="log-older">${esc(t('notify.older'))}</button>` : ''}
@@ -312,7 +314,7 @@ function start() {
     if (all) q.set('all', '1');
     if (more && st.log?.next) q.set('before', st.log.next);
     const r = await call('GET', `/v1/teams/${encodeURIComponent(team)}/notifications/log${q.size ? `?${q}` : ''}`);
-    if (!r.ok) { st.log = { items: more ? st.log?.items ?? [] : [], next: null, all, error: errorOf(r) }; return; }
+    if (!r.ok) { st.log = { items: more ? st.log?.items ?? [] : [], next: null, all, error: t('notify.log.failed') }; return; }
     st.log = { items: [...(more ? st.log?.items ?? [] : []), ...(r.data.items ?? [])], next: r.data.next ?? null, all, error: null };
   }
   const say = (key, kind, text) => { st.notes.clear(); if (text) st.notes.set(key, { kind, text }); };
