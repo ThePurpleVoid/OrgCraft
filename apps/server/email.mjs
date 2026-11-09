@@ -651,8 +651,7 @@ export function createNotifications({ db }) {
       const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
       const cursor = before === null || before === undefined || before === '' ? null : String(before);
       if (cursor !== null && !/^\d{1,30}$/.test(cursor)) throw new Problem(400, 'before is the `at` of the last row, in ms');
-      return db.tenant(tenant, async ({ q }) => {
-        const rows = await q(`select * from (
+      const rows = await db.tenant(tenant, ({ q }) => q(`select * from (
             select 'email' as channel, d.at, d.event, d.kind, case when d.held then 'held' else d.status end as status, d.error, s.principal, s.email as target,
                 d.status = 'failed' and exists(select 1 from email_deliveries h where h.subscription = d.subscription and h.event = d.event and h.held)
                   and (select count(*) from email_deliveries f where f.subscription = d.subscription and f.event = d.event and f.status = 'failed') >= ${HELD_TRIES} as final
@@ -661,18 +660,20 @@ export function createNotifications({ db }) {
             select 'slack' as channel, d.at, d.event, d.kind, d.status, d.error, l.principal, coalesce(l.slack_user, d.target) as target, false as final
               from slack_deliveries d left join slack_links l on l.id = d.target where d.team = $1
           ) x where ($2::boolean or x.principal = $3) and ($4::bigint is null or x.at < to_timestamp($4::bigint / 1000.0))
-          order by x.at desc limit $5`, [team, all, principal, cursor, n]);
-        // L25 follow-up: on all=1 each row names its person (name, else login), from members of this tenant only.
-        const ids = all ? [...new Set(rows.map((r) => r.principal).filter(Boolean))] : [];
-        const names = new Map(ids.length ? (await db.system(`select distinct p.id, coalesce(nullif(p.name, ''), p.login) as name from people p
-          join members m on m.person = p.id and m.tenant = $1 where p.id = any($2)`, [tenant, ids])).map((x) => [x.id, x.name]) : []);
+          order by x.at desc limit $5`, [team, all, principal, cursor, n]));
+      // L25 follow-up: on all=1 each row names its person (name, else login), from people who are or were members of
+      // this tenant. Read after the tenant transaction, never inside it (one connection on PGlite).
+      const ids = all ? [...new Set(rows.map((r) => r.principal).filter(Boolean))] : [];
+      const names = new Map(ids.length ? (await db.system(`select distinct p.id, coalesce(nullif(p.name, ''), p.login) as name from people p
+        join members m on m.person = p.id and m.tenant = $1 where p.id = any($2)`, [tenant, ids])).map((x) => [x.id, x.name]) : []);
+      {
         const items = rows.map((r) => ({ channel: r.channel, at: r.at, event: r.event, kind: r.kind, status: r.status, reason: reasonOf(r), why: r.error ?? null,
           // Only your own rows say where they went: an admin's all=1 never shows someone else's address, even masked.
           ...(r.principal === principal ? { to: r.channel === 'email' ? maskEmail(r.target) : r.target } : {}),
           ...(all ? { principal: r.principal, name: r.principal ? names.get(r.principal) ?? null : null } : {}) }));
         const last = rows.at(-1);
         return { items, next: rows.length === n && last ? String(new Date(last.at).getTime()) : null };
-      });
+      }
     },
   };
 }
