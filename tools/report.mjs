@@ -175,7 +175,8 @@ const roleSlugs = (cwd, rev) => (rev ? git(cwd, ['ls-tree', '--name-only', `${re
  * The team.published body for a commit (default: the last one on the first-parent line that changed .agent-team/,
  * the version teamVersionAt reports):
  * { kind: 'published', version, publishedAt, pr, roles, off, plan, changes, by, systemsHash? }. systemsHash is
- * canonicalSystemsHash of that commit's .agent-team/resources.json, left out when it has none (L40b). Throws when there is none.
+ * canonicalSystemsHash of that commit's .agent-team/resources.json (none is the empty set), left out only when the
+ * file does not parse (L40b). Throws when there is none.
  */
 export function publishedBody(cwd, { sha = '', pr = '', by = '' } = {}) {
   const version = git(cwd, ['rev-parse', '--verify', '--quiet', `${sha || git(cwd, ['log', '-1', '--first-parent', '--format=%H', '--', '.agent-team']) || 'none'}^{commit}`]).toLowerCase();
@@ -187,9 +188,10 @@ export function publishedBody(cwd, { sha = '', pr = '', by = '' } = {}) {
   const before = roleSlugs(cwd, parent);
   const changes = (parent ? git(cwd, ['diff', '--name-only', parent, version, '--', ...TEAM_PATHS]) : git(cwd, ['ls-tree', '-r', '--name-only', version, '--', ...TEAM_PATHS]))
     .split('\n').filter(Boolean).slice(0, 200);
+  // No resources.json is no systems (the empty set's hash); one that does not parse names no systems at all.
   let systemsHash = null;
   const raw = git(cwd, ['cat-file', '-p', `${version}:.agent-team/resources.json`]);
-  if (raw) { try { systemsHash = canonicalSystemsHash(JSON.parse(raw)); } catch { systemsHash = null; } }
+  try { systemsHash = canonicalSystemsHash(raw ? JSON.parse(raw) : null); } catch { systemsHash = null; }
   const n = String(pr || /\(#(\d+)\)\s*$/.exec(subject ?? '')?.[1] || /^Merge pull request #(\d+)/.exec(subject ?? '')?.[1] || '');
   return {
     kind: 'published', version, publishedAt: new Date(publishedAt).toISOString(), pr: /^\d+$/.test(n) ? Number(n) : null,
