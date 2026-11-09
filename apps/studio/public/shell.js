@@ -65,19 +65,25 @@ export const SHELL = `
 <section id="meetings-page" class="meetings-page meetings-only" aria-label="Meetings"></section>
 <section id="chat-page" class="chat-page chat-only" aria-label="Chat with the chief of staff"></section>
 <section id="rollout-page" class="rollout-page rollout-only" aria-label="Rollout of the published team" aria-live="polite"></section>
-<dialog id="publish-dialog">
-  <form method="dialog" class="dialog">
-    <h2>Publish the team</h2>
-    <p class="muted local-only">Writes <code>.agent-team/</code>, runs sync, and commits the result on a branch. Review the changes, then open a pull request as usual.</p>
-    <p class="muted embedded-only">Writes the team's files on a new branch and opens a pull request. Nothing changes until someone merges it.</p>
+<dialog id="publish-dialog" aria-labelledby="publish-title">
+  <form method="dialog" class="dialog sheet">
+    <h2 id="publish-title">${t('publish.button', { n: '' })}</h2>
+    <section id="widens" class="sheet-sec widens" hidden></section>
+    <section id="sheet-checks" class="sheet-sec"></section>
+    <section id="sheet-changes" class="sheet-sec"></section>
     <div id="impact"></div>
     <div id="plan" class="plan-preview" hidden></div>
-    <div id="changes" class="changes"></div>
+    <details id="files" class="sheet-sec"><summary id="files-title">${t('publish.files', { n: '…' })}</summary>
+      <p class="muted local-only">Writes <code>.agent-team/</code>, runs sync, and commits the result on a branch. Review the changes, then open a pull request as usual.</p>
+      <p class="muted embedded-only">Writes the team's files on a new branch and opens a pull request. Nothing changes until someone merges it.</p>
+      <div id="changes" class="changes"></div>
+    </details>
     <label>Branch <input id="branch" required pattern="[A-Za-z0-9._\\/\\-]+"></label>
     <label>Commit message <input id="message"></label>
+    <p class="hint">${t('publish.hint')}</p>
     <p id="publish-result" class="result" role="status"></p>
     <div class="dialog-actions">
-      <button value="cancel" type="submit">Close</button>
+      <button value="cancel" type="submit">${t('publish.keep')}</button>
       <button id="confirm" type="button" class="primary"><span class="local-only">Commit to branch</span><span class="embedded-only">Open a pull request</span></button>
     </div>
   </form>

@@ -60,6 +60,7 @@ test('the AGENTS.md switch publishes AGENTS.md and keeps the repository\'s own t
   assert.equal(await sw.isChecked(), false);
   await sw.check();
   await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
   await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
   await page.locator('#branch').fill('agents-md');
   await page.locator('#confirm').click();
@@ -71,10 +72,11 @@ test('the AGENTS.md switch publishes AGENTS.md and keeps the repository\'s own t
   assert.equal(execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' }), '', 'AGENTS.md and the .gitignore line are committed');
 
   // Off again: the kit's block goes, the repository's text stays, and team.json loses the key.
-  await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
+  await page.locator('#publish-dialog').getByRole('button', { name: 'Keep editing' }).click();
   await page.locator('#canvas').click({ position: { x: 5, y: 5 } });
   await page.getByLabel('Also keep an AGENTS.md file, for AI coding tools other than Claude Code').uncheck();
   await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
   await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
   // The review shows what sync does: the kit's block goes, the owner's text stays (QA of #119).
   assert.equal(await page.locator('#changes summary', { hasText: /^changedAGENTS\.md$/ }).count(), 1);
@@ -108,10 +110,11 @@ test('a kit-made AGENTS.md: the review shows only real changes, switching off co
   await page.locator('#canvas .node[data-slug="owner"]').click();
   await page.getByLabel(label).check();
   await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
   await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
   await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
-  await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
+  await page.locator('#publish-dialog').getByRole('button', { name: 'Keep editing' }).click();
   // Nothing left to publish: the review reads the repository's AGENTS.md, so it is not shown as changed.
   await page.locator('#publish', { hasText: 'Nothing to publish' }).waitFor();
   assert.equal(await page.locator('#publish').isDisabled(), true);
@@ -119,6 +122,7 @@ test('a kit-made AGENTS.md: the review shows only real changes, switching off co
   // Off: the kit made the file, so it goes, and the deletion is committed.
   await page.getByLabel(label).uncheck();
   await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
   await page.locator('#changes summary', { hasText: 'AGENTS.md' }).first().waitFor();
   await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();

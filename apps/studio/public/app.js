@@ -1,6 +1,6 @@
 // Agent Team Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
-import { addMember, applyExtension, checkUpgrade, DEFAULT_TARGETS, displayName, membersOf, poolOf, resolveSpec, setDisplayName, setEnabled, setField, splitBrief, TARGETS, teamPacks, teamTargets, typeOf, validate } from './team-model.mjs';
+import { addMember, applyExtension, checkUpgrade, DEFAULT_TARGETS, diffTeams, displayName, membersOf, poolOf, resolveSpec, setDisplayName, setEnabled, setField, splitBrief, TARGETS, teamPacks, teamTargets, typeOf, validate } from './team-model.mjs';
 import { t, tip } from './i18n.js';
 import { drawLines, renderWiring, wireWiring } from './wiring.js';
 import { createChat } from './chat.js';
@@ -12,6 +12,7 @@ import { createAgentEditor } from './agent-editor.js';
 import { QUIET_S, assess, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
 import { $, $$, apiUrl, ask, configure, env, feature, paint, request, requestJson, stateEl } from './env.js';
 import { SHELL } from './shell.js';
+import { changesHtml, checksHtml, sheetLines, widensHtml } from './publish-sheet.js';
 import { infoButton, installTips } from './tooltip.js';
 
 /** The glossary tooltip (a function named `tip` is shadowed where the card builds its own hover text). */
@@ -104,7 +105,16 @@ function derive() {
   const all = Object.keys(spec.roles).sort().map(info);
   const safety = assess({ published, draft: spec, kit: S.kit, board, head: S.git?.head });
   const team = all.filter((r) => r.enabled && bySlug.has(r.slug));
-  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team, issues: checksOf(spec), safety, draft: draftChanges(), looks: thingsToLook(team, bySlug) };
+  const byAll = new Map(all.map((r) => [r.slug, r]));
+  const draft = draftChanges();
+  // B5.1-1: the Publish sheet's lines, one per change; "Publish {n} changes" counts the same lines.
+  if (published && !S.noTeam) {
+    try {
+      draft.lines = sheetLines(diffTeams(published, spec, S.kit), { name: (id) => byAll.get(id)?.title ?? roleName(id), system: systemName, changedRoles: [...draft.changed], changedData: draft.data });
+      draft.count = draft.lines.length;
+    } catch { draft.lines = []; }
+  } else draft.lines = [];
+  return { all, bySlug: byAll, team, issues: checksOf(spec), safety, draft, looks: thingsToLook(team, bySlug) };
 }
 
 /**
@@ -122,8 +132,11 @@ function draftChanges() {
   const slugs = new Set([...Object.keys(spec.roles), ...Object.keys(published?.roles ?? {})]);
   const changed = new Set([...slugs].filter((s) => seat(published, s) !== seat(spec, s)));
   const data = ['ownership', 'gates', 'resources', 'meetings', 'values', 'options', 'rules'].filter((k) => JSON.stringify(published?.[k] ?? null) !== JSON.stringify(spec[k] ?? null));
-  return { changed, count: changed.size + data.length };
+  return { changed, data, count: changed.size + data.length };
 }
+
+/** A system's name, from the draft or the published team. */
+const systemName = (id) => [...(spec.resources?.resources ?? []), ...(published?.resources?.resources ?? [])].find((x) => x.id === id)?.name ?? id;
 
 /**
  * B1.1-7: the live checks shown on the cards and under "Things to look at before you publish": a teammate whose
@@ -1087,7 +1100,12 @@ function wireImpact() {
 async function previewPublish() {
   try {
     const { spec: out } = publishable(spec, published, view.safety.on ? view.safety.items : [], picks);
-    const { changes, issues, needsCode } = await api('/v1/team/preview', { spec: out });
+    const { changes, issues, needsCode, capability } = await api('/v1/team/preview', { spec: out });
+    // Widens access, first (ADR 0013 rule 2): what the server computed for this draft, whoever wrote it.
+    const name = (id) => view.bySlug.get(id)?.title ?? roleName(id);
+    $('#widens').innerHTML = widensHtml(capability ?? [], name, systemName);
+    $('#widens').hidden = !capability?.length;
+    $('#files-title').textContent = t('publish.files', { n: changes.length });
     const errors = issues.filter((i) => i.level === 'error');
     // Mounted in a host that publishes through the team's deployment: a change to the commands the team runs is
     // published from the deployment's own Studio, never through the host (embed spec section 6).
@@ -1114,9 +1132,34 @@ async function previewPublish() {
   }
 }
 
+/** The Publish sheet's own sections (B5.1): its title, the checks and one line per change with its Undo. */
+function renderSheet() {
+  $('#publish-title').textContent = t('publish.button', { n: pendingCount() });
+  $('#sheet-checks').innerHTML = checksHtml([...view.issues, ...reminders()], view.looks);
+  const lines = S.noTeam ? view.team.map((r) => ({ text: t('change.role-added', { teammate: r.title }) })) : view.draft.lines;
+  $('#sheet-changes').innerHTML = lines.length ? changesHtml(lines, { undo: !S.noTeam }) : '';
+}
+
+function wireSheet() {
+  $('#sheet-changes').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-undo-line]');
+    const line = b && view.draft.lines[+b.dataset.undoLine];
+    if (!line) return;
+    change((sp) => revert(sp, published, line.change));
+    renderSheet();
+    renderImpact();
+    previewPublish();
+    // Keep the keyboard where it was: the next line's Undo, else the sheet's title.
+    ($$('#sheet-changes [data-undo-line]')[+b.dataset.undoLine] ?? $$('#sheet-changes [data-undo-line]').at(-1) ?? $('#publish-title')).focus?.();
+  });
+}
+
 async function openPublish() {
   if (locked()) return flash(lockedNote());
   const dlg = $('#publish-dialog');
+  renderSheet();
+  $('#widens').hidden = true;
+  $('#files').open = false;
   $('#publish-result').textContent = '';
   $('#publish-result').className = 'result';
   $('#changes').innerHTML = '<p class="muted pad">Working out what changes…</p>';
@@ -1509,6 +1552,7 @@ function load(initial) {
   // A move published to happen after its open work merges lives on in the draft, even across a reload or a restart.
   for (const f of followUps) reapplyFollowUp(spec, f);
   wireImpact();
+  wireSheet();
   if (!S.noTeam && feature('live', S.features)) {
     loadBoard();
     try { boardStream = new EventSource(apiUrl('/v1/team/board/stream')); boardStream.addEventListener('changed', loadBoard); } catch { /* no stream: the first read stands */ }

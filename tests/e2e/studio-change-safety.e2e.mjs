@@ -253,7 +253,7 @@ test('never two writers: "move after the PR merges" keeps the writer in the file
   assert.equal(rows.find((r) => r.path === 'web/').writer, 'web-dev', 'the files keep the current writer');
   assert.doesNotMatch(git(pubB.root, 'show', 'HEAD:.agent-team/roles/site-builder.md'), /`web\/`/, 'and the new agent does not write it yet');
   // The checks keep a reminder, and the draft still carries the move for the next publish.
-  await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
+  await page.locator('#publish-dialog').getByRole('button', { name: 'Keep editing' }).click();
   await page.locator('#issues li', { hasText: 'web/ moves from web-dev to site-builder after PR #142 merges. Publish again then' }).waitFor();
   await page.locator('#impact-pill', { hasText: 'touches work in progress' }).waitFor();
   // A reload reads the published team from disk; the deferred move and its reminder come back with the draft.

@@ -98,6 +98,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   // Edit and Publish through the host's API base.
   await switchTeammate(ats, 'release-manager', false);
   await ats.locator('#publish').click();
+  await ats.locator('#files > summary').click();
   const dlg = ats.locator('#publish-dialog');
   await dlg.getByText("Writes the team's files on a new branch and opens a pull request.").waitFor();
   await dlg.locator('#changes summary').first().waitFor();
@@ -127,7 +128,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   assert.ok(sent.length && sent.every((p) => p.startsWith('/api/agent-team/studio/v1/')), sent.join(', '));
 
   // destroy(): nothing of the Studio is left, and it mounts again.
-  await dlg.getByRole('button', { name: 'Close' }).click();
+  await dlg.getByRole('button', { name: 'Keep editing' }).click();
   await page.evaluate(() => window.studio.destroy());
   assert.equal(await page.locator('#team').innerHTML(), '');
   assert.equal(await page.evaluate(() => document.getElementById('team').className), '');

@@ -174,6 +174,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
 
   // Publish writes every agent's file, and lists the ones that are off in exclude.
   await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
   const changes = page.locator('#changes');
   for (const p of ['.agent-team/roles/accessibility-auditor.md', '.agent-team/roles/qa-a11y.md', '.agent-team/roles/translator.md', '.agent-team/roles/localization-lead.md', '.agent-team/team.json']) await changes.locator('summary', { hasText: p }).first().waitFor();
   await changes.locator('summary', { hasText: '.agent-team/team.json' }).click();

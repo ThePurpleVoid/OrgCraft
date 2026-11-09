@@ -163,6 +163,14 @@ function revertOwns(spec, published, path) {
  * keeps the role's rule edits, and an area undo restores both the ownership row and the roles' own Owns lines.
  */
 export function revert(spec, published, item) {
+  revertOne(spec, published, item);
+  // An undo that leaves only empty change lists behind puts the role back exactly as published, so nothing is left over.
+  const r = spec.roles[item.role], p = published.roles[item.role];
+  const bare = (x) => { const e = x?.extension; const empty = !e || (!(e.fields ?? []).length && !(e.sections ?? []).length && e.title === undefined); return JSON.stringify({ ...x, extension: empty ? undefined : e }); };
+  if (r && p && bare(r) === bare(p)) spec.roles[item.role] = clone(p);
+}
+
+function revertOne(spec, published, item) {
   const p = published.roles[item.role];
   // A role or teammate this draft added (the Publish sheet's Undo, L14): back to off, or gone with what it was given.
   if (item.kind === 'role-added' || item.kind === 'member-added') {
@@ -242,6 +250,7 @@ export function revert(spec, published, item) {
     return;
   }
   if (item.kind === 'rules' || item.kind === 'values' || item.kind === 'options') put(spec, item.kind, published[item.kind]);
+  else if (item.kind === 'other' && item.key) put(spec, item.key, published[item.key]);
 }
 
 // ------------------------------------------------------------------------------------------------ the impact step

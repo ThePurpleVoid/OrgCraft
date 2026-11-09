@@ -112,6 +112,7 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   await view.getByText('Saved to the draft. Publish writes it to the team.').waitFor();
   await view.locator('.meeting-row', { hasText: 'Daily standup' }).getByText(/Mon to Fri 09:00 · \d+ roles · written round/).waitFor();
   await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
   await page.locator('#changes summary', { hasText: '.agent-team/meetings.json' }).waitFor();
   await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
@@ -130,7 +131,7 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   assert.match(readFileSync(join(root, 'docs/team/roles/release-manager.md'), 'utf8'), /^- meeting$/m);
 
   // Criterion 11: reopened, the same meetings with zero diff.
-  await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
+  await page.locator('#publish-dialog').getByRole('button', { name: 'Keep editing' }).click();
   await page.goto(`${base}/#meetings`);
   await view.locator('.meeting-row', { hasText: 'Daily standup' }).waitFor();
   // Nothing to publish: the button says so and is disabled.
