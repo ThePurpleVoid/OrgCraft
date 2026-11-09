@@ -77,6 +77,13 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
     const ledger = (await p.call('GET', '/teams/shop/ledger')).body.items;
     assert.deepEqual(ledger.map((l) => l.kind).reverse(), ['rule-added', 'rule-used', 'rule-used', 'rule-used', 'rule-withdrawn']);
     assert.equal(ledger.at(-1).words, 'small refunds don\'t need me', 'the owner\'s words, exactly');
+    // Every rule row says which rule, as the list would (web-dev: no cross-reference).
+    const line = 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments';
+    assert.ok(ledger.every((l) => l.ruleNumber === 1 && l.ruleLine === line));
+    const used = ledger.find((l) => l.kind === 'rule-used');
+    assert.equal(typeof used.what, 'string');
+    assert.deepEqual([used.channel, used.name, used.letter], [null, null, null], 'the server decided; no letters yet');
+    assert.equal(ledger[0].words, null, 'no words: null (ledger.noword)');
   });
 });
 
@@ -96,6 +103,8 @@ test('pay.known and send.known never cover someone new; a merge is never covered
     assert.equal((await ask(p, s, pay('acct_stranger'))).card.state, 'open');
     const words = (await p.call('GET', '/teams/shop/ledger')).body.items.find((l) => l.kind === 'approved');
     assert.equal(words.words, 'yes, that is our flour supplier');
+    assert.equal(words.channel, 'approvals', 'decided through POST /v1/approvals');
+    assert.match(words.what, /acct_stranger|acct_supplier|pay/i);
   });
 });
 
@@ -136,6 +145,12 @@ test('declines stick for 7 days on the same effect and target; a re-ask must say
     assert.deepEqual([old.state, old.answer.note], ['superseded', 'This changed since you were asked.']);
     const ledger = (await p.call('GET', '/teams/shop/ledger')).body.items.map((l) => [l.kind, l.words ?? null]);
     assert.deepEqual(ledger.reverse(), [['denied', 'not this week'], ['declined-again', null], ['declined-again', null], ['declined-again', null]]);
+    // A person's rows carry their display name, for people who are or were members of this workspace.
+    await p.db.system("insert into people(id, provider, subject, login, name) values ('per_danaruiz1', 'github', '777', 'dana-gh', null)");
+    await p.db.system("insert into members(id, tenant, person, role) values ('mem_dana1', 'acme', 'per_danaruiz1', 'approver')");
+    await p.db.tenant('acme', ({ q }) => q("insert into approval_ledger(tenant, team, kind, by, words, channel) values ('acme', 'shop', 'denied', 'per_danaruiz1', 'no', 'chat')"));
+    const top = (await p.call('GET', '/teams/shop/ledger')).body.items[0];
+    assert.deepEqual([top.by, top.name, top.channel], ['per_danaruiz1', 'dana-gh', 'chat']);
   });
 });
 

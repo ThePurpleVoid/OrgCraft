@@ -47,7 +47,9 @@ create table approval_ledger (
   rule text,
   by text not null,
   words text check (words is null or length(words) <= 4000),
-  calls_hash text check (calls_hash is null or calls_hash ~ '^[0-9a-f]{64}$')
+  calls_hash text check (calls_hash is null or calls_hash ~ '^[0-9a-f]{64}$'),
+  -- Where a person decided: chat (the card), approvals (POST /v1/approvals), email or slack; null for the server's own.
+  channel text check (channel is null or channel in ('chat', 'approvals', 'email', 'slack'))
 );
 create index approval_ledger_team on approval_ledger(team, at);
 

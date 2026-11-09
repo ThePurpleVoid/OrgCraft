@@ -184,14 +184,26 @@ export async function declinedBefore(ctx, team, hash, effect = null) {
 }
 
 /** One ledger line. `words` are the person's own, kept exactly (cut only by the column's 4,000). */
-export async function ledgerRow(q, tenant, team, { kind, approval = null, rule = null, by, words = null, callsHash = null }) {
-  await q('insert into approval_ledger(tenant, team, kind, approval, rule, by, words, calls_hash) values ($1, $2, $3, $4, $5, $6, $7, $8)',
-    [tenant, team, kind, approval, rule, by, typeof words === 'string' && words ? words.slice(0, 4000) : null, callsHash]);
+export async function ledgerRow(q, tenant, team, { kind, approval = null, rule = null, by, words = null, callsHash = null, channel = null }) {
+  await q('insert into approval_ledger(tenant, team, kind, approval, rule, by, words, calls_hash, channel) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+    [tenant, team, kind, approval, rule, by, typeof words === 'string' && words ? words.slice(0, 4000) : null, callsHash, channel]);
 }
 
 export function createLedger({ db, m3, now = () => new Date() }) {
-  const view = (r, n, at) => ({ id: r.id, number: n, kind: r.kind, form: r.spec, line: ruleLine(r.spec), words: r.words, createdBy: r.created_by, createdAt: new Date(r.created_at).toISOString(),
-    expiresAt: new Date(r.expires_at).toISOString(), ...(r.withdrawn_at ? { withdrawnAt: new Date(r.withdrawn_at).toISOString(), withdrawnBy: r.withdrawn_by } : {}),
+  /**
+   * Display names (name, else login) for principals who are or were members of this tenant; anyone else (the server's
+   * own, a rule, someone never a member) has none. Read outside any tenant transaction (one connection on PGlite).
+   */
+  async function namesOf(tenant, ids) {
+    const want = [...new Set(ids.filter((x) => typeof x === 'string' && x.startsWith('per_')))];
+    if (!want.length) return new Map();
+    const rows = await db.system(`select distinct p.id, coalesce(nullif(p.name, ''), p.login) as name from people p
+      join members m on m.person = p.id and m.tenant = $1 where p.id = any($2)`, [tenant, want]);
+    return new Map(rows.map((x) => [x.id, x.name]));
+  }
+  const nameIn = (names, id) => (id ? names.get(id) ?? null : null);
+  const view = (r, n, at, names = new Map()) => ({ id: r.id, number: n, kind: r.kind, form: r.spec, line: ruleLine(r.spec), words: r.words, createdBy: r.created_by, createdByName: nameIn(names, r.created_by), createdAt: new Date(r.created_at).toISOString(),
+    expiresAt: new Date(r.expires_at).toISOString(), ...(r.withdrawn_at ? { withdrawnAt: new Date(r.withdrawn_at).toISOString(), withdrawnBy: r.withdrawn_by, withdrawnByName: nameIn(names, r.withdrawn_by) } : {}),
     live: !r.withdrawn_at && new Date(r.expires_at) > at, used: { n: Number(r.used_n), ...(r.spec.amountField ? { amount: Number(r.used_amount) } : {}) } });
 
   async function list(tenant, team) {
@@ -201,7 +213,8 @@ export function createLedger({ db, m3, now = () => new Date() }) {
         (select count(*) from standing_rule_uses u where u.rule = r.id and u.at > $2::timestamptz - (case r.spec->>'period' when 'day' then interval '1 day' when 'week' then interval '7 days' else interval '30 days' end)) as used_n,
         (select coalesce(sum(u.amount), 0) from standing_rule_uses u where u.rule = r.id and u.at > $2::timestamptz - (case r.spec->>'period' when 'day' then interval '1 day' when 'week' then interval '7 days' else interval '30 days' end)) as used_amount
       from standing_rules r where r.team = $1 order by r.created_at desc, r.id desc`, [team, at]));
-    return { kinds: Object.entries(KINDS).map(([id, enforced]) => ({ id, enforced })), never: NEVER, rules: rows.map((r) => view(r, Number(r.n), at)) };
+    const names = await namesOf(tenant, rows.flatMap((r) => [r.created_by, r.withdrawn_by]));
+    return { kinds: Object.entries(KINDS).map(([id, enforced]) => ({ id, enforced })), never: NEVER, rules: rows.map((r) => view(r, Number(r.n), at, names)) };
   }
 
   async function add(tenant, team, body, who, stepUp) {
@@ -240,10 +253,18 @@ export function createLedger({ db, m3, now = () => new Date() }) {
     await getTeam(db, tenant, team);
     const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
     if (before !== null && before !== undefined && before !== '' && !/^\d{1,18}$/.test(String(before))) throw new Problem(400, 'before is the next value of the previous page');
-    const rows = await db.tenant(tenant, ({ q }) => q(`select l.*, a.action, a.calls, a.role from approval_ledger l left join approvals a on a.id = l.approval
+    const rows = await db.tenant(tenant, ({ q }) => q(`select l.*, a.action, a.calls, a.role, c.card as card, s.spec as rule_spec,
+        (select count(*)::int from standing_rules x where x.team = s.team and (x.created_at, x.id) <= (s.created_at, s.id)) as rule_number
+      from approval_ledger l left join approvals a on a.id = l.approval left join cards c on c.id = a.card left join standing_rules s on s.id = l.rule
       where l.team = $1 and ($2::bigint is null or l.id < $2) order by l.id desc limit $3`, [team, before || null, n]));
-    const items = rows.map((r) => ({ at: new Date(r.at).toISOString(), kind: r.kind, by: r.by, ...(r.words ? { words: r.words } : {}), ...(r.approval ? { approval: r.approval, action: r.action, role: r.role } : {}),
-      ...(r.rule ? { rule: r.rule } : {}), ...(r.calls_hash ? { callsHash: r.calls_hash } : {}) }));
+    const names = await namesOf(tenant, rows.map((r) => r.by));
+    // {what}: the first fact the server rendered from the signed calls, else the card's title.
+    const whatOf = (card) => (Array.isArray(card?.data?.facts) && card.data.facts[0]?.text ? String(card.data.facts[0].text) : card?.title ?? null);
+    const items = rows.map((r) => ({ at: new Date(r.at).toISOString(), kind: r.kind, by: r.by, name: nameIn(names, r.by), words: r.words ?? null, channel: r.channel ?? null,
+      // {letter}: the ask's letter once cards carry lettered asks; none yet.
+      ...(r.approval ? { approval: r.approval, action: r.action, role: r.role, what: whatOf(r.card), letter: r.card?.data?.letter ?? null } : {}),
+      ...(r.rule ? { rule: r.rule, ruleNumber: r.rule_spec ? Number(r.rule_number) : null, ruleLine: r.rule_spec ? ruleLine(r.rule_spec) : null } : {}),
+      ...(r.calls_hash ? { callsHash: r.calls_hash } : {}) }));
     return { items, next: rows.length === n ? String(rows.at(-1).id) : null };
   }
 
