@@ -303,8 +303,9 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     const next = checkSystems(body ?? {}) ?? { resources: [], bindings: [] };
     // The version the person confirmed the change against (L40, security): `expect` in the body or If-Match. When the
     // stored set moved since, 409 with the current one, so a concurrent PUT can't change the base under a confirmation.
-    const raw = body?.expect ?? (ifMatch ? String(ifMatch).replace(/^W\//, '').replace(/"/g, '') : null);
-    const expect = raw === null || raw === undefined ? null : Number(raw);
+    const tag = ifMatch ? String(ifMatch).replace(/^W\//, '').replace(/"/g, '') : null;
+    const given = body?.expect !== undefined && body?.expect !== null;
+    const expect = given ? body.expect : tag !== null && /^\d{1,9}$/.test(tag) ? Number(tag) : tag !== null ? -1 : null;
     if (expect !== null && (!Number.isInteger(expect) || expect < 0)) throw new Problem(400, 'expect is the systems version you saw (0 when there were none)');
     // Checked before the step-up is spent, and again under the lock.
     if (expect !== null) {

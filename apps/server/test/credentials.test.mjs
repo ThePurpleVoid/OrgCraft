@@ -213,6 +213,7 @@ test('a run request cannot carry systems; only an admin sets them, with a step-u
     // The version the person confirmed against (L40): a moved base is 409 with the current set, before the step-up
     // is spent; the matching one goes through, by body or If-Match.
     const token = await su('systems:shop');
+    for (const bad of ['', true, '2', 1.5]) assert.equal((await call('PUT', '/teams/shop/systems', { ...systems(), expect: bad }, token)).status, 400, `expect ${JSON.stringify(bad)}`);
     const stale = await call('PUT', '/teams/shop/systems', { ...systems(), expect: 1 }, token);
     assert.deepEqual([stale.status, stale.body.type, stale.body.version], [409, 'systems-changed', 2]);
     assert.equal((await call('PUT', '/teams/shop/systems', { ...systems(), expect: 2 }, token)).body.version, 3, 'the token was not spent by the 409');
