@@ -5,7 +5,7 @@
 *.swp
 
 # Node
-node_modules/
+node_modules
 
 # Local state the scripts write
 .merge-gate/
