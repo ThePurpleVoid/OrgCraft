@@ -156,8 +156,12 @@ export function createChanges({ db, m3, now = () => new Date(), backendFor = nul
       // writes now, so the checks at accept pass even when the kit changed since `to` was published.
       const spec = core.state(await b.readTeam(to)).spec;
       if (!spec) throw new Problem(409, 'that version has no team to roll back to');
+      // The kit pin stays main's: the generated files come from today's kit, so team.json must say so (code review L9c).
+      const mainRead = await b.readTeam(main);
+      const pin = core.state(mainRead).spec?.kit;
+      if (pin !== undefined) spec.kit = pin; else delete spec.kit;
       let p;
-      try { p = core.plan(await b.readTeam(main), spec, { strict: true }); } catch (e) { throw new Problem(e.status ?? 422, `that version can't be rolled back to with this kit: ${String(e.message).slice(0, 200)}`); }
+      try { p = core.plan(mainRead, spec, { strict: true }); } catch (e) { throw new Problem(e.status ?? 422, `that version can't be rolled back to with this kit: ${String(e.message).slice(0, 200)}`); }
       const checks = { ok: !p.issues.some((i) => i.level === 'error'), errors: p.issues.filter((i) => i.level === 'error').map((i) => `${i.where}: ${i.message}`), drift: [] };
       const out = await b.rollback({ to, changes: p.changes, by: { id: String(who.principal) }, checks, capability: p.capability, needsCode: p.needsCode, pr: { title: `Roll back to ${String(to).slice(0, 12)}`, body: '' } })
         .catch((e) => { throw e?.status ? new Problem(e.status, e.message, e.type ? { type: e.type } : undefined) : e; });

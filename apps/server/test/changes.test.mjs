@@ -169,8 +169,13 @@ test('rollback to a version an older kit generated: the old team, synced with to
     const path = 'docs/team/protocols.md';
     const before = (await backend.diff(null, main1)).find((f) => f.path === path).after;
     assert.ok(before.length > 100);
-    const old = await backend.publish({ base: main1, message: 'Written by an older kit', changes: [{ path, mode: '100644', content: `${before}\nA line an older kit wrote.\n` }] });
+    const teamJson = (await backend.diff(null, main1)).find((f) => f.path === '.agent-team/team.json').after;
+    const oldPin = JSON.stringify({ ...JSON.parse(teamJson), kit: 'github:ThePurpleVoid/OrgCraft#v0.20.0' }, null, 2) + '\n';
+    const old = await backend.publish({ base: main1, message: 'Written by an older kit', changes: [{ path, mode: '100644', content: `${before}\nA line an older kit wrote.\n` }, { path: '.agent-team/team.json', mode: '100644', content: oldPin }] });
     await backend.accept(old.pr.number, {});
+    // Then the team upgraded its pin.
+    const up = await backend.publish({ base: old.commit, message: 'Upgrade the kit pin', changes: [{ path: '.agent-team/team.json', mode: '100644', content: teamJson }] });
+    await backend.accept(up.pr.number, {});
     const { spec } = (await call('GET', '/teams/shop/studio/v1/team', undefined, studio())).body;
     const who = Object.keys(spec.roles).find((x) => spec.roles[x].enabled);
     const m = await publish((x) => setField(x, who, 'Model', 'light'), 'lighter', 'lighter');
@@ -178,6 +183,8 @@ test('rollback to a version an older kit generated: the old team, synced with to
     const rb = await call('POST', '/teams/shop/rollback', { to: old.commit });
     assert.equal(rb.status, 201, JSON.stringify(rb.body));
     assert.ok(!rb.body.files?.some((f) => f.path === path), 'the old generated text is not brought back');
+    // The old version pinned another kit; the rollback keeps main's pin, since its files come from today's kit.
+    assert.ok(!rb.body.files.some((f) => f.path === '.agent-team/team.json'), JSON.stringify(rb.body.files.map((f) => f.path)));
     const ok = await call('POST', `/teams/shop/changes/${rb.body.number}/accept`, {}, await su(`accept-change:shop_${rb.body.number}`));
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     // Rolling back to where the team already is changes nothing.
