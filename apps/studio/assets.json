@@ -97,6 +97,10 @@
       "path": "apps/studio/public/studio.js",
       "type": "text/javascript; charset=utf-8"
     },
+    "systems.js": {
+      "path": "apps/studio/public/systems.js",
+      "type": "text/javascript; charset=utf-8"
+    },
     "tooltip.js": {
       "path": "apps/studio/public/tooltip.js",
       "type": "text/javascript; charset=utf-8"

@@ -55,6 +55,10 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     events, cards, runs, cost, budget, started, live, rules, ledger,
   };
   const doIts = [];
+  let systems = { resources: [], bindings: [], version: 0 };
+  const systemsPuts = [];
+  /** Sets the team's systems directly, as an earlier send or another admin would. */
+  const setSystems = (next) => { systems = { resources: next.resources ?? [], bindings: next.bindings ?? [], version: systems.version + 1 }; };
   const scopes = new Map(); // su -> scope it was bound to (ADR 0013)
   const stepped = (req, scope = null) => { const su = req.headers['x-step-up']; if (!su || !(stepUps.get(su) > Date.now()) || (scopes.get(su) ?? null) !== scope) return false; stepUps.delete(su); scopes.delete(su); return true; };
   const needStepUp = (res, what) => send(res, 401, { type: 'step-up-required', title: `${what} needs a recent sign-in`, status: 401 });
@@ -236,6 +240,16 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       append('live.changed', { kind: 'person', id: 'owner', via: 'studio' }, { op: 'lifted', override: o.id, kind: o.kind, by: 'owner', stepUp: true }, 'live');
       return send(res, 200, { ...o, lifted: true });
     }
+    // L40: a team's systems. Setting them needs a step-up scoped systems:<team> (ADR 0013), as the real server does.
+    if (p === `/v1/teams/${team}/systems` && req.method === 'GET') return send(res, 200, { ...systems });
+    if (p === `/v1/teams/${team}/systems` && req.method === 'PUT') {
+      const body = await read(req);
+      if (body.expect !== undefined && body.expect !== systems.version) return send(res, 409, { type: 'systems-changed', title: 'The systems changed since they were compared', status: 409, version: systems.version });
+      if (!stepped(req, `systems:${team}`)) return send(res, 401, { type: 'step-up-required', title: 'Changing what the team can reach needs a recent sign-in', status: 401, scope: `systems:${team}` });
+      systems = { resources: body.resources ?? [], bindings: body.bindings ?? [], version: systems.version + 1 };
+      systemsPuts.push(body);
+      return send(res, 200, { ...systems });
+    }
     if (p === '/v1/me/summary') {
       const r = runs.find((x) => x.state !== 'stopped');
       return send(res, 200, { asOf: events.at(-1)?.id ?? null, teams: [{ team, name: team, run: r?.state ?? null, cost, inbox: 0 }] });
@@ -253,7 +267,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}`;
   return {
-    url, token, stepUpSecret, team, ...api, doIts,
+    url, token, stepUpSecret, team, ...api, doIts, systemsPuts, setSystems, get systems() { return systems; },
     env: { AGENT_TEAM_SERVER: url, AGENT_TEAM_SERVER_TOKEN: token, AGENT_TEAM_SERVER_TEAM: team },
     close: () => { for (const s of streams) s.end(); server.closeAllConnections?.(); server.close(); },
   };

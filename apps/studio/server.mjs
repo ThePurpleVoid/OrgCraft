@@ -8,13 +8,13 @@
 // and commits the result on a branch. The repository stays the source of truth (docs/adr/0001).
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_KIT_SPEC, KIT, VERSION } from '../../bin/agent-team.mjs';
-import { resolveSpec, teamTargets, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
+import { resolveSpec, systemsCapability, teamTargets, TEMPLATE_GROUPS, TEMPLATE_SCHEMA, templateCard, templateSpec, validate } from '../../packages/team-model/index.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
 import { hostGuard } from '../../tools/hosts.mjs';
@@ -29,6 +29,81 @@ import { openPullRequest, prSupport, pullRequestText } from './pr.mjs';
 import { linkHash, resolveMeeting } from './public/links.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The systems as published: .agent-team/resources.json at HEAD, as { resources, bindings }, or null when the published
+ * team has none. Read from Git, so a draft on the canvas or an uncommitted edit is never what the control plane gets.
+ */
+export function publishedSystems(root) {
+  let text;
+  try { text = execFileSync('git', ['-C', root, 'show', 'HEAD:.agent-team/resources.json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return null; }
+  let json;
+  try { json = JSON.parse(text); } catch { return null; }
+  return { resources: Array.isArray(json?.resources) ? json.resources : [], bindings: Array.isArray(json?.bindings) ? json.bindings : [] };
+}
+
+/**
+ * Same systems, whatever the order: each resource's id, connector, secret names, tools, permissions, effects, egress
+ * and tier, and every binding. Compared on what decides access, with the defaults the control plane fills in (no
+ * permission grants, no effects, no egress, tier custom), since it keeps no `config` (L40 review sev3).
+ */
+export function sameSystems(here, there) {
+  const sorted = (a) => [...(Array.isArray(a) ? a : [])].map(String).sort();
+  const resource = (r) => JSON.stringify([
+    r.id, r.type, sorted(r.secrets),
+    r.tools?.command ? { command: r.tools.command, args: r.tools.args ?? [] } : r.tools?.url ? { url: r.tools.url } : null,
+    ['read', 'write', 'deploy'].map((p) => sorted(r.permissions?.[p])),
+    Object.entries(r.effects ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+    sorted(r.egress), r.tier ?? 'custom',
+  ]);
+  const norm = (s) => JSON.stringify({
+    resources: [...(s?.resources ?? [])].map(resource).sort(),
+    bindings: [...(s?.bindings ?? [])].map((b) => `${b.role}\u0000${b.resource}\u0000${b.permission}`).sort(),
+  });
+  return norm(here ?? { resources: [], bindings: [] }) === norm(there);
+}
+
+/** A hash of the published systems, so a send goes only when HEAD still holds what the person confirmed. */
+export const systemsHash = (here) => createHash('sha256').update(JSON.stringify(here ?? { resources: [], bindings: [] })).digest('hex');
+
+/**
+ * What sending the published systems would change on the control plane (L40 security review sev2): the control
+ * plane's systems against HEAD's, never the local previous commit against the draft, so whatever the control plane
+ * is behind on (a cancelled send, a teammate's merged change, a publish with no control plane) is what is shown.
+ */
+export async function systemsPlan(root, chat) {
+  const there = await chat.systems();
+  const here = publishedSystems(root) ?? { resources: [], bindings: [] };
+  const inSync = sameSystems(here, there);
+  return { connected: true, version: there.version ?? 0, inSync, items: inSync ? [] : systemsCapability(there, here), lost: inSync ? [] : systemsLost(there, here), names: systemsNames(root, here, there), hash: systemsHash(here), here };
+}
+
+/**
+ * What a send takes away: systems removed, and seats that lose a system or get a lower level. The passkey dialog lists
+ * them too, so a send that only narrows still says why it asks (qa-web L40 N3).
+ */
+export function systemsLost(there, here) {
+  const RANK = { read: 0, write: 1, deploy: 2 };
+  const now = new Map((here?.bindings ?? []).map((b) => [`${b.role}\u0000${b.resource}`, b]));
+  const ids = new Set((here?.resources ?? []).map((r) => r.id));
+  const out = [];
+  for (const r of there?.resources ?? []) if (!ids.has(r.id)) out.push({ kind: 'system-removed', resource: r.id });
+  for (const b of there?.bindings ?? []) {
+    const n = now.get(`${b.role}\u0000${b.resource}`);
+    if (!n) { if (ids.has(b.resource)) out.push({ kind: 'binding-removed', role: b.role, resource: b.resource }); }
+    else if ((RANK[n.permission] ?? 0) < (RANK[b.permission] ?? 0)) out.push({ kind: 'binding-narrowed', role: b.role, resource: b.resource, from: b.permission, to: n.permission });
+  }
+  return out;
+}
+
+/** People's words for the ids a systems list names: teammates by name, systems by name (never ids on screen). */
+function systemsNames(root, here, there) {
+  const systems = Object.fromEntries([...(there?.resources ?? []), ...(here?.resources ?? [])].map((r) => [r.id, r.name || r.id]));
+  let roles = {};
+  try { roles = Object.fromEntries((state(root).members ?? []).map((m) => [m.id, m.name])); } catch { /* the names fall back to the page's */ }
+  return { roles, systems };
+}
+
 const PUBLIC = join(HERE, 'public');
 const MODEL = join(KIT, 'packages/team-model/index.mjs');
 const PRICES = join(KIT, 'packages/model-prices/prices.json');
@@ -299,6 +374,11 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           return { connected: true, me: me?.id ?? me?.person?.id ?? null, owner: (me?.workspaces ?? []).some((w) => w.role === 'owner'), ...(rules ? { rules } : {}), ledger };
         });
       }
+      // L40: are the published systems the ones the control plane holds? Compared on content, never versions.
+      if (req.method === 'GET' && url.pathname === '/v1/team/systems') {
+        if (!chat.connected) return send(res, 200, { connected: false });
+        return relay(res, async () => { const { here, ...plan } = await systemsPlan(root, chat); return { ...plan, published: !!publishedSystems(root) }; });
+      }
       if (req.method === 'GET' && url.pathname === '/v1/team/runners') {
         if (!chat.connected) return send(res, 200, { connected: false, runners: [] });
         return relay(res, async () => ({ connected: true, ...(await chat.runners()) }));
@@ -374,6 +454,20 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           const asks = input.asks;
           if (!Array.isArray(asks) || !asks.length || asks.length > 5 || asks.some((x) => !x || typeof x.approval !== 'string' || x.approval.length > 100 || !Number.isInteger(x.version))) throw new HttpError(400, 'asks is 1 to 5 of { approval, version }');
           return relay(res, () => chat.doIt({ asks: asks.map((x) => ({ approval: x.approval, version: x.version })), key: typeof input.key === 'string' ? input.key.slice(0, 80) : undefined }));
+        }
+        // L40: sends the systems as published (the repository's HEAD, never the page's draft) to the control plane.
+        // The control plane asks for a step-up scoped systems:<team>; the page gets it and calls again.
+        if (url.pathname === '/v1/team/systems') {
+          // No control plane: the repository is the only place systems live, so there is nothing to send.
+          if (!chat.connected) return send(res, 200, { connected: false });
+          // Only what the person was shown: HEAD must still hash to it, and the control plane must still be at the
+          // version it was compared with (it answers 409 when it moved).
+          // A refusal here drops any held step-up: it was given for the set shown, and must not carry over to the next
+          // one (security review L40w sev3).
+          if (!Number.isInteger(input.version) || typeof input.hash !== 'string') { chat.dropStepUp(); throw new HttpError(400, 'send the version and hash from GET /v1/team/systems'); }
+          const here = publishedSystems(root) ?? { resources: [], bindings: [] };
+          if (systemsHash(here) !== input.hash) { chat.dropStepUp(); throw new HttpError(409, 'the published systems changed since they were shown', { type: 'systems-moved' }); }
+          return relay(res, () => chat.setSystems({ ...here, expect: input.version }, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
         }
         const withdraw = /^\/v1\/team\/standing-rules\/([^/]+)\/withdraw$/.exec(url.pathname);
         if (withdraw) return relay(res, () => chat.withdrawRule(decodeURIComponent(withdraw[1])));

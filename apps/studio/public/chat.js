@@ -6,6 +6,7 @@
 import { apiUrl, ask, askText, requestJson } from './env.js';
 import { t } from './i18n.js';
 import { personWord, ruleLine } from './approvals.js';
+import { sendSystems, showItems, systemsState } from './systems.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -161,17 +162,19 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       <div class="chat-run row">
         <span id="run-state" class="pill" role="status"></span>
         <span id="cost" class="cost" role="status"></span>
-        <button id="run-start" type="button" class="primary" hidden>Start a run…</button>
+        <button id="run-start" type="button" class="primary" hidden>${t('team.start')}…</button>
         <button id="run-pause" type="button"></button>
         <button id="run-stop" type="button" class="danger">Stop</button>
         <button id="runner-add" type="button" data-tip="${esc(t('runner.connect.tip'))}" hidden>${esc(t('runner.connect'))}</button>
       </div>
+      <p id="run-systems" class="run-systems" role="status" hidden></p>
     </div>
     <dialog id="start-dialog" class="start-dialog">
       <form method="dialog" class="dialog" id="start-form">
-        <h2>Start a run</h2>
+        <h2>${t('team.start')}</h2>
         <p class="muted">The team runs as it was last published, not as the canvas shows it now. It keeps going until you pause or stop it, or today's cap is reached.</p>
         <p id="start-plan" class="plan" role="status">Reading the published team…</p>
+        <p id="start-systems" class="plan" hidden></p>
         <label for="start-cap">Daily cap</label>
         <div class="money"><input id="start-cap" type="number" inputmode="decimal" min="0.01" step="0.01" required placeholder="e.g. 20.00"><span id="start-currency" class="muted"></span></div>
         <p class="hint" id="start-cap-hint">The most the team may spend in a day (UTC). A run cannot start without one. Raising it later asks you to confirm it is you.</p>
@@ -525,6 +528,41 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     $('#run-start', root).hidden = going || st.connected !== true;
     $('#run-start', root).disabled = st.busy;
     $('#runner-add', root).hidden = st.connected !== true;
+    renderRunSystems(going);
+  }
+
+  // L40 (CTO ruling on qa-web round 2): while the team runs on systems that aren't the published ones, the header says
+  // the run keeps the ones it started with, offers Send now for the next start, and, when the change takes access
+  // away, Stop so the wider access ends now. Read at most every 30 seconds, not on every chat refresh.
+  function renderRunSystems(going) {
+    const el = $('#run-systems', root);
+    if (going && st.connected === true && Date.now() - (st.runSystemsAt ?? 0) > 30_000) {
+      st.runSystemsAt = Date.now();
+      systemsState().then((s) => { st.runSystems = s; renderRunSystems(going); }).catch(() => {});
+    }
+    const s = st.runSystems;
+    const sending = s === 'sending';
+    const sent = s?.result === 'done' && s.inSync;
+    el.hidden = !(going && st.connected === true && (sending || sent || (s && !s.inSync && s.connected !== false)));
+    if (el.hidden) return;
+    if (sending) { el.textContent = t('start.systems.sending'); return; }
+    if (sent) { el.textContent = t('run.systems.sent'); return; }
+    const button = (id, label, onclick) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'link'; b.id = id; b.textContent = label; b.onclick = onclick; return b; };
+    const parts = [`${t(s.result === 'failed' ? 'start.systems.failed' : 'run.systems.behind')} `, button('run-systems-send', t('start.systems.send'), sendRunSystems)];
+    if (s.lost?.length) parts.push(` ${t('run.systems.narrows')} `, button('run-systems-stop', t('run.systems.stop'), () => control('stop')));
+    el.replaceChildren(...parts);
+  }
+  async function sendRunSystems() {
+    const was = st.runSystems;
+    st.runSystems = 'sending'; renderRun();
+    const result = await sendSystems({ stepUp });
+    const fresh = await systemsState();
+    st.runSystems = fresh ? { ...fresh, result: result === 'none' ? null : result } : was;
+    st.runSystemsAt = Date.now();
+    renderRun();
+    const el = $('#run-systems', root);
+    el.tabIndex = -1;
+    if (!el.hidden) ($('#run-systems-send', root) ?? el).focus();
   }
 
   async function load() {
@@ -628,10 +666,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     const form = $('#stepup-form', root);
     const input = $('#stepup-secret', root);
     $('#stepup-why', root).textContent = t('stepup.body', { action });
-    // What the passkey signs, one line each, when the caller lists it (Do it's payments and sends).
-    const why = $('#stepup-why', root);
-    if (why.nextElementSibling?.classList.contains('stepup-items')) why.nextElementSibling.remove();
-    if (lines.length) { const ul = document.createElement('ul'); ul.className = 'stepup-items'; ul.replaceChildren(...lines.map((l) => { const li = document.createElement('li'); li.textContent = l; return li; })); why.after(ul); }
+    showItems($('#stepup-why', root), lines);
     $('#stepup-result', root).textContent = '';
     input.value = '';
     return new Promise((done) => {
@@ -716,6 +751,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     else if (!st.plan.ok) plan.textContent = st.plan.error;
     else plan.textContent = `${st.plan.summary}${st.plan.repo?.url ? ` Repository: ${st.plan.repo.url} (${st.plan.repo.ref}).` : ''}`;
     plan.classList.toggle('refused', !!st.plan && !st.plan.ok);
+    renderSystems();
     $('#start-currency', root).textContent = currency();
     const d = minorDigits(currency());
     $('#start-cap', root).step = d ? String(10 ** -d) : '1';
@@ -723,14 +759,43 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     // Start stays off until there is a published team and a daily cap: the control plane refuses a run without one.
     $('#start-go', root).disabled = st.busy || !st.plan?.ok || toMinor($('#start-cap', root).value) === null;
   }
+  // L40: the control plane's systems against the published ones. When they differ, the plan says so and offers to
+  // send them now, behind the same systems:<team> step-up as a publish (CTO ruling on the L40 review: no new screen).
+  function renderSystems() {
+    const el = $('#start-systems', root);
+    const s = st.systems;
+    const sending = s === 'sending';
+    const done = s?.result === 'done' && s.inSync;
+    el.hidden = !sending && !done && (!s || s.inSync || s.connected === false);
+    if (el.hidden) return;
+    if (sending) { el.textContent = t('start.systems.sending'); return; }
+    if (done) { el.textContent = t('publish.systems.done'); return; }
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'link'; b.id = 'start-systems-send'; b.textContent = t('start.systems.send');
+    b.onclick = sendSystemsNow;
+    el.replaceChildren(`${t(s.result === 'failed' ? 'start.systems.failed' : 'start.systems.behind')} `, b);
+  }
+  async function sendSystemsNow() {
+    const was = st.systems;
+    st.systems = 'sending'; renderSystems();
+    const result = await sendSystems({ stepUp });
+    const fresh = await systemsState();
+    st.systems = fresh ? { ...fresh, result: result === 'none' ? null : result } : was;
+    renderSystems();
+    const el = $('#start-systems', root);
+    el.tabIndex = -1;
+    if (!el.hidden) ($('#start-systems-send', root) ?? el).focus();
+  }
   async function openStart() {
     st.plan = null; st.budget = null;
+    st.systems = null;
     $('#start-result', root).textContent = '';
     $('#start-result', root).classList.remove('error');
     $('#start-cap', root).value = '';
     renderStart();
     $('#start-dialog', root).showModal();
-    const [plan, budget] = await Promise.all([api('/v1/team/run/plan'), api('/v1/team/budget')]);
+    const [plan, budget, systems] = await Promise.all([api('/v1/team/run/plan'), api('/v1/team/budget'), systemsState().catch(() => null)]);
+    st.systems = systems;
     st.plan = plan.ok ? plan.data : { ok: false, error: plan.data.error ?? `HTTP ${plan.status}` };
     st.budget = budget.ok && budget.data.connected !== false ? budget.data : null;
     if (st.budget?.perDay != null) $('#start-cap', root).value = (st.budget.perDay / 10 ** minorDigits(currency())).toFixed(minorDigits(currency()));

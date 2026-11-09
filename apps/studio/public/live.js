@@ -5,6 +5,7 @@
 // hides it: only a lift does.
 import { t } from './i18n.js';
 import { $, requestJson } from './env.js';
+import { showItems } from './systems.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -18,12 +19,13 @@ async function api(path, body) {
 const needsStepUp = (r) => r.status === 401 && /step-up-required$/.test(r.data.type ?? '');
 
 /** The passkey step-up (until OIDC, the step-up secret), bound to `scope`. Resolves true once the Studio holds one. */
-function stepUp(why, scope) {
+export function stepUp(why, scope, lines = []) {
   const dlg = $('#live-stepup');
   const form = dlg.querySelector('form');
   const input = dlg.querySelector('input');
   const result = dlg.querySelector('.result');
   dlg.querySelector('.why').textContent = t('stepup.body', { action: why });
+  showItems(dlg.querySelector('.why'), lines);
   result.textContent = '';
   input.value = '';
   return new Promise((done) => {
