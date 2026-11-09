@@ -325,7 +325,7 @@ test('quiet hours and the digest render what is saved, and the log never shows a
   const log = logHtml({ kinds, owner: true, log: { all: true, next: '1', items: [{ channel: 'email', at: new Date().toISOString(), kind: 'minutes', status: 'held', why: 'quiet hours', principal: 'per_kim' }, { channel: 'slack', at: new Date().toISOString(), kind: 'approval', status: 'failed', why: 'channel_not_found', to: '<U1>', principal: 'per_octo' }] } });
   assert.match(log, /Held for the digest<\/td><td>It came in during quiet hours\./);
   assert.doesNotMatch(log, /channel_not_found|quiet hours<\/p>/, 'never a provider\'s own error');
-  assert.match(log, /&lt;U1&gt;/);
+  assert.doesNotMatch(log, /U1/, 'a Slack row never shows its raw user id (qa-web)');
   assert.doesNotMatch(log, /<th scope="col">Who<\/th>|per_kim|per_octo/, 'no raw person ids');
   assert.match(log, /aria-pressed="true">Everyone/);
   assert.match(log, /id="log-older"/);
@@ -381,7 +381,9 @@ test('L25: set quiet hours and a digest, then read the delivery log, mine and ev
   const log = page.locator('#log');
   await log.getByRole('heading', { name: 'Delivery log' }).waitFor();
   assert.equal(await log.locator('tbody tr').count(), 2);
-  assert.equal(await log.locator('tr.st-held button.info').getAttribute('data-tip'), 'It came in during quiet hours.');
+  // The reason is in its own column, so no hover-only title (ALL-4).
+  assert.equal(await log.locator('tr.st-held td[title]').count(), 0);
+  await log.locator('tr.st-held td', { hasText: 'It came in during quiet hours.' }).waitFor();
   await log.getByRole('button', { name: 'Everyone' }).click();
   await log.locator('tbody tr').nth(2).waitFor();
   assert.equal(await log.getByRole('button', { name: 'Everyone' }).getAttribute('aria-pressed'), 'true');
