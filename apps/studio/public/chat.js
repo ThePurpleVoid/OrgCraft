@@ -271,7 +271,8 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   const LETTER = /^[A-E]$/;
   const approvalOf = (card) => card.approval ?? /^approval\/(.+)$/.exec(card.subject ?? '')?.[1] ?? card.id;
   // A merge held by a missing or stale sign-off needs the person (or the team) to do something before it can go.
-  const needsYou = (card) => !!card.data?.blocked || (Array.isArray(card.data?.signoffs) && card.data.signoffs.some((x) => x?.fresh === false));
+  // Do it approves, so an ask whose recommendation is anything else is held for its own answer too.
+  const needsYou = (card) => (card.recommendation?.option != null && card.recommendation.option !== 'approve') || !!card.data?.blocked || (Array.isArray(card.data?.signoffs) && card.data.signoffs.some((x) => x?.fresh === false));
   const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
   /** The open lettered asks, the ones Do it covers, and the card it shows on (the newest of them). */
   function doItPlan(isAnswered) {
@@ -287,7 +288,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     const letters = p.covered.map((c) => c.data.letter);
     const covers = p.all === 1 ? t('card.doit.single') : p.held.length ? t('card.doit.covers', { list: andList(letters), other: andList(p.held.map((c) => c.data.letter)) }) : t('card.doit.covers', { list: andList(letters), other: '' }).split(/(?<=\.)\s+/)[0];
     const acts = p.covered.some((c) => Array.isArray(c.data?.facts) && c.data.facts.length) ? ` ${t('card.doit.acts')}` : '';
-    return `<div class="doit"><button type="button" class="primary big" id="doit" data-tip="${esc(t('tip.control.doit'))}" ${st.busy ? 'disabled' : ''}>${esc(t('card.doit'))}<small class="doitcov">${esc(covers + acts)}</small></button></div>`;
+    return `<div class="doit"><button type="button" class="primary big" id="doit" data-tip="${esc(t('tip.control.do.it'))}" ${st.busy ? 'disabled' : ''}>${esc(t('card.doit'))}<small class="doitcov">${esc(covers + acts)}</small></button></div>`;
   }
   async function doIt() {
     const p = st.doit;
@@ -297,7 +298,10 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     st.busy = true; render();
     let r = await api('/v1/team/do-it', { asks, key: newId() });
     // One step-up for the set, bound to exactly these asks as shown (the control plane names the scope).
-    if (needsStepUp(r) && await stepUp(t('stepup.action.approve', { 'card summary': list }), r.data.scope)) r = await api('/v1/team/do-it', { asks, key: newId() });
+    // Each covered ask by its letter and title, so the passkey confirms what acts even with the cards scrolled away
+    // (security L39w low), then its payments and sends from the server's facts.
+    const acts = p.covered.flatMap((c) => [`${c.data.letter}. ${c.title}`, ...(Array.isArray(c.data?.facts) ? c.data.facts : []).filter((f) => f && typeof f.text === 'string').map((f) => f.text)]);
+    if (needsStepUp(r) && await stepUp(t('stepup.action.doit', { list }), r.data.scope, acts)) r = await api('/v1/team/do-it', { asks, key: newId() });
     st.busy = false;
     if (r.status === 409 && Array.isArray(r.data.cards)) {
       // Something changed since it was shown: nothing was approved. The cards are redrawn as they are now.
@@ -577,11 +581,15 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   }
 
   /** Asks for the step-up in a dialog, naming `action` (a stepup.action.* string). Resolves true once the Studio server holds a step-up token. */
-  function stepUp(action, scope) {
+  function stepUp(action, scope, lines = []) {
     const dlg = $('#stepup-dialog', root);
     const form = $('#stepup-form', root);
     const input = $('#stepup-secret', root);
     $('#stepup-why', root).textContent = t('stepup.body', { action });
+    // What the passkey signs, one line each, when the caller lists it (Do it's payments and sends).
+    const why = $('#stepup-why', root);
+    if (why.nextElementSibling?.classList.contains('stepup-items')) why.nextElementSibling.remove();
+    if (lines.length) { const ul = document.createElement('ul'); ul.className = 'stepup-items'; ul.replaceChildren(...lines.map((l) => { const li = document.createElement('li'); li.textContent = l; return li; })); why.after(ul); }
     $('#stepup-result', root).textContent = '';
     input.value = '';
     return new Promise((done) => {

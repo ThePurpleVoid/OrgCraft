@@ -54,12 +54,13 @@ test('Do it covers the asks it can, leaves a held one open, and sends each card 
   ask(cp, 'A');
   ask(cp, 'B');
   ask(cp, 'C', { data: { blocked: 'QA has not signed off this version' } });
+  ask(cp, 'D', { card: { recommendation: { option: 'deny', why: 'The report has errors.' } } });
   await go();
   for (const l of ['A', 'B', 'C']) await page.locator(`[data-card-id="card_${l}"] h3 .letter`, { hasText: `${l}.` }).waitFor();
   // The control shows once, on the newest ask, and says what it covers and what needs the person first.
   assert.equal(await page.locator('#doit').count(), 1);
-  assert.equal(await page.locator('[data-card-id="card_C"] #doit').count(), 1);
-  assert.equal(await page.locator('#doit .doitcov').textContent(), 'Covers A and B. C needs you to do something first.');
+  assert.equal(await page.locator('[data-card-id="card_D"] #doit').count(), 1);
+  assert.equal(await page.locator('#doit .doitcov').textContent(), 'Covers A and B. C and D needs you to do something first.');
   await page.locator('#doit').click();
   await page.locator('[data-card-id="card_A"] .answer').waitFor();
   await page.locator('[data-card-id="card_B"] .answer').waitFor();
@@ -80,7 +81,8 @@ test('one bound ask: one passkey for the set, scoped to it', { skip }, async () 
   assert.match(await page.locator('#doit .doitcov').textContent(), /The passkey shows each payment and send\./);
   await page.locator('#doit').click();
   const dlg = page.locator('#stepup-dialog');
-  await dlg.locator('#stepup-why', { hasText: 'Approve: A' }).waitFor();
+  await dlg.locator('#stepup-why', { hasText: 'Take the recommended answer on A' }).waitFor();
+  assert.deepEqual(await dlg.locator('.stepup-items li').allTextContents(), ['A. web-dev asks to send report A', 'send email to client@example.com: Launch posts'], 'each ask, then each send on its own line');
   assert.equal(cp.doIts.length, 0, 'nothing approved before the passkey');
   await dlg.locator('#stepup-secret').fill(cp.stepUpSecret);
   await dlg.locator('button[type="submit"]').click();

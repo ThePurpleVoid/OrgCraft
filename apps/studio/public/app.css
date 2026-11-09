@@ -252,6 +252,8 @@
 .ats .start-dialog .result:empty { display: none; }
 .ats .start-dialog .result.error { color: var(--error); }
 .ats .stepup-dialog p { margin: 0 0 10px; }
+.ats .stepup-items, .stepup-items { margin: 0 0 10px; padding-left: 1.2em; max-height: 40vh; overflow-y: auto; }
+.stepup-items li { margin: 2px 0; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .ats .start-dialog, .ats .stepup-dialog { width: calc(100vw - 24px); } .ats .dialog-actions button { min-height: 44px; } }
 
 /* signing in to a hosted Studio (sign-in.html, account.html, the passkey dialogs in auth.js) */
