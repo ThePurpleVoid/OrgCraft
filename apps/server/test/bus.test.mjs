@@ -283,6 +283,40 @@ test('after a budget pause, run.resumed restarts every stopped session from its 
   }, { tickMs: 0 });
 });
 
+test('a chat to a front door whose session ended, or that its runner no longer runs, is not dropped: the session starts again', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'one' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    const env = (type, data) => ({ specversion: '1.0', id: `ev_${Math.random().toString(36).slice(2)}`, type, version: 1, source: '/tenants/acme/teams/shop', tenant: 'acme', team: 'shop', time: new Date().toISOString(), actor: { kind: 'role', id: 'chief-of-staff', session: s.session }, data });
+    const starts = () => runner.frames.filter((f) => f.op === 'session.start' && f.body.session === s.session).length;
+    // Ended, and the server heard it: the next chat starts the session again (a resume).
+    assert.equal((await runner.request('events', { events: [env('session.ended', { reason: 'done' })] })).op, 'ack');
+    await p.call('POST', '/teams/shop/chat', { text: 'two' });
+    await waitFor(async () => starts() === 2);
+    const again = runner.frames.filter((f) => f.op === 'session.start' && f.body.session === s.session).at(-1);
+    assert.deepEqual([again.body.resume, again.body.wake.data.text], [true, 'two']);
+    // Ended on the runner but the server never heard: the message is nacked no-session, and the session starts again.
+    assert.equal((await runner.request('events', { events: [env('session.idle', {})] })).op, 'ack');
+    const before = runner.frames.length;
+    const nackOnce = (f) => {
+      if (f.op !== 'session.message' || f.body.session !== s.session) return false;
+      runner.ws.send(JSON.stringify({ op: 'nack', id: `n${f.id}`, ref: f.id, body: { problem: 'no session', error: 'no-session' } }));
+      return true;
+    };
+    runner.ws.removeAllListeners('message').on('message', (d) => {
+      const f = JSON.parse(String(d)); runner.frames.push(f);
+      if (f.op === 'ping') runner.ws.send(JSON.stringify({ op: 'pong', id: `p${f.id}`, ref: f.id, body: { t: f.body.t } }));
+      else if (!['ack', 'nack', 'welcome'].includes(f.op) && !nackOnce(f)) runner.ws.send(JSON.stringify({ op: 'ack', id: `a${f.id}`, ref: f.id, body: {} }));
+    });
+    await p.call('POST', '/teams/shop/chat', { text: 'three' });
+    await waitFor(async () => starts() === 3);
+    const later = runner.frames.slice(before);
+    assert.ok(later.some((f) => f.op === 'session.message' && f.body.session === s.session), 'it was a message first');
+    assert.equal(runner.frames.filter((f) => f.op === 'session.start' && f.body.session === s.session).at(-1).body.wake.data.text, 'three', 'started again, woken by the chat');
+  }, { tickMs: 0 });
+});
+
 test('a session whose runner went quiet is not started a second time elsewhere', async () => {
   await plane(async (p) => {
     const { runner } = await setup(p);

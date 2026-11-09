@@ -276,7 +276,7 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
   /** meeting.skipped for the attendee whose turn it is; its turn's deliveries still waiting are dropped. */
   async function skip(ctx, m, role, reason) {
     await ctx.emit(m.team, 'meeting.skipped', { meeting: m.id, definition: m.definition, role, reason, turn: place(m, role).turn, round: m.round, ...(reason === 'busy' && m.if_busy === 'proxy' ? { proxy: true } : {}) }, opts(m));
-    if (m.turn_event) await ctx.q("update deliveries set state = 'dead' where event = $1 and state in ('pending', 'held')", [m.turn_event]);
+    if (m.turn_event) await ctx.q("update deliveries set state = 'dead' where team = $2 and event = $1 and state in ('pending', 'held')", [m.turn_event, m.team]);
     return save(ctx.q, m, { turn: m.turn + 1, skipped: [...m.skipped, { role, reason }] });
   }
 
@@ -362,7 +362,7 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
 
   async function abandon(ctx, m, why) {
     await save(ctx.q, m, { state: 'closed', outcome: 'abandoned', closed_at: ctx.now.toISOString(), turn_due: null });
-    if (m.turn_event) await ctx.q("update deliveries set state = 'dead' where event = $1 and state in ('pending', 'held')", [m.turn_event]);
+    if (m.turn_event) await ctx.q("update deliveries set state = 'dead' where team = $2 and event = $1 and state in ('pending', 'held')", [m.turn_event, m.team]);
     await ctx.emit(m.team, 'meeting.closed', { meeting: m.id, definition: m.definition, title: m.title, outcome: 'abandoned', why, replies: m.replies.length, skipped: m.skipped, spent: Number(m.spent), cap: Number(m.cap), currency: m.currency, url: page(m) }, opts(m));
   }
 
@@ -389,7 +389,7 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
       // has (partial minutes).
       // One meeting.skipped per attendee still to speak (architect: not one per turn per round), from the round it
       // would have spoken in next.
-      if (next.turn_event) await q("update deliveries set state = 'dead' where event = $1 and state in ('pending', 'held')", [next.turn_event]);
+      if (next.turn_event) await q("update deliveries set state = 'dead' where team = $2 and event = $1 and state in ('pending', 'held')", [next.turn_event, next.team]);
       const out = [];
       for (const [i, role] of next.attendees.entries()) {
         if (next.done.includes(role)) continue;
@@ -422,15 +422,15 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
                                      and m.opened_at + make_interval(mins => least(m.rounds * jsonb_array_length(m.attendees) * $1, 240)) <= now() for update of m skip locked`, [turnMinutes]);
       for (const r of stalled) {
         const m = await lock(ctx.q, r.id);
-        if (m.turn_event) await ctx.q("update deliveries set state = 'dead' where event = $1 and state in ('pending', 'held')", [m.turn_event]);
+        if (m.turn_event) await ctx.q("update deliveries set state = 'dead' where team = $2 and event = $1 and state in ('pending', 'held')", [m.turn_event, m.team]);
         await advance(ctx, await save(ctx.q, m, { timed_out: true }));
       }
     });
   }
 
   /** A meeting.turn was sent to a session: with next-pause its deadline counts from now (A7). */
-  async function sent(q, eventId) {
-    await q(`update meetings set turn_due = now() + make_interval(mins => $2) where turn_event = $1 and state <> 'closed'`, [eventId, turnMinutes]);
+  async function sent(q, eventId, team) {
+    await q(`update meetings set turn_due = now() + make_interval(mins => $2) where team = $3 and turn_event = $1 and state <> 'closed'`, [eventId, turnMinutes, team]);
   }
 
   /** The role instance a turn goes to (A8): its lowest-numbered live instance, otherwise the role itself. */

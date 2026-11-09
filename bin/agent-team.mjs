@@ -20,7 +20,7 @@
 //   agent-team version
 //
 // Run it with npx, without installing anything:
-//   npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.21.0 init --preset engineering --project "My App"
+//   npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 init --preset engineering --project "My App"
 // After that, scripts/agent-team/sync.sh runs the kit version pinned in .agent-team/team.json.
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -36,7 +36,7 @@ import { loadKit, loadTemplates, readLayer, readTemplateDir, writeLayer } from '
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8'));
 export const VERSION = pkg.version;
-export const DEFAULT_KIT_SPEC = `github:PurpleGiragge/Agent-Team-Kit#v${VERSION}`;
+export const DEFAULT_KIT_SPEC = `github:ThePurpleVoid/OrgCraft#v${VERSION}`;
 
 const LAYER = '.agent-team';
 const DOCS = 'docs/team';

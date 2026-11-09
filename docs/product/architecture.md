@@ -36,7 +36,7 @@ Owner: architect. Status: draft 1, 2026-11-05. Reads with the [PRD](prd.md). Dec
 
 One build, four shapes: everything in one process on a laptop; control and data plane in one cluster (self-hosted); our control plane with the customer's runners in their VPC; or fully hosted.
 
-Repository layout (monorepo, npm workspaces). The kit's root package stays as it is, so `npx github:PurpleGiragge/Agent-Team-Kit#vX` keeps working. The `files` whitelist in the root `package.json` keeps the apps out of the kit package.
+Repository layout (monorepo, npm workspaces). The kit's root package stays as it is, so `npx github:ThePurpleVoid/OrgCraft#vX` keeps working. The `files` whitelist in the root `package.json` keeps the apps out of the kit package.
 
 ```
 bin/ team/ presets/ scripts/ tools/ templates/ board/   the kit (unchanged role: CLI, briefs, scripts, dashboard)
@@ -60,7 +60,7 @@ The phone apps live in their own repositories, `agent-team-ios` and `agent-team-
 ```jsonc
 {
   "schema": "agent-team/team-spec@1",
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.7.1",
+  "kit": "github:ThePurpleVoid/OrgCraft#v0.7.1",
   "base": { "preset": "engineering" },             // what the roles are diffed against
   "values": { "PROJECT_NAME": "My App", "OWNER": "Sam", "TIMEZONE": "UTC", "DIGEST_TIME": "08:00" },
   "roles": {

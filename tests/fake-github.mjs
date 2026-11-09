@@ -28,8 +28,10 @@ export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, installa
   const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(body === undefined ? '' : JSON.stringify(body)); };
 
   const server = createServer(async (req, res) => {
-    let raw = '';
-    for await (const c of req) raw += c;
+    // Decoded once, after the whole body is in: a chunk can end inside a multi-byte character.
+    const parts = [];
+    for await (const c of req) parts.push(c);
+    const raw = Buffer.concat(parts).toString('utf8');
     const url = new URL(req.url, 'http://x');
     calls.push({ method: req.method, path: url.pathname + url.search, auth: req.headers.authorization ?? '' });
     // How many calls are waiting on the fake at once: the client's parallelism, independent of how busy the machine is.

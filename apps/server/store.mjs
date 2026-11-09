@@ -426,10 +426,14 @@ export async function tenantHead(db, tenant) {
   return row ? { id: row.id, seq: Number(row.seq) } : { id: null, seq: 0 };
 }
 
-/** The seq of an event anywhere in the tenant's log, for /me/stream's Last-Event-ID. 400 when unknown. */
+/**
+ * The seq of an event anywhere in the tenant's log, for /me/stream's Last-Event-ID. 400 when unknown. An event id is
+ * unique only within its team, and some are deterministic (published-<sha>), so two teams may share one: resume from
+ * the earliest, so the stream may repeat events but never skips one (review-2 D1).
+ */
 export async function tenantSeqOf(db, tenant, eventId) {
   if (!eventId) return 0;
-  const [row] = await db.tenant(tenant, ({ q }) => q('select max(seq) as seq from events where id = $1', [String(eventId)]));
+  const [row] = await db.tenant(tenant, ({ q }) => q('select min(seq) as seq from events where id = $1', [String(eventId)]));
   if (!row?.seq) throw new Problem(400, `no event ${eventId} in your teams' logs`);
   return Number(row.seq);
 }
