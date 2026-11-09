@@ -34,6 +34,15 @@ export function memoryRefs() {
     },
     async openChange(row) { const number = changes.size + 1; changes.set(number, { ...row, number, state: 'open', createdAt: new Date().toISOString() }); return number; },
     async getChange(number) { const c = changes.get(number); return c ? structuredClone(c) : null; },
+    async acceptChange(number, { from, to, by, at }) {
+      const c = changes.get(number);
+      if (!c || c.state !== 'open') return { ok: false, reason: 'state' };
+      const cur = refs.get('main');
+      if (from === null ? !!cur : cur?.sha !== from) return { ok: false, reason: 'stale' };
+      refs.set('main', { sha: to, version: (cur?.version ?? 0) + 1 });
+      Object.assign(c, { state: 'accepted', acceptedBy: by, acceptedSha: to, closedAt: at });
+      return { ok: true, row: structuredClone(c) };
+    },
     async updateChange(number, patch, expectState) {
       const c = changes.get(number);
       if (!c || (expectState && c.state !== expectState)) return null;
@@ -52,7 +61,7 @@ const clean = (s, max) => String(s ?? '').replace(/[\u0000-\u001f\u007f<>]/g, ' 
  */
 export function managedBackend({ store, refs, now = () => new Date(), author = () => ({ name: 'OrgCraft Studio', email: 'studio@orgcraft.invalid' }), autoAccept = false } = {}) {
   if (!store || typeof store.get !== 'function' || typeof store.put !== 'function') throw new TypeError('managedBackend: store is a Git object store');
-  for (const m of ['getRef', 'setRef', 'openChange', 'getChange', 'updateChange']) if (typeof refs?.[m] !== 'function') throw new TypeError(`managedBackend: refs.${m} is required`);
+  for (const m of ['getRef', 'setRef', 'openChange', 'getChange', 'updateChange', 'acceptChange']) if (typeof refs?.[m] !== 'function') throw new TypeError(`managedBackend: refs.${m} is required`);
 
   const commitOf = async (sha) => {
     if (!SHA.test(sha ?? '')) throw new CoreError(400, 'base is a commit id');
@@ -60,14 +69,6 @@ export function managedBackend({ store, refs, now = () => new Date(), author = (
   };
   const files = async (sha) => (sha ? listTree(store, (await commitOf(sha)).tree) : []);
   const text = async (sha) => (await readObject(store, sha, 'blob')).body.toString('utf8');
-
-  /** Moves main from `from` to `to`, fast-forward only. False when main is not at `from` any more. */
-  async function moveMain(from, to) {
-    const cur = await refs.getRef('main');
-    if (from === null) return cur === null && refs.setRef('main', to, null);
-    if (!cur || cur.sha !== from) return false;
-    return refs.setRef('main', to, cur);
-  }
 
   const api = {
     kind: 'managed',
@@ -127,9 +128,11 @@ export function managedBackend({ store, refs, now = () => new Date(), author = (
       const c = await refs.getChange(number);
       if (!c) throw new CoreError(404, `no change ${number}`);
       if (c.state !== 'open') throw new CoreError(409, `change ${number} is ${c.state}`, { type: c.state });
-      if (!(await moveMain(c.base, c.head))) throw new CoreError(409, STALE, { type: 'stale' });
-      const row = await refs.updateChange(number, { state: 'accepted', acceptedBy: by?.id ?? null, acceptedSha: c.head, closedAt: now().toISOString() }, 'open');
-      return { number, sha: c.head, change: row };
+      // The move and the state change in one transaction: a close or a crash between them can't split them.
+      const r = await refs.acceptChange(number, { from: c.base ?? null, to: c.head, by: by?.id ?? null, at: now().toISOString() });
+      if (!r.ok && r.reason === 'stale') throw new CoreError(409, STALE, { type: 'stale' });
+      if (!r.ok) throw new CoreError(409, `change ${number} is not open`, { type: 'closed' });
+      return { number, sha: c.head, change: r.row };
     },
     async close(number) {
       const row = await refs.updateChange(number, { state: 'closed', closedAt: now().toISOString() }, 'open');

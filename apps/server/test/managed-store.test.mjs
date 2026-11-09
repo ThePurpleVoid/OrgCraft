@@ -50,6 +50,24 @@ test('022: concurrent publishes straight away, exactly one wins; numbers never r
   });
 });
 
+test('022: accept moves main and marks the change in one transaction: a closed change never moves main', async () => {
+  await plane(async ({ db }) => {
+    await store.createTeam(db, 'acme', { id: 'shop' });
+    const b = backend(db, 'acme', 'shop');
+    const one = await b.publish({ base: null, message: 'Start', changes: [file('.agent-team/team.json', '{}\n')] });
+    await b.close(one.pr.number);
+    await assert.rejects(b.accept(one.pr.number), (e) => e.status === 409);
+    assert.equal((await db.system("select count(*)::int as n from managed_refs where team = 'shop' and name = 'main'"))[0].n, 0, 'main never moved');
+    const two = await b.publish({ base: null, message: 'Start again', changes: [file('.agent-team/team.json', '{"a":1}\n')] });
+    const [x, y] = await Promise.allSettled([b.accept(two.pr.number), b.close(two.pr.number)]);
+    const [cr] = await db.system("select state from change_requests where team = 'shop' and number = $1", [two.pr.number]);
+    const [main] = await db.system("select sha from managed_refs where team = 'shop' and name = 'main'");
+    // Whichever won, the two agree: accepted with main at its head, or closed with main never moved.
+    if (cr.state === 'accepted') assert.equal(main?.sha, two.commit, JSON.stringify([x.status, y.status]));
+    else assert.equal(main, undefined, JSON.stringify([x.status, y.status]));
+  });
+});
+
 test('022: row-level security keeps one tenant\'s objects, refs and changes from another', async () => {
   await plane(async ({ db }) => {
     await store.ensureTenant(db, 'globex');
