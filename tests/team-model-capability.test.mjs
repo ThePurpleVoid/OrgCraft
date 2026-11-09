@@ -136,3 +136,42 @@ test('selfCapability: a seat may not widen itself or weaken a check, and another
   assert.deepEqual(selfCapability(items, null), [], 'a person is not a seat');
   assert.deepEqual(selfCapability([{ kind: 'seat-added', subject: 'backend-dev-3' }], 'cto'), []);
 });
+
+// L40: systems (resources.json), as GET/PUT /v1/teams/{team}/systems carry them. Adding widens; removing never does.
+test('systemsCapability: each kind of widening, and nothing for removing or narrowing', async () => {
+  const { systemsCapability } = await import('../packages/team-model/index.mjs');
+  const gh = { id: 'code', type: 'github', config: { repo: 'acme/shop' }, secrets: ['GITHUB_TOKEN'] };
+  const db = { id: 'db', type: 'postgres', config: {}, secrets: [] };
+  const before = { resources: [gh], bindings: [{ role: 'backend-dev', resource: 'code', permission: 'read' }] };
+  const kinds = (after) => systemsCapability(before, after).map((x) => [x.kind, x.subject, x.resource, x.from ?? null, x.to ?? null]);
+  // A new system, bound or not.
+  assert.deepEqual(kinds({ ...before, resources: [gh, db] }), [['system-added', null, 'db', null, null]]);
+  const added = systemsCapability(before, { resources: [gh, db], bindings: [...before.bindings, { role: 'web-dev', resource: 'db', permission: 'write' }] });
+  assert.deepEqual(added.map((x) => [x.kind, x.subject]), [['system-added', 'web-dev'], ['binding-added', 'web-dev']]);
+  // Read, then Change, then Act.
+  assert.deepEqual(kinds({ ...before, bindings: [{ role: 'backend-dev', resource: 'code', permission: 'write' }] }), [['binding-widened', 'backend-dev', 'code', 'read', 'write']]);
+  assert.deepEqual(kinds({ ...before, bindings: [{ role: 'backend-dev', resource: 'code', permission: 'deploy' }] }), [['binding-widened', 'backend-dev', 'code', 'read', 'deploy']]);
+  // A secret, a command or settings on an existing system.
+  const two = { ...before, bindings: [...before.bindings, { role: 'qa-web', resource: 'code', permission: 'read' }] };
+  const sec = systemsCapability(two, { ...two, resources: [{ ...gh, secrets: ['GITHUB_TOKEN', 'NPM_TOKEN'] }] });
+  assert.deepEqual(sec.map((x) => [x.kind, x.subject, x.subjects, x.secrets]), [['resource-widened', null, ['backend-dev', 'qa-web'], ['NPM_TOKEN']]]);
+  assert.equal(systemsCapability(before, { ...before, resources: [{ ...gh, tools: { command: 'npx', args: ['x'] } }] })[0].command, true);
+  assert.match(systemsCapability(before, { ...before, resources: [{ ...gh, config: { repo: 'acme/other' } }] })[0].detail, /changes its settings/);
+  // Removing a system, a binding or a secret, or narrowing, lists nothing.
+  assert.deepEqual(systemsCapability(before, { resources: [], bindings: [] }), []);
+  assert.deepEqual(systemsCapability(before, { ...before, bindings: [] }), []);
+  assert.deepEqual(systemsCapability({ ...before, bindings: [{ role: 'backend-dev', resource: 'code', permission: 'deploy' }] }, before), []);
+  assert.deepEqual(systemsCapability(before, { ...before, resources: [{ ...gh, secrets: [] }] }), []);
+  assert.deepEqual(systemsCapability(before, before), []);
+  // A seat may not widen its own systems.
+  assert.deepEqual(selfCapability(sec, 'qa-web').length, 1);
+  assert.deepEqual(selfCapability(sec, 'web-dev'), []);
+});
+
+test('capabilityDiff carries the systems items for a resources.json change in a publish', () => {
+  const published = team();
+  const draft = clone(published);
+  draft.resources = { resources: [{ id: 'db', type: 'postgres', config: {}, secrets: ['DATABASE_URL'] }], bindings: [{ role: 'backend-dev', resource: 'db', permission: 'write' }] };
+  assert.deepEqual(capabilityDiff(published, draft, kit).filter((x) => ['system-added', 'binding-added'].includes(x.kind)).map((x) => [x.kind, x.subject]), [['system-added', 'backend-dev'], ['binding-added', 'backend-dev']]);
+  assert.deepEqual(capabilityDiff(draft, published, kit).filter((x) => /system|binding|resource/.test(x.kind)), [], 'taking it away widens nothing');
+});
