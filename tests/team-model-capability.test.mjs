@@ -217,5 +217,7 @@ test('systemsCapability: an unknown field changing widens, a name or key order d
   const odd = after({ ...r, sandbox: 'off' });
   assert.deepEqual([odd[0].kind, odd[0].subject], ['resource-widened', 'ops']);
   assert.match(odd[0].detail, /changes its settings/);
+  assert.equal(odd[0].settings, true);
+  assert.equal(after({ ...r, tools: { command: 'npx', args: ['t'] } })[0].settings, undefined, 'a command change alone is not a settings change');
   assert.equal(after({ ...r, tools: { command: 'npx', args: ['s', '--all'] } })[0].command, true);
 });
