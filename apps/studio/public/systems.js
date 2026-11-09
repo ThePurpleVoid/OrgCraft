@@ -43,10 +43,12 @@ export function showItems(whyEl, lines = []) {
  * Sends the published systems when the control plane's differ. `stepUp(why, scope, lines)` asks for the passkey.
  * Resolves 'none' (nothing to send, or no control plane), 'done', 'cancelled' or 'failed'.
  */
-export async function sendSystems({ stepUp, name, system, state = null } = {}) {
+export async function sendSystems({ stepUp, name, system, state = null, pending = null } = {}) {
   const s = state ?? await systemsState();
   if (!s || s.connected === false || s.inSync) return 'none';
-  const body = { key: `systems-${Date.now().toString(36)}`, version: s.version, hash: s.hash };
+  // PR mode (L40b): the set waits for its change; one already waiting with this content is not sent again.
+  if (pending && s.pending?.ours) return 'done';
+  const body = { key: `systems-${Date.now().toString(36)}`, version: s.version, hash: s.hash, ...(pending ? { pending: true, ...(pending.pr ? { pr: pending.pr } : {}) } : {}) };
   let r = await call('/v1/team/systems', body);
   if (r.status === 401 && /step-up-required$/.test(r.data.type ?? '')) {
     if (!(await stepUp(t('stepup.action.systems'), r.data.scope ?? null, await systemsLines(s, name, system)))) return 'cancelled';
@@ -55,3 +57,28 @@ export async function sendSystems({ stepUp, name, system, state = null } = {}) {
   if (r.ok && r.data.connected === false) return 'none';
   return r.ok ? 'done' : 'failed';
 }
+
+/**
+ * L40b: switches on the pending set shown in `state` (its commit and content hash), behind a fresh systems step-up
+ * whose dialog lists what the control plane gains and loses. Resolves 'done', 'cancelled', 'changed' (another admin
+ * re-confirmed it with other content: look again), 'dropped' (expired, or the systems moved: confirm again) or 'failed'.
+ */
+export async function applyPending({ stepUp, name, system, state }) {
+  const p = state?.pending;
+  if (!p) return 'dropped';
+  const body = { sha: p.sha, contentHash: p.contentHash };
+  let r = await call('/v1/team/systems/pending/apply', body);
+  if (r.status === 401 && /step-up-required$/.test(r.data.type ?? '')) {
+    if (!(await stepUp(t('stepup.action.systems.switchon'), r.data.scope ?? null, await systemsLines({ ...state, items: p.items, lost: p.lost }, name, system)))) return 'cancelled';
+    r = await call('/v1/team/systems/pending/apply', body);
+  }
+  if (r.ok) return 'done';
+  const type = String(r.data.type ?? '').replace(/^.*\//, '');
+  return type === 'pending-changed' ? 'changed' : type === 'pending-dropped' || type === 'no-pending' ? 'dropped' : 'failed';
+}
+
+/** The words for a systems.pending.dropped reason (CPO §5a); `days` is how long a pending set waits. */
+export const droppedLine = (reason, days = 30) => t({ withdrawn: 'systems.dropped.closed', expired: 'systems.dropped.expired', 'base-moved': 'systems.dropped.moved', 'merged-different': 'systems.dropped.merged-different' }[reason] ?? 'systems.dropped.moved', { days });
+
+/** "{code host} reports that the change was accepted…": the host by name when the Studio knows it. */
+export const readyLine = (host) => t('systems.ready', { 'code host': host || t('systems.codehost.other') });
