@@ -3,6 +3,8 @@
 ## Unreleased
 - **Templates: roles that start switched off** (L34, demo step 13). `template.json` may list `"off": [role ids]`: those kit roles are on the team but start switched off (team.json excludes them), so the Studio draws them as Off and switching one on is a one-line team.json change. The Startup product team template starts with Performance tester off (27 of 28 on). `checkTemplate` refuses an `off` entry that is not a kit role. **What existing teams see:** nothing; only new teams made from the template.
 
+- **Teammates: a name can't look like an address** (L35, security's L17 low; the same rule as the server's run-start roster check). A teammate's name may not equal another seat's id, a role type on the team, or `owner` (trimmed, spaces collapsed, any case); its own id is fine. Renaming refuses it with 409 ("{name} is already a teammate's id, a role or \"owner\"; pick another."), and `validate` reports it as an error. `packages/team-model` exports `addressClash`. **What existing teams see:** nothing, unless a name already breaks the rule; then validate says which one to change.
+
 ## 0.22.0
 
 - **Runner: a sidecar server's environment is PATH, HOME and its own secrets only** (L20 fix). The MCP SDK passes the runner's own `USER`, `LOGNAME`, `SHELL` and `TERM` to a stdio server by default; the sidecar now starts each server through `env -u` for every one of those it did not set. CI hosts set them, so the signed promise failed there while it held in the sandbox. The test now sets them itself.
