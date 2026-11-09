@@ -241,8 +241,13 @@
             "kit",
             "project",
             "project-replaces-kit",
+            "member",
             "missing"
           ]
+        },
+        "type": {
+          "type": "string",
+          "description": "The type (a kit or project role slug) this member is based on, from its extension's \"Based on\" line. Present only when source is member (ADR 0011)."
         },
         "enabled": {
           "type": "boolean"
