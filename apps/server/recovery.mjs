@@ -15,6 +15,8 @@ import { Problem } from './store.mjs';
 export const COOLING_OFF_MS = 24 * 3600_000;
 export const WANTED = 2;
 const rid = () => `rco_${randomBytes(12).toString('base64url')}`;
+/** The step-up scope for naming or removing one recovery owner. */
+export const recoveryScope = (tenant, person) => `recovery:${tenant}_${person}`;
 
 export function createRecovery({ db, requireStepUp, now = () => new Date() }) {
   const view = (r, at) => {
@@ -60,7 +62,8 @@ export function createRecovery({ db, requireStepUp, now = () => new Date() }) {
     mustOwn(who);
     const person = typeof body?.person === 'string' ? body.person : '';
     if (!/^per_[A-Za-z0-9_-]{8,64}$/.test(person)) throw new Problem(400, 'send { person }: the id of an owner of this workspace (GET /v1/members)');
-    await requireStepUp(who, stepUp, 'Naming a recovery owner');
+    // ADR 0013 rule 3: the step-up names this exact change (security review low 3).
+    await requireStepUp(who, stepUp, 'Naming a recovery owner', recoveryScope(who.tenant, person));
     return db.systemTx(async ({ q }) => {
       await q('select pg_advisory_xact_lock(4854, hashtext($1))', [who.tenant]);
       const [m] = await q('select role from members where tenant = $1 and person = $2 and removed_at is null', [who.tenant, person]);
@@ -84,7 +87,7 @@ export function createRecovery({ db, requireStepUp, now = () => new Date() }) {
 
   async function remove(who, person, stepUp) {
     mustOwn(who);
-    await requireStepUp(who, stepUp, 'Removing a recovery owner');
+    await requireStepUp(who, stepUp, 'Removing a recovery owner', recoveryScope(who.tenant, person));
     return db.systemTx(async ({ q }) => {
       await q('select pg_advisory_xact_lock(4854, hashtext($1))', [who.tenant]);
       const gone = await q('update recovery_owners set removed_at = $3, removed_by = $4 where tenant = $1 and person = $2 and removed_at is null returning id', [who.tenant, person, now(), who.principal]);

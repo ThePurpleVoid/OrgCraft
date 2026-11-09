@@ -16,7 +16,7 @@ async function person(gh, browser, user) {
   const key = authenticator({ origin: ORIGIN, rpId: RP });
   const added = await b.call('POST', '/me/passkeys', { name: `${user.login}'s laptop`, credential: key.create((await b.call('GET', '/me/passkeys/options')).body) });
   assert.equal(added.status, 201, JSON.stringify(added.body));
-  const su = async () => (await b.call('POST', '/auth/step-up', { webauthn: key.get((await b.call('GET', '/auth/step-up/challenge')).body) })).body.token;
+  const su = async (scope) => (await b.call('POST', '/auth/step-up', { webauthn: key.get((await b.call('GET', '/auth/step-up/challenge')).body), ...(scope ? { scope } : {}) })).body.token;
   const me = (await b.call('GET', '/me')).body.id;
   return { b, key, su, me };
 }
@@ -32,8 +32,8 @@ async function passkeySignIn(browser, key, { ip = 'pk', knobs, ret = '/' } = {})
   const first = await b.go(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=${encodeURIComponent(ret)}`);
   assert.match(first.at, /\/sign-in\?interaction=/);
   const uid = new URL(first.at).searchParams.get('interaction');
-  const options = await (await b.fetch(`${ORIGIN}/oauth/interaction/${uid}/passkey`)).json();
-  const res = await b.fetch(`${ORIGIN}/oauth/interaction/${uid}/passkey`, { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/json' }, body: JSON.stringify({ webauthn: key.get(options, knobs) }) });
+  const options = await (await b.fetch(`${ORIGIN}/oauth/authorize/${uid}/passkey`)).json();
+  const res = await b.fetch(`${ORIGIN}/oauth/authorize/${uid}/passkey`, { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/json' }, body: JSON.stringify({ webauthn: key.get(options, knobs) }) });
   const body = await res.json();
   if (res.status !== 200) return { b, status: res.status, body, uid, options };
   const done = await b.go(body.location.startsWith('/') ? ORIGIN + body.location : body.location);
@@ -44,9 +44,10 @@ test('a passkey alone signs a member in, without GitHub; a wrong, reused or cros
   const octo = await person(gh, browser, owner);
   options: {
     // Options carry no credential list (the authenticator offers its own) and require user verification.
-    const first = await browser({ ip: 'x' }).go(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=%2F`);
+    const bx = browser({ ip: 'x' });
+    const first = await bx.go(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=%2F`);
     const uid = new URL(first.at).searchParams.get('interaction');
-    const o = await (await browser({ ip: 'x' }).fetch(`${ORIGIN}/oauth/interaction/${uid}/passkey`)).json();
+    const o = await (await bx.fetch(`${ORIGIN}/oauth/authorize/${uid}/passkey`)).json();
     assert.equal(o.userVerification, 'required');
     assert.equal(o.rpId, RP);
     assert.deepEqual(o.allowCredentials ?? [], []);
@@ -59,6 +60,10 @@ test('a passkey alone signs a member in, without GitHub; a wrong, reused or cros
   assert.deepEqual([me.status, me.body.id, me.body.workspaces[0].role], [200, octo.me, 'owner']);
   const [s] = await db.system('select amr from person_sessions where person = $1 order by created_at desc limit 1', [octo.me]);
   assert.deepEqual(s.amr, ['hwk', 'user']);
+  // A counter that went back on a counting authenticator may be a cloned key: refused (security review low 1).
+  octo.key.counter = 0;
+  assert.equal((await passkeySignIn(browser, octo.key, { ip: 'clone' })).status, 401);
+  octo.key.counter = 100;
 
   // Refused: no user verification, another origin, a key nobody registered; each one generic and audited.
   for (const [knobs, key] of [[{ uv: false }, octo.key], [{ from: 'https://evil.example' }, octo.key], [undefined, authenticator({ origin: ORIGIN, rpId: RP })]]) {
@@ -70,13 +75,20 @@ test('a passkey alone signs a member in, without GitHub; a wrong, reused or cros
   const b = browser({ ip: 'replay' });
   const first = await b.go(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=%2F`);
   const uid = new URL(first.at).searchParams.get('interaction');
-  const options = await (await b.fetch(`${ORIGIN}/oauth/interaction/${uid}/passkey`)).json();
+  const options = await (await b.fetch(`${ORIGIN}/oauth/authorize/${uid}/passkey`)).json();
   const assertion = octo.key.get(options);
-  const post = (u, h = { origin: ORIGIN, 'content-type': 'application/json' }) => b.fetch(`${ORIGIN}/oauth/interaction/${u}/passkey`, { method: 'POST', headers: h, body: JSON.stringify({ webauthn: assertion }) });
+  const post = (u, h = { origin: ORIGIN, 'content-type': 'application/json' }) => b.fetch(`${ORIGIN}/oauth/authorize/${u}/passkey`, { method: 'POST', headers: h, body: JSON.stringify({ webauthn: assertion }) });
   assert.equal((await post(uid, { origin: 'https://evil.example', 'content-type': 'application/json' })).status, 403, 'cross-site');
+  // Bound to the browser that started the sign-in (security review sev 3): another browser presenting the uid, even
+  // with a good assertion, gets nowhere, and cannot ask for options either.
+  const thief = browser({ ip: 'thief' });
+  assert.equal((await thief.fetch(`${ORIGIN}/oauth/authorize/${uid}/passkey`)).status, 410);
+  const stolen = await thief.fetch(`${ORIGIN}/oauth/authorize/${uid}/passkey`, { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/json' }, body: JSON.stringify({ webauthn: assertion }) });
+  assert.equal(stolen.status, 410);
   const other = new URL((await browser({ ip: 'o' }).go(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=%2F`)).at).searchParams.get('interaction');
-  assert.equal((await post(other)).status, 401, 'another sign-in\'s challenge');
-  assert.equal((await post(uid)).status, 401, 'used up by the try above');
+  assert.equal((await post(other)).status, 410, 'another browser\'s sign-in');
+  assert.equal((await post(uid)).status, 200, 'still good in its own browser');
+  assert.equal((await post(uid)).status, 401, 'a challenge works once');
 }));
 
 test('a removed member\'s passkey signs nobody in', () => issuer(async ({ gh, browser }) => {
@@ -96,15 +108,16 @@ test('recovery owners: owners with a passkey, 24 hours before a new one counts, 
   const list = async () => (await octo.b.call('GET', '/recovery')).body;
   assert.deepEqual((await list()).warnings.map((w) => w.code), ['fewer-than-two']);
   assert.equal((await e.b.call('GET', '/recovery')).status, 200, 'an admin can see them');
-  assert.equal((await e.b.call('POST', '/recovery', { person: e.me }, { 'x-step-up': await e.su() })).status, 403, 'only an owner names one');
+  assert.equal((await e.b.call('POST', '/recovery', { person: e.me }, { 'x-step-up': await e.su(`recovery:acme_${e.me}`) })).status, 403, 'only an owner names one');
   assert.equal((await octo.b.call('POST', '/recovery', { person: octo.me })).status, 401, 'step-up first');
-  assert.equal((await octo.b.call('POST', '/recovery', { person: e.me }, { 'x-step-up': await octo.su() })).body.type, 'not-owner');
+  assert.equal((await octo.b.call('POST', '/recovery', { person: octo.me }, { 'x-step-up': await octo.su() })).status, 401, 'the step-up names the change (recovery:<tenant>_<person>)');
+  assert.equal((await octo.b.call('POST', '/recovery', { person: e.me }, { 'x-step-up': await octo.su(`recovery:acme_${e.me}`) })).body.type, 'not-owner');
   // The first one, an owner naming themselves, counts at once.
-  const self = await octo.b.call('POST', '/recovery', { person: octo.me }, { 'x-step-up': await octo.su() });
+  const self = await octo.b.call('POST', '/recovery', { person: octo.me }, { 'x-step-up': await octo.su(`recovery:acme_${octo.me}`) });
   assert.deepEqual([self.status, self.body.pending], [201, false]);
-  assert.equal((await octo.b.call('POST', '/recovery', { person: octo.me }, { 'x-step-up': await octo.su() })).body.type, 'already');
+  assert.equal((await octo.b.call('POST', '/recovery', { person: octo.me }, { 'x-step-up': await octo.su(`recovery:acme_${octo.me}`) })).body.type, 'already');
   // A second one widens access: 24 hours, and every owner is told.
-  const second = await octo.b.call('POST', '/recovery', { person: d.me }, { 'x-step-up': await octo.su() });
+  const second = await octo.b.call('POST', '/recovery', { person: d.me }, { 'x-step-up': await octo.su(`recovery:acme_${d.me}`) });
   assert.deepEqual([second.status, second.body.pending], [201, true]);
   assert.ok(Date.parse(second.body.effectiveAt) - Date.now() > 23.9 * 3600_000);
   let l = await list();
@@ -120,17 +133,17 @@ test('recovery owners: owners with a passkey, 24 hours before a new one counts, 
   l = await list();
   assert.deepEqual(l.warnings.map((w) => w.code), ['fewer-than-two', 'not-owner']);
   // Removing is at once.
-  assert.equal((await octo.b.call('DELETE', `/recovery/${d.me}`, {}, { 'x-step-up': await octo.su() })).status, 200);
+  assert.equal((await octo.b.call('DELETE', `/recovery/${d.me}`, {}, { 'x-step-up': await octo.su(`recovery:acme_${d.me}`) })).status, 200);
   assert.deepEqual((await list()).owners.map((o) => o.login), ['octo']);
-  assert.equal((await octo.b.call('DELETE', `/recovery/${d.me}`, {}, { 'x-step-up': await octo.su() })).status, 404);
+  assert.equal((await octo.b.call('DELETE', `/recovery/${d.me}`, {}, { 'x-step-up': await octo.su(`recovery:acme_${d.me}`) })).status, 404);
 }));
 
 test('acceptance: the owner\'s GitHub sign-in is gone, and the second recovery owner gets them back in', () => issuer(async ({ db, gh, browser }) => {
   gh.directory.push(dana);
   const octo = await person(gh, browser, owner);
   const d = await join(gh, browser, octo, dana, 'owner');
-  await octo.b.call('POST', '/recovery', { person: octo.me }, { 'x-step-up': await octo.su() });
-  await octo.b.call('POST', '/recovery', { person: d.me }, { 'x-step-up': await octo.su() });
+  await octo.b.call('POST', '/recovery', { person: octo.me }, { 'x-step-up': await octo.su(`recovery:acme_${octo.me}`) });
+  await octo.b.call('POST', '/recovery', { person: d.me }, { 'x-step-up': await octo.su(`recovery:acme_${d.me}`) });
   await db.system("update recovery_owners set effective_at = now() - interval '1 minute'");
   assert.deepEqual((await (await d.b.call('GET', '/recovery')).body).warnings, []);
 

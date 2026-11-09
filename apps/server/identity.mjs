@@ -555,14 +555,26 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
 
   // ---- the second way in: a passkey (L27, B15) --------------------------------------------------------------------
   // A person who has added a passkey can sign in with it alone, so losing their GitHub account never locks them out.
-  // The sign-in page asks GET /oauth/interaction/{uid}/passkey for options (no allowCredentials: the authenticator
+  // The sign-in page asks GET /oauth/authorize/{uid}/passkey for options (no allowCredentials: the authenticator
   // offers its own passkeys for this site), then POSTs the assertion as JSON from this origin. The passkey must be
   // someone's who is still a member somewhere; user verification is required.
+  //
+  // Both legs are bound to the browser that started this sign-in (security review sev 3): the issuer's signed
+  // resume cookie for this interaction (path /oauth/authorize/{uid}, which is why the routes live under it) must name
+  // the uid, so someone who learns the uid cannot finish the sign-in as themselves in another browser.
   const rpID = issuer.hostname;
+  const cookieKey = createHmac('sha256', key).update('agent-team/oidc-cookies/v1').digest('base64url');
+  const cookieSig = (name, value) => createHmac('sha1', cookieKey).update(`${name}=${value}`).digest('base64').replace(/\/|\+|=/g, (c) => ({ '/': '_', '+': '-', '=': '' }[c]));
+  function boundToBrowser(req, uid) {
+    const c = cookies(req);
+    const v = c.get('_interaction_resume') ?? '', sig = c.get('_interaction_resume.sig') ?? '';
+    return !!v && !!sig && same(v, uid) && same(sig, cookieSig('_interaction_resume', v));
+  }
   const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 
-  async function passkeyOptions(res, uid) {
-    if (!UID.test(uid) || !(await provider.Interaction.find(uid))) throw new Problem(410, 'this sign-in has expired; start again', { type: 'expired' });
+  async function passkeyOptions(req, res, uid) {
+    if (limited(clientIp(req), 'passkey-options', 20)) throw new Problem(429, 'too many passkey sign-ins from here; try again in a minute');
+    if (!UID.test(uid) || !boundToBrowser(req, uid) || !(await provider.Interaction.find(uid))) throw new Problem(410, 'this sign-in has expired; start again', { type: 'expired' });
     const options = await generateAuthenticationOptions({ rpID, userVerification: 'required', timeout: 120_000 });
     await db.system('insert into oidc_store(model, id_hash, payload, expires_at) values ($1, $2, $3, $4)', ['WebAuthn', sha(options.challenge), { kind: 'sign-in', uid }, new Date(Date.now() + 120_000)]);
     return json(res, 200, options);
@@ -571,7 +583,7 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
   async function passkeyDone(req, res, uid) {
     if (!csrfOk(req)) throw new Problem(403, 'cross-site request refused: send this deployment\'s Origin and content-type: application/json');
     if (limited(clientIp(req), 'passkey-sign-in', 10)) throw new Problem(429, 'too many passkey sign-ins from here; try again in a minute');
-    if (!UID.test(uid)) throw new Problem(410, 'this sign-in has expired; start again', { type: 'expired' });
+    if (!UID.test(uid) || !boundToBrowser(req, uid)) throw new Problem(410, 'this sign-in has expired; start again', { type: 'expired' });
     let raw = '';
     for await (const c of req) { raw += c; if (raw.length > 64 * 1024) throw new Problem(413, 'too large'); }
     let assertion;
@@ -600,7 +612,11 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     } catch (e) { return refuse(String(e.message).slice(0, 200), { passkey: k.id }); }
     if (!out.verified) return refuse('did not verify', { passkey: k.id });
     const counter = out.authenticationInfo.newCounter;
-    if ((counter > 0 || Number(k.sign_count) > 0) && counter <= Number(k.sign_count)) await audit(k.person, 'passkey.sign-count-flagged', { passkey: k.id, stored: Number(k.sign_count), got: counter });
+    // A counter that went back on an authenticator that counts may be a cloned key: refused for sign-in (review low 1).
+    if (counter > 0 && Number(k.sign_count) > 0 && counter <= Number(k.sign_count)) {
+      await audit(k.person, 'passkey.sign-count-flagged', { passkey: k.id, stored: Number(k.sign_count), got: counter, signIn: true });
+      return refuse('sign count went back', { passkey: k.id });
+    }
     await db.system('update passkeys set sign_count = greatest(sign_count, $2), last_used = now() where id = $1', [k.id, counter]);
     const person = await activePerson(k.person);
     if (!person) return refuse('not a member', { passkey: k.id });
@@ -671,8 +687,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     if (authorize && req.method === 'GET' && url.searchParams.get('client_id') === WEB_CLIENT && !url.searchParams.has('response_type')) { await webStart(req, res, url); return true; }
     const inter = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
     if (inter && req.method === 'GET') { await upstreamStart(req, res, inter[1]); return true; }
-    const pk = /^\/oauth\/interaction\/([^/]+)\/passkey$/.exec(p);
-    if (pk && req.method === 'GET') { await passkeyOptions(res, pk[1]); return true; }
+    const pk = /^\/oauth\/authorize\/([^/]+)\/passkey$/.exec(p);
+    if (pk && req.method === 'GET') { await passkeyOptions(req, res, pk[1]); return true; }
     if (pk && req.method === 'POST') { await passkeyDone(req, res, pk[1]); return true; }
     const consent = /^\/oauth\/interaction\/([^/]+)\/consent$/.exec(p);
     if (consent && (req.method === 'GET' || req.method === 'POST')) {

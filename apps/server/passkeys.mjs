@@ -159,9 +159,9 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
   }
 
   /** A su_ token for this person in this tenant, used up here. */
-  async function requireStepUp(who, token, what) {
+  async function requireStepUp(who, token, what, scope = null) {
     if (!who.tenant || !token) throw new StepUpNeeded(what);
-    try { return await m3.requireStepUp(who.tenant, who.principal, token, what); } catch (e) { if (e?.type === 'step-up-required') throw new StepUpNeeded(what); throw e; }
+    try { return await m3.requireStepUp(who.tenant, who.principal, token, what, scope); } catch (e) { if (e?.type === 'step-up-required') throw new StepUpNeeded(what); throw e; }
   }
 
   return { list, registrationOptions, register, remove, challenge, stepUp, requireStepUp, rpID };

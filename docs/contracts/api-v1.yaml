@@ -247,8 +247,8 @@ paths:
     patch:
       x-min-role: viewer
       tags: [notifications]
-      summary: Choose the kinds to email (approval, budget80, budget100, blocked, minutes, ready); the address must be verified
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } }
+      summary: Choose the kinds to email (approval, budget80, budget100, blocked, minutes, ready, digest); the address must be verified. digest is the daily digest, sent at the time in /me/notifications
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kinds], properties: { kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready, digest] } } } } } } }
       responses: { "200": { description: The address }, "409": { description: Not verified yet } }
     delete: { x-min-role: viewer, tags: [notifications], summary: Remove the address, responses: { "200": { description: Removed } } }
   /teams/{team}/emails/{email}/verify:
@@ -263,6 +263,17 @@ paths:
     parameters: [ { name: action, in: path, required: true, schema: { enum: [link, unsubscribe, resubscribe] } }, { name: t, in: query, required: true, schema: { type: string } } ]
     get: { tags: [notifications], security: [], summary: "No sign-in, the signed token is the proof. link: redirects into the Studio until it expires (approvals 24 hours, others 7 days). unsubscribe: shows a page asking to turn off one kind for one team (the button POSTs)", responses: { "200": { description: A page }, "302": { description: Into the Studio }, "410": { description: The link expired } } }
     post: { tags: [notifications], security: [], summary: "unsubscribe: turns off one kind for one team (also RFC 8058 one-click); resubscribe: Turn it back on", responses: { "200": { description: A page } } }
+  /teams/{team}/notifications/log:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [notifications]
+      summary: "The delivery log (PRD O6), newest first: one row per email or Slack try, with status sent, held (quiet hours, kept for the digest), skipped, failed or emailed (Slack fell back to email) and why. Addresses are masked and appear only on your own rows. You see your own rows; all=1 (everyone's, with principal, plus Slack channel posts, which are nobody's own) needs admin"
+      parameters:
+        - { name: all, in: query, schema: { enum: ["1"] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: before, in: query, description: The next value of the previous page, schema: { type: string } }
+      responses: { "200": { description: "{ items: [{ channel, at, event, kind, status, why, to, principal? }], next }" }, "403": { description: all=1 without admin } }
   /teams/{team}/slack:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get: { x-min-role: viewer, tags: [notifications], summary: "Is Slack connected and working (health), the kinds, and the caller's own link", responses: { "200": { description: "{ connected, ready, canLink, health, kinds: [{ id, label, suggested, channelDefault }], me }: suggested kinds are ticked, not saved, the first time a person sees the DM switches" } } }
@@ -342,6 +353,92 @@ paths:
       x-interactive-only: [resume]
       description: "Pause and stop never need step-up. Resuming does, whoever paused the run, with a step-up bound to scope resume:<run> (ADR 0013; before, only after a budget pause). Resume is interactive only: a host's token may pause or stop, never resume (403)"
       responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required); the body's scope names what to step up for" }, "403": { description: "Resume through a host" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
+  /hooks/{hook}:
+    parameters: [ { name: hook, in: path, required: true, schema: { type: string }, description: "hk_ and 32 random characters: the URL is the first secret" } ]
+    post:
+      tags: [triggers]
+      security: []
+      summary: "A webhook signal (N2, L21). The hook's own secret is the only credential: hmac (X-Team-Signature: t=<unix>,v1=<hex of HMAC-SHA256 over '<t>.<body>'>, 5 minutes skew) or bearer (Authorization: Bearer <secret>). Body at most 256 KB. An unknown or revoked hook is 404, a bad or stale signature 401, over 600 a minute 429, and none of these writes anything (the tick writes one rejected row per hook per minute). A verified duplicate (the body's sha256 for hmac hooks, since the header is not signed; Idempotency-Key, else the sha256, for bearer hooks; kept 7 days) and a signal over the team's 300 an hour answer 200 with no event. Otherwise inbound.received, then the run's matching triggers fire (202 { id }); with no run going the signal is queued for 24 hours. The answer never echoes the body"
+      responses: { "202": { description: "{ id }" }, "200": { description: "Duplicate or over the ceiling: { id, duplicate } or { id, held }" }, "401": { description: Signature }, "404": { description: "Unknown or revoked" }, "413": { description: Too large }, "429": { description: Too many } }
+  /teams/{team}/hooks:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [triggers]
+      summary: "The team's hooks: id, name, url, scheme, state, lastAt, last24h counts by state. Never a secret"
+      responses: { "200": { description: "{ hooks }" } }
+    post:
+      x-min-role: admin
+      tags: [triggers]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "Add a hook: { name (what triggers.json names), scheme: hmac | bearer } -> 201 { id, name, scheme, url, secret }. The secret is shown once and kept in the vault by name. The step-up is scoped to this hook: hook:<team>_<name>"
+      responses: { "201": { description: Created }, "401": { description: Step-up required }, "409": { description: "A hook with that name exists" } }
+  /teams/{team}/hooks/{hook}/rotate:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: hook, in: path, required: true, schema: { type: string } } ]
+    post:
+      x-min-role: admin
+      tags: [triggers]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "A new secret, shown once; the old one keeps verifying for 24 hours. The step-up is scoped: hook:<hook id>"
+      responses: { "200": { description: "{ id, secret }" } }
+  /teams/{team}/hooks/{hook}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: hook, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: admin
+      tags: [triggers]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "Revoke a hook: its URL answers 404 at once. The step-up is scoped: hook:<hook id>"
+      responses: { "200": { description: Revoked } }
+  /teams/{team}/triggers/{trigger}/history:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: trigger, in: path, required: true, schema: { type: string } } ]
+    get:
+      x-min-role: viewer
+      tags: [triggers]
+      summary: "What each signal did with this trigger, newest first: { history: [{ inbound, summary, at, outcome (fired, filtered, held), detail, event }], next }. Summaries only, never bodies"
+      responses: { "200": { description: OK } }
+  /teams/{team}/triggers/test:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: editor
+      tags: [triggers]
+      summary: "Try a draft trigger on a sample: { trigger, sample: { fields } } -> { passes, failed?: { field, op }, wake }. Pure: stores nothing and wakes nobody"
+      responses: { "200": { description: OK } }
+  /live/stop-everything:
+    post:
+      x-min-role: editor
+      tags: [live]
+      summary: "Stop everything in every team of the workspace (L18, G17.5): each team gets the same live change as POST /teams/{team}/live/stop-everything. No step-up, no code host, no publish"
+      responses: { "200": { description: "{ live: [{ team, ...LiveChange }] }" } }
+  /teams/{team}/live:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [live]
+      summary: "The live changes in force (L18, review-2 R2): emergency controls kept as control-plane state, never in Git. Each is { id, kind (halt, member), member, state (paused, off), reason, by, at, runs (halt: the runs it paused), text, liveChange }. The Studio shows them on the next publish diff (liveChange: 'Live change by ... Keep it?') and as the banner"
+      responses: { "200": { description: "{ live: [LiveChange] }" } }
+  /teams/{team}/live/stop-everything:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: editor
+      tags: [live]
+      summary: "Stop everything for this team: every running run pauses (reason owner), no run starts or resumes (409 halted) and no teammate gets work until it is lifted. One tap, no step-up; works with the code host down. Emits live.changed and an audit row. Body (optional): { reason }"
+      responses: { "200": { description: LiveChange } }
+  /teams/{team}/live/members/{member}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: member, in: path, required: true, schema: { type: string }, description: "A teammate id, like web-dev, or role#instance" } ]
+    put:
+      x-min-role: editor
+      tags: [live]
+      summary: "Pause or switch off one teammate live: { state: paused | off, reason? }. Its new work is held; its live sessions stop (paused: at a safe point, with a checkpoint; off: now). No step-up. Only a lift clears it (a run's roster never does), so a leftover change after a publish that dropped the teammate stays until someone lifts it. Its approval results wait too"
+      responses: { "200": { description: LiveChange }, "400": { description: "state is not paused or off, or the teammate id is malformed" } }
+  /teams/{team}/live/{override}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: override, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: editor
+      tags: [live]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      x-interactive-only: [lift]
+      summary: "Lift one live change. Needs a step-up bound to scope lift:<override> (ADR 0013: stopping is cheap, carrying on is not); a host never sends one. Lifting Stop everything resumes the runs it paused, unless today's budget is spent; lifting a teammate releases its held work and restarts what the pause stopped"
+      responses: { "200": { description: "LiveChange with lifted: true (and resumed: [run ids] for a halt)" }, "401": { description: "Step-up required; the body's scope names the change" }, "404": { description: "No such live change, or already lifted" } }
   /teams/{team}/chat:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
@@ -548,6 +645,18 @@ paths:
       summary: Everything waiting for me across teams, as cards, most urgent first (clients.md section 5)
       parameters: [ { $ref: "#/components/parameters/cursor" }, { $ref: "#/components/parameters/limit" } ]
       responses: { "200": { description: Cards, content: { application/json: { schema: { type: object, properties: { asOf: { type: string }, cards: { type: array, items: { $ref: "#/components/schemas/Card" } }, next: { type: string } } } } } } }
+  /me/notifications:
+    get:
+      x-min-role: viewer
+      tags: [me, notifications]
+      summary: "My quiet hours and daily digest in this workspace (PRD O3): { timezone, quietHours: { from, to } | null, digest: { at, kinds } | null, breakthrough }. breakthrough lists the kinds quiet hours never hold"
+      responses: { "200": { description: Settings } }
+    put:
+      x-min-role: viewer
+      tags: [me, notifications]
+      summary: "Change them. Times are local HH:MM in timezone (IANA); quiet hours may wrap past midnight; null turns one off; a field left out keeps its value. During quiet hours an email that does not break through, is logged held and goes in the next digest; without a digest it goes out on its own when quiet hours end. The digest goes once a day at digest.at to each address with the digest kind on, with what was held plus digest.kinds (not digest itself)"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { timezone: { type: string }, quietHours: { type: [object, "null"], properties: { from: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }, to: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" } } }, digest: { type: [object, "null"], properties: { at: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }, kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } } } }
+      responses: { "200": { description: Settings }, "400": { description: A bad time, zone or kind } }
   /me/summary:
     get:
       x-min-role: viewer
@@ -602,7 +711,7 @@ paths:
       x-min-role: owner
       tags: [people]
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
-      summary: "Name a recovery owner: { person } (an owner of the workspace with a passkey). Widening access, so it counts after 24 hours and every owner is told (GET /v1/me notices: recovery-owner.added). The one exception: in a workspace with none, an owner naming themselves counts at once"
+      summary: "Name a recovery owner: { person } (an owner of the workspace with a passkey). Widening access, so it counts after 24 hours and every owner is told (GET /v1/me notices: recovery-owner.added). The one exception: in a workspace with none, an owner naming themselves counts at once. The step-up is scoped: recovery:<tenant>_<person>"
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [person], properties: { person: { type: string } } } } } }
       responses: { "201": { description: "{ person, effectiveAt, pending }" }, "401": { description: Step-up required }, "403": { description: Not an owner }, "404": { description: No such member }, "409": { description: "not-owner, no-passkey or already" } }
   /recovery/{person}:
@@ -611,7 +720,7 @@ paths:
       x-min-role: owner
       tags: [people]
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
-      summary: "End someone's recovery ownership at once (also undoes a pending one); every owner is told"
+      summary: "End someone's recovery ownership at once (also undoes a pending one); every owner is told. The step-up is scoped: recovery:<tenant>_<person>"
       responses: { "200": { description: Removed }, "401": { description: Step-up required }, "404": { description: Not a recovery owner } }
   /members:
     get:
@@ -812,6 +921,11 @@ components:
                   handsTo: { type: array, maxItems: 50, items: { type: string }, description: "Additive: the member ids its structured Hands to lists (the drawn wiring, used to route a message to a type with several members; never a firewall)" }
                   model: { type: string }
                   brief: { type: string, description: "The role's brief as text, at most 20 KB; sent to the runner as session.start prompt.brief" }
+            triggers:
+              type: array
+              maxItems: 100
+              description: "Additive (N2, L21). The team's triggers.json entries, frozen with the run: { id, name, source: { hook, kind } | { schedule: { cron, timezone, catchUp: none | one } } | { event (message.handoff, message.bug, ..., run.started), from? }, filter: [{ field, op (is, isNot, contains, startsWith, in, matches, exists), value } | { any: [...] }], to (a teammate), wake (the trusted text, with {field} placeholders filled quoted and on one line), rate: { perHour 1 to 600, default 60 }, ignoreSelf, on }. A pattern with backreferences, lookarounds or nested repeats is refused"
+              items: { type: object }
             meetings:
               type: array
               maxItems: 50
