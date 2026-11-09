@@ -312,3 +312,20 @@ test('a resume refused because today\'s budget is spent says so in words, and Ra
     await page.close();
   } finally { s3.closeAllConnections?.(); s3.close(); plane.close(); }
 });
+
+test('a card this role cannot answer says who can, in plain words, never the server\'s text', { skip }, async () => {
+  cp.card({ id: 'card_nobudget', kind: 'budget', forbid: true, title: 'Raise the daily cap to $90.00?', body: 'The team hit its cap.', options: [{ id: 'raise', label: 'Raise it', style: 'primary' }, { id: 'keep', label: 'Keep it' }] });
+  cp.card({ id: 'card_nodecide', kind: 'decision', forbid: true, title: 'Ship the settings page today?', body: 'QA passed.', options: [{ id: 'yes', label: 'Ship it', style: 'primary' }, { id: 'no', label: 'Wait' }] });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  await page.goto(`${base}/?t=${studio.launchToken}`);
+  await page.goto(`${base}/#chat`);
+  const budget = page.locator('.card-msg', { hasText: 'Raise the daily cap to $90.00?' });
+  await budget.getByRole('button', { name: 'Raise it' }).click();
+  await budget.locator('.card-note').getByText(/^Only an admin or owner of .+ can answer a budget card, because it changes what the team may spend\. Ask one of them, or they'll see it in their Approvals\.$/).waitFor();
+  const decision = page.locator('.card-msg', { hasText: 'Ship the settings page today?' });
+  await decision.getByRole('button', { name: 'Ship it' }).click();
+  const note = decision.locator('.card-note');
+  await note.getByText(/^Your role in .+ can't answer this card\. An approver, an admin or the owner can, and they'll see it in their Approvals\.$/).waitFor();
+  assert.doesNotMatch(await page.locator('#chat-log').innerText(), /lacks cards\.answer|workspace/);
+  await page.close();
+});

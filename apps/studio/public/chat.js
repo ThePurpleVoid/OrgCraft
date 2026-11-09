@@ -117,7 +117,7 @@ function cardFrom(e) {
   return { id: d.cardId || subjectId(e.subject) || e.id, kind: 'decision', subject: e.subject, version: d.version ?? 1, title: d.question ?? d.title ?? 'A decision', body: d.body ?? '', options: opts, recommendation: rec };
 }
 
-export function createChat({ root, onOpen, runs = true } = {}) {
+export function createChat({ root, onOpen, runs = true, organization = () => '' } = {}) {
   const st = {
     connected: null, error: null, events: [], next: null, cards: new Map(), answers: new Map(), pending: [],
     notes: new Map(), // card id -> note shown above it (changed, step-up)
@@ -483,7 +483,11 @@ export function createChat({ root, onOpen, runs = true } = {}) {
       st.notes.set(cardId, { kind: 'stepup', option, scope: typeof r.data.scope === 'string' ? r.data.scope : null, text: t('stepup.body', { action: t('stepup.action.approve', { 'card summary': card.title ?? human(card.kind) }) }) });
     } else if (r.status === 403) {
       st.forbidden.add(cardId);
-      st.notes.set(cardId, { kind: 'error', text: card.kind === 'budget' ? 'Only an admin of this workspace can answer a budget card, since it changes what the team may spend. Ask an admin.' : `Your role cannot answer this card. ${r.data.error ?? ''}`.trim() });
+      // The server's own words go to the console only (CPO); who can answer is the plain default until the server's
+      // role table names the least role per card kind.
+      if (r.data.error) console.info('card refused:', r.data.error);
+      const org = organization() || 'this organization';
+      st.notes.set(cardId, { kind: 'error', text: card.kind === 'budget' ? t('card.forbidden.budget', { organization: org }) : t('card.forbidden', { organization: org, 'who can': t('card.forbidden.who') }) });
     } else if (!r.ok) {
       st.notes.set(cardId, { kind: 'error', text: r.data.error ?? `HTTP ${r.status}` });
     } else {
