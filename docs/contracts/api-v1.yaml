@@ -342,6 +342,56 @@ paths:
       x-interactive-only: [resume]
       description: "Pause and stop never need step-up. Resuming does, whoever paused the run, with a step-up bound to scope resume:<run> (ADR 0013; before, only after a budget pause). Resume is interactive only: a host's token may pause or stop, never resume (403)"
       responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required); the body's scope names what to step up for" }, "403": { description: "Resume through a host" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
+  /hooks/{hook}:
+    parameters: [ { name: hook, in: path, required: true, schema: { type: string }, description: "hk_ and 32 random characters: the URL is the first secret" } ]
+    post:
+      tags: [triggers]
+      security: []
+      summary: "A webhook signal (N2, L21). The hook's own secret is the only credential: hmac (X-Team-Signature: t=<unix>,v1=<hex of HMAC-SHA256 over '<t>.<body>'>, 5 minutes skew) or bearer (Authorization: Bearer <secret>). Body at most 256 KB. An unknown or revoked hook is 404, a bad or stale signature 401, over 600 a minute 429, and none of these writes anything (the tick writes one rejected row per hook per minute). A verified duplicate (Idempotency-Key, else the body's sha256, kept 7 days) and a signal over the team's 300 an hour answer 200 with no event. Otherwise inbound.received, then the run's matching triggers fire (202 { id }); with no run going the signal is queued for 24 hours. The answer never echoes the body"
+      responses: { "202": { description: "{ id }" }, "200": { description: "Duplicate or over the ceiling: { id, duplicate } or { id, held }" }, "401": { description: Signature }, "404": { description: "Unknown or revoked" }, "413": { description: Too large }, "429": { description: Too many } }
+  /teams/{team}/hooks:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [triggers]
+      summary: "The team's hooks: id, name, url, scheme, state, lastAt, last24h counts by state. Never a secret"
+      responses: { "200": { description: "{ hooks }" } }
+    post:
+      x-min-role: admin
+      tags: [triggers]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "Add a hook: { name (what triggers.json names), scheme: hmac | bearer } -> 201 { id, name, scheme, url, secret }. The secret is shown once and kept in the vault by name"
+      responses: { "201": { description: Created }, "401": { description: Step-up required }, "409": { description: "A hook with that name exists" } }
+  /teams/{team}/hooks/{hook}/rotate:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: hook, in: path, required: true, schema: { type: string } } ]
+    post:
+      x-min-role: admin
+      tags: [triggers]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "A new secret, shown once; the old one keeps verifying for 24 hours"
+      responses: { "200": { description: "{ id, secret }" } }
+  /teams/{team}/hooks/{hook}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: hook, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: admin
+      tags: [triggers]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "Revoke a hook: its URL answers 404 at once"
+      responses: { "200": { description: Revoked } }
+  /teams/{team}/triggers/{trigger}/history:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: trigger, in: path, required: true, schema: { type: string } } ]
+    get:
+      x-min-role: viewer
+      tags: [triggers]
+      summary: "What each signal did with this trigger, newest first: { history: [{ inbound, summary, at, outcome (fired, filtered, held), detail, event }], next }. Summaries only, never bodies"
+      responses: { "200": { description: OK } }
+  /teams/{team}/triggers/test:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: editor
+      tags: [triggers]
+      summary: "Try a draft trigger on a sample: { trigger, sample: { fields } } -> { passes, failed?: { field, op }, wake }. Pure: stores nothing and wakes nobody"
+      responses: { "200": { description: OK } }
   /teams/{team}/chat:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
@@ -788,6 +838,11 @@ components:
                   pool: { type: integer, description: "Most instances, so to: role#instance can be checked" }
                   model: { type: string }
                   brief: { type: string, description: "The role's brief as text, at most 20 KB; sent to the runner as session.start prompt.brief" }
+            triggers:
+              type: array
+              maxItems: 100
+              description: "Additive (N2, L21). The team's triggers.json entries, frozen with the run: { id, name, source: { hook, kind } | { schedule: { cron, timezone, catchUp: none | one } } | { event (message.handoff, message.bug, ..., run.started), from? }, filter: [{ field, op (is, isNot, contains, startsWith, in, matches, exists), value } | { any: [...] }], to (a teammate), wake (the trusted text, with {field} placeholders filled quoted and on one line), rate: { perHour 1 to 600, default 60 }, ignoreSelf, on }. A pattern with backreferences, lookarounds or nested repeats is refused"
+              items: { type: object }
             meetings:
               type: array
               maxItems: 50
