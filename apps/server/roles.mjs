@@ -26,6 +26,11 @@ export const ROUTES = [
   ['PUT', '/me/notifications', 'viewer'],
   ['POST', '/auth/step-up', 'viewer'],
   ['POST', '/runs/{run}/{action}', 'editor'],
+  // L22: standing rules (an owner's decision in advance; checked again in ledger.mjs) and the approvals ledger.
+  ['GET', '/teams/{team}/standing-rules', 'viewer'],
+  ['POST', '/teams/{team}/standing-rules', 'owner'],
+  ['DELETE', '/teams/{team}/standing-rules/{rule}', 'owner'],
+  ['GET', '/teams/{team}/ledger', 'viewer'],
   ['POST', '/live/stop-everything', 'editor'],
   ['GET', '/teams/{team}/live', 'viewer'],
   ['POST', '/teams/{team}/live/stop-everything', 'editor'],

@@ -20,6 +20,7 @@ import { attachRunners } from './runners.mjs';
 import { createM3 } from './m3.mjs';
 import { createBus } from './bus.mjs';
 import { createLive } from './live.mjs';
+import { createLedger } from './ledger.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
@@ -187,6 +188,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl, installationsFor: installations ? (tn, url) => installations.forRepo(tn, url) : null });
   if (!givenBus) wireBus(m3, bus);
   const overrides = createLive({ db, m3 });
+  const ledger = createLedger({ db, m3, now });
   // Every write of the m3 module and the bus reaches the live streams and the sinks once it commits.
   m3.onStored((stored) => { const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); });
   /** Runs an m3 write and tells the hub and sinks about what it stored. */
@@ -655,6 +657,13 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (m === 'GET') return send(res, 200, { teams: await store.listTeams(db, t) });
       if (m === 'POST') return send(res, 201, await store.createTeam(db, t, (await readJson(req, 16 * 1024)) ?? {}));
     }
+    // Standing rules and the approvals ledger (L22).
+    if (a === 'teams' && team && b === 'standing-rules' && !parts[5]) {
+      if (!c && m === 'GET') return send(res, 200, await ledger.list(t, team));
+      if (!c && m === 'POST') return send(res, 201, await ledger.add(t, team, (await readJson(req, 8 * 1024)) ?? {}, who, stepUp));
+      if (c && m === 'DELETE') return send(res, 200, await ledger.withdraw(t, team, c, who));
+    }
+    if (a === 'teams' && team && b === 'ledger' && !c && m === 'GET') return send(res, 200, await ledger.ledger(t, team, { limit: url.searchParams.get('limit'), before: url.searchParams.get('before') }));
     // Live overrides (L18): emergency controls as control-plane state, never Git. Stopping is one tap; lifting needs
     // a step-up scoped to the one change (a host never sends one, so a host can stop but never lift).
     if (a === 'live' && team === 'stop-everything' && !b && m === 'POST') return send(res, 200, await overrides.stopEverywhere(t, me, { reason: ((await readJson(req, 4 * 1024)) ?? {}).reason ?? null }));
