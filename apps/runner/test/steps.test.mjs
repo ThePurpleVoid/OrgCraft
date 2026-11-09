@@ -26,8 +26,9 @@ test('redaction names what it hid, and a summary is one line of at most 300 char
   assert.equal(r.text, 'token=[secret: model-key] and [secret: model-key]');
   assert.deepEqual(r.names, ['model-key']);
   assert.equal(summarize('Read', { file_path: '/w/src/app.js' }, 'x', true), 'read src/app.js');
-  assert.equal(summarize('Bash', { command: 'npm test' }, { stdout: '\n# pass 3\n' }, true), 'ran npm test · # pass 3');
-  assert.equal(summarize('Bash', { command: 'x' }, { stdout: 'boom', is_error: true }, false), 'failed: boom');
+  assert.equal(summarize('Bash', { command: 'npm test' }, { stdout: '\n# pass 3\n' }, true), 'ran npm test', 'never the output');
+  assert.equal(summarize('Bash', { command: 'x' }, { stdout: 'boom', is_error: true }, false), 'ran x · failed');
+  assert.equal(summarize('mcp__mail__search', { q: 'refunds' }, { content: [{ type: 'text', text: 'jane@example.com' }] }, true), 'mcp__mail__search');
   assert.ok(summarize('Bash', { command: 'y'.repeat(500) }, { stdout: 'z'.repeat(500) }, true).length <= 300);
 });
 
@@ -159,6 +160,25 @@ test('cause is cleared when the turn ends, and a turn with nothing to report car
     assert.ok(s, 'the session is reachable');
     assert.equal(s.cause, null);
     assert.deepEqual(s.steps.text, []);
+    noFailedTurns(cp);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
+
+test('with capture off, nothing from a tool\'s output reaches the event log (security review, L19)', async () => {
+  const { bare, root } = origin();
+  const cp = await fakeControlPlane();
+  const adapter = stubAdapter({ 'docs-keeper': async (t) => { await t.use('Bash', { command: 'grep -r customer data/' }, () => ({ stdout: 'jane.doe@example.com ordered 3 items' })); return {}; } });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  try {
+    await runner.ready;
+    cp.start({ role: 'docs-keeper', run: 'run_1', repo: { url: bare }, areas: ['docs/'], wake: { id: 'ev_w', type: 'chat.message', data: { text: 'go' } } });
+    await cp.until(() => cp.events.some((e) => e.type === 'session.idle'));
+    assert.equal(cp.events.find((e) => e.type === 'session.result').data.summary, 'ran grep -r customer data/');
+    assert.ok(!JSON.stringify(cp.events).includes('jane.doe@example.com'));
+    assert.ok(!JSON.stringify(cp.frames).includes('jane.doe@example.com'));
     noFailedTurns(cp);
   } finally {
     await runner.close();

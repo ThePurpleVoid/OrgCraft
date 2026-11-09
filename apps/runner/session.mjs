@@ -362,8 +362,12 @@ export class Session {
   }
 
   /** Secret values the session knows by name, for `[secret: NAME]` in step I/O. */
+  /**
+   * The session's own secrets, by name: one list for step I/O redaction and for the push and memory checks. The
+   * session token, the loopback proxy's token, the model key, the runner key, and the merger app's key and tokens.
+   */
   namedSecrets() {
-    return [['model-proxy-token', this.proxyToken], ['session-token', this.token], ['model-key', process.env.ANTHROPIC_API_KEY], ['runner-key', this.deps.runnerKey], ...(this.deps.proposals?.secrets?.() ?? []).map((v) => ['merger', v])]
+    return [['session-token', this.token], ['model-proxy-token', this.proxyToken], ['model-key', process.env.ANTHROPIC_API_KEY], ['runner-key', this.deps.runnerKey], ...(this.deps.proposals?.secrets?.() ?? []).map((v) => ['merger', v])]
       .filter(([, v]) => typeof v === 'string' && v).map(([name, value]) => ({ name, value }));
   }
 
@@ -415,11 +419,8 @@ export class Session {
     return new Promise((resolve) => this.afterTurn.push(async () => resolve(await go())));
   }
 
-  /** Values that must never leave in a push or the memory file: the session's proxy token, the model key, the runner key. */
-  secretValues() {
-    // The merger app's key and its installation tokens are the runner's too: none may leave in a commit or a memory.
-    return [this.proxyToken, process.env.ANTHROPIC_API_KEY, this.deps.runnerKey, ...(this.deps.proposals?.secrets?.() ?? [])].filter(Boolean);
-  }
+  /** Values that must never leave in a push or the memory file: the same list as namedSecrets. */
+  secretValues() { return this.namedSecrets().map((x) => x.value); }
 
   /** Checkpoint and push through the runner's checks (ownership, symlinks, secrets); never throws. */
   async save(reason) {

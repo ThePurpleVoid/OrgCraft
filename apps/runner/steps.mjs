@@ -64,19 +64,19 @@ export function failed(response) {
   return response.is_error === true || response.isError === true || response.interrupted === true;
 }
 
-/** At most 300 characters, one line, redacted by the caller: what the call did, in words a person reads. */
+/**
+ * At most 300 characters, one line: what the call did, from its tool and input only. Never from the output: the
+ * summary goes into the append-only event log, where no retention or erasure reaches, so the output's text (customer
+ * data, outside text) stays in the deletable output io.
+ */
 export function summarize(tool, input, response, ok) {
   const path = (input?.file_path ?? input?.notebook_path ?? input?.path ?? '').toString().split('/').slice(-2).join('/');
-  const text = typeof response === 'string' ? response
-    : response?.stdout ?? response?.content?.find?.((c) => c?.type === 'text')?.text ?? (typeof response?.content === 'string' ? response.content : '');
-  const first = String(text ?? '').split('\n').find((l) => l.trim()) ?? '';
   let s;
-  if (!ok) s = `failed${first ? `: ${first}` : ''}`;
-  else if (tool === 'Read') s = `read ${path}`;
+  if (tool === 'Read' && path) s = `read ${path}`;
   else if (WRITES.has(tool) && tool !== 'Bash' && path) s = `changed ${path}`;
-  else if (tool === 'Bash') s = `ran ${String(input?.command ?? '').split('\n')[0].slice(0, 120)}${first ? ` · ${first}` : ''}`;
-  else s = first || 'done';
-  return s.replace(/\s+/g, ' ').trim().slice(0, 300);
+  else if (tool === 'Bash') s = `ran ${String(input?.command ?? '').split('\n')[0].slice(0, 120)}`;
+  else s = tool;
+  return `${s}${ok ? '' : ' · failed'}`.replace(/\s+/g, ' ').trim().slice(0, 300);
 }
 
 export class Steps {
