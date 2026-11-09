@@ -536,7 +536,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     await ctx.q(`insert into approvals(id, tenant, team, run, session, role, action, call, why, risk, card, expires_at, calls, calls_hash) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
       [apr, ctx.tenant, team, run, session, role, action, JSON.stringify(call), why, r, card.id, expiresAt.toISOString(), bound ? JSON.stringify(bound.calls) : null, bound?.hash ?? null]);
     // The calls themselves stay in the approval row (deletable with it), not in the permanent log: the event names the hash.
-    const ev = await ctx.emit(team, 'approval.requested', { approval: apr, action, call, why, risk: r, expires: expiresAt.toISOString(), cardId: card.id, session, ...(bound ? { callsHash: bound.hash } : {}) },
+    const ev = await ctx.emit(team, 'approval.requested', { approval: apr, action, ...(bound ? {} : { call }), why, risk: r, expires: expiresAt.toISOString(), cardId: card.id, session, ...(bound ? { callsHash: bound.hash } : {}) },
       { subject: `approval/${apr}`, ...(run ? { run } : {}), ...(role ? { actor: { kind: 'role', id: role, session, via: 'tool' } } : {}) });
     await ctx.audit({ team, actorKind: role ? 'role' : 'system', actorId: role ?? 'control-plane', session, action: 'approval', target: apr, decision: 'needs-approval', rule: action, event: ev.id });
     return { approval: apr, card };

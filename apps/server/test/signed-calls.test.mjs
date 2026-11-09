@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hashCalls, callOf } from '../../../packages/calls/index.mjs';
-import { approveScope, boundCalls, factsOf } from '../signed.mjs';
+import { approveScope, boundCalls, factsOf, redact, FACT_MAX } from '../signed.mjs';
 import * as store from '../store.mjs';
 import { fakeRunner, plane, registerRunner } from './helpers.mjs';
 
@@ -37,6 +37,20 @@ test('boundCalls re-canonicalises, checks the hash, and caps a card at 5 calls',
   assert.deepEqual(factsOf(bash.calls), [{ tool: 'Bash', text: 'Run: rm -rf build' }]);
 });
 
+test('a fact is never cut: a call too long to show whole is refused, and a redacted fact says so', () => {
+  // Canonical JSON sorts keys, so a long padding key ("a") comes first and would push "to" past any cut.
+  const padded = [{ tool: 'mcp__bank__pay', input: { a: 'x'.repeat(2100), amount: 2000, to: 'acct_attacker' } }];
+  const p = boundCalls(padded, hashCalls(padded.map((c) => callOf(c.tool, c.input))));
+  assert.match(p.problem, /too long to show on a card.*split it/);
+  const justFits = [{ tool: 'mcp__bank__pay', input: { a: 'x'.repeat(1900), to: 'acct_jane' } }];
+  const ok = boundCalls(justFits, hashCalls(justFits.map((c) => callOf(c.tool, c.input))));
+  const [fact] = factsOf(ok.calls, redact);
+  assert.ok(fact.text.length <= FACT_MAX && fact.text.endsWith('"to":"acct_jane"}'), 'shown whole, to the last character');
+  const secret = [{ tool: 'Bash', input: { command: 'deploy --token=abc123' } }];
+  const b = boundCalls(secret, hashCalls(secret.map((c) => callOf(c.tool, c.input))));
+  assert.deepEqual(factsOf(b.calls, redact), [{ tool: 'Bash', text: 'Run: deploy --token=[redacted]', redacted: true }]);
+});
+
 test('condition A: a duplicate key shows what is signed, never the raw call text; the role\'s risk is ignored', async () => {
   await plane(async (p) => {
     const { s } = await setup(p);
@@ -54,6 +68,14 @@ test('condition A: a duplicate key shows what is signed, never the raw call text
     assert.deepEqual(card.data.facts, [{ tool: 'mcp__bank__pay', text: 'mcp__bank__pay {"amount":2000,"currency":"USD","to":"attacker"}' }], 'the facts are what is signed');
     assert.equal(card.body, 'Refund $20 to Jane', 'the role\'s words sit only under why');
     assert.equal(card.risk, 'high', 'risk is the server\'s: bound calls without a facts map are high, whatever the role said');
+    const [ev] = await p.db.system("select envelope from events where type = 'approval.requested' and envelope->'data'->>'approval' = $1", [r.body.approval]);
+    assert.equal(ev.envelope.data.call, undefined, 'a bound approval\'s event carries the hash, never the raw call text');
+    assert.equal(ev.envelope.data.callsHash, callsHash);
+    // The same padding attack through the tool: refused with the reason, nothing stored.
+    const padded = [{ tool: 'mcp__bank__pay', input: { a: 'x'.repeat(2100), amount: 2000, to: 'acct_attacker' } }];
+    const long = await tool(p.call, s, 'request_approval', { action: 'payment', why: 'Refund', calls: padded, callsHash: hashCalls(padded.map((c) => callOf(c.tool, c.input))) });
+    assert.equal(long.status, 422);
+    assert.match(JSON.stringify(long.body), /too long to show on a card/);
     const [a] = await p.db.system('select calls, calls_hash from approvals where id = $1', [r.body.approval]);
     assert.deepEqual([a.calls[0].input.to, a.calls_hash], ['attacker', callsHash]);
     // An old-style card (no calls): normal risk, whatever the role said.

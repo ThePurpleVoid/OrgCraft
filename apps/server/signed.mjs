@@ -44,19 +44,31 @@ export function boundCalls(calls, hash) {
     return { problem: `calls: ${e.message}` };
   }
   if (hashCalls(canon) !== hash) return { problem: 'callsHash does not match the calls: it is the sha256 of "calls/1", a newline, and their canonical JSON' };
+  // A fact is never cut: a cut fact could hide the part that matters (a recipient after a long padding key, since
+  // canonical JSON sorts keys), while the hash, and the runner, cover all of it. Too long to show is refused instead.
+  if (canon.some((c) => render(c, redact).length > FACT_MAX)) return { problem: `a call is too long to show on a card (over ${FACT_MAX.toLocaleString('en-US')} characters); split it into smaller calls` };
   return { calls: canon, hash };
+}
+
+/** The longest fact a card shows. A bound call whose fact would be longer is refused, never cut. */
+export const FACT_MAX = 2000;
+
+function render(c, redact) {
+  if (c.tool === 'Bash' && typeof c.input.command === 'string' && Object.keys(c.input).every((k) => k === 'command')) return redact(`Run: ${c.input.command}`);
+  return redact(`${c.tool} ${canonical(c.input)}`);
 }
 
 /**
  * The card's facts, rendered by the server from the canonical calls, never from what the role wrote. Without a
- * connector `facts` map (none ship yet) a fact is the tool and its exact input. `redact` keeps secret shapes off the
- * card; the hash still covers the exact call.
+ * connector `facts` map (none ship yet) a fact is the tool and its exact input, whole (boundCalls refused anything
+ * too long to show). `redact` keeps secret shapes off the card and marks the fact `redacted`, so the card can say
+ * so; the hash still covers the exact call.
  */
 export function factsOf(calls, redact = (s) => s) {
-  const cut = (t, n = 2000) => (t.length > n ? `${t.slice(0, n)}…` : t);
   return calls.map((c) => {
-    if (c.tool === 'Bash' && typeof c.input.command === 'string' && Object.keys(c.input).every((k) => k === 'command')) return { tool: 'Bash', text: cut(redact(`Run: ${c.input.command}`)) };
-    return { tool: c.tool, text: cut(redact(`${c.tool} ${canonical(c.input)}`)) };
+    const text = render(c, redact);
+    const redacted = text !== render(c, (s) => s);
+    return { tool: c.tool, text, ...(redacted ? { redacted: true } : {}) };
   });
 }
 

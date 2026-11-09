@@ -232,7 +232,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
   function factsHtml(card) {
     const facts = Array.isArray(card.data?.facts) ? card.data.facts.filter((f) => f && typeof f.text === 'string') : [];
     if (card.kind !== 'approval' || !facts.length) return '';
-    return `<div class="facts"><p><strong>It will do exactly this${facts.length > 1 ? `, ${facts.length} steps` : ''}:</strong></p>${facts.map((f) => `<pre><code>${esc(f.text)}</code></pre>`).join('')}<p class="muted">Approving signs these exact steps. Anything different is asked for again.</p></div>`;
+    return `<div class="facts"><p><strong>It will do exactly this${facts.length > 1 ? `, ${facts.length} steps` : ''}:</strong></p>${facts.map((f) => `<pre><code>${esc(f.text)}</code></pre>`).join('')}${facts.some((f) => f.redacted) ? '<p class="muted">Values that look like passwords or keys are hidden here as [redacted]. Approving still covers the exact steps, hidden values included.</p>' : ''}<p class="muted">Approving signs these exact steps. Anything different is asked for again.</p></div>`;
   }
 
   function cardHtml(card, answered) {
