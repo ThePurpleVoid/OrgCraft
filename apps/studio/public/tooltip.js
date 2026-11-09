@@ -18,6 +18,7 @@ export function installTips(root, signal) {
   let timer = 0;
   let owner = null;
 
+  let tapped = false; // the tip showing was opened by a tap on its ⓘ
   const hide = () => {
     clearTimeout(timer);
     if (owner) {
@@ -27,11 +28,12 @@ export function installTips(root, signal) {
     owner = null;
     box.hidden = true;
   };
-  const show = (el) => {
+  const show = (el, tap = false) => {
     const text = el.dataset.tip;
     if (!text) return;
     hide();
     owner = el;
+    tapped = tap;
     box.textContent = text;
     box.hidden = false;
     const ids = (el.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean);
@@ -63,7 +65,9 @@ export function installTips(root, signal) {
   root.addEventListener('focusout', (e) => { if (tipped(e) === owner) hide(); }, { signal });
   root.addEventListener('click', (e) => {
     const info = e.target.closest?.('button.info[data-tip]');
-    if (info) { e.preventDefault(); if (owner === info && !box.hidden) hide(); else show(info); return; }
+    // A second tap closes what a tap opened; a tap on a tip that hover or focus opened keeps it open (it would
+    // otherwise close the moment the hover delay beat the click).
+    if (info) { e.preventDefault(); if (owner === info && !box.hidden && tapped) hide(); else show(info, true); return; }
     const hint = e.target.closest?.('[data-hint-close]');
     if (hint) dismissHint(hint.closest('[data-hint-once]'));
     else if (owner?.matches('button.info')) hide();
