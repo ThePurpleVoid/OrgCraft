@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 import { KIT } from '../../bin/agent-team.mjs';
 import { createStudio } from '../../apps/studio/server.mjs';
 import { changeUrl, localRollout, pendingOf } from '../../apps/studio/rollout.mjs';
-import { choiceWords, rolloutHtml, sortRoles, stateLine, summaryLine, UNKNOWN_HINT } from '../../apps/studio/public/rollout.js';
+import { choiceWords, createRollout, rolloutHtml, sortRoles, stateLine, summaryLine, UNKNOWN_HINT } from '../../apps/studio/public/rollout.js';
 import { context } from '../../tools/report.mjs';
 
 const require = createRequire(import.meta.url);
@@ -106,6 +106,7 @@ test('the copy: each state, the summary and the choice words (CPO D61 to D63)', 
   assert.deepEqual(stateLine({ state: 'unknown', lastAt: '2026-11-06T11:50:00Z' }, { now }), { text: 'Version not reported', tone: 'grey', hint: UNKNOWN_HINT });
   assert.deepEqual(stateLine({ state: 'no-report', lastAt: '2026-11-06T07:00:00Z' }, { now }), { text: 'No report since the publish · last heard 5 h ago', tone: 'grey' });
   assert.deepEqual(stateLine({ state: 'no-report' }, { now }), { text: 'No report since the publish', tone: 'grey' });
+  assert.equal(stateLine({ state: 'no-report', lastAt: '2026-11-06T11:59:30Z' }, { now }).text, 'No report since the publish · last heard just now', 'review nit: never "just now ago"');
   assert.deepEqual(stateLine({ state: 'moved', lastAt: '2026-11-06T09:00:00Z' }, { now }), { text: 'On the new version · last heard 3 h ago', tone: 'grey' }, 'D14: quiet over 2 h is grey');
   assert.equal(choiceWords({ choice: 'finish' }), 'then switches over');
   assert.deepEqual(sortRoles([{ role: 'b', state: 'off' }, { role: 'z', state: 'moved' }, { role: 'a', state: 'moved' }, { role: 'y', state: 'unknown' }, { role: 'x', state: 'no-report' }, { role: 'w', state: 'next-task' }, { role: 'v', state: 'off-finishing' }, { role: 'u', state: 'finishing' }]).map((x) => x.role),
@@ -119,6 +120,29 @@ test('the copy: each state, the summary and the choice words (CPO D61 to D63)', 
   assert.match(rolloutHtml({ version: 'abc1234', name: 'abc1234, published 6 Nov', roles: [], summary: { moved: 0, of: 9, finishing: 0 }, pending: { version: 'def5678' } }), /0 of 9 roles on abc1234, published 6 Nov</, 'pending: the count names the merged version');
   assert.match(rolloutHtml({ version: 'abc1234', name: 'abc1234, published 6 Nov', roles: [], summary: { moved: 0, of: 9, finishing: 0 } }), /0 of 9 roles on the new version</);
   assert.ok(!rolloutHtml({ version: 'abc1234', name: '<b>x</b>', roles: [{ role: '<i>', state: 'off' }], summary: { moved: 0, of: 0 } }).includes('<b>x'), 'escaped');
+});
+
+test('an older load that lands after a newer one is dropped (review nit)', async () => {
+  const pending = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = () => new Promise((resolve) => pending.push(resolve));
+  const reply = (body) => ({ ok: true, status: 200, json: async () => body });
+  const root = { html: '', set innerHTML(v) { this.html = v; }, get innerHTML() { return this.html; }, querySelector: () => null, addEventListener() {} };
+  try {
+    const ro = createRollout({ root, titleOf: (s) => s });
+    ro.open();
+    await new Promise((r) => setImmediate(r));
+    ro.open();
+    await new Promise((r) => setImmediate(r));
+    assert.equal(pending.length, 2);
+    pending[1](reply({ version: 'v2', name: 'Version 2', roles: [], summary: { moved: 0, of: 0, finishing: 0 } }));
+    await new Promise((r) => setImmediate(r));
+    pending[0](reply({ version: 'v1', name: 'Version 1', roles: [], summary: { moved: 0, of: 0, finishing: 0 } }));
+    await new Promise((r) => setImmediate(r));
+    assert.match(root.html, /Version 2/);
+    assert.doesNotMatch(root.html, /Version 1/);
+    ro.close();
+  } finally { globalThis.fetch = realFetch; }
 });
 
 test('the local data: the default branch says what merged, its message gives the plan, and a branch ahead of it is waiting', () => {

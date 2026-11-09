@@ -2,6 +2,8 @@
 // picked up what was published? One line per role, from board reports since the publish merged. Read-only (D63): it
 // shows the choice made at publish and changes nothing. GET /v1/team/rollout gives the data (packages/team-model
 // rollout(): the control plane's when connected, else this repository's default branch and the board).
+import { requestJson } from './env.js';
+
 // ago and QUIET_S as safety.js has them (D14); not imported, so this file loads in Node for its tests.
 const QUIET_S = 2 * 3600;
 function ago(seconds) {
@@ -11,7 +13,6 @@ function ago(seconds) {
   if (s < 172800) return `${Math.round(s / 3600)} h`;
   return `${Math.round(s / 86400)} days`;
 }
-import { requestJson } from './env.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const human = (slug) => { const s = String(slug ?? '').replace(/[-_]+/g, ' ').trim(); return s ? s[0].toUpperCase() + s.slice(1) : ''; };
@@ -27,13 +28,16 @@ export function choiceWords(plan, titleOf = human) {
   return 'then switches over';
 }
 
+/** "5 min ago", but "just now" on its own. */
+const agoText = (seconds) => { const a = ago(seconds); return a === 'just now' ? a : `${a} ago`; };
+
 const ageOf = (iso, now) => { const t = Date.parse(iso ?? ''); return Number.isNaN(t) ? null : (now - t) / 1000; };
 
 /** One role's label and its colour (CPO copy, D61, D62): { text, tone: 'ok' | 'warn' | 'grey', hint? }. */
 export function stateLine(r, { titleOf = human, now = Date.now() } = {}) {
   const task = r.task ? `"${r.task}"` : 'its current task';
   const age = ageOf(r.lastAt, now);
-  const heard = age !== null && age > QUIET_S ? ` · last heard ${ago(age)} ago` : '';
+  const heard = age !== null && age > QUIET_S ? ` · last heard ${agoText(age)}` : '';
   switch (r.state) {
     case 'moved': return { text: `On the new version${heard}`, tone: heard ? 'grey' : 'ok' };
     case 'next-task': return { text: `Picks up the new version at its next task${heard}`, tone: heard ? 'grey' : 'plain' };
@@ -41,7 +45,7 @@ export function stateLine(r, { titleOf = human, now = Date.now() } = {}) {
     case 'off-finishing': return { text: `Switched off · finishing ${task} first${heard}`, tone: heard ? 'grey' : 'warn' };
     case 'off': return { text: 'Off', tone: 'grey' };
     case 'unknown': return { text: 'Version not reported', tone: 'grey', hint: UNKNOWN_HINT };
-    default: return { text: `No report since the publish${r.lastAt && age !== null ? ` · last heard ${ago(age)} ago` : ''}`, tone: 'grey' };
+    default: return { text: `No report since the publish${r.lastAt && age !== null ? ` · last heard ${agoText(age)}` : ''}`, tone: 'grey' };
   }
 }
 
@@ -90,19 +94,24 @@ export function rolloutHtml(data, { titleOf = human, now = Date.now() } = {}) {
 
 /** The Rollout page: loads when shown, and again whenever the board changes while it is open. */
 export function createRollout({ root, titleOf, apiUrl }) {
-  let data = null, es = null, timer = null;
+  let data = null, es = null, timer = null, seq = 0;
   const draw = () => {
     root.innerHTML = rolloutHtml(data, { titleOf });
     // https only, set through the DOM, never written into markup.
     const a = root.querySelector('.ro-change');
     if (a) { try { const u = new URL(data.changeUrl); if (u.protocol === 'https:') a.href = u.href; else a.parentElement.remove(); } catch { a.parentElement.remove(); } }
   };
+  // Only the latest load may draw: an older response that lands late is dropped, as is one that lands after close().
   async function load() {
+    const mine = ++seq;
+    let next;
     try {
       const res = await requestJson('/v1/team/rollout');
       const body = await res.json().catch(() => ({}));
-      data = res.ok ? body : { error: body.error ?? `HTTP ${res.status}` };
-    } catch (e) { data = { error: e.message }; }
+      next = res.ok ? body : { error: body.error ?? `HTTP ${res.status}` };
+    } catch (e) { next = { error: e.message }; }
+    if (mine !== seq) return;
+    data = next;
     draw();
   }
   root.addEventListener('click', (e) => {
@@ -121,6 +130,6 @@ export function createRollout({ root, titleOf, apiUrl }) {
       es = new EventSource(apiUrl('/v1/team/board/stream'));
       es.addEventListener('changed', () => { clearTimeout(timer); timer = setTimeout(load, 300); });
     },
-    close() { es?.close(); es = null; clearTimeout(timer); },
+    close() { es?.close(); es = null; clearTimeout(timer); seq++; },
   };
 }
