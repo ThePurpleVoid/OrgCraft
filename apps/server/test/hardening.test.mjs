@@ -28,6 +28,29 @@ async function running(call, budget = { perDay: 1000 }, caps) {
 }
 const runOf = async (call) => (await call('GET', '/teams/shop/runs')).body.runs[0];
 
+test('ADR 0013: resuming a run a person paused needs step-up; pausing and stopping never do', async () => {
+  await withStepUp(async ({ call, db }) => {
+    const run = await running(call, { perDay: 1000 });
+    assert.equal((await call('POST', `/runs/${run.id}/pause`)).status, 200, 'pause is one tap');
+    const bare = await call('POST', `/runs/${run.id}/resume`);
+    assert.deepEqual([bare.status, bare.body.type], [401, 'step-up-required']);
+    assert.match(bare.body.detail ?? bare.body.title ?? '', /Resuming a paused run/);
+    assert.equal((await runOf(call)).state, 'paused', 'refused, so still paused');
+    const ok = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call));
+    assert.equal(ok.status, 200);
+    assert.equal((await runOf(call)).state, 'running');
+    const [a] = await db.system("select detail from audit where action = 'run' and detail->>'op' = 'resume'");
+    assert.equal(a.detail.stepUp, true);
+    // A used step-up token does not resume a second time.
+    assert.equal((await call('POST', `/runs/${run.id}/pause`)).status, 200);
+    const token = await stepUp(call);
+    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, token)).status, 200);
+    assert.equal((await call('POST', `/runs/${run.id}/pause`)).status, 200);
+    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, token)).status, 401, 'single use');
+    assert.equal((await call('POST', `/runs/${run.id}/stop`)).status, 200, 'stop is one tap');
+  });
+});
+
 test('U2: an owner-paused run cannot resume past a spent day, and usage on a spent day pauses what runs', async () => {
   await withStepUp(async ({ call, db }) => {
     const run = await running(call, { perDay: 100 });

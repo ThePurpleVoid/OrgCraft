@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Control plane: resuming a paused run needs step-up, whoever paused it** (ADR 0013, local PR L7). Before, only a run the budget paused asked for a passkey, so anyone holding a session could restart a run the owner had stopped to think. Stopping and pausing stay one tap with no step-up. The audit row for a resume now says who paused the run (`pausedBy`). Clients already handle `step-up-required` on resume, from the budget case.
 - **Runner resilience, before the real M3 exit test** (#28). This is an offline pass with the fake model. `tests/e2e/m3-resilience.e2e.mjs` kills the runner mid-session, takes the control plane away, cuts the runner's link, pauses at 100% of the daily budget and expires an approval while the runner is down. It runs in process and, in CI, with the runner image. What it found and fixed:
   - A restarted runner's sessions were "resumed" on it as ghosts, and messages to them were acked and lost. Now `hello.sessions` decides which sessions resume. The lost ones start again from their checkpoints, with what woke them since they were last idle. A message for a session the runner does not have is nacked, and the session is started again.
   - Stopping a run while its runner was away stopped nothing, so on reconnect the session merged a pull request approved before the stop. Now the session stops in the control plane at once, and the runner gets `session.stop` with the welcome.

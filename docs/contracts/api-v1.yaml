@@ -339,7 +339,7 @@ paths:
         - { name: run, in: path, required: true, schema: { type: string } }
         - { name: action, in: path, required: true, schema: { enum: [pause, resume, stop] } }
         - { $ref: "#/components/parameters/stepUp" }
-      description: Pause and stop never need step-up. Resuming a run paused with reason budget does
+      description: Pause and stop never need step-up. Resuming does, whoever paused the run (ADR 0013; before, only after a budget pause)
       responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required)" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
   /teams/{team}/chat:
     parameters: [ { $ref: "#/components/parameters/team" } ]
@@ -630,7 +630,7 @@ components:
     team: { name: team, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,63}$" } }
     cursor: { name: cursor, in: query, schema: { type: string } }
     limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
-    stepUp: { name: x-step-up, in: header, schema: { type: string }, description: "A step-up token from POST /auth/step-up: approvals, options with stepUp: true, raising a budget cap, resuming after a budget pause, runner codes and secrets" }
+    stepUp: { name: x-step-up, in: header, schema: { type: string }, description: "A step-up token from POST /auth/step-up: approvals, options with stepUp: true, raising a budget cap, resuming a paused run, runner codes and secrets" }
   responses:
     Problem: { description: An error (RFC 9457), content: { application/problem+json: { schema: { type: object, properties: { type: { type: string }, title: { type: string }, status: { type: integer }, detail: { type: string } } } } } }
     Team: { description: A team, content: { application/json: { schema: { $ref: "#/components/schemas/Team" } } } }

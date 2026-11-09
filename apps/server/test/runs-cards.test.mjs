@@ -137,8 +137,9 @@ test('runs: frozen on a roster with one front door, one at a time, paused, resum
     assert.equal((await call('POST', '/teams/shop/runs', { team: roster() })).status, 409, 'one run at a time');
     assert.equal((await call('POST', `/runs/${run.id}/pause`)).body.state, 'paused');
     assert.equal((await call('POST', `/runs/${run.id}/pause`)).status, 409);
-    const resumed = (await call('POST', `/runs/${run.id}/resume`)).body;
-    assert.equal(resumed.state, 'running', 'resuming after the owner paused needs no step-up');
+    assert.equal((await call('POST', `/runs/${run.id}/resume`)).body.type, 'step-up-required', 'resuming needs step-up, whoever paused it (ADR 0013)');
+    const resumed = (await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call))).body;
+    assert.equal(resumed.state, 'running');
     assert.equal(resumed.version, 3);
     assert.equal((await call('POST', `/runs/${run.id}/stop`)).body.state, 'stopped');
     assert.equal((await call('POST', `/runs/${run.id}/explode`)).status, 404);

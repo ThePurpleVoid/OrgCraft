@@ -345,7 +345,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     return (await db.tenant(tenant, ({ q }) => q(`select ${RUN_COLS} from runs where team = $1 order by started_at desc limit 100`, [team]))).map(runView);
   }
 
-  /** pause, resume or stop. Resuming a run the budget paused needs step-up (issue #28 D4); pause and stop never do. */
+  /**
+   * pause, resume or stop. Resuming needs step-up whoever paused the run (ADR 0013: stopping stays cheap, resuming does
+   * not; issue #28 D4 had it for the budget's pauses only); pause and stop never do.
+   */
   async function controlRun(tenant, rid, action, by, { stepUp = null } = {}) {
     if (!['pause', 'resume', 'stop'].includes(action)) throw new Problem(404, 'the actions are pause, resume and stop');
     return tx(tenant, async (ctx) => {
@@ -368,9 +371,9 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (r.state !== 'paused') throw new Problem(409, `the run is ${r.state}`);
       // Whoever paused it, nothing resumes while today's budget is spent (issue #28 U2).
       if ((await today(ctx.q, r.team, ctx.now)).state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it (the budget card) or wait for tomorrow", { type: 'budget-exhausted' });
-      if (r.reason === 'budget' && !(await useStepUp(ctx, by, stepUp))) throw new StepUpRequired('Resuming a run the budget paused');
+      if (!(await useStepUp(ctx, by, stepUp))) throw new StepUpRequired(r.reason === 'budget' ? 'Resuming a run the budget paused' : 'Resuming a paused run');
       const row = await setRunState(ctx, r.team, rid, 'running', 'owner', actor);
-      await ctx.audit({ team: r.team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'resume', stepUp: r.reason === 'budget' } });
+      await ctx.audit({ team: r.team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'resume', stepUp: true, pausedBy: r.reason } });
       return runView(row);
     });
   }
