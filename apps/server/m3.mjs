@@ -8,7 +8,7 @@ import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
 import { checkMeetingDefs } from './meetings.mjs';
-import { halted, reconcile } from './live.mjs';
+import { halted } from './live.mjs';
 
 const scrypt = promisify(scryptCb);
 
@@ -330,7 +330,6 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
                                  on conflict (team) where state <> 'stopped' do nothing returning ${RUN_COLS}`,
         [rid, tenant, team, mode, JSON.stringify(caps), JSON.stringify(roster), roster.version, by]);
       if (!row) throw new Problem(409, 'another run of this team started just now; stop it first');
-      await reconcile(ctx, team, roster, by);
       await ctx.emit(team, 'run.started', { mode, by, caps, frontDoor: roster.frontDoor, roles: roster.roles.length }, { actor: personActor(by), subject: `run/${rid}`, run: rid, teamVersion: roster.version ?? undefined });
       await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'start', mode } });
       hooks.runStarted && ctx.after.push(() => hooks.runStarted(tenant, team, rid));

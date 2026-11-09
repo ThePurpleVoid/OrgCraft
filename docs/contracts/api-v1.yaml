@@ -367,7 +367,7 @@ paths:
     put:
       x-min-role: editor
       tags: [live]
-      summary: "Pause or switch off one teammate live: { state: paused | off, reason? }. Its new work is held; its live sessions stop (paused: at a safe point, with a checkpoint; off: now). No step-up. A publish whose run no longer has the teammate clears an off change as 'published'"
+      summary: "Pause or switch off one teammate live: { state: paused | off, reason? }. Its new work is held; its live sessions stop (paused: at a safe point, with a checkpoint; off: now). No step-up. Only a lift clears it (a run's roster never does), so a leftover change after a publish that dropped the teammate stays until someone lifts it. Its approval results wait too"
       responses: { "200": { description: LiveChange }, "400": { description: "state is not paused or off, or the teammate id is malformed" } }
   /teams/{team}/live/{override}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: override, in: path, required: true, schema: { type: string } } ]

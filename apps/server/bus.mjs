@@ -304,7 +304,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
    * off: they stop now; on (lifted): what the pause stopped starts again from its checkpoint, then its held work goes.
    * Each step re-checks the override, so a lift that lands meanwhile wins.
    */
-  async function memberChanged(tenant, team, role, instance, state) {
+  async function memberChanged(tenant, team, role, instance, state, override = null) {
     const run = await db.tenant(tenant, ({ q }) => activeRun(q, team));
     if (!run) return;
     const mine = "role = $2 and ($3::text is null or coalesce(instance, '') = $3)";
@@ -312,7 +312,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (run.state !== 'running') return; // the run's own resume releases it
       const due = await db.tenant(tenant, async ({ q }) => {
         if (await memberHeld(q, team, role, instance)) return [];
-        const [ev] = await q("select id from events where team = $1 and type = 'live.changed' and envelope->'data'->>'op' = 'lifted' order by seq desc limit 1", [team]);
+        const [ev] = await q("select id from events where team = $1 and type = 'live.changed' and envelope->'data'->>'op' = 'lifted' and envelope->'data'->>'override' = $2 order by seq desc limit 1", [team, override]);
         const out = [];
         if (ev) {
           for (const s of await q(`select role, instance from sessions where run = $1 and state = 'stopped' and ${mine}`, [run.id, role, instance])) {
@@ -354,10 +354,12 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   /** An approval was answered: tell the runner holding that session (D6: approval.result only ever comes from here). */
   async function approvalDecided(tenant, team, { approval, decision, by, note, session }) {
     if (!session) return;
-    const [s] = await db.tenant(tenant, ({ q }) => q('select runner from sessions where id = $1', [session]));
+    const [s] = await db.tenant(tenant, ({ q }) => q('select runner, role, instance from sessions where id = $1', [session]));
     const [a] = await db.tenant(tenant, ({ q }) => q('select a.call, a.action, r.state as run_state from approvals a left join runs r on r.id = a.run where a.id = $1', [approval]));
     // A merge is only ever let go while its run is running: a stopped or paused run lands nothing, whatever the runner does.
     if (decision === 'approved' && a?.action === 'accept' && a.run_state && a.run_state !== 'running') return;
+    // A teammate paused or switched off live (L18) gets no result either; the resend after a lift delivers it.
+    if (s && (await db.tenant(tenant, ({ q }) => memberHeld(q, team, s.role, s.instance)))) return;
     const conn = s?.runner ? reg()?.get(s.runner) : null;
     const headSha = a?.call && typeof a.call === 'object' ? a.call.headSha ?? null : null;
     if (conn) await conn.send('approval.result', { approval, decision, by, note, ...(headSha ? { headSha } : {}) }).catch(() => {});
@@ -493,12 +495,15 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     async 'approval.wait'(conn, body) {
       const a = body.approval ?? {};
       if (body.resend && typeof a.id === 'string') {
-        const [row] = await db.tenant(conn.tenant, ({ q }) => q('select a.id, a.card, a.state, a.session, a.decided_by, a.call, a.action, r.state as run_state from approvals a left join runs r on r.id = a.run where a.id = $1', [a.id]));
+        const [row] = await db.tenant(conn.tenant, ({ q }) => q(`select a.id, a.card, a.state, a.session, a.decided_by, a.call, a.action, r.state as run_state,
+                                                                  exists (select 1 from sessions s join live_overrides o on o.team = s.team and o.kind = 'member' and o.cleared_at is null and o.role = s.role
+                                                                          and (o.instance is null or o.instance = coalesce(s.instance, '')) where s.id = a.session) as member_held
+                                                                from approvals a left join runs r on r.id = a.run where a.id = $1`, [a.id]));
         if (!row) throw new Problem(404, `no approval ${a.id}`);
         if (!row.session) throw new Problem(403, `approval ${a.id} is not a session's`);
         await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, row.session));
         if (body.session && body.session !== row.session) throw new Problem(403, `approval ${a.id} belongs to another session`);
-        const held = row.state === 'approved' && row.action === 'accept' && row.run_state && row.run_state !== 'running'; // as in approvalDecided
+        const held = (row.state === 'approved' && row.action === 'accept' && row.run_state && row.run_state !== 'running') || row.member_held; // as in approvalDecided
         if (row.state !== 'pending' && !held) setImmediate(() => conn.send('approval.result', { approval: row.id, decision: row.state, by: row.decided_by, ...(row.call?.headSha ? { headSha: row.call.headSha } : {}) }).catch(() => {}));
         return { approval: row.id, card: row.card };
       }

@@ -19,7 +19,7 @@ create table live_overrides (
   set_at timestamptz not null default now(),
   cleared_at timestamptz,
   cleared_by text,
-  cleared_how text check (cleared_how is null or cleared_how in ('lifted', 'published'))
+  cleared_how text check (cleared_how is null or cleared_how = 'lifted')
 );
 -- At most one active override per team and target; a second "pause" of the same teammate is the same override.
 create unique index live_overrides_one_active on live_overrides (team, kind, coalesce(role, ''), coalesce(instance, '')) where cleared_at is null;

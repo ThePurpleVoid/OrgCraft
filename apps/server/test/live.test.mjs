@@ -136,17 +136,20 @@ test('a teammate paused: its session checkpoints first and stops at a safe point
   });
 });
 
-test('a publish reconciles: a new run whose team no longer has a switched-off teammate clears that live change', async () => {
+test('a run without the teammate never clears its live change: stop, start without it, start with it, still off (security L18)', async () => {
   await plane(async (p) => {
     const { run } = await setup(p);
     const off = (await p.call('PUT', '/teams/shop/live/members/web-dev', { state: 'off' })).body;
-    const paused = (await p.call('PUT', '/teams/shop/live/members/chief-of-staff', { state: 'paused' })).body;
+    // An editor (or a host) tries to switch it back on without a passkey: a run whose roster drops the teammate...
     await p.call('POST', `/runs/${run.id}/stop`);
-    assert.equal((await p.call('POST', '/teams/shop/runs', { team: roster(['chief-of-staff']) })).status, 201);
-    const live = (await p.call('GET', '/teams/shop/live')).body.live;
-    assert.deepEqual(live.map((o) => o.id), [paused.id], 'only the change the files do not say stays');
-    const [row] = await p.db.system('select cleared_how from live_overrides where id = $1', [off.id]);
-    assert.equal(row.cleared_how, 'published');
+    const without = await p.call('POST', '/teams/shop/runs', { team: roster(['chief-of-staff']) });
+    assert.equal(without.status, 201);
+    await p.call('POST', `/runs/${without.body.id}/stop`);
+    // ...then the full team again: web-dev is still off, and its work is held.
+    assert.equal((await p.call('POST', '/teams/shop/runs', { team: roster() })).status, 201);
+    assert.deepEqual((await p.call('GET', '/teams/shop/live')).body.live.map((o) => [o.id, o.state]), [[off.id, 'off']]);
+    const [row] = await p.db.system('select cleared_at from live_overrides where id = $1', [off.id]);
+    assert.equal(row.cleared_at, null, 'only a lift, with its step-up, clears it');
   });
 });
 

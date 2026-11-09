@@ -9,9 +9,10 @@
 //   POST   /v1/live/stop-everything                   editor: Stop everything for every team in the workspace
 //
 // Stopping is one tap and never needs a passkey; carrying on does (ADR 0013 rule 4), and a host may stop but never
-// lift. None of it needs the code host, Git or a publish. Every change is an event (live.changed) and an audit row. A
-// publish reconciles: an 'off' override whose teammate the newly started run's roster no longer has is cleared as
-// 'published', since the team's own files now say the same.
+// lift. None of it needs the code host, Git or a publish. Every change is an event (live.changed) and an audit row.
+// Nothing clears one but a lift: a run's roster comes from its request, so clearing on a roster that drops the teammate
+// would let an editor or a host switch it back on without a passkey (security, L18 review). A leftover change after
+// a publish that dropped the teammate is harmless; the Studio offers "Remove this live change?", which is a lift.
 import { Problem, SLUG, getTeam, id } from './store.mjs';
 import { StepUpRequired, personActor } from './m3.mjs';
 
@@ -119,7 +120,7 @@ export function createLive({ db, m3 }) {
         }
       }
       await changed(ctx, team, row, 'lifted', by, { stepUp: true, ...(o.kind === 'halt' ? { resumed } : {}) });
-      if (o.kind === 'member') ctx.after.push(() => m3.hooks.memberChanged?.(tenant, team, o.role, o.instance, 'on'));
+      if (o.kind === 'member') ctx.after.push(() => m3.hooks.memberChanged?.(tenant, team, o.role, o.instance, 'on', o.id));
       return { ...view(row), lifted: true, ...(o.kind === 'halt' ? { resumed } : {}) };
     });
     return result;
@@ -144,21 +145,6 @@ export async function halted(q, team) {
 export async function memberHeld(q, team, role, instance) {
   return (await q(`select 1 from live_overrides where team = $1 and kind = 'member' and cleared_at is null and role = $2
                    and (instance is null or instance = coalesce($3, ''))`, [team, role, instance])).length > 0;
-}
-
-/**
- * A publish reconciles (R2): when a run starts on a roster that no longer has a teammate an 'off' override names, the
- * team's files now say the same, so the override is cleared as 'published' (an event and an audit row say so).
- */
-export async function reconcile(ctx, team, roster, by) {
-  const slugs = new Set((roster?.roles ?? []).map((r) => r.slug));
-  for (const o of await ctx.q("select * from live_overrides where team = $1 and kind = 'member' and state = 'off' and cleared_at is null for update", [team])) {
-    if (slugs.has(o.role)) continue;
-    await ctx.q("update live_overrides set cleared_at = now(), cleared_by = $2, cleared_how = 'published' where id = $1", [o.id, by]);
-    const data = { op: 'published', override: o.id, kind: 'member', member: nameOf(o), state: 'off', by };
-    await ctx.emit(team, 'live.changed', data, { actor: personActor(by), subject: `role/${o.role}` });
-    await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'live', target: o.id, decision: 'allowed', detail: data });
-  }
 }
 
 function checkReason(r) {
