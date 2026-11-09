@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { checkTriggers, dueSlots, fieldsOf, parseCron, passes, renderWake, safeRegex, LIMITS } from '../triggers.mjs';
+import { checkTriggers, dueSlots, fieldsOf, linearRegex, parseCron, passes, renderWake, safeRegex, LIMITS } from '../triggers.mjs';
 import { fakeRunner, plane, registerRunner } from './helpers.mjs';
 
 const roles = [{ slug: 'chief-of-staff', reportsTo: 'owner', areas: [], brief: 'You are the front door.' }, { slug: 'support-lead', reportsTo: 'chief-of-staff', areas: [] }, { slug: 'editor', reportsTo: 'chief-of-staff', areas: [] }];
@@ -13,7 +13,7 @@ const sign = (secret, body, t = Math.floor(Date.now() / 1000)) => `t=${t},v1=${c
 async function setup(p, triggers = [refund]) {
   await p.call('POST', '/teams', { id: 'shop' });
   await p.call('PUT', '/teams/shop/budget', { perDay: 1000, sessions: 5 }, await p.su());
-  const hook = await p.call('POST', '/teams/shop/hooks', { name: 'shop-orders' }, await p.su());
+  const hook = await p.call('POST', '/teams/shop/hooks', { name: 'shop-orders' }, await p.su('hook:shop_shop-orders'));
   assert.equal(hook.status, 201, JSON.stringify(hook.body));
   const r = await registerRunner(p.call);
   const runner = await fakeRunner(p.base, r.key, { runner: r.id, maxSessions: 8 });
@@ -61,6 +61,9 @@ test('a signed webhook wakes the teammate its trigger names, with the outside da
     const again = await post(p.base, hook.id, body, { 'x-team-signature': sign(hook.secret, body) });
     assert.deepEqual([again.status, again.body.duplicate], [200, true]);
     assert.equal((await p.call('GET', '/teams/shop/events?type=inbound.received')).body.events.length, 1);
+    // A fresh Idempotency-Key does not make a captured signed request new: signed hooks dedupe on the bytes (review low 1).
+    const replay = await post(p.base, hook.id, body, { 'x-team-signature': sign(hook.secret, body), 'idempotency-key': 'fresh-1' });
+    assert.deepEqual([replay.status, replay.body.duplicate], [200, true]);
     // A filtered-out signal is a row, not a wake.
     const sale = JSON.stringify({ type: 'sale' });
     assert.equal((await post(p.base, hook.id, sale, { 'x-team-signature': sign(hook.secret, sale) })).status, 202);
@@ -157,16 +160,33 @@ test('hooks: creating, rotating and removing need admin and a step-up; the list 
   await plane(async (p) => {
     await p.call('POST', '/teams', { id: 'shop' });
     assert.equal((await p.call('POST', '/teams/shop/hooks', { name: 'orders' })).status, 401, 'step-up first');
-    const h = (await p.call('POST', '/teams/shop/hooks', { name: 'orders', scheme: 'bearer' }, await p.su())).body;
-    assert.equal((await p.call('POST', '/teams/shop/hooks', { name: 'orders' }, await p.su())).status, 409);
+    // The step-up names the change (ADR 0013): an unscoped one, or one for another hook, is refused.
+    assert.equal((await p.call('POST', '/teams/shop/hooks', { name: 'orders', scheme: 'bearer' }, await p.su())).status, 401);
+    assert.equal((await p.call('POST', '/teams/shop/hooks', { name: 'orders', scheme: 'bearer' }, await p.su('hook:shop_other'))).status, 401);
+    const h = (await p.call('POST', '/teams/shop/hooks', { name: 'orders', scheme: 'bearer' }, await p.su('hook:shop_orders'))).body;
+    assert.equal((await p.call('POST', '/teams/shop/hooks', { name: 'orders' }, await p.su('hook:shop_orders'))).status, 409);
     const list = (await p.call('GET', '/teams/shop/hooks')).body.hooks;
     assert.equal(JSON.stringify(list).includes(h.secret), false);
-    const rot = (await p.call('POST', `/teams/shop/hooks/${h.id}/rotate`, undefined, await p.su())).body;
+    assert.equal((await p.call('POST', `/teams/shop/hooks/${h.id}/rotate`, undefined, await p.su())).status, 401);
+    const rot = (await p.call('POST', `/teams/shop/hooks/${h.id}/rotate`, undefined, await p.su(`hook:${h.id}`))).body;
     // Both secrets verify during the overlap (no run: queued).
     for (const s of [h.secret, rot.secret]) assert.equal((await post(p.base, h.id, JSON.stringify({ n: s.length, s }), { authorization: `Bearer ${s}` })).status, 202);
-    assert.equal((await p.call('DELETE', `/teams/shop/hooks/${h.id}`, undefined, await p.su())).status, 200);
+    assert.equal((await p.call('DELETE', `/teams/shop/hooks/${h.id}`, undefined, await p.su(`hook:${h.id}`))).status, 200);
     assert.equal((await post(p.base, h.id, '{}', { authorization: `Bearer ${rot.secret}` })).status, 404, 'revoked: 404 at once');
     const t = await p.call('POST', '/teams/shop/triggers/test', { trigger: refund, sample: { fields: { type: 'refund', 'order.id': 'Z' } } });
     assert.deepEqual(t.body, { passes: true, wake: 'A refund came in for “Z”: .' });
   });
+});
+
+test('a pattern that would backtrack for ever returns at once: the linear-time fallback is on (review sev 2)', () => {
+  assert.equal(linearRegex(), true);
+  for (const [src, input] of [['(a|aa)+$', `${'a'.repeat(499)}!`], ['a*a*a*a*a*a*b', 'a'.repeat(500)], ['(x|xx)*y', 'x'.repeat(500)]]) {
+    const re = safeRegex(src);
+    assert.ok(re, src);
+    const t = performance.now();
+    assert.equal(passes([{ field: 'f', op: 'matches', value: src }], { f: input }).passes, false, src);
+    assert.ok(performance.now() - t < 1000, `${src} took ${performance.now() - t} ms`);
+  }
+  assert.equal(safeRegex('a'.repeat(101)), null, 'at most 100 characters');
+  assert.equal(safeRegex('a?b?c?d?e?f?g?h?i?j?k?'), null, 'at most 10 repeats');
 });

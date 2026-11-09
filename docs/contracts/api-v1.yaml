@@ -347,7 +347,7 @@ paths:
     post:
       tags: [triggers]
       security: []
-      summary: "A webhook signal (N2, L21). The hook's own secret is the only credential: hmac (X-Team-Signature: t=<unix>,v1=<hex of HMAC-SHA256 over '<t>.<body>'>, 5 minutes skew) or bearer (Authorization: Bearer <secret>). Body at most 256 KB. An unknown or revoked hook is 404, a bad or stale signature 401, over 600 a minute 429, and none of these writes anything (the tick writes one rejected row per hook per minute). A verified duplicate (Idempotency-Key, else the body's sha256, kept 7 days) and a signal over the team's 300 an hour answer 200 with no event. Otherwise inbound.received, then the run's matching triggers fire (202 { id }); with no run going the signal is queued for 24 hours. The answer never echoes the body"
+      summary: "A webhook signal (N2, L21). The hook's own secret is the only credential: hmac (X-Team-Signature: t=<unix>,v1=<hex of HMAC-SHA256 over '<t>.<body>'>, 5 minutes skew) or bearer (Authorization: Bearer <secret>). Body at most 256 KB. An unknown or revoked hook is 404, a bad or stale signature 401, over 600 a minute 429, and none of these writes anything (the tick writes one rejected row per hook per minute). A verified duplicate (the body's sha256 for hmac hooks, since the header is not signed; Idempotency-Key, else the sha256, for bearer hooks; kept 7 days) and a signal over the team's 300 an hour answer 200 with no event. Otherwise inbound.received, then the run's matching triggers fire (202 { id }); with no run going the signal is queued for 24 hours. The answer never echoes the body"
       responses: { "202": { description: "{ id }" }, "200": { description: "Duplicate or over the ceiling: { id, duplicate } or { id, held }" }, "401": { description: Signature }, "404": { description: "Unknown or revoked" }, "413": { description: Too large }, "429": { description: Too many } }
   /teams/{team}/hooks:
     parameters: [ { $ref: "#/components/parameters/team" } ]
@@ -360,7 +360,7 @@ paths:
       x-min-role: admin
       tags: [triggers]
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
-      summary: "Add a hook: { name (what triggers.json names), scheme: hmac | bearer } -> 201 { id, name, scheme, url, secret }. The secret is shown once and kept in the vault by name"
+      summary: "Add a hook: { name (what triggers.json names), scheme: hmac | bearer } -> 201 { id, name, scheme, url, secret }. The secret is shown once and kept in the vault by name. The step-up is scoped to this hook: hook:<team>_<name>"
       responses: { "201": { description: Created }, "401": { description: Step-up required }, "409": { description: "A hook with that name exists" } }
   /teams/{team}/hooks/{hook}/rotate:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: hook, in: path, required: true, schema: { type: string } } ]
@@ -368,7 +368,7 @@ paths:
       x-min-role: admin
       tags: [triggers]
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
-      summary: "A new secret, shown once; the old one keeps verifying for 24 hours"
+      summary: "A new secret, shown once; the old one keeps verifying for 24 hours. The step-up is scoped: hook:<hook id>"
       responses: { "200": { description: "{ id, secret }" } }
   /teams/{team}/hooks/{hook}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: hook, in: path, required: true, schema: { type: string } } ]
@@ -376,7 +376,7 @@ paths:
       x-min-role: admin
       tags: [triggers]
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
-      summary: "Revoke a hook: its URL answers 404 at once"
+      summary: "Revoke a hook: its URL answers 404 at once. The step-up is scoped: hook:<hook id>"
       responses: { "200": { description: Revoked } }
   /teams/{team}/triggers/{trigger}/history:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: trigger, in: path, required: true, schema: { type: string } } ]

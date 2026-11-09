@@ -16,6 +16,7 @@
 // chain, and a chain of event triggers is at most 5 deep; the rest is held and shown as trigger.held.
 import { createHmac, randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { Problem, SLUG, getTeam, id, putSecret, readSecret } from './store.mjs';
+import v8 from 'node:v8';
 
 export const LIMITS = Object.freeze({ bodyBytes: 256 * 1024, perHookPerMinute: 600, ceilingPerHour: 300, fanOut: 50, depth: 5, triggers: 100, toleranceSec: 300, keepDays: 7, queueHours: 24 });
 const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -27,9 +28,35 @@ const ROOT_EVENTS = ['message.handoff', 'message.bug', 'message.signoff', 'messa
 
 const OPS = ['is', 'isNot', 'contains', 'startsWith', 'in', 'matches', 'exists'];
 
-/** A regex a filter may use: short, no backreferences, no nested quantifiers (a bounded match on cut strings). */
+/**
+ * The protection against a pattern that backtracks for ever (ReDoS, security review sev 2): V8 runs a regex that
+ * backtracks too much on its linear-time engine instead. The flag is set here, before any filter compiles, and checked
+ * once with a pattern that takes seconds without it; if it is not working, `matches` is refused (fail closed).
+ */
+v8.setFlagsFromString('--enable-experimental-regexp-engine-on-excessive-backtracks');
+let linear = null;
+export function linearRegex() {
+  if (linear === null) {
+    const t = performance.now();
+    /(a|aa)+$/.test(`${'a'.repeat(30)}!`);
+    linear = performance.now() - t < 100;
+    if (!linear) console.error('triggers: the linear-time regex fallback is off, so filters with matches are refused');
+  }
+  return linear;
+}
+
+/** The step-up scope for adding one hook (ADR 0013): the team and the name, which are slugs, so `_` cannot be in either. */
+export const hookScope = (team, name) => `hook:${team}_${name}`;
+
+/**
+ * A regex a filter may use: short (100 characters), at most 10 repeats, no backreferences, lookarounds or nested
+ * repeats, and only while the linear-time fallback is on. These shape checks are a first filter; the fallback is the
+ * protection.
+ */
 export function safeRegex(src) {
-  if (typeof src !== 'string' || !src || src.length > 200) return null;
+  if (typeof src !== 'string' || !src || src.length > 100) return null;
+  if ((src.match(/[+*?}]/g) ?? []).length > 10) return null;
+  if (!linearRegex()) return null;
   let flags = '';
   let body = src;
   if (body.startsWith('(?i)')) { flags = 'i'; body = body.slice(4); }
@@ -43,7 +70,7 @@ function checkFilter(f, where, depth = 0) {
   for (const c of f) {
     if (c && Array.isArray(c.any) && depth === 0) { checkFilter(c.any, where, 1); continue; }
     if (!c || typeof c.field !== 'string' || !/^[A-Za-z0-9_.]{1,100}$/.test(c.field) || !OPS.includes(c.op)) throw new Problem(400, `${where}: each condition is { field, op (${OPS.join(', ')}), value }, or { any: [...] } one level deep`);
-    if (c.op === 'matches' && !safeRegex(c.value)) throw new Problem(400, `${where}: ${JSON.stringify(String(c.value).slice(0, 40))} is not a pattern a filter may use (at most 200 characters, no backreferences, lookarounds or nested repeats)`);
+    if (c.op === 'matches' && !safeRegex(c.value)) throw new Problem(400, `${where}: ${JSON.stringify(String(c.value).slice(0, 40))} is not a pattern a filter may use (at most 100 characters and 10 repeats, no backreferences, lookarounds or nested repeats)`);
     if (c.op === 'in' && (!Array.isArray(c.value) || c.value.length > 50)) throw new Problem(400, `${where}: in takes a list of at most 50 values`);
   }
 }
@@ -198,7 +225,7 @@ export function createTriggers({ db, key, m3, publicUrl = '', now = () => new Da
     if (!SLUG.test(name ?? '')) throw new Problem(400, 'name is the hook\'s name in triggers.json (lowercase letters, digits and dashes)');
     const scheme = body?.scheme ?? 'hmac';
     if (!['hmac', 'bearer'].includes(scheme)) throw new Problem(400, 'scheme is hmac (signed, X-Team-Signature) or bearer (a header, for tools that cannot sign)');
-    await m3.requireStepUp(tenant, by, stepUp, 'Adding a webhook');
+    await m3.requireStepUp(tenant, by, stepUp, 'Adding a webhook', hookScope(team, name));
     const hid = hookId();
     const secret = randomBytes(32).toString('base64url');
     const secretName = `HOOK_${hid.slice(3).toUpperCase()}`;
@@ -217,7 +244,7 @@ export function createTriggers({ db, key, m3, publicUrl = '', now = () => new Da
     await getTeam(db, tenant, team);
     const [h] = await db.tenant(tenant, ({ q }) => q("select * from hooks where id = $1 and team = $2 and state = 'active'", [hid, team]));
     if (!h) throw notFound();
-    await m3.requireStepUp(tenant, by, stepUp, 'Rotating a webhook secret');
+    await m3.requireStepUp(tenant, by, stepUp, 'Rotating a webhook secret', `hook:${hid}`);
     const secret = randomBytes(32).toString('base64url');
     const next = `HOOK_${hid.slice(3).toUpperCase()}_${Date.now().toString(36).toUpperCase()}`.slice(0, 64);
     await putSecret(db, key, tenant, next, secret);
@@ -230,7 +257,7 @@ export function createTriggers({ db, key, m3, publicUrl = '', now = () => new Da
     await getTeam(db, tenant, team);
     const [h] = await db.tenant(tenant, ({ q }) => q("select id from hooks where id = $1 and team = $2 and state = 'active'", [hid, team]));
     if (!h) throw notFound();
-    await m3.requireStepUp(tenant, by, stepUp, 'Removing a webhook');
+    await m3.requireStepUp(tenant, by, stepUp, 'Removing a webhook', `hook:${hid}`);
     await db.tenant(tenant, ({ q }) => q("update hooks set state = 'revoked' where id = $1", [hid]));
     await m3.tx(tenant, (ctx) => ctx.audit({ team, actorKind: 'person', actorId: by, action: 'hook', target: hid, decision: 'allowed', detail: { op: 'revoke' } }));
     return { id: hid, state: 'revoked' };
@@ -280,7 +307,9 @@ export function createTriggers({ db, key, m3, publicUrl = '', now = () => new Da
 
     const body = raw.toString('utf8');
     const fields = fieldsOf(body);
-    const idem = typeof headers['idempotency-key'] === 'string' ? headers['idempotency-key'].slice(0, 200) : null;
+    // A signed hook dedupes on the signed bytes only: the Idempotency-Key header is not signed, so honouring it would
+    // let a captured request be replayed under fresh keys inside the 5 minutes (security review low 1).
+    const idem = h.scheme === 'bearer' && typeof headers['idempotency-key'] === 'string' ? headers['idempotency-key'].slice(0, 200) : null;
     const dedupeKey = idem ?? sha256(raw);
     const summary = String(fields.summary ?? fields.title ?? fields.subject ?? fields.text ?? `A webhook to ${h.name}`).replace(/\s+/g, ' ').slice(0, 300);
     const kind = 'webhook.received';
