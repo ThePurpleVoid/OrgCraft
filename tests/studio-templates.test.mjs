@@ -137,7 +137,7 @@ test('a first publish that fails leaves the repository as it was, and the retry 
 test('the shared rules line names the packs in plain words (neutral protocols criterion 5)', async () => {
   const { rulesLine } = await import('../apps/studio/public/gallery.js');
   assert.equal(rulesLine([]), 'Shared rules: the core only');
-  assert.equal(rulesLine(['engineering']), 'Shared rules: the core and engineering (pull requests, the merge gate, deploys)');
+  assert.equal(rulesLine(['engineering']), 'Shared rules: the core and engineering (pull requests, the merge gate, going live)');
   assert.equal(rulesLine(['legal']), 'Shared rules: the core and legal');
 });
 
