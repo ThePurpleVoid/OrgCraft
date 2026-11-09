@@ -117,6 +117,8 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
 test('at 360px the chat fits, the cards answer, and the team is read-only', { skip }, async () => {
   cp.say('The settings page change is ready to try. One step needs you before it merges.');
   cp.card({ id: 'card_phone', kind: 'approval', subject: 'approval/apr_phone', title: 'release-manager asks to merge #14 at 9b1e4d0', data: { pr: 14, headSha: '9b1e4d07c2a5f8e3b6d9c1a4f7e0b3d6c9a2f5e8' }, body: 'QA signed off on both themes. The merge gate is green.', risk: 'low', options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger' }], links: [{ rel: 'pr', url: 'https://example.com/pull/14' }, { rel: 'preview', url: 'https://example.com/preview/14' }] });
+  // L6: a card bound to exact calls shows the server's facts, and the teammate's text only as the reason.
+  cp.card({ id: 'card_bound', kind: 'approval', subject: 'approval/apr_bound', title: 'ops asks to run one command', data: { facts: [{ tool: 'Bash', text: 'Run: rm -rf build/' }], callsHash: 'a'.repeat(64) }, body: 'Clean the old build.', risk: 'high', options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger' }] });
   for (const scheme of ['light', 'dark']) {
     const ctx = await browser.newContext({ viewport: { width: 360, height: 760 }, colorScheme: scheme, isMobile: true, hasTouch: true, deviceScaleFactor: SHOTS ? 2 : 1 });
     const page = await ctx.newPage();
@@ -130,6 +132,10 @@ test('at 360px the chat fits, the cards answer, and the team is read-only', { sk
     await page.locator('.card-msg.k-approval').last().scrollIntoViewIfNeeded();
     if (SHOTS) await page.screenshot({ path: join(SHOTS, `phone-${scheme}.png`) });
     if (scheme === 'light') {
+      const bound = page.locator('.card-msg.k-approval', { hasText: 'ops asks to run one command' });
+      await bound.getByText('It will do exactly this:').waitFor();
+      assert.equal((await bound.locator('.facts pre').textContent()).trim(), 'Run: rm -rf build/');
+      await bound.getByText("Why, in the teammate's words:").waitFor();
       await page.getByRole('button', { name: 'Team' }).click();
       await page.getByText('Read-only on a phone. Open on a larger screen to rearrange.').waitFor();
       assert.equal(await page.locator('#publish').isVisible(), false);
@@ -295,7 +301,7 @@ test('a resume refused because today\'s budget is spent says so in words, and Ra
     await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
     await su.getByRole('button', { name: 'Confirm' }).click();
     // Each step-up is used once, so resuming asks again.
-    await su.getByText("Resuming a run that today's cap paused lets the team spend again.").waitFor();
+    await su.getByText('Resuming the run lets the team carry on working and spending.').waitFor();
     assert.equal(plane.budget.perDay, 8000);
     await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
     await su.getByRole('button', { name: 'Confirm' }).click();

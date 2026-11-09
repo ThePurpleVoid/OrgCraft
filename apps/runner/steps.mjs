@@ -10,6 +10,8 @@ import { ulid } from './link.mjs';
 import { PATTERNS } from './secrets.mjs';
 
 export const IO_MAX = 64 * 1024;
+export const CHECKS_MAX = 20;
+const READS_KEPT = 5;
 const READS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebFetch', 'WebSearch', 'TodoRead']);
 const WRITES = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'TodoWrite']);
 const OUTSIDE = new Set(['WebFetch', 'WebSearch']);
@@ -63,19 +65,19 @@ export function failed(response) {
   return response.is_error === true || response.isError === true || response.interrupted === true;
 }
 
-/** At most 300 characters, one line, redacted by the caller: what the call did, in words a person reads. */
+/**
+ * At most 300 characters, one line: what the call did, from its tool and input only. Never from the output: the
+ * summary goes into the append-only event log, where no retention or erasure reaches, so the output's text (customer
+ * data, outside text) stays in the deletable output io.
+ */
 export function summarize(tool, input, response, ok) {
   const path = (input?.file_path ?? input?.notebook_path ?? input?.path ?? '').toString().split('/').slice(-2).join('/');
-  const text = typeof response === 'string' ? response
-    : response?.stdout ?? response?.content?.find?.((c) => c?.type === 'text')?.text ?? (typeof response?.content === 'string' ? response.content : '');
-  const first = String(text ?? '').split('\n').find((l) => l.trim()) ?? '';
   let s;
-  if (!ok) s = `failed${first ? `: ${first}` : ''}`;
-  else if (tool === 'Read') s = `read ${path}`;
+  if (tool === 'Read' && path) s = `read ${path}`;
   else if (WRITES.has(tool) && tool !== 'Bash' && path) s = `changed ${path}`;
-  else if (tool === 'Bash') s = `ran ${String(input?.command ?? '').split('\n')[0].slice(0, 120)}${first ? ` · ${first}` : ''}`;
-  else s = first || 'done';
-  return s.replace(/\s+/g, ' ').trim().slice(0, 300);
+  else if (tool === 'Bash') s = `ran ${String(input?.command ?? '').split('\n')[0].slice(0, 120)}`;
+  else s = tool;
+  return `${s}${ok ? '' : ' · failed'}`.replace(/\s+/g, ' ').trim().slice(0, 300);
 }
 
 export class Steps {
@@ -83,12 +85,14 @@ export class Steps {
    * `capture`: all, tools, off (or absent: off). `send(frame)`: sends a step.io frame. `secrets()`: [{ name, value }]
    * known by name. `session`: the session id.
    */
-  constructor({ capture, send, secrets = () => [], session }) {
+  constructor({ capture, send, secrets = () => [], session, effectOf: manifestEffect = () => undefined }) {
+    this.manifestEffect = manifestEffect;
     this.capture = ['all', 'tools'].includes(capture) ? capture : 'off';
     this.send = send;
     this.secrets = secrets;
     this.session = session;
     this.history = []; // the last 20 calls: { call, tool, hash, failed }
+    this.done = []; // the last 20 calls that ran and succeeded: the checks a sign-off carries as evidence
     this.pending = new Map(); // tool_use id (or tool+hash) -> step
     this.text = [];
   }
@@ -116,10 +120,17 @@ export class Steps {
     return step;
   }
 
+  /**
+   * What this session itself ran and saw succeed, newest last: the evidence behind a sign-off's "Unverified: none"
+   * (governance G1, review 2 AI-1). Recorded by the runner from the calls it decided; an agent can't add to it.
+   */
+  checks() { return this.done.map((c) => ({ ...c })); }
+
   /** The fields every session.tool for this call carries. */
   fields(step, rule) {
     if (!step) return {};
-    return { call: step.call, effect: effectOf(step.tool, rule), ...(step.io ? { io: step.io } : {}), ...(step.retryOf ? { retryOf: step.retryOf } : {}) };
+    step.effect = (rule && BY_RULE[rule]) || this.manifestEffect(step.tool) || effectOf(step.tool, rule);
+    return { call: step.call, effect: step.effect, ...(step.io ? { io: step.io } : {}), ...(step.retryOf ? { retryOf: step.retryOf } : {}) };
   }
 
   /** The decision: an allowed call waits for its result; a refused one is remembered as failed (for retryOf). */
@@ -134,6 +145,16 @@ export class Steps {
     if (this.history.length > 20) this.history.shift();
   }
 
+  /**
+   * The id of an allowed call still waiting for its result, for this tool and input, that has not run yet; it is
+   * marked as run (the sidecar runs only those, each once).
+   */
+  takeCall(tool, input) {
+    const hash = inputHash(tool, input);
+    for (const step of this.pending.values()) if (step.tool === tool && step.hash === hash && !step.taken) { step.taken = true; return step.call; }
+    return null;
+  }
+
   /** The call finished: the session.result data, or null for a call this session never decided (a team tool). */
   end(tool, input, response, { id } = {}) {
     const key = id ?? `${tool}:${inputHash(tool, input)}`;
@@ -144,6 +165,13 @@ export class Steps {
     this.remember(step, !ok);
     const summary = redactNamed(summarize(tool, input, response, ok), this.secrets()).text.slice(0, 300);
     const io = this.io('output', response ?? null, typeof response === 'string' ? 'text/plain' : 'application/json');
+    if (ok) {
+      this.done.push({ call: step.call, tool, ...(step.effect ? { effect: step.effect } : {}), summary, at: new Date().toISOString(), ...(io ? { io } : {}) });
+      // Reads never push out what the session ran or changed: at most READS_KEPT of the kept checks are reads.
+      const isRead = (c) => c.effect === 'read';
+      if (this.done.filter(isRead).length > READS_KEPT) this.done.splice(this.done.findIndex(isRead), 1);
+      if (this.done.length > CHECKS_MAX) this.done.shift();
+    }
     return { call: step.call, tool, ok, durationMs: Date.now() - step.started, summary, ...(io ? { io } : {}), ...(isOutside(tool) ? { outside: true } : {}) };
   }
 

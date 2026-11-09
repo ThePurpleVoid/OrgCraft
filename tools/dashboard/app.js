@@ -1,4 +1,4 @@
-// Agent Team Kit dashboard. Draws the team from the role briefs (org chart and hand-off flow) and colours each role by
+// OrgCraft dashboard. Draws the team from the role briefs (org chart and hand-off flow) and colours each role by
 // what its thread last reported. Plain browser JavaScript, no build step, no dependencies.
 //
 // Two ways to run it:

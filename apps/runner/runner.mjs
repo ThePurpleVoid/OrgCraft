@@ -2,6 +2,7 @@
 // docs/contracts/runner-protocol.md is the contract, and docs/product/m3-design.md section 4 the subset M3 builds:
 // hello/welcome (with sessions to resume), session.start/message/stop/checkpoint, events, approval.wait/result,
 // session.renew/token, ping/pong, ack/nack.
+import { readFileSync } from 'node:fs';
 import { checkEvent, SPEC, VERSION } from '../../packages/events/index.mjs';
 import { connect, ulid } from './link.mjs';
 import { Session } from './session.mjs';
@@ -10,7 +11,9 @@ import { startModelProxy } from './modelproxy.mjs';
 import { sandboxPool } from './sandbox.mjs';
 
 export const PROTOCOL = 'runner/1';
-const RUNNER_VERSION = '0.1.0';
+// The kit's version: apps/runner/package.json is kept equal to the root's (tests/versions.test.mjs), so the control
+// plane can place this runner in its supported window (R13).
+const RUNNER_VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 /** What the runner key may send as events (runner-protocol.md, "What each credential may send"). */
 const MAY_EMIT = (type, frontDoor) => /^session\./.test(type) || type === 'usage.recorded' || type === 'report.heartbeat' || /^proposal\.(opened|updated|accepted|failed|previewed)$/.test(type) || (type === 'chat.message' && frontDoor);
 const RENEW_BEFORE_MS = 2 * 60_000;
@@ -20,9 +23,16 @@ const RENEW_BEFORE_MS = 2 * 60_000;
  * clones, worktrees and memory files, `adapter` the runtime (agentSdkAdapter() or stubAdapter(...)).
  * Returns { sessions, link, ready, close() }; ready resolves with the first welcome.
  */
-export function startRunner({ server, key, root, work = root, sandbox = null, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
+export function startRunner({ server, key, root, work = root, sandbox = null, egressEnforced = false, sidecarUnsandboxed = false, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
   // The model key stays in this process; sessions reach the model through the loopback proxy (modelproxy.mjs).
-  const proxy = modelProxy === undefined ? startModelProxy({ log }) : modelProxy;
+  const proxy = modelProxy === undefined ? startModelProxy({ log, onHealth: (h) => reportHealth(h) }) : modelProxy;
+  // Outage mode (L29): the control plane hears when the model provider stops or starts answering, and starts no new
+  // work here while it doesn't. The hello carries the same state after every reconnect.
+  function reportHealth(h) { if (up) link.send('runner.health', { model: h }).catch(() => {}); }
+  // One probe at start, so the control plane hears early whether the model answers. If it lands after the hello went
+  // out, the welcome handler below sends the change.
+  let helloHealth = null;
+  if (modelProxy === undefined) proxy.check?.();
   // The agent users (#28): one per live session from a pool, or one shared user for a runner of a single customer.
   const pool = sandboxPool(sandbox);
   let customer = null; // with one shared agent user: the only team this runner serves
@@ -40,7 +50,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
 
   const link = makeLink({
     server, key, log,
-    hello: () => ({ runner: id, version: RUNNER_VERSION, protocol: PROTOCOL, capabilities: { sandboxes: ['process'], runtimes: [adapter.runtime ?? 'agent-sdk'], maxSessions, slots: {} }, sessions: [...sessions.values()].filter((s) => s.state !== 'ended').map((s) => s.id) }),
+    hello: () => ({ runner: id, version: RUNNER_VERSION, protocol: PROTOCOL, capabilities: { sandboxes: ['process'], runtimes: [adapter.runtime ?? 'agent-sdk'], maxSessions, slots: {} }, sessions: [...sessions.values()].filter((s) => s.state !== 'ended').map((s) => s.id), ...(proxy?.health ? { health: { model: (helloHealth = proxy.health()) } } : {}) }),
   });
 
   /** Values that must never leave the runner in an event: the model key and the session's tool token. */
@@ -82,11 +92,20 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     return new Promise((resolve) => approvals.set(approvalId, { resolve, session, approval: { ...approval, id: approvalId } }));
   }
 
+  /** secret.get (runner/1): one value for a session's bound resource; the ack carries it, a nack refuses. */
+  async function secretGet(session, name) {
+    const ack = await link.send('secret.get', { session, name });
+    if (ack.nack || typeof ack.value !== 'string') throw new Error(ack.nack ?? 'no value came back');
+    return ack.value;
+  }
+
   /** The policy path: approval.wait, whose ack names the approval the control plane minted. */
   async function approve(s, req) {
-    const ack = await link.send('approval.wait', { session: s.id, approval: { action: req.action, call: req.call, why: req.why, ...(req.pr ? { pr: req.pr, headSha: req.headSha, ...(req.repo ? { repo: req.repo } : {}) } : {}) } });
+    // calls and callsHash (ADR 0013): the exact calls held, and the hash the card is signed over.
+    const signed = req.calls ? { calls: req.calls, callsHash: req.callsHash } : {};
+    const ack = await link.send('approval.wait', { session: s.id, approval: { action: req.action, call: req.call, ...signed, why: req.why, ...(req.pr ? { pr: req.pr, headSha: req.headSha, ...(req.repo ? { repo: req.repo } : {}) } : {}) } });
     if (ack.nack || !ack.approval) return { decision: 'denied', note: ack.nack ?? 'the control plane did not record the approval' };
-    return awaitApproval(ack.approval, s.id, { action: req.action, call: req.call, why: req.why });
+    return awaitApproval(ack.approval, s.id, { action: req.action, call: req.call, ...signed, why: req.why });
   }
 
   function renew(s) {
@@ -124,7 +143,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     }
     let s;
     const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
-    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online,
+    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online, egressEnforced, sidecarUnsandboxed, secretGet,
       // step.io (N1): sent before the event that names it; a control plane that does not keep step I/O refuses it, harmlessly.
       stepIo: (frame) => { Promise.resolve(link.send('step.io', frame)).catch(() => {}); } });
     s.tools = tools;
@@ -155,6 +174,9 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     tenant = w.tenant ?? tenant ?? 'local';
     if (welcomed) for (const [, a] of approvals) if (a.resolve && sessions.get(a.session)?.state !== 'ended') link.send('approval.wait', { session: a.session, approval: a.approval, resend: true });
     welcomed = true;
+    if (proxy?.health && helloHealth && proxy.health().state !== helloHealth.state) reportHealth(proxy.health());
+    // Behind the supported window (R13): still served, but told to upgrade by a date. The Studio shows it too.
+    if (w.upgrade?.required) log(`this runner is ${w.upgrade.behind ?? 'too many'} versions behind the control plane (${w.upgrade.current}); upgrade by ${w.upgrade.by}`);
     // Sessions to resume after a reconnect: ids this runner still runs are kept; full bodies are (re)started.
     for (const a of w.sessions ?? w.assignments ?? []) if (a && typeof a === 'object') startSession({ resume: true, ...a });
     readyResolve(w);
@@ -185,7 +207,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
         return;
       }
       case 'approval.result': {
-        const d = { decision: b.decision, by: b.by, note: b.note, ...(b.headSha ? { headSha: b.headSha } : {}) };
+        const d = { decision: b.decision, by: b.by, note: b.note, ...(b.headSha ? { headSha: b.headSha } : {}), ...(typeof b.callsHash === 'string' ? { callsHash: b.callsHash } : {}) };
         const r = approvals.get(b.approval);
         if (r?.resolve) { approvals.delete(b.approval); r.resolve(d); } else approvals.set(b.approval, { early: d });
         return;

@@ -2,6 +2,7 @@
 // It owns the session's working copy, its queue of messages, its budget and its liveness. The runner key's events
 // (session.*, usage.recorded, report.heartbeat, and the front door's chat.message) go out through `emit`; role
 // messages go through the team tool server, so the control plane mints them (docs/product/m3-design.md).
+import { callOf, hashCalls, parseCalls, replay } from './calls.mjs';
 import { tierModel } from '../../packages/model-prices/index.mjs';
 import { loadPrices } from '../../packages/model-prices/node.mjs';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -10,6 +11,7 @@ import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
 import { Steps } from './steps.mjs';
+import { localServers, startSidecar, EFFECT_ACTION } from './sidecar.mjs';
 import { reapAside, safeRead, safeWrite, sandboxPool, sharedDir } from './sandbox.mjs';
 import { checkHead, checkpoint as saveWork, copyPath, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
 
@@ -31,15 +33,24 @@ const HEARTBEAT_MS = 5 * 60_000;
 const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 80);
 
 /** The system prompt: the role's brief, the protocols, the project's instructions and the role's memory file. */
-export function systemPrompt(p = {}, role, memoryPath) {
+export function systemPrompt(p = {}, role, memoryPath, { type, name } = {}) {
   const part = (title, body) => (body ? `\n\n# ${title}\n\n${String(body).trim()}` : '');
+  // A teammate is a member: its id (role) is who it is; its type is the job it does; its name is what people call it
+  // (ADR 0011). Two members of one type are two teammates, each with its own session, copy and memory.
+  const shown = oneLine(name), job = oneLine(type);
+  const who = shown || (job && job !== role)
+    ? `You are ${shown ? `${shown} (${role})` : role}${job && job !== role ? `, a ${job}` : ''} on this team, running as a session of the team's runner. Teammates address you as ${role}.`
+    : `You are the ${role} on this team, running as a session of the team's runner.`;
   return [
-    `You are the ${role} on this team, running as a session of the team's runner.`,
+    who,
     'Use the team tools (report, handoff, bug, signoff, blocked, ask_owner, request_approval) for every report and message the protocols describe; they are checked and delivered for you.',
     'Writes outside your owned areas are refused, and the steps the protocols keep for the owner (such as merging) wait for a person\'s approval.',
     memoryPath ? `Your memory file is ${memoryPath}: rewrite it (Identity, Current task, Open items, Decisions, Lessons) at the end of every task.` : '',
   ].filter(Boolean).join(' ') + part('Your brief', p.brief) + part('Team protocols', p.protocols) + part('Project instructions', p.instructions) + part(`Your memory file (roles/${role}.md)`, p.memory);
 }
+
+/** A display name or type for the prompt: one line, at most 80 characters, or '' when there is none. */
+const oneLine = (v) => (typeof v === 'string' ? v.replace(/[\r\n\t]+/g, ' ').trim().slice(0, 80) : '');
 
 /** A message that wakes a session, as the prompt of its next turn. The owner's words travel verbatim and quoted. */
 export function wakePrompt(m, role, { resume = false } = {}) {
@@ -102,6 +113,20 @@ function meetingPrompt(lead, d) {
 // How long to wait between looks for a merge's preview deployment: about ten minutes in all (G-12).
 const PREVIEW_DELAYS = [10e3, 20e3, 30e3, 60e3, 60e3, 60e3, 120e3, 120e3, 120e3];
 
+// How long a call approved through request_approval may wait to be made (ADR 0013): long enough for the next step.
+const GRANT_MS = 15 * 60_000;
+
+/**
+ * Whether an approval.result is for these calls. A control plane that signs calls echoes the hash it bound; one that
+ * echoes a different hash approved something else. A result with no hash is refused: the control plane signs calls
+ * since L6, and the two ship together. ORGCRAFT_SIGNED_CALLS=0 accepts one, for local development against an older
+ * control plane only.
+ */
+export function signedFor(result, hash, { require = process.env.ORGCRAFT_SIGNED_CALLS !== '0' } = {}) {
+  if (typeof result?.callsHash === 'string') return result.callsHash === hash;
+  return !require;
+}
+
 export class Session {
   /**
    * `body` is the session.start body (docs/contracts/runner-protocol.md, with the M3 fields). `deps`:
@@ -125,8 +150,11 @@ export class Session {
     this.woken = new Set();
     this.ended = new Promise((r) => (this._ended = r));
     this.stopped = new Promise((r) => (this._stopped = r));
+    // Calls a person approved through request_approval: canonical hash -> { approval, call, expires }. Each lets
+    // through one call identical to the signed record, once, in this session only (ADR 0013).
+    this.grants = new Map();
     // Step boundaries and I/O for the run inspector (N1): call ids, effects, retries, results; step.io when captured.
-    this.steps = new Steps({ capture: body.caps?.capture, send: deps.stepIo, secrets: () => this.namedSecrets(), session: this.id });
+    this.steps = new Steps({ capture: body.caps?.capture, send: deps.stepIo, secrets: () => this.namedSecrets(), session: this.id, effectOf: (tool) => this.sidecar?.effectOf(tool) });
     this.cause = null; // the event that woke the turn running now (echoed on events when the team captures steps)
     this.work = deps.work ?? deps.root; // what the agent may reach; deps.root stays the runner's own
     this.memoryPath = join(this.work, 'memory', safe(this.id), `${safe(this.role)}.md`);
@@ -178,7 +206,20 @@ export class Session {
         Object.assign(this.env, { ANTHROPIC_BASE_URL: p.baseUrl, ANTHROPIC_API_KEY: p.token });
       }
       if (b.instance) this.env.AGENT_TEAM_INSTANCE = String(b.instance);
+      // Local MCP servers run in the sidecar, outside the agent's process, with their secrets (L20).
+      const local = localServers(b.tools?.mcp);
+      if (Object.keys(local).length) {
+        this.sidecar = await startSidecar({
+          session: this.id, servers: local, egressEnforced: Boolean(this.deps.egressEnforced), log: this.deps.log,
+          pool: this.pool, unsandboxed: Boolean(this.deps.sidecarUnsandboxed),
+          secretGet: (name) => this.deps.secretGet(this.id, name),
+          take: (tool, input) => this.steps.takeCall(tool, input),
+          named: () => this.namedSecrets().filter((x) => !x.name.startsWith('sidecar:')),
+        });
+        for (const problem of this.sidecar.problems) await this.emit('session.tool', { tool: 'sidecar', decision: 'refused', rule: 'sidecar', detail: problem.slice(0, 500) });
+      }
     } catch (e) {
+      await this.sidecar?.close().catch(() => {});
       if (this.copy) release(this.copy.cwd, this.id);
       await this.endSlot();
       await this.emit('session.ended', { role: this.role, reason: e.capacity ? 'capacity' : 'failed', detail: `could not start: ${e.message}` });
@@ -257,8 +298,8 @@ export class Session {
     try {
       out = await this.deps.adapter.turn({
         session: this.id, role: this.role, model: this.model, cwd: this.copy.cwd, env: this.env, resume: this.resume, sandbox: this.slot ?? null,
-        systemPrompt: systemPrompt(this.body.prompt, this.role, this.memoryPath), prompt: this.takeNote(wakePrompt(message, this.role, { resume })),
-        signal: this.abort.signal, maxBudgetUsd: remaining === null ? undefined : remaining / 100, mcp: this.body.tools?.mcp ?? {},
+        systemPrompt: systemPrompt(this.body.prompt, this.role, this.memoryPath, { type: this.body.type, name: this.body.name }), prompt: this.takeNote(wakePrompt(message, this.role, { resume })),
+        signal: this.abort.signal, maxBudgetUsd: remaining === null ? undefined : remaining / 100, mcp: this.mcpServers(),
         tools: Object.entries(TOOLS).map(([name, t]) => ({ name, description: t.description, shape: t.shape })),
         callTool: (name, args) => this.callTool(name, args),
         preToolUse: (tool, input, meta) => this.preToolUse(tool, input, meta),
@@ -314,9 +355,15 @@ export class Session {
       }
     }
     if (name === 'request_approval' && local.input.action === 'accept' && this.proposes()) return this.acceptFlow(local.input);
+    // A request_approval that names its calls (as JSON) is bound to them: the hash goes with it for the card to sign.
+    const calls = name === 'request_approval' ? parseCalls(local.input.call) : null;
+    const bound = calls ? { calls, hash: hashCalls(calls) } : null;
+    // A sign-off carries the runner's own record of what this session ran and saw succeed (governance G1): the
+    // evidence behind its unverified list. The agent can't write it; the tool's shape has no such field.
+    const input = name === 'signoff' ? { ...local.input, checks: this.steps.checks() } : bound ? { ...local.input, calls: bound.calls, callsHash: bound.hash } : local.input;
     let r;
     try {
-      r = await this.deps.tools.call(name, local.input);
+      r = await this.deps.tools.call(name, input);
     } catch (e) {
       return { text: `The control plane could not be reached (${e.message}). Nothing was sent; try again shortly.`, isError: true };
     }
@@ -325,8 +372,15 @@ export class Session {
       this.state = 'waiting';
       const d = await this.untilStopped(this.deps.awaitApproval(r.result.approval, this.id));
       if (this.state === 'waiting') this.state = 'working';
-      const ok = d.decision === 'approved';
-      return { text: JSON.stringify({ approval: r.result.approval, decision: d.decision, note: d.note }) + (ok ? ' Approved: go ahead with exactly that call.' : ' Not approved: do not take the step.'), isError: !ok };
+      const signed = bound && d.decision === 'approved' && signedFor(d, bound.hash);
+      const ok = d.decision === 'approved' && (!bound || signed);
+      const said = JSON.stringify({ approval: r.result.approval, decision: ok ? d.decision : (d.decision === 'approved' ? 'refused' : d.decision), note: d.note });
+      if (!ok) return { text: `${said} ${d.decision === 'approved' ? 'Not approved for these calls: the approval the runner received was signed for other calls. Do not take the step; ask again.' : 'Not approved: do not take the step.'}`, isError: true };
+      if (!bound) return { text: `${said} Approved as a decision. It approves no particular call: any step the team policy keeps for a person is still held when you make it, and asked for with its exact input.` };
+      // What you see is what you sign: only the signed calls ride this approval, each once, and they run as signed.
+      const expires = Date.now() + GRANT_MS;
+      for (const c of bound.calls) this.grants.set(hashCalls([c]), { approval: r.result.approval, call: c, expires });
+      return { text: `${said} Approved for exactly ${bound.calls.length === 1 ? 'this call' : `these ${bound.calls.length} calls`}, each once, within ${GRANT_MS / 60_000} minutes. Make ${bound.calls.length === 1 ? 'it' : 'them'} now with the same tool and input; the runner runs the signed version, and anything that differs is held and asked for again.` };
     }
     return { text: JSON.stringify(r.result) };
   }
@@ -359,9 +413,20 @@ export class Session {
   }
 
   /** Secret values the session knows by name, for `[secret: NAME]` in step I/O. */
+  /**
+   * The session's own secrets, by name: one list for step I/O redaction and for the push and memory checks. The
+   * session token, the loopback proxy's token, the model key, the runner key, and the merger app's key and tokens.
+   */
   namedSecrets() {
-    return [['model-proxy-token', this.proxyToken], ['session-token', this.token], ['model-key', process.env.ANTHROPIC_API_KEY], ['runner-key', this.deps.runnerKey], ...(this.deps.proposals?.secrets?.() ?? []).map((v) => ['merger', v])]
+    return [['session-token', this.token], ['model-proxy-token', this.proxyToken], ['model-key', process.env.ANTHROPIC_API_KEY], ['runner-key', this.deps.runnerKey], ...(this.deps.proposals?.secrets?.() ?? []).map((v) => ['merger', v]), ...(this.sidecar?.secrets() ?? []).map((x) => [`sidecar:${x.name}`, x.value])]
       .filter(([, v]) => typeof v === 'string' && v).map(([name, value]) => ({ name, value }));
+  }
+
+  /** The SDK's MCP servers: remote ones as given, local ones through the sidecar (never run by the agent). */
+  mcpServers() {
+    const given = this.body.tools?.mcp ?? {};
+    const local = localServers(given);
+    return { ...Object.fromEntries(Object.entries(given).filter(([k]) => !local[k])), ...(this.sidecar?.mcp ?? {}) };
   }
 
   async decideTool(tool, input, step) {
@@ -376,20 +441,45 @@ export class Session {
     }
     const d = decide({ tool, input, cwd: this.copy.cwd, repo: this.body.repo?.url ?? null, areas: this.body.areas ?? [], also: [this.memoryPath], rules: this.deps.rules ?? DEFAULT_RULES });
     if (d.rule === 'team-tool') return { allow: true };
+    // A sidecar tool's effect comes from its manifest: one that can't be taken back waits for a person (L20).
+    const effect = this.sidecar?.effectOf(tool);
+    if (d.decision === 'allowed' && EFFECT_ACTION[effect]) Object.assign(d, { decision: 'needs-approval', rule: EFFECT_ACTION[effect], why: `has the effect "${effect}" in its connector's manifest`, target: tool });
+    // A tool the manifest gives no effect counts as one that acts (ADR 0013): a person decides.
+    else if (d.decision === 'allowed' && this.sidecar?.owns(tool) && !effect) Object.assign(d, { decision: 'needs-approval', rule: 'unclassified-effect', why: 'has no effect in its connector\'s manifest, so it counts as one that acts', target: tool });
     // Where the runner proposes, it alone merges (D2): the session asks for the merge, it does not run one.
     if ((d.rule === 'accept' || (d.decision === 'refused' && d.rule === 'match-head-commit')) && this.proposes()) {
       await this.toolEvent(step, { tool, target: String(d.target ?? '').slice(0, 500), decision: 'refused', rule: 'runner-merges' });
       return { allow: false, reason: `The runner merges this branch's pull request${this.proposal ? ` (#${this.proposal.ref})` : ''} itself, after the owner approves its head. Call request_approval with action "accept" instead; do not merge or push to the base yourself.` };
     }
+    // The signed record of this call (ADR 0013). A call JSON cannot carry exactly is never approved.
+    let signed = null;
+    try { signed = callOf(tool, input); } catch { /* left unsigned: it can be refused or allowed, never approved */ }
+    const hash = signed && hashCalls([signed]);
+    const grant = hash && this.grants.get(hash);
+    if (grant && grant.expires <= Date.now()) this.grants.delete(hash);
+    // A call a person approved through request_approval, identical to what they signed: it runs as signed, once.
+    // A grant never overrides a refusal (an owned-area or other policy rule still applies).
+    if (grant && grant.expires > Date.now() && d.decision !== 'refused') {
+      this.grants.delete(hash);
+      await this.toolEvent(step, { tool, target: String(d.target ?? '').slice(0, 500), decision: 'allowed', rule: d.rule ?? 'approved-call', approval: grant.approval, callsHash: hash });
+      return { allow: true, input: replay(grant.call) };
+    }
     if (d.decision === 'needs-approval') {
       await this.toolEvent(step, { tool, target: String(d.target).slice(0, 500), decision: 'needs-approval', rule: d.rule });
+      if (!signed) {
+        await this.toolEvent(step, { tool, target: String(d.target).slice(0, 500), decision: 'refused', rule: d.rule, detail: 'the call cannot be signed exactly' });
+        return { allow: false, reason: 'This call needs a person, and its input cannot be signed exactly (it carries something JSON cannot hold). Make the call with plain values.' };
+      }
       this.state = 'waiting';
       const call = tool === 'Bash' ? String(input.command ?? '') : JSON.stringify({ tool, input });
-      const a = await this.untilStopped(this.deps.approve({ action: d.rule, call, why: `The team policy keeps this for a person: it ${d.why}.`, ...(d.pr ? { pr: d.pr, headSha: d.headSha, ...(d.repo ? { repo: d.repo } : {}) } : {}) }));
+      const a = await this.untilStopped(this.deps.approve({ action: d.rule, call, calls: [signed], callsHash: hash, why: `The team policy keeps this for a person: it ${d.why}.`, ...(d.pr ? { pr: d.pr, headSha: d.headSha, ...(d.repo ? { repo: d.repo } : {}) } : {}) }));
       if (this.state === 'waiting') this.state = 'working';
-      const ok = a.decision === 'approved';
-      await this.toolEvent(step, { tool, target: String(d.target).slice(0, 500), decision: ok ? 'allowed' : 'refused', rule: d.rule, by: a.by });
-      return ok ? { allow: true } : { allow: false, reason: `A person did not approve this (${a.decision})${a.note ? `: ${a.note}` : ''}. Do not try it another way; tell whoever asked for it.` };
+      const ok = a.decision === 'approved' && signedFor(a, hash);
+      await this.toolEvent(step, { tool, target: String(d.target).slice(0, 500), decision: ok ? 'allowed' : 'refused', rule: d.rule, by: a.by, callsHash: hash, ...(a.decision === 'approved' && !ok ? { detail: 'the approval was signed for other calls' } : {}) });
+      // Held at the call: what runs is the signed record, not whatever the model's object holds by then.
+      if (ok) return { allow: true, input: replay(signed) };
+      if (a.decision === 'approved') return { allow: false, reason: 'The approval the runner received was signed for a different call, so this one does not run. Do not try it another way; tell whoever asked for it.' };
+      return { allow: false, reason: `A person did not approve this (${a.decision})${a.note ? `: ${a.note}` : ''}. Do not try it another way; tell whoever asked for it.` };
     }
     await this.toolEvent(step, { tool, target: String(d.target ?? '').slice(0, 500), decision: d.decision, rule: d.rule ?? undefined });
     return d.decision === 'allowed' ? { allow: true } : { allow: false, reason: d.why };
@@ -412,11 +502,8 @@ export class Session {
     return new Promise((resolve) => this.afterTurn.push(async () => resolve(await go())));
   }
 
-  /** Values that must never leave in a push or the memory file: the session's proxy token, the model key, the runner key. */
-  secretValues() {
-    // The merger app's key and its installation tokens are the runner's too: none may leave in a commit or a memory.
-    return [this.proxyToken, process.env.ANTHROPIC_API_KEY, this.deps.runnerKey, ...(this.deps.proposals?.secrets?.() ?? [])].filter(Boolean);
-  }
+  /** Values that must never leave in a push or the memory file: the same list as namedSecrets. */
+  secretValues() { return this.namedSecrets().map((x) => x.value); }
 
   /** Checkpoint and push through the runner's checks (ownership, symlinks, secrets); never throws. */
   async save(reason) {
@@ -546,6 +633,7 @@ export class Session {
 
   /** session.stop: `now` aborts the turn in flight, `finish-step` lets it end first. Either way the work is pushed. */
   stop(mode = 'finish-step', reason = 'stopped') {
+    this.grants.clear(); // nothing approved for a session outlives it
     if (this.state === 'ended' || this.finished) return this.ended;
     this.stopReason = reason;
     this.state = 'stopping';
@@ -562,6 +650,7 @@ export class Session {
     if (this.copy) saved = await this.save(reason);
     if (this.copy) release(this.copy.cwd, this.id);
     this.deps.modelProxy?.unregister(this.id);
+    await this.sidecar?.close().catch(() => {});
     await this.record({}, { last: true });
     await this.endSlot();
     await this.emit('report.heartbeat', { status: 'idle', detail: reason === 'budget' ? 'stopped: the session reached its budget' : `stopped (${reason})`, source: 'hook' }, { via: 'hook' });

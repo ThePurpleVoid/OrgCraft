@@ -62,7 +62,7 @@ Local mode moves onto the same path. It no longer runs `sync` in the working tre
 ## 3. Step 1: the handler
 
 ```js
-import { createStudioHandler } from 'agent-team-kit/studio/handler';
+import { createStudioHandler } from 'orgcraft/studio/handler';
 
 export const handler = createStudioHandler({
   repo: 'owner/name',                       // the repository the team lives in
@@ -96,7 +96,7 @@ It needs a **Node runtime** with `node:fs` and a writable temp dir. Edge runtime
 - **`info`** reads the repository and the default branch's ref: 2 calls.
 - **`readTeam`** fetches the root tree without recursion, then the tree of each read-set directory recursively. That keeps a large monorepo from hitting the truncated recursive tree. It then fetches blobs, 16 at a time, and caches them across warm invocations, keyed on `(repo id, installation id, sha)` and re-hashed on read (S3). Limits: at most 2,000 files and 20 MB, otherwise a 413 that names the size.
 - **`publish`** makes one `POST /git/trees` with `base_tree` and inline `content` for each change (`sha: null` deletes), then a commit with `base` as its parent, then `POST /git/refs`, which is create-only. It then checks that the `into` branch still points at `base`; if not, it deletes its own new ref and returns `stale`. Last comes `POST /pulls`.
-- **The commit** is authored by the app. Its message ends with `Published-by: <name> (<host user id>) via Agent Team Studio`, from `authorize`'s answer and appended last (S5). That line is the host user's display name and id only, never an email address or a token.
+- **The commit** is authored by the app. Its message ends with `Published-by: <name> (<host user id>) via OrgCraft Studio`, from `authorize`'s answer and appended last (S5). That line is the host user's display name and id only, never an email address or a token.
 
 **Time budget** (10 seconds per request):
 

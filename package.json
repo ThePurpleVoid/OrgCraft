@@ -1,5 +1,5 @@
 {
-  "name": "agent-team-kit",
+  "name": "orgcraft",
   "version": "0.22.0",
   "description": "Run a company of Claude Code agents on your repository: role briefs, protocols, a board and the scripts that hold them together.",
   "license": "MIT",
@@ -9,6 +9,7 @@
     "url": "git+https://github.com/ThePurpleVoid/OrgCraft.git"
   },
   "bin": {
+    "orgcraft": "bin/agent-team.mjs",
     "agent-team": "bin/agent-team.mjs"
   },
   "exports": {
@@ -22,6 +23,7 @@
   "files": [
     "apps/studio/",
     "bin/",
+    "packages/calls/",
     "packages/events/",
     "packages/github-app/",
     "packages/model-prices/",

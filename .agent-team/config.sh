@@ -1,5 +1,5 @@
 # shellcheck shell=bash disable=SC2034
-# .agent-team/config.sh: the runtime settings for the Agent Team Kit scripts in this repository.
+# .agent-team/config.sh: the runtime settings for the OrgCraft scripts in this repository.
 # `agent-team init` writes it once; it is yours to edit and sync never touches it. It is plain bash, sourced by
 # every script in scripts/agent-team/. Keep secrets out of it: tokens go in ~/.agent-team/<project>/team.env.
 

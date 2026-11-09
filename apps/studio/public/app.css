@@ -203,6 +203,9 @@
 .ats .card-msg .bound { margin: 4px 0; font-size: 13px; }
 .ats .card-msg .bound summary { cursor: pointer; min-height: 32px; display: list-item; padding: 4px 0; }
 .ats .card-msg .bound code { font-size: 12.5px; }
+.ats .card-msg .facts { margin: 6px 0; font-size: 13px; }
+.ats .card-msg .facts pre { margin: 4px 0; padding: 6px 8px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ats .card-msg .why-label { margin: 6px 0 0; font-size: 12.5px; }
 .ats .card-msg .bound .sha { margin: 2px 0 0; font-size: 12.5px; overflow-wrap: anywhere; }
 .ats .card-msg .links { font-size: 12.5px; margin: 4px 0; }
 .ats .card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
