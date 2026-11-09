@@ -115,6 +115,8 @@ export function chatSource(env = process.env) {
     // L40: the team's systems (resources.json) live on the control plane, set only by an admin with a step-up scoped
     // systems:<team> (apps/server/credentials.mjs putSystems); runs freeze them at start.
     systems: () => call('GET', `/teams/${t}/systems`),
+    /** Drops a held step-up unspent: a refusal before the send must not leave it to authorise a set never shown. */
+    dropStepUp: () => { spendStepUp(); },
     setSystems: (body, key) => call('PUT', `/teams/${t}/systems`, body, { ...(key ? { 'idempotency-key': key } : {}), ...spendStepUp() }),
     rules: () => call('GET', `/teams/${t}/standing-rules`),
     withdrawRule: (id) => call('DELETE', `/teams/${t}/standing-rules/${encodeURIComponent(id)}`),

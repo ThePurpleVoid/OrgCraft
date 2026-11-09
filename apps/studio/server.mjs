@@ -425,9 +425,11 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           if (!chat.connected) return send(res, 200, { connected: false });
           // Only what the person was shown: HEAD must still hash to it, and the control plane must still be at the
           // version it was compared with (it answers 409 when it moved).
-          if (!Number.isInteger(input.version) || typeof input.hash !== 'string') throw new HttpError(400, 'send the version and hash from GET /v1/team/systems');
+          // A refusal here drops any held step-up: it was given for the set shown, and must not carry over to the next
+          // one (security review L40w sev3).
+          if (!Number.isInteger(input.version) || typeof input.hash !== 'string') { chat.dropStepUp(); throw new HttpError(400, 'send the version and hash from GET /v1/team/systems'); }
           const here = publishedSystems(root) ?? { resources: [], bindings: [] };
-          if (systemsHash(here) !== input.hash) throw new HttpError(409, 'the published systems changed since they were shown', { type: 'systems-moved' });
+          if (systemsHash(here) !== input.hash) { chat.dropStepUp(); throw new HttpError(409, 'the published systems changed since they were shown', { type: 'systems-moved' }); }
           return relay(res, () => chat.setSystems({ ...here, expect: input.version }, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
         }
         const withdraw = /^\/v1\/team\/standing-rules\/([^/]+)\/withdraw$/.exec(url.pathname);

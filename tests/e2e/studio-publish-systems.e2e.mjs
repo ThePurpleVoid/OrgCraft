@@ -99,6 +99,17 @@ test('the first send: the dialog lists all the control plane gains, then the sys
   const stale = await page.evaluate(async (h) => { const r = await fetch('/v1/team/systems', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ version: 0, hash: h }) }); return r.status; }, sync.hash);
   assert.equal(stale, 409);
   assert.equal(cp.systemsPuts.length, 1);
+
+  // A step-up given, then a refusal before the send (HEAD moved): the step-up is dropped, so the next set asks again.
+  const post = (path, body) => page.evaluate(async ([p, b]) => { const r = await fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }); return { status: r.status, ...(await r.json()) }; }, [path, body]);
+  assert.equal((await post('/v1/team/step-up', { secret: cp.stepUpSecret, scope: 'systems:sample-app' })).status, 200);
+  assert.equal((await post('/v1/team/systems', { version: sync.version, hash: 'not-this' })).type, 'systems-moved');
+  cp.setSystems({ resources: cp.systems.resources, bindings: [] });
+  const next = await page.evaluate(async () => (await fetch('/v1/team/systems')).json());
+  const again = await post('/v1/team/systems', { version: next.version, hash: next.hash });
+  assert.equal(again.status, 401, 'the held step-up did not survive the refusal');
+  assert.match(again.type, /step-up-required$/);
+  assert.equal(cp.systemsPuts.length, 1);
   assert.deepEqual(errors, []);
   await page.close();
 });
@@ -170,18 +181,18 @@ test('the run-start plan: systems not the published ones, Send now, a cancel, th
   cp.setSystems({ resources: cp.systems.resources, bindings: [] });
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.goto(`${base}/#chat`);
-  await page.getByRole('button', { name: 'Start a run' }).click();
+  await page.getByRole('button', { name: 'Start the team' }).click();
   const start = page.locator('#start-dialog');
   const line = start.locator('#start-systems');
-  await line.getByText("OrgCraft isn't using the systems you published yet").waitFor();
-  await line.getByRole('button', { name: 'Send now' }).click();
+  await line.getByText("Your latest system changes haven't been sent yet").waitFor();
+  await line.getByRole('button', { name: 'Send them now' }).click();
   const dlg = page.locator('#stepup-dialog');
   await dlg.locator('#stepup-why', { hasText: 'Change which systems your team can use' }).waitFor();
   assert.equal((await items(dlg)).length, 1);
   await dlg.getByRole('button', { name: /cancel/i }).click();
-  await line.getByText("OrgCraft isn't using the systems you published yet").waitFor();
+  await line.getByText("Your latest system changes haven't been sent yet").waitFor();
   const before = cp.systemsPuts.length;
-  await line.getByRole('button', { name: 'Send now' }).click();
+  await line.getByRole('button', { name: 'Send them now' }).click();
   await dlg.locator('#stepup-secret').fill(cp.stepUpSecret);
   await dlg.locator('button[type="submit"]').click();
   await line.getByText('Your systems are updated').waitFor();

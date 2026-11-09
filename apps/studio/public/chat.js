@@ -162,7 +162,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       <div class="chat-run row">
         <span id="run-state" class="pill" role="status"></span>
         <span id="cost" class="cost" role="status"></span>
-        <button id="run-start" type="button" class="primary" hidden>Start a run…</button>
+        <button id="run-start" type="button" class="primary" hidden>${t('team.start')}…</button>
         <button id="run-pause" type="button"></button>
         <button id="run-stop" type="button" class="danger">Stop</button>
         <button id="runner-add" type="button" data-tip="${esc(t('runner.connect.tip'))}" hidden>${esc(t('runner.connect'))}</button>
@@ -170,7 +170,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     </div>
     <dialog id="start-dialog" class="start-dialog">
       <form method="dialog" class="dialog" id="start-form">
-        <h2>Start a run</h2>
+        <h2>${t('team.start')}</h2>
         <p class="muted">The team runs as it was last published, not as the canvas shows it now. It keeps going until you pause or stop it, or today's cap is reached.</p>
         <p id="start-plan" class="plan" role="status">Reading the published team…</p>
         <p id="start-systems" class="plan" hidden></p>

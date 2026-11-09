@@ -222,7 +222,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     if (p === `/v1/teams/${team}/systems` && req.method === 'GET') return send(res, 200, { ...systems });
     if (p === `/v1/teams/${team}/systems` && req.method === 'PUT') {
       const body = await read(req);
-      if (body.expect !== undefined && body.expect !== systems.version) return send(res, 409, { type: 'systems-version', title: 'The systems changed since they were compared', status: 409, version: systems.version });
+      if (body.expect !== undefined && body.expect !== systems.version) return send(res, 409, { type: 'systems-changed', title: 'The systems changed since they were compared', status: 409, version: systems.version });
       if (!stepped(req, `systems:${team}`)) return send(res, 401, { type: 'step-up-required', title: 'Changing what the team can reach needs a recent sign-in', status: 401, scope: `systems:${team}` });
       systems = { resources: body.resources ?? [], bindings: body.bindings ?? [], version: systems.version + 1 };
       systemsPuts.push(body);

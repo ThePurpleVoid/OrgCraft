@@ -81,7 +81,7 @@ test('against the real control plane: chat, cards, an approval with step-up, a s
   await page.locator('#run-state', { hasText: 'Not running' }).waitFor();
 
   // The daily cap, set from the Start dialog: the first one needs step-up. Start itself waits for runner part 2b.
-  await page.getByRole('button', { name: 'Start a run' }).click();
+  await page.getByRole('button', { name: 'Start the team' }).click();
   const dlg = page.locator('#start-dialog');
   await dlg.getByText('chief-of-staff reports to the owner').waitFor();
   await dlg.getByLabel('Daily cap').fill('10');
