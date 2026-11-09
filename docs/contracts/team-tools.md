@@ -68,7 +68,7 @@ Emits `message.bug`. Wakes `to`. Result: `{ "event": "<id>" }`.
 | `versionKind` | with `version` | `commit`, `revision` or `draft`. A full commit id alone is taken as `commit`; anything else needs it |
 | `unverified` | no | see the rules. A sign-off whose list is not empty is **partial**: it shows amber and satisfies no gate |
 
-The runner adds **`checks`**: its own record of the calls this session ran and saw succeed, newest last, at most 20, each `{ call, tool, effect, summary, at, io? }` with the `call` id of that call's `session.tool` and `session.result` (N1). It is the evidence behind `unverified: []`, so a reader can see what the sender actually ran. A model can't write it: the input has no such field, and anything sent under that name is dropped before the runner adds its own. The control plane stores `checks` with the event; one that receives a sign-off from anything other than a runner session ignores it.
+The runner adds **`checks`**: its own record of the calls this session ran and saw succeed, newest last, at most 20 of which at most 5 are reads (so reading never pushes out what was run or changed), each `{ call, tool, effect, summary, at, io? }` with the `call` id of that call's `session.tool` and `session.result` (N1). It is the evidence behind `unverified: []`, so a reader can see what the sender actually ran. A model can't write it: the input has no such field, and anything sent under that name is dropped before the runner adds its own. The control plane stores `checks` with the event; one that receives a sign-off from anything other than a runner session ignores it.
 
 Emits `message.signoff`. Wakes `to`. Result: `{ "event": "<id>" }`.
 

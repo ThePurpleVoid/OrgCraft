@@ -223,13 +223,22 @@ test('a sign-off carries the runner\'s own record of what the session ran and sa
 test('checks keep the last 20 successful calls', () => {
   const steps = new Steps({ capture: 'off', session: 'ses_1' });
   for (let i = 0; i < 25; i++) {
-    const step = steps.begin('Read', { file_path: `f${i}.md` });
+    const step = steps.begin('Edit', { file_path: `f${i}.md` });
     steps.fields(step);
     steps.decided(step, true);
-    steps.end('Read', { file_path: `f${i}.md` }, 'ok');
+    steps.end('Edit', { file_path: `f${i}.md` }, 'ok');
   }
   const checks = steps.checks();
   assert.equal(checks.length, 20);
-  assert.equal(checks[0].summary, 'read f5.md');
-  assert.equal(checks[19].effect, 'read');
+  assert.equal(checks[0].summary, 'changed f5.md');
+  assert.equal(checks[19].effect, 'write');
+});
+
+test('reads never push out what the session ran: at most 5 of the kept checks are reads (code review, L23)', () => {
+  const steps = new Steps({ capture: 'off', session: 'ses_1' });
+  const run = (tool, input) => { const st = steps.begin(tool, input); steps.fields(st); steps.decided(st, true); steps.end(tool, input, { stdout: 'ok' }); };
+  run('Bash', { command: 'npm test' });
+  for (let i = 0; i < 30; i++) run('Read', { file_path: `f${i}.md` });
+  const checks = steps.checks();
+  assert.deepEqual(checks.map((c) => c.summary), ['ran npm test', 'read f25.md', 'read f26.md', 'read f27.md', 'read f28.md', 'read f29.md']);
 });
