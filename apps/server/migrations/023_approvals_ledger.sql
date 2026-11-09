@@ -5,7 +5,7 @@
 -- standing_rules: the owner deciding in advance, from a fixed list of kinds, each with a limit per period. The server
 -- matches signed calls against the structured form only; the owner's words are kept beside it, never parsed.
 --
--- Rollback: drop table standing_rule_uses, approval_ledger, standing_rules; alter table approvals drop column effect_hash; drop index events_outside_results;
+-- Rollback: drop table standing_rule_uses, approval_ledger, standing_rules; alter table approvals drop column effect_targets; drop index events_outside_results;
 -- delete from schema_migrations where name = '023_approvals_ledger.sql'.
 
 create table standing_rules (
@@ -53,11 +53,12 @@ create table approval_ledger (
 );
 create index approval_ledger_team on approval_ledger(team, at);
 
--- A decline sticks: finding an earlier "no" to the same signed calls, or to the same effect on the same target (the
--- tool plus who or what it acts on, ledger.mjs effectHash), so a re-ask for a slightly different amount still matches.
-alter table approvals add column effect_hash text check (effect_hash is null or effect_hash ~ '^[0-9a-f]{64}$');
+-- A decline sticks: finding an earlier "no" to the same signed calls, or to the same tool acting on any of the same
+-- targets (ledger.mjs targetsOf: "tool\nvalue" pairs, whatever field carried the value), so a re-ask for a slightly
+-- different amount, a renamed field or one more target field still matches.
+alter table approvals add column effect_targets text[] check (effect_targets is null or cardinality(effect_targets) <= 200);
 create index approvals_denied_hash on approvals(team, calls_hash) where state = 'denied';
-create index approvals_denied_effect on approvals(team, effect_hash) where state = 'denied' and effect_hash is not null;
+create index approvals_denied_targets on approvals using gin (effect_targets) where state = 'denied' and effect_targets is not null;
 -- rule.never.outside: a call whose output came from outside the team, for this session, since a person last decided.
 create index events_outside_results on events((envelope->'actor'->>'session'), received_at) where type = 'session.result' and envelope->'data'->>'outside' = 'true';
 

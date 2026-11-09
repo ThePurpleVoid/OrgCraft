@@ -31,8 +31,8 @@ async function ask(p, s, calls, why = 'Refund the customer', changed = undefined
 const RULE = { kind: 'refund', tool: 'mcp__payments__refund', amountField: 'amount', currency: 'USD', currencyField: 'currency', recipientField: 'customer', maxEach: 2000, total: 3000, period: 'week', system: 'Payments' };
 
 test('rule forms: the fixed list, a limit per period, never deleting or going live', () => {
-  assert.equal(ruleLine(ruleForm(RULE)), 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments · fields: customer, amount, currency');
-  assert.equal(ruleLine(ruleForm({ kind: 'send.known', tool: 'mcp__mail__send', recipientField: 'to', n: 50, period: 'day', channel: 'Email' })), 'Messages to people the team has written to before · in Email · at most 50 per day · fields: to');
+  assert.equal(ruleLine(ruleForm(RULE)), 'Refunds · up to $20 each · at most $30 per customer a week · in Payments · may include: customer, amount, currency');
+  assert.equal(ruleLine(ruleForm({ kind: 'send.known', tool: 'mcp__mail__send', recipientField: 'to', n: 50, period: 'day', channel: 'Email' })), 'Messages to people the team has written to before · in Email · at most 50 a day · may include: to');
   assert.throws(() => ruleForm({ ...RULE, period: undefined }), /limit per period/);
   assert.throws(() => ruleForm({ ...RULE, tool: 'mcp__shop__delete_order' }), /never cover deleting/);
   assert.throws(() => ruleForm({ ...RULE, tool: 'mcp__site__deploy' }), /going live/);
@@ -54,8 +54,8 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
     const a = await ask(p, s, [refund('cus_dana')]);
     assert.equal(a.card.state, 'answered', 'covered: no card waits for anyone');
     assert.equal(a.card.answer.by, `rule:${made.body.id}`);
-    assert.equal(a.card.answer.note, 'Done under standing rule #1: Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments · fields: customer, amount, currency');
-    assert.deepEqual([a.card.answer.ruleNumber, a.card.answer.ruleLine], [1, 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments · fields: customer, amount, currency']);
+    assert.equal(a.card.answer.note, 'Done under standing rule #1: Refunds · up to $20 each · at most $30 per customer a week · in Payments · may include: customer, amount, currency');
+    assert.deepEqual([a.card.answer.ruleNumber, a.card.answer.ruleLine], [1, 'Refunds · up to $20 each · at most $30 per customer a week · in Payments · may include: customer, amount, currency']);
     const res = await runner.next((f) => f.op === 'approval.result' && f.body.approval === a.approval);
     assert.deepEqual([res.body.decision, res.body.callsHash], ['approved', a.callsHash]);
 
@@ -67,7 +67,11 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
     assert.equal((await ask(p, s, [refund('cus_eli', 400)])).card.state, 'answered', 'per customer');
 
     const rules = (await p.call('GET', '/teams/shop/standing-rules')).body;
-    assert.deepEqual(rules.rules.map((r) => [r.number, r.line, r.words, r.used]), [[1, 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments · fields: customer, amount, currency', 'small refunds don\'t need me', { n: 3, amount: 3100 }]]);
+    assert.deepEqual(rules.rules.map((r) => [r.number, r.line, r.words, r.used.n, r.used.amount]), [[1, 'Refunds · up to $20 each · at most $30 per customer a week · in Payments · may include: customer, amount, currency', 'small refunds don\'t need me', 3, 3100]]);
+    // A calendar week (Monday to Monday in the team's zone, UTC here): it resets next Monday at midnight.
+    const resets = new Date(rules.rules[0].used.resetsAt);
+    assert.deepEqual([resets.getUTCDay(), resets.getUTCHours(), resets.getUTCMinutes()], [1, 0, 0]);
+    assert.ok(resets > new Date() && resets - new Date() <= 7 * 86_400_000);
     assert.deepEqual(rules.never, ['newrecipient', 'live', 'delete', 'passkey', 'outside']);
 
     // Withdrawn: at once, no step-up, and the next one asks.
@@ -78,7 +82,7 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
     assert.deepEqual(ledger.map((l) => l.kind).reverse(), ['rule-added', 'rule-used', 'rule-used', 'rule-used', 'rule-withdrawn']);
     assert.equal(ledger.at(-1).words, 'small refunds don\'t need me', 'the owner\'s words, exactly');
     // Every rule row says which rule, as the list would (web-dev: no cross-reference).
-    const line = 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments · fields: customer, amount, currency';
+    const line = 'Refunds · up to $20 each · at most $30 per customer a week · in Payments · may include: customer, amount, currency';
     assert.ok(ledger.every((l) => l.ruleNumber === 1 && l.ruleLine === line));
     const used = ledger.find((l) => l.kind === 'rule-used');
     assert.equal(typeof used.what, 'string');
@@ -90,9 +94,9 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
 test('pay.known and send.known never cover someone new; a merge is never covered', async () => {
   await plane(async (p) => {
     const { s } = await setup(p);
-    const PAY = { kind: 'pay.known', tool: 'mcp__bank__pay', amountField: 'amount', currency: 'USD', recipientField: 'to', maxEach: 20000, total: 100000, period: 'week' };
+    const PAY = { kind: 'pay.known', tool: 'mcp__bank__pay', amountField: 'amount', currency: 'USD', currencyField: 'currency', recipientField: 'to', maxEach: 20000, total: 100000, period: 'week' };
     assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...PAY, words: 'regular suppliers are fine' }, await p.su(`rule:${formHash(ruleForm(PAY))}`))).status, 201);
-    const pay = (to) => [{ tool: 'mcp__bank__pay', input: { amount: 5000, to } }];
+    const pay = (to) => [{ tool: 'mcp__bank__pay', input: { amount: 5000, currency: 'USD', to } }];
     // Someone new: a person decides, with their words in the ledger.
     const first = await ask(p, s, pay('acct_supplier'));
     assert.equal(first.card.state, 'open');
@@ -121,13 +125,13 @@ test('a rule covers only the fields it names, only its own kind of action, and n
       const scope = approveScope({ tenant: 'acme', team: 'shop', approval: a.approval, version: 1, callsHash: a.callsHash });
       assert.equal((await p.call('POST', `/approvals/${a.approval}`, { decision: 'approved', version: 1, note: 'ok' }, await p.su(scope))).status, 200);
     };
-    const PAY = { kind: 'pay.known', tool: 'mcp__bank__pay', amountField: 'amount', currency: 'USD', recipientField: 'to', maxEach: 20000, total: 100000, period: 'week', free: ['memo'] };
-    assert.equal(ruleLine(ruleForm(PAY)), "Payments to people you've paid before · up to $200.00 each · at most $1,000.00 per week · fields: to, amount, memo");
+    const PAY = { kind: 'pay.known', tool: 'mcp__bank__pay', amountField: 'amount', currency: 'USD', currencyField: 'currency', recipientField: 'to', maxEach: 20000, total: 100000, period: 'week', free: ['memo'] };
+    assert.equal(ruleLine(ruleForm(PAY)), "Payments to people you've paid before · up to $200 each · at most $1,000 a week · may include: to, amount, currency, memo");
     assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...PAY, fixed: { 'bad key': 1 }, words: 'regular suppliers' }, await p.su('rule:x'))).status, 400);
     assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...PAY, words: 'regular suppliers are fine' }, await p.su(`rule:${formHash(ruleForm(PAY))}`))).status, 201);
     const SEND = { kind: 'send.known', tool: 'mcp__mail__send', recipientField: 'to', n: 10, period: 'day', free: ['subject', 'body'] };
     assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...SEND, words: 'replies to known customers' }, await p.su(`rule:${formHash(ruleForm(SEND))}`))).status, 201);
-    const pay = (input) => [{ tool: 'mcp__bank__pay', input: { amount: 5000, to: 'acct_supplier', ...input } }];
+    const pay = (input) => [{ tool: 'mcp__bank__pay', input: { amount: 5000, currency: 'USD', to: 'acct_supplier', ...input } }];
     const mail = (input) => [{ tool: 'mcp__mail__send', input: { to: 'jo@shop.example', subject: 'Hi', body: 'Thanks', ...input } }];
     await approve(await askAs('payment', pay({})));
     await approve(await askAs('outbound-message', mail({})));
@@ -173,6 +177,9 @@ test('declines stick for 7 days on the same effect and target; a re-ask must say
     // A cent less, same customer, same system: still what was declined (AI-10), unless the teammate says what changed.
     const cent = await ask(p, s, [refund('cus_zed', 8999)]);
     assert.deepEqual([cent.card.state, cent.card.answer.option], ['answered', 'deny']);
+    // A renamed target field, or one more target field, is still the same customer (code review sev 3).
+    assert.equal((await ask(p, s, [{ tool: 'mcp__payments__refund', input: { amount: 8999, currency: 'USD', customer_id: 'cus_zed' } }])).card.state, 'answered');
+    assert.equal((await ask(p, s, [{ tool: 'mcp__payments__refund', input: { amount: 8999, currency: 'USD', customer: 'cus_zed', email: 'zed@x.example' } }])).card.state, 'answered');
     // The exact same calls stay declined even with a reason: nothing changed.
     const same = await ask(p, s, [refund('cus_zed', 9000)], 'Refund the customer', 'they called again');
     assert.equal(same.card.state, 'answered');
@@ -190,7 +197,7 @@ test('declines stick for 7 days on the same effect and target; a re-ask must say
     const old = (await p.call('GET', `/cards/${changed.card.id}`)).body;
     assert.deepEqual([old.state, old.answer.note], ['superseded', 'This changed since you were asked.']);
     const ledger = (await p.call('GET', '/teams/shop/ledger')).body.items.map((l) => [l.kind, l.words ?? null]);
-    assert.deepEqual(ledger.reverse(), [['denied', 'not this week'], ['declined-again', null], ['declined-again', null], ['declined-again', null]]);
+    assert.deepEqual(ledger.reverse(), [['denied', 'not this week'], ...Array(5).fill(['declined-again', null])]);
     // A person's rows carry their display name, for people who are or were members of this workspace.
     await p.db.system("insert into people(id, provider, subject, login, name) values ('per_danaruiz1', 'github', '777', 'dana-gh', null)");
     await p.db.system("insert into members(id, tenant, person, role) values ('mem_dana1', 'acme', 'per_danaruiz1', 'approver')");
@@ -200,12 +207,37 @@ test('declines stick for 7 days on the same effect and target; a re-ask must say
   });
 });
 
-test('effectHash: the tool and its targets, not the amount or the wording', async () => {
-  const { effectHash } = await import('../ledger.mjs');
-  const a = effectHash([refund('cus_zed', 9000)]);
-  assert.equal(effectHash([refund('CUS_ZED ', 1)]), a);
-  assert.notEqual(effectHash([refund('cus_amy', 9000)]), a);
-  assert.notEqual(effectHash([{ tool: 'mcp__other__refund', input: { customer: 'cus_zed', amount: 9000 } }]), a);
-  assert.equal(effectHash([{ tool: 'mcp__mail__send', input: { to: 'a@b.example', body: 'Hi' } }]), effectHash([{ tool: 'mcp__mail__send', input: { to: 'a@b.example', body: 'Hello there' } }]));
-  assert.equal(effectHash([{ tool: 'mcp__x__do', input: { text: 'no target' } }]), null);
+test('money rules: the currency is always compared; refunds can also have a total across all customers', async () => {
+  const { currencyField, ...noCurrency } = RULE;
+  assert.throws(() => ruleForm(noCurrency), /currencyField/);
+  const ALL = { ...RULE, all: 3500 };
+  assert.equal(ruleLine(ruleForm(ALL)), 'Refunds · up to $20 each · at most $30 per customer a week · at most $35 a week in all · in Payments · may include: customer, amount, currency');
+  assert.throws(() => ruleForm({ ...RULE, all: 100 }), /at least maxEach/);
+  await plane(async (p) => {
+    const { s } = await setup(p);
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...ALL, words: 'small refunds, $35 a week in all' }, await p.su(`rule:${formHash(ruleForm(ALL))}`))).status, 201);
+    // Another currency is never this rule's, whatever the amount.
+    assert.equal((await ask(p, s, [{ tool: 'mcp__payments__refund', input: { amount: 500, currency: 'GBP', customer: 'cus_a' } }])).card.state, 'open');
+    // Per customer $30, in all $35: the third customer's refund would pass its own limit but not the total.
+    assert.equal((await ask(p, s, [refund('cus_a', 1500)])).card.state, 'answered');
+    assert.equal((await ask(p, s, [refund('cus_b', 1500)])).card.state, 'answered');
+    assert.equal((await ask(p, s, [refund('cus_c', 1000)])).card.state, 'open', 'the total in all is hit first');
+    assert.equal((await ask(p, s, [refund('cus_c', 500)])).card.state, 'answered', 'exactly the total is fine');
+  });
+});
+
+test('targetsOf: the tool and the values it acts on, whatever field carries them', async () => {
+  const { targetsOf } = await import('../ledger.mjs');
+  const overlap = (a, b) => a.some((x) => b.includes(x));
+  const a = targetsOf([refund('cus_zed', 9000)]);
+  assert.deepEqual(targetsOf([refund('CUS_ZED ', 1)]), a, 'not the amount, not the case');
+  assert.ok(overlap(targetsOf([{ tool: 'mcp__payments__refund', input: { customer_id: 'cus_zed', amount: 1 } }]), a), 'a renamed field');
+  assert.ok(overlap(targetsOf([{ tool: 'mcp__payments__refund', input: { customer: 'cus_zed', email: 'z@x.example', amount: 1 } }]), a), 'one more target field');
+  assert.ok(!overlap(targetsOf([refund('cus_amy', 9000)]), a), 'another customer');
+  assert.ok(!overlap(targetsOf([{ tool: 'mcp__other__refund', input: { customer: 'cus_zed', amount: 9000 } }]), a), 'another system');
+  assert.deepEqual(targetsOf([{ tool: 'mcp__mail__send', input: { to: 'a@b.example', body: 'Hi' } }]), targetsOf([{ tool: 'mcp__mail__send', input: { to: 'a@b.example', body: 'Hello there' } }]));
+  assert.equal(targetsOf([{ tool: 'mcp__x__do', input: { text: 'no target' } }]), null);
+  // Nested targets count, and a call without one in the set does not hide the others (code review sev 4).
+  assert.ok(overlap(targetsOf([{ tool: 'mcp__payments__refund', input: { customer: { id: 'cus_zed' }, amount: 1 } }]), a));
+  assert.ok(overlap(targetsOf([refund('cus_zed', 9000), { tool: 'mcp__notes__add', input: { text: 'refunded' } }]), a));
 });

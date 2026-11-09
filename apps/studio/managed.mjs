@@ -100,7 +100,7 @@ export function managedBackend({ store, refs, now = () => new Date(), author = (
      * Writes the change as a commit on `base` and opens change request n on ref cr/<n>. `base` null is the team's first
      * version (no main yet). Refused with 409 stale when main moved from `base`. `pr` gives the title and body.
      */
-    async publish({ base, message, changes, pr, by = null, needsCode = false, checks = null, capability = [] }) {
+    async publish({ base, message, changes, pr, by = null, needsCode = false, checks = null, capability = [], authorMember = null }) {
       const main = await refs.getRef('main');
       if ((main?.sha ?? null) !== (base ?? null)) throw new CoreError(409, STALE, { type: 'stale' });
       for (const c of changes) if (!inReadSet(c.path)) throw new CoreError(400, `${c.path} is outside the team's files`);
@@ -110,7 +110,7 @@ export function managedBackend({ store, refs, now = () => new Date(), author = (
       const a = author(by);
       const who = { name: clean(a?.name, 100) || 'OrgCraft Studio', email: clean(a?.email, 100) || 'studio@orgcraft.invalid', time: Math.floor(now().getTime() / 1000), tz: '+0000' };
       const commit = await writeObject(store, 'commit', writeCommit({ tree, parents: base ? [base] : [], author: who, message }));
-      const number = await refs.openChange({ base: base ?? null, head: commit, title: clean(pr?.title ?? message.split('\n')[0], 200), body: String(pr?.body ?? '').slice(0, 65536), createdBy: by?.id ?? null, needsCode: !!needsCode, checks, capability });
+      const number = await refs.openChange({ base: base ?? null, head: commit, title: clean(pr?.title ?? message.split('\n')[0], 200), body: String(pr?.body ?? '').slice(0, 65536), createdBy: by?.id ?? null, authorMember, needsCode: !!needsCode, checks, capability });
       if (!(await refs.setRef(`cr/${number}`, commit, null))) throw new CoreError(409, `change ${number} already has a ref`, { type: 'exists' });
       const branch = `cr/${number}`;
       let result = { state: 'opened', number, url: `/studio/changes/${number}`, branch, base: 'main' };
@@ -122,6 +122,54 @@ export function managedBackend({ store, refs, now = () => new Date(), author = (
         } catch (e) { await refs.updateChange(number, { state: 'closed', closedAt: now().toISOString() }, 'open'); throw e; }
       }
       return { branch, commit, tree, files: changes.map((c) => c.path), pr: result };
+    },
+    /**
+     * The files a change touches between two versions (base null: the first version), read-set text files only:
+     * [{ path, status: 'added' | 'removed' | 'changed', before, after }], sorted by path.
+     */
+    async diff(base, head) {
+      const index = async (sha) => new Map((await files(sha)).filter((e) => inReadSet(e.path)).map((e) => [e.path, e]));
+      const [a, b] = await Promise.all([index(base), index(head)]);
+      const out = [];
+      for (const path of [...new Set([...a.keys(), ...b.keys()])].sort()) {
+        const x = a.get(path);
+        const y = b.get(path);
+        if (x && y && x.sha === y.sha && x.mode === y.mode) continue;
+        out.push({ path, status: !x ? 'added' : !y ? 'removed' : 'changed', before: x ? await text(x.sha) : null, after: y ? await text(y.sha) : null });
+      }
+      return out;
+    },
+    /** Whether `sha` is main or one of its ancestors (a version this team published), walking at most `limit` commits. */
+    async published(sha, limit = 10_000) {
+      let cur = (await refs.getRef('main'))?.sha ?? null;
+      for (let n = 0; cur && n < limit; n++) {
+        if (cur === sha) return true;
+        cur = (await commitOf(cur)).parents[0] ?? null;
+      }
+      return false;
+    },
+    /**
+     * Rollback (spec 4.5, S2-19): a new commit on main whose tree is version `to`'s, opened as a change request like any
+     * other; never a move of main backwards. `to` must be a version this team published.
+     */
+    // `changes` turn main into `to` (core.plan of to's .agent-team/ against main with the current kit): never to's whole
+    // tree, whose generated files may be an older kit's, which the checks would then refuse forever (code review L9c).
+    // Never auto-accepted: a rollback can put access back, so it waits for a person.
+    async rollback({ to, changes, message, pr, by = null, checks = null, capability = [], authorMember = null, needsCode = false }) {
+      if (!SHA.test(to ?? '')) throw new CoreError(400, 'to is a commit id');
+      if (!Array.isArray(changes) || !changes.length) throw new CoreError(409, 'the team is already at that version', { type: 'no-change' });
+      const main = await refs.getRef('main');
+      if (!main) throw new CoreError(409, 'the team has no published version yet');
+      if (!(await api.published(to))) throw new CoreError(404, 'that is not a version this team published');
+      for (const c of changes) if (!inReadSet(c.path)) throw new CoreError(400, `${c.path} is outside the team's files`);
+      let tree;
+      try { tree = await applyChanges(store, (await commitOf(main.sha)).tree, changes.map((c) => ({ path: c.path, mode: c.mode ?? '100644', content: c.content }))); } catch (e) { throw new CoreError(400, `the rollback could not be written: ${clean(e.message, 160)}`); }
+      const a = author(by);
+      const who = { name: clean(a?.name, 100) || 'OrgCraft Studio', email: clean(a?.email, 100) || 'studio@orgcraft.invalid', time: Math.floor(now().getTime() / 1000), tz: '+0000' };
+      const commit = await writeObject(store, 'commit', writeCommit({ tree, parents: [main.sha], author: who, message: message || `Roll back to ${to.slice(0, 12)}` }));
+      const number = await refs.openChange({ base: main.sha, head: commit, title: clean(pr?.title ?? `Roll back to ${to.slice(0, 12)}`, 200), body: String(pr?.body ?? '').slice(0, 65536), createdBy: by?.id ?? null, authorMember, needsCode: !!needsCode, checks, capability, rollbackTo: to });
+      if (!(await refs.setRef(`cr/${number}`, commit, null))) throw new CoreError(409, `change ${number} already has a ref`, { type: 'exists' });
+      return { branch: `cr/${number}`, commit, number, url: `/studio/changes/${number}` };
     },
     /** Accepts change request n: main moves to its head, fast-forward only. 409 stale when main moved since it opened. */
     async accept(number, { by = null } = {}) {

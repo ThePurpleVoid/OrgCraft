@@ -16,7 +16,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { canonical } from '../../packages/calls/index.mjs';
 import { Problem, getTeam } from './store.mjs';
 
-export const PERIODS = { day: 86_400_000, week: 7 * 86_400_000, month: 30 * 86_400_000 };
+/** Calendar periods in the team's time zone (CPO ruling): a day from midnight, a week from Monday, a month from the 1st. */
+export const PERIODS = { day: 'day', week: 'week', month: 'month' };
 /** The fixed list (CPO §6b). Only these three are enforced in Now; the others need data the server does not hold yet. */
 export const KINDS = { refund: true, 'pay.known': true, 'send.known': true, reply: false, merge: false, cost: false };
 export const NEVER = ['newrecipient', 'live', 'delete', 'passkey', 'outside'];
@@ -50,11 +51,16 @@ export function ruleForm(body = {}) {
   }
   if (typeof body.amountField !== 'string' || !FIELD.test(body.amountField)) throw new Problem(400, 'amountField is the input field with the amount, in minor units');
   if (typeof body.currency !== 'string' || !/^[A-Z]{3}$/.test(body.currency)) throw new Problem(400, 'currency is a three-letter code, like USD');
-  if (body.currencyField !== undefined && (typeof body.currencyField !== 'string' || !FIELD.test(body.currencyField))) throw new Problem(400, 'currencyField is the input field with the currency');
+  // The call must say its currency, and it is always compared with the rule's (code review sev 3): a money rule with
+  // no currency field would take any currency as the rule's.
+  if (typeof body.currencyField !== 'string' || !FIELD.test(body.currencyField)) throw new Problem(400, 'currencyField is the input field with the currency, compared with the rule\'s on every call');
   const maxEach = int(body.maxEach, 'maxEach');
   const total = int(body.total, 'total');
   if (total < maxEach) throw new Problem(400, 'total per period is at least maxEach');
-  return { ...form, amountField: body.amountField, currency: body.currency, ...(body.currencyField ? { currencyField: body.currencyField } : {}), maxEach, total, system: label(body.system, 'system') };
+  // Refunds may also have a total across all customers (CPO ruling; off by default).
+  const all = kind === 'refund' && body.all !== undefined && body.all !== null ? int(body.all, 'all') : null;
+  if (all !== null && all < maxEach) throw new Problem(400, 'all (the total across all customers per period) is at least maxEach');
+  return { ...form, amountField: body.amountField, currency: body.currency, currencyField: body.currencyField, maxEach, total, ...(all !== null ? { all } : {}), system: label(body.system, 'system') };
 }
 
 /**
@@ -81,7 +87,7 @@ function shapeOf(body, kind) {
   return { fixed: Object.fromEntries(Object.entries(fixed).sort(([a], [b]) => (a < b ? -1 : 1))), free: [...free].sort() };
 }
 
-/** Does this call's input have only the fields the rule allows, every fixed one as fixed, and nothing nested? */
+/** Does this call's input have exactly the fields the rule names, every fixed one as fixed, and nothing nested? */
 function fitsShape(f, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
   const allowed = new Set([f.recipientField, f.amountField, f.currencyField, ...Object.keys(f.fixed ?? {}), ...(f.free ?? [])].filter(Boolean));
@@ -89,6 +95,9 @@ function fitsShape(f, input) {
     if (!allowed.has(k)) return false;
     if (v !== null && typeof v === 'object') return false;
   }
+  // Nothing the rule depends on may be missing ("facts whole", L6): its recipient, amount and currency fields and every
+  // fixed field. Free fields are what the line calls "may include", so they may be left out.
+  for (const k of [f.recipientField, f.amountField, f.currencyField, ...Object.keys(f.fixed ?? {})].filter(Boolean)) if (!(k in input)) return false;
   for (const [k, v] of Object.entries(f.fixed ?? {})) if (input[k] !== v) return false;
   return true;
 }
@@ -100,16 +109,18 @@ export const formHash = (form) => sha(`rule/1\n${canonical(form)}`);
 
 /** The one line a rule reads as (CPO §6b patterns), for the ledger and the list. Parts that are not set are left out. */
 export function ruleLine(form) {
-  const money = (minor) => new Intl.NumberFormat('en-US', { style: 'currency', currency: form.currency ?? 'USD' }).format(minor / 100);
+  // "$20", or "$20.50" when there are cents (strings-now rule.* examples).
+  const money = (minor) => new Intl.NumberFormat('en-US', { style: 'currency', currency: form.currency ?? 'USD', ...(minor % 100 === 0 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}) }).format(minor / 100);
   const parts = {
-    refund: ['Refunds', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} per customer per ${form.period}`, form.system && `in ${form.system}`],
-    'pay.known': ['Payments to people you\'ve paid before', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} per ${form.period}`, form.system && `in ${form.system}`],
-    'send.known': ['Messages to people the team has written to before', form.channel && `in ${form.channel}`, `at most ${form.n} per ${form.period}`],
+    refund: ['Refunds', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} per customer a ${form.period}`, form.all && `at most ${money(form.all)} a ${form.period} in all`, form.system && `in ${form.system}`],
+    'pay.known': ['Payments to people you\'ve paid before', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} a ${form.period}`, form.system && `in ${form.system}`],
+    'send.known': ['Messages to people the team has written to before', form.channel && `in ${form.channel}`, `at most ${form.n} a ${form.period}`],
   }[form.kind];
-  const fixed = Object.entries(form.fixed ?? {}).map(([k, v]) => `${k} ${JSON.stringify(v)}`);
-  const only = [form.recipientField, form.amountField, form.currencyField, ...(form.free ?? [])].filter(Boolean);
-  // The fields a covered call may carry, all of them, so the line is never narrower than the rule (security sev 2).
-  return [...parts, fixed.length && `with ${fixed.join(', ')}`, `fields: ${[...only, ...Object.keys(form.fixed ?? {})].join(', ')}`].filter(Boolean).join(' · ');
+  // rule.part.with, one per fixed field, then rule.part.fields: every field a covered call may carry, so the line is
+  // never narrower than the rule (security sev 2). Anything not listed makes it ask a person.
+  const fixed = Object.entries(form.fixed ?? {}).map(([k, v]) => `only when ${k} is "${v}"`);
+  const fields = [form.recipientField, form.amountField, form.currencyField, ...(form.free ?? []), ...Object.keys(form.fixed ?? {})].filter(Boolean);
+  return [...parts, ...fixed, `may include: ${fields.join(', ')}`].filter(Boolean).join(' · ');
 }
 
 /** Has this teammate read outside text (a trigger's outside block) since a person last decided for its session? */
@@ -146,6 +157,19 @@ async function known(q, team, rule, tool, field, recipient) {
 }
 
 /**
+ * The calendar period `now` is in, in the team's time zone (its budget day's zone when it has one, else UTC):
+ * { start, end }. Postgres does the zone arithmetic, so 23- and 25-hour days come out right, as for the budget day.
+ */
+export async function periodOf(q, team, period, now) {
+  const unit = PERIODS[period] ?? 'day';
+  const [r] = await q(`with z as (select coalesce((select to_jsonb(b)->>'time_zone' from budgets b where b.team = $1
+        and exists(select 1 from pg_timezone_names n where n.name = to_jsonb(b)->>'time_zone')), 'UTC') as tz)
+    select date_trunc($2, $3::timestamptz at time zone z.tz) at time zone z.tz as start,
+      (date_trunc($2, $3::timestamptz at time zone z.tz) + ('1 ' || $2)::interval) at time zone z.tz as "end" from z`, [team, unit, now]);
+  return { start: new Date(r.start), end: new Date(r.end) };
+}
+
+/**
  * Which live rule covers every one of these signed calls, within its limits, or null. Locks the rules it reads, so two
  * asks at once cannot both spend the last of a limit. Returns { rule, uses: [{ amount, recipient }] }.
  */
@@ -172,9 +196,9 @@ export async function coveredBy(ctx, team, { action, bound, session }) {
       uses.push({ amount, recipient });
     }
     if (!ok) continue;
-    const since = new Date(ctx.now.getTime() - PERIODS[f.period]);
+    const { start: since } = await periodOf(ctx.q, team, f.period, ctx.now);
     if (f.kind === 'send.known') {
-      const [{ n }] = await ctx.q('select count(*)::int as n from standing_rule_uses where rule = $1 and at > $2', [rule.id, since]);
+      const [{ n }] = await ctx.q('select count(*)::int as n from standing_rule_uses where rule = $1 and at >= $2', [rule.id, since]);
       if (n + uses.length > f.n) continue;
     } else if (f.kind === 'refund') {
       // Per customer per period.
@@ -182,12 +206,17 @@ export async function coveredBy(ctx, team, { action, bound, session }) {
       for (const u of uses) per[u.recipient] = (per[u.recipient] ?? 0) + u.amount;
       let over = false;
       for (const [r, add] of Object.entries(per)) {
-        const [{ s }] = await ctx.q('select coalesce(sum(amount), 0)::bigint as s from standing_rule_uses where rule = $1 and recipient = $2 and at > $3', [rule.id, r, since]);
+        const [{ s }] = await ctx.q('select coalesce(sum(amount), 0)::bigint as s from standing_rule_uses where rule = $1 and recipient = $2 and at >= $3', [rule.id, r, since]);
         if (Number(s) + add > f.total) over = true;
+      }
+      // And the total across all customers, when the rule has one: whichever is hit first sends it to a person.
+      if (!over && f.all) {
+        const [{ s }] = await ctx.q('select coalesce(sum(amount), 0)::bigint as s from standing_rule_uses where rule = $1 and at >= $2', [rule.id, since]);
+        if (Number(s) + uses.reduce((a, u) => a + u.amount, 0) > f.all) over = true;
       }
       if (over) continue;
     } else {
-      const [{ s }] = await ctx.q('select coalesce(sum(amount), 0)::bigint as s from standing_rule_uses where rule = $1 and at > $2', [rule.id, since]);
+      const [{ s }] = await ctx.q('select coalesce(sum(amount), 0)::bigint as s from standing_rule_uses where rule = $1 and at >= $2', [rule.id, since]);
       if (Number(s) + uses.reduce((a, u) => a + u.amount, 0) > f.total) continue;
     }
     return { rule, uses };
@@ -196,44 +225,45 @@ export async function coveredBy(ctx, team, { action, bound, session }) {
 }
 
 /**
- * Input fields that name who or what a call acts on: a recipient, payee, customer or account. Matching declines on
- * these (plus the tool, which names the system and the effect) means a re-ask for $63.99 in place of $64.00, or the
- * same email reworded, is still the thing that was declined (CPO, AI-10).
+ * Input fields that name who or what a call acts on: a recipient, payee, customer or account, by any of their usual
+ * names (customer, customer_id, customerId, to, bcc, email, account ...). Declines match on their values with the same
+ * tool (the system and the effect), whatever field carries them (code review sev 3): a re-ask for $63.99 in place of
+ * $64.00, the same email reworded, a renamed field or one more target field is still the thing that was declined.
  */
-const TARGET_FIELDS = ['to', 'recipient', 'recipients', 'customer', 'customer_id', 'customerId', 'payee', 'payee_id', 'payeeId', 'account', 'account_id', 'accountId', 'email', 'user', 'user_id', 'userId', 'channel', 'phone', 'number'];
-const targetOf = (input) => {
-  const out = [];
-  for (const k of TARGET_FIELDS) {
-    const v = input?.[k];
-    for (const x of Array.isArray(v) ? v : [v]) if (typeof x === 'string' || typeof x === 'number') out.push(`${k}=${String(x).trim().toLowerCase()}`);
-  }
-  return out.sort();
-};
+const TARGET = /^(to|cc|bcc|recipients?|customer|payee|account|email|user|channel|phone|number|destination|member|contact)(_?id)?$|(_id|Id)$/i;
 
 /**
- * The effect key of a set of signed calls: each call's tool (system and effect) with its targets, order ignored. Null
- * when any call names no target: then only the exact same calls count as asked before.
+ * The (tool, target value) pairs of a set of signed calls, looking into nested objects (three levels: `customer: { id }`
+ * counts as the customer). A call with no target adds nothing; null only when no call names one, and then only the
+ * exact calls match (code review sev 4).
  */
-export function effectHash(calls) {
+export function targetsOf(calls) {
   if (!Array.isArray(calls) || !calls.length) return null;
-  const parts = [];
-  for (const c of calls) {
-    const t = targetOf(c.input);
-    if (!t.length) return null;
-    parts.push(`${c.tool}\n${t.join('\n')}`);
-  }
-  return sha(`effect/1\n${[...new Set(parts)].sort().join('\n\n')}`);
+  const out = new Set();
+  const walk = (tool, obj, depth, under) => {
+    if (depth > 3 || !obj || typeof obj !== 'object') return;
+    for (const [k, v] of Object.entries(obj)) {
+      const hit = under || TARGET.test(k);
+      for (const x of Array.isArray(v) ? v : [v]) {
+        if (x && typeof x === 'object') walk(tool, x, depth + 1, hit);
+        else if (hit && ((typeof x === 'string' && x.trim()) || typeof x === 'number')) out.add(`${tool}\n${String(x).trim().toLowerCase()}`);
+      }
+    }
+  };
+  for (const c of calls) walk(c.tool, c.input ?? {}, 0, false);
+  return out.size ? [...out].sort() : null;
 }
 
 /**
  * An earlier "no" from a person in this team, within 7 days (declines stick, AI-10), to the same effect on the same
  * target (or the exact same calls). `exact` says whether nothing at all changed.
  */
-export async function declinedBefore(ctx, team, hash, effect = null) {
+export async function declinedBefore(ctx, team, hash, targets = null) {
   if (!hash) return null;
-  const [r] = await ctx.q(`select id, decided_at, decided_by, calls_hash = $2 as exact from approvals where team = $1 and (calls_hash = $2 or ($5::text is not null and effect_hash = $5)) and state = 'denied'
+  const [r] = await ctx.q(`select id, decided_at, decided_by, calls_hash = $2 as exact from approvals where team = $1
+    and (calls_hash = $2 or ($5::text[] is not null and effect_targets && $5::text[])) and state = 'denied'
     and decided_by not like 'rule:%' and decided_by not in ('ledger', 'changed') and decided_at > $3::timestamptz - make_interval(days => $4)
-    order by (calls_hash = $2) desc, decided_at desc limit 1`, [team, hash, ctx.now, DECLINE_DAYS, effect]);
+    order by (calls_hash = $2) desc, decided_at desc limit 1`, [team, hash, ctx.now, DECLINE_DAYS, targets]);
   return r ? { ...r, until: new Date(new Date(r.decided_at).getTime() + DECLINE_DAYS * 86_400_000) } : null;
 }
 
@@ -258,15 +288,22 @@ export function createLedger({ db, m3, now = () => new Date() }) {
   const nameIn = (names, id) => (id ? names.get(id) ?? null : null);
   const view = (r, n, at, names = new Map()) => ({ id: r.id, number: n, kind: r.kind, form: r.spec, line: ruleLine(r.spec), words: r.words, createdBy: r.created_by, createdByName: nameIn(names, r.created_by), createdAt: new Date(r.created_at).toISOString(),
     expiresAt: new Date(r.expires_at).toISOString(), ...(r.withdrawn_at ? { withdrawnAt: new Date(r.withdrawn_at).toISOString(), withdrawnBy: r.withdrawn_by, withdrawnByName: nameIn(names, r.withdrawn_by) } : {}),
-    live: !r.withdrawn_at && new Date(r.expires_at) > at, used: { n: Number(r.used_n), ...(r.spec.amountField ? { amount: Number(r.used_amount) } : {}) } });
+    live: !r.withdrawn_at && new Date(r.expires_at) > at, used: { n: Number(r.used_n), ...(r.spec.amountField ? { amount: Number(r.used_amount) } : {}), resetsAt: r.resets_at ? new Date(r.resets_at).toISOString() : null } });
 
   async function list(tenant, team) {
     await getTeam(db, tenant, team);
     const at = now();
-    const rows = await db.tenant(tenant, ({ q }) => q(`select r.*, row_number() over (order by r.created_at, r.id) as n,
-        (select count(*) from standing_rule_uses u where u.rule = r.id and u.at > $2::timestamptz - (case r.spec->>'period' when 'day' then interval '1 day' when 'week' then interval '7 days' else interval '30 days' end)) as used_n,
-        (select coalesce(sum(u.amount), 0) from standing_rule_uses u where u.rule = r.id and u.at > $2::timestamptz - (case r.spec->>'period' when 'day' then interval '1 day' when 'week' then interval '7 days' else interval '30 days' end)) as used_amount
-      from standing_rules r where r.team = $1 order by r.created_at desc, r.id desc`, [team, at]));
+    const rows = await db.tenant(tenant, async ({ q }) => {
+      const bounds = {};
+      for (const p of Object.keys(PERIODS)) bounds[p] = await periodOf(q, team, p, at);
+      const out = await q('select r.*, row_number() over (order by r.created_at, r.id) as n from standing_rules r where r.team = $1 order by r.created_at desc, r.id desc', [team]);
+      for (const r of out) {
+        const b = bounds[r.spec.period] ?? bounds.day;
+        const [u] = await q('select count(*)::int as n, coalesce(sum(amount), 0)::bigint as amount from standing_rule_uses where rule = $1 and at >= $2', [r.id, b.start]);
+        Object.assign(r, { used_n: u.n, used_amount: u.amount, resets_at: b.end });
+      }
+      return out;
+    });
     const names = await namesOf(tenant, rows.flatMap((r) => [r.created_by, r.withdrawn_by]));
     return { kinds: Object.entries(KINDS).map(([id, enforced]) => ({ id, enforced })), never: NEVER, rules: rows.map((r) => view(r, Number(r.n), at, names)) };
   }
