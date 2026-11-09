@@ -6,8 +6,6 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
-  // L40b (asked of the CPO): the code host when the Studio can't name it.
-  'systems.codehost.other': 'Your code host',
 };
 
 export function t(key, vars = {}) {
