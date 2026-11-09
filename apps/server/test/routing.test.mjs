@@ -86,5 +86,14 @@ test('through the team tool: a handoff by type is stamped with the member, a nam
     // A run's roster checks the new fields.
     const bad = await call('POST', '/teams/desk/runs', { team: { roles: [{ slug: 'a', reportsTo: 'owner', handsTo: ['Not An Id'] }] } });
     assert.equal(bad.status, 400);
+    // A name may not catch messages meant for someone else: another's id, a type, "owner", or another's name (security L17).
+    const clash = (extra) => call('POST', '/teams/desk/runs', { team: { roles: [{ slug: 'boss', reportsTo: 'owner' }, { slug: 'billing', reportsTo: 'boss' }, { slug: 'x-2', reportsTo: 'boss', type: 'support-agent', ...extra }] } });
+    for (const name of ['Billing', 'OWNER', 'support-agent', ' boss ']) {
+      const r = await clash({ name });
+      assert.equal(r.status, 400, name);
+      assert.match(r.body.error, /already a teammate's id, a role or "owner"/);
+    }
+    const twins = await call('POST', '/teams/desk/runs', { team: { roles: [{ slug: 'boss', reportsTo: 'owner', name: 'Maya' }, { slug: 'x-2', reportsTo: 'boss', name: 'maya' }] } });
+    assert.match(twins.body.error, /already called/);
   });
 });
