@@ -183,6 +183,8 @@ function revertOne(spec, published, item) {
   if (item.kind === 'member-renamed') {
     const r = spec.roles[item.role];
     if (!r || !p) return;
+    // A seat's own name is its Name field (kit 0.22, L11b); a teammate named before that has it as its title.
+    revertField(spec, published, item.role, 'Name');
     if (r.extension) { if (p.extension?.title !== undefined) r.extension.title = p.extension.title; else delete r.extension.title; }
     if (r.brief !== undefined && p.brief !== undefined) {
       const was = /^#\s+.*$/m.exec(p.brief)?.[0];
