@@ -7,7 +7,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,7 +26,7 @@ const SHOTS = process.env.SCREENSHOTS;
 const ADMIN = 'adm_e2e';
 const SECRET = 'a long step-up secret for the browser test';
 const TEAM = 'sample-app';
-let db, plane, studio, base, browser, m3;
+let db, plane, studio, base, browser, m3, repo;
 
 before(async () => {
   if (skip) return;
@@ -44,7 +44,7 @@ before(async () => {
   const auth = { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' };
   assert.equal((await fetch(`${cp}/v1/teams`, { method: 'POST', headers: auth, body: JSON.stringify({ id: TEAM }) })).status, 201);
 
-  const root = mkdtempSync(join(tmpdir(), 'studio-real-'));
+  const root = repo = mkdtempSync(join(tmpdir(), 'studio-real-'));
   execFileSync('git', ['-C', root, 'init', '-q']);
   execFileSync(process.execPath, [join(KIT, 'bin/agent-team.mjs'), 'init', '--preset', 'minimal', '--project', 'Sample app', '--dir', root], { stdio: 'ignore' });
   execFileSync('git', ['-C', root, 'add', '-A']);
@@ -189,5 +189,33 @@ test('Add a runner: a code after step-up, shown once, that registers a runner on
   assert.equal(await dlg.getByLabel('Runner code').count(), 0);
   assert.equal(await dlg.getByRole('button', { name: 'Get a code' }).isVisible(), true);
   assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('against the real control plane: systems sent behind a scoped step-up, and a stale version refused (L40)', { skip }, async () => {
+  writeFileSync(join(repo, '.agent-team/resources.json'), JSON.stringify({ resources: [{ id: 'drive', type: 'mcp', name: 'Shared drive', config: {}, secrets: ['DRIVE_TOKEN'] }], bindings: [{ role: 'chief-of-staff', resource: 'drive', permission: 'read' }] }, null, 2) + '\n');
+  execFileSync('git', ['-C', repo, 'add', '-A']);
+  execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'systems']);
+  const page = await browser.newPage();
+  await page.goto(`${base}/?t=${studio.launchToken}`);
+  const get = () => page.evaluate(async () => (await fetch('/v1/team/systems')).json());
+  const post = (path, body) => page.evaluate(async ([p, b]) => { const r = await fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }); return { status: r.status, ...(await r.json()) }; }, [path, body]);
+  const state = await get();
+  assert.equal(state.inSync, false);
+  assert.equal(state.version, 0);
+  assert.deepEqual(state.items.map((x) => x.kind).sort(), ['binding-added', 'system-added']);
+  // A version the control plane has moved past: its own 409, before any step-up is asked or spent.
+  const stale = await post('/v1/team/systems', { version: state.version + 1, hash: state.hash });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.type.replace(/^.*\//, ''), 'systems-changed');
+  // The version shown: the control plane asks for a step-up scoped to this team, then takes the set.
+  const ask = await post('/v1/team/systems', { version: state.version, hash: state.hash });
+  assert.equal(ask.status, 401);
+  assert.equal(ask.scope, `systems:${TEAM}`);
+  assert.equal((await post('/v1/team/step-up', { secret: SECRET, scope: ask.scope })).status, 200);
+  assert.equal((await post('/v1/team/systems', { version: state.version, hash: state.hash })).status, 200);
+  const after = await get();
+  assert.equal(after.inSync, true);
+  assert.equal(after.version, 1);
   await page.close();
 });
