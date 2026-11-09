@@ -540,6 +540,12 @@ export async function flushHeld(db, key, { providers = PROVIDERS, readSecret, pu
     where d.held and d.at > $1::timestamptz - interval '7 days' and s.verified_at is not null and d.kind = any(s.kinds)
       and not ('digest' = any(s.kinds) and p.digest_at is not null)
       and not exists(select 1 from email_deliveries x where x.subscription = d.subscription and x.event = d.event and x.status = 'sent')
+      -- A failing send is tried 3 times, like a digest (review sev 4).
+      and (select count(*) from email_deliveries f where f.subscription = d.subscription and f.event = d.event and f.status = 'failed') < 3
+      -- Still inside the person's quiet hours: not yet, and not counted against the limit (review sev 4).
+      and not coalesce((with m as (select (extract(hour from $1::timestamptz at time zone coalesce(p.timezone, 'UTC')) * 60
+          + extract(minute from $1::timestamptz at time zone coalesce(p.timezone, 'UTC')))::int as v)
+        select case when p.quiet_start < p.quiet_end then m.v >= p.quiet_start and m.v < p.quiet_end else m.v >= p.quiet_start or m.v < p.quiet_end end from m), false)
       -- What a digest already carried is not sent again (the digest was on when it was held).
       and not exists(select 1 from email_deliveries g where g.subscription = d.subscription and g.kind = 'digest' and g.status = 'sent' and g.at >= d.at)
       and ${stillIn('s')}
