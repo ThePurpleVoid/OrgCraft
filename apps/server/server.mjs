@@ -19,6 +19,7 @@ import * as store from './store.mjs';
 import { attachRunners } from './runners.mjs';
 import { createM3 } from './m3.mjs';
 import { createBus } from './bus.mjs';
+import { createInspector } from './inspector-api.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
@@ -144,6 +145,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
+  const inspector = createInspector({ db, m3 });
   const passkeys = identity ? createPasskeys({ db, m3, origin: identity.origin, now }) : null;
   const members = identity ? createMembers({ db, lookup: identity.lookup, endSessions: (p) => identity.endSessions(p), requireStepUp: passkeys.requireStepUp, now }) : null;
   const emailProviders = emailOpts.providers ?? PROVIDERS;
@@ -675,6 +677,10 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'events' && c === 'stream' && m === 'GET') return stream(req, res, t, team, url);
       if (b === 'budget' && !c && m === 'GET') return send(res, 200, await m3.getBudget(t, team));
       if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
+      if (b === 'tasks' && !c && m === 'GET') { await store.getTeam(db, t, team); return send(res, 200, await inspector.list(t, team, Object.fromEntries(url.searchParams))); }
+      if (b === 'tasks' && c && !parts[5] && m === 'GET') return send(res, 200, await inspector.get(t, team, c));
+      if (b === 'io' && c && !parts[5] && m === 'GET') return send(res, 200, await inspector.read(t, team, c, me));
+      if (b === 'io' && !c && m === 'DELETE') { await store.getTeam(db, t, team); return send(res, 200, await inspector.remove(t, team, url.searchParams.get('before'), me, stepUp)); }
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
       if (b === 'runs' && !c && m === 'POST') {
         const body = (await readJson(req, MAX_BODY)) ?? {};

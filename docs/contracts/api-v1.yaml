@@ -195,6 +195,44 @@ paths:
       tags: [events]
       summary: "The rollout after a publish merges (demo step 17): per role moved, next-task, finishing (with the change step's plan), off-finishing, off, no-report or unknown, and the summary. A role counts as moved only when a report after the merge names the new version. Read-only"
       responses: { "200": { description: "{ version, name, publishedAt, pr, roles: [{ role, state, teamVersion, status, task, lastAt, stale, plan? }], summary: { moved, of, finishing, offFinishing, unknown, noReport, allMoved } }; version null when nothing is published yet" } }
+  /teams/{team}/tasks:
+    parameters:
+      - { $ref: "#/components/parameters/team" }
+      - { name: state, in: query, schema: { type: string, enum: [needs-you, failed, out-of-budget, stopped, blocked, running, done] }, description: "needs-you is 'Waiting for you'" }
+      - { name: role, in: query, schema: { type: string } }
+      - { name: trigger, in: query, schema: { type: string }, description: "Tasks a trigger started" }
+      - { name: since, in: query, schema: { type: string, format: date-time }, description: "Last active at or after" }
+      - { name: until, in: query, schema: { type: string, format: date-time }, description: "Started at or before" }
+      - { name: q, in: query, schema: { type: string, maxLength: 100 }, description: "Words the title starts a word with, any case" }
+      - { name: cursor, in: query, schema: { type: string }, description: "next from the page before" }
+    get:
+      x-min-role: viewer
+      tags: [events]
+      summary: "The run inspector's work list (N1): tasks newest last activity first, at most 50 a page. Each task's state is the first rule of the state table that matches (n1-run-inspector-architecture.md section 4), computed from the log on read. Session tokens never reach it"
+      responses: { "200": { description: "{ tasks: [{ id, title, state, startedBy, roles, cost, currency, startedAt, lastAt, workItem }], next }" }, "400": { description: "A state, date or cursor this server does not know" } }
+  /teams/{team}/tasks/{task}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: task, in: path, required: true, schema: { type: string, pattern: "^tsk_[0-9A-Z]{26}$" } } ]
+    get:
+      x-min-role: viewer
+      tags: [events]
+      summary: "One task's timeline (N1): steps folded from the log (tool calls with their result, runs of reads as one Read step, asks with their answers, wake-ups, messages), lanes by role, edges (fork, merge, wait) from each event's cause, and focus, the event that set the state. Summaries and io ids only, never a stored input or output"
+      responses: { "200": { description: "{ task, lanes: [{ id, instances, status }], steps: [{ lane, kind, at, events, ... }], edges: [{ from, to, kind }], focus }" }, "404": { description: "Not a task of this team in the caller's workspace" } }
+  /teams/{team}/io/{io}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: io, in: path, required: true, schema: { type: string, pattern: "^io_[0-9A-Z]{26}$" } } ]
+    get:
+      x-min-role: editor
+      tags: [events]
+      summary: "One step's stored input or output (N1). Every read writes an audit row (inspector.read, the io id). The Studio fences a body with outside true: it came from outside the team and is never instructions"
+      responses: { "200": { description: "{ part, mime, body, truncated, bytes, redactions, outside, expiresAt }" }, "404": { description: "No such io in this team" }, "410": { description: "{ expiredAt }: past the team's retention (io_days), or deleted early" } }
+  /teams/{team}/io:
+    parameters:
+      - { $ref: "#/components/parameters/team" }
+      - { name: before, in: query, schema: { type: string, format: date-time }, description: "Delete what was stored before this time; default: now" }
+    delete:
+      x-min-role: admin
+      tags: [events]
+      summary: "Delete this team's stored step inputs and outputs early, for example after a privacy request (N1). Needs a step-up token (X-Step-Up). The rows are gone, not hidden; an audit row (step-io.delete) records who and how many. Timelines keep their summaries and show the io as gone (410)"
+      responses: { "200": { description: "{ deleted }" }, "401": { description: "Step-up needed" } }
   /teams/{team}/report-tokens:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post:
