@@ -543,8 +543,8 @@ export async function flushHeld(db, key, { providers = PROVIDERS, readSecret, pu
       -- A failing send is tried 3 times, like a digest (review sev 4).
       and (select count(*) from email_deliveries f where f.subscription = d.subscription and f.event = d.event and f.status = 'failed') < 3
       -- Still inside the person's quiet hours: not yet, and not counted against the limit (review sev 4).
-      and not coalesce((with m as (select (extract(hour from $1::timestamptz at time zone coalesce(p.timezone, 'UTC')) * 60
-          + extract(minute from $1::timestamptz at time zone coalesce(p.timezone, 'UTC')))::int as v)
+      and not coalesce((with z as (select case when exists(select 1 from pg_timezone_names n where n.name = p.timezone) then p.timezone else 'UTC' end as tz),
+        m as (select (extract(hour from $1::timestamptz at time zone z.tz) * 60 + extract(minute from $1::timestamptz at time zone z.tz))::int as v from z)
         select case when p.quiet_start < p.quiet_end then m.v >= p.quiet_start and m.v < p.quiet_end else m.v >= p.quiet_start or m.v < p.quiet_end end from m), false)
       -- What a digest already carried is not sent again (the digest was on when it was held).
       and not exists(select 1 from email_deliveries g where g.subscription = d.subscription and g.kind = 'digest' and g.status = 'sent' and g.at >= d.at)
@@ -606,7 +606,9 @@ export function createNotifications({ db }) {
       const [old] = await db.tenant(tenant, ({ q }) => q('select * from notification_prefs where tenant = $1 and principal = $2', [tenant, principal]));
       const next = { timezone: old?.timezone ?? 'UTC', quiet_start: old?.quiet_start ?? null, quiet_end: old?.quiet_end ?? null, digest_at: old?.digest_at ?? null, digest_kinds: old?.digest_kinds ?? [] };
       if ('timezone' in body) {
-        if (!isZone(body.timezone)) throw new Problem(400, 'timezone is an IANA zone like "America/Los_Angeles"');
+        // Both the server (Intl) and the database (flushHeld's `at time zone`) must know it (review sev 4).
+        const known = isZone(body.timezone) && (await db.tenant(tenant, ({ q }) => q('select 1 from pg_timezone_names where name = $1', [body.timezone]))).length > 0;
+        if (!known) throw new Problem(400, 'timezone is an IANA zone like "America/Los_Angeles"');
         next.timezone = body.timezone;
       }
       if ('quietHours' in body) {
