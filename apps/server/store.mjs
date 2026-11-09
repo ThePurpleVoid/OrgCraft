@@ -1,5 +1,6 @@
 // The control plane's data: teams, report tokens, the event log, the board projection, sinks and secrets.
 // Everything a tenant owns is read and written inside db.tenant(), so row-level security has the last word.
+import { attribute } from './inspector.mjs';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { summarize, toRow } from '../../tools/board.mjs';
 import { checkEvent, fromKitRow, toKitRow } from '../../packages/events/index.mjs';
@@ -110,10 +111,12 @@ export async function appendIn(q, tenant, team, events, { project = null, now = 
     if (e.tenant !== tenant || (e.team && e.team !== team) || !e.source.startsWith(`/tenants/${tenant}`)) throw new Problem(400, `event ${e.id} is for another tenant or team`);
     const env = { ...e, team };
     if (now && Date.parse(e.time) > now.getTime() + CLOCK_SKEW_MS) env.time = now.toISOString();
+    // The run inspector's task and cause are the server's to set, never the sender's (ADR 0009).
+    await attribute(q, env);
     const [row] = await q(
-      `insert into events(tenant, team, id, type, version, time, actor_kind, actor_id, envelope)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict (team, id) do nothing returning seq`,
-      [tenant, team, e.id, e.type, e.version, env.time, e.actor.kind, e.actor.id, JSON.stringify(env)]);
+      `insert into events(tenant, team, id, type, version, time, actor_kind, actor_id, envelope, task, cause)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict (team, id) do nothing returning seq`,
+      [tenant, team, e.id, e.type, e.version, env.time, e.actor.kind, e.actor.id, JSON.stringify(env), env.task ?? null, env.cause ?? null]);
     if (!row) continue;
     const stored = { id: e.id, seq: Number(row.seq), event: env };
     out.push(stored);
