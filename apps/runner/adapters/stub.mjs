@@ -11,7 +11,7 @@ export function stubAdapter(script, { costUsd = 0.0123 } = {}) {
       turns.set(o.session, n);
       const play = script[o.role] ?? script['*'];
       const t = {
-        role: o.role, turn: n, prompt: o.prompt, systemPrompt: o.systemPrompt, cwd: o.cwd, model: o.model, env: o.env, signal: o.signal, maxBudgetUsd: o.maxBudgetUsd,
+        role: o.role, turn: n, prompt: o.prompt, systemPrompt: o.systemPrompt, cwd: o.cwd, model: o.model, env: o.env, signal: o.signal, maxBudgetUsd: o.maxBudgetUsd, mcp: o.mcp ?? {},
         call: (name, args) => o.callTool(name, args),
         /** A built-in tool call: the policy decides first; `run` is what the tool would do when allowed. */
         use: async (tool, input, run, { id = `tu_${++uses}` } = {}) => {

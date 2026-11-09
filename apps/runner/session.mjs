@@ -10,6 +10,7 @@ import { decide, DEFAULT_RULES } from './policy.mjs';
 import { checkTool, TOOLS } from './tools.mjs';
 import { redactSecrets } from './secrets.mjs';
 import { Steps } from './steps.mjs';
+import { localServers, startSidecar, EFFECT_ACTION } from './sidecar.mjs';
 import { reapAside, safeRead, safeWrite, sandboxPool, sharedDir } from './sandbox.mjs';
 import { checkHead, checkpoint as saveWork, copyPath, onBranch, outOfArea, prepare, release, restart } from './worktree.mjs';
 
@@ -126,7 +127,7 @@ export class Session {
     this.ended = new Promise((r) => (this._ended = r));
     this.stopped = new Promise((r) => (this._stopped = r));
     // Step boundaries and I/O for the run inspector (N1): call ids, effects, retries, results; step.io when captured.
-    this.steps = new Steps({ capture: body.caps?.capture, send: deps.stepIo, secrets: () => this.namedSecrets(), session: this.id });
+    this.steps = new Steps({ capture: body.caps?.capture, send: deps.stepIo, secrets: () => this.namedSecrets(), session: this.id, effectOf: (tool) => this.sidecar?.effectOf(tool) });
     this.cause = null; // the event that woke the turn running now (echoed on events when the team captures steps)
     this.work = deps.work ?? deps.root; // what the agent may reach; deps.root stays the runner's own
     this.memoryPath = join(this.work, 'memory', safe(this.id), `${safe(this.role)}.md`);
@@ -178,7 +179,19 @@ export class Session {
         Object.assign(this.env, { ANTHROPIC_BASE_URL: p.baseUrl, ANTHROPIC_API_KEY: p.token });
       }
       if (b.instance) this.env.AGENT_TEAM_INSTANCE = String(b.instance);
+      // Local MCP servers run in the sidecar, outside the agent's process, with their secrets (L20).
+      const local = localServers(b.tools?.mcp);
+      if (Object.keys(local).length) {
+        this.sidecar = await startSidecar({
+          session: this.id, servers: local, egressEnforced: Boolean(this.deps.egressEnforced), log: this.deps.log,
+          secretGet: (name) => this.deps.secretGet(this.id, name),
+          pending: (tool, input) => this.steps.pendingCall(tool, input),
+          named: () => this.namedSecrets().filter((x) => !x.name.startsWith('sidecar:')),
+        });
+        for (const problem of this.sidecar.problems) await this.emit('session.tool', { tool: 'sidecar', decision: 'refused', rule: 'sidecar', detail: problem.slice(0, 500) });
+      }
     } catch (e) {
+      await this.sidecar?.close().catch(() => {});
       if (this.copy) release(this.copy.cwd, this.id);
       await this.endSlot();
       await this.emit('session.ended', { role: this.role, reason: e.capacity ? 'capacity' : 'failed', detail: `could not start: ${e.message}` });
@@ -258,7 +271,7 @@ export class Session {
       out = await this.deps.adapter.turn({
         session: this.id, role: this.role, model: this.model, cwd: this.copy.cwd, env: this.env, resume: this.resume, sandbox: this.slot ?? null,
         systemPrompt: systemPrompt(this.body.prompt, this.role, this.memoryPath), prompt: this.takeNote(wakePrompt(message, this.role, { resume })),
-        signal: this.abort.signal, maxBudgetUsd: remaining === null ? undefined : remaining / 100, mcp: this.body.tools?.mcp ?? {},
+        signal: this.abort.signal, maxBudgetUsd: remaining === null ? undefined : remaining / 100, mcp: this.mcpServers(),
         tools: Object.entries(TOOLS).map(([name, t]) => ({ name, description: t.description, shape: t.shape })),
         callTool: (name, args) => this.callTool(name, args),
         preToolUse: (tool, input, meta) => this.preToolUse(tool, input, meta),
@@ -364,8 +377,15 @@ export class Session {
    * session token, the loopback proxy's token, the model key, the runner key, and the merger app's key and tokens.
    */
   namedSecrets() {
-    return [['session-token', this.token], ['model-proxy-token', this.proxyToken], ['model-key', process.env.ANTHROPIC_API_KEY], ['runner-key', this.deps.runnerKey], ...(this.deps.proposals?.secrets?.() ?? []).map((v) => ['merger', v])]
+    return [['session-token', this.token], ['model-proxy-token', this.proxyToken], ['model-key', process.env.ANTHROPIC_API_KEY], ['runner-key', this.deps.runnerKey], ...(this.deps.proposals?.secrets?.() ?? []).map((v) => ['merger', v]), ...(this.sidecar?.secrets() ?? []).map((x) => [`sidecar:${x.name}`, x.value])]
       .filter(([, v]) => typeof v === 'string' && v).map(([name, value]) => ({ name, value }));
+  }
+
+  /** The SDK's MCP servers: remote ones as given, local ones through the sidecar (never run by the agent). */
+  mcpServers() {
+    const given = this.body.tools?.mcp ?? {};
+    const local = localServers(given);
+    return { ...Object.fromEntries(Object.entries(given).filter(([k]) => !local[k])), ...(this.sidecar?.mcp ?? {}) };
   }
 
   async decideTool(tool, input, step) {
@@ -380,6 +400,9 @@ export class Session {
     }
     const d = decide({ tool, input, cwd: this.copy.cwd, repo: this.body.repo?.url ?? null, areas: this.body.areas ?? [], also: [this.memoryPath], rules: this.deps.rules ?? DEFAULT_RULES });
     if (d.rule === 'team-tool') return { allow: true };
+    // A sidecar tool's effect comes from its manifest: one that can't be taken back waits for a person (L20).
+    const effect = this.sidecar?.effectOf(tool);
+    if (d.decision === 'allowed' && EFFECT_ACTION[effect]) Object.assign(d, { decision: 'needs-approval', rule: EFFECT_ACTION[effect], why: `has the effect "${effect}" in its connector's manifest`, target: tool });
     // Where the runner proposes, it alone merges (D2): the session asks for the merge, it does not run one.
     if ((d.rule === 'accept' || (d.decision === 'refused' && d.rule === 'match-head-commit')) && this.proposes()) {
       await this.toolEvent(step, { tool, target: String(d.target ?? '').slice(0, 500), decision: 'refused', rule: 'runner-merges' });
@@ -563,6 +586,7 @@ export class Session {
     if (this.copy) saved = await this.save(reason);
     if (this.copy) release(this.copy.cwd, this.id);
     this.deps.modelProxy?.unregister(this.id);
+    await this.sidecar?.close().catch(() => {});
     await this.record({}, { last: true });
     await this.endSlot();
     await this.emit('report.heartbeat', { status: 'idle', detail: reason === 'budget' ? 'stopped: the session reached its budget' : `stopped (${reason})`, source: 'hook' }, { via: 'hook' });

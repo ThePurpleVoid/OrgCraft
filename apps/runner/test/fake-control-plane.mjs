@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 const MAY_EMIT = (t) => /^session\./.test(t) || ['usage.recorded', 'report.heartbeat', 'chat.message'].includes(t) || /^proposal\.(opened|updated|accepted|failed|previewed)$/.test(t);
 const TOOL_EVENT = { report: 'report.status', handoff: 'message.handoff', bug: 'message.bug', signoff: 'message.signoff', blocked: 'message.blocked' };
 
-export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decide = () => ({ decision: 'approved', by: 'owner' }), sessionDefaults = () => ({}), tokenTtlMs = 15 * 60_000 } = {}) {
+export async function fakeControlPlane({ secrets = {}, key = 'rk_test', tenant = 'acme', decide = () => ({ decision: 'approved', by: 'owner' }), sessionDefaults = () => ({}), tokenTtlMs = 15 * 60_000 } = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const events = [], frames = [], approvals = [], toolCalls = [], nacks = [], resent = [];
   const live = new Map(); // role -> session id
@@ -89,6 +89,11 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
           approvals.push({ approval: a, via: 'policy', ...f.body });
           send('ack', { approval: a, card: id('card') }, f.id);
           decideLater(a, f.body.approval);
+        } else if (f.op === 'secret.get') {
+          // Released only for names bound to the session (here: the `secrets` map), and every release is recorded.
+          plane.secretGets.push(f.body);
+          if (Object.hasOwn(secrets, f.body.name)) send('ack', { name: f.body.name, value: secrets[f.body.name] }, f.id);
+          else send('nack', { ref: f.id, problem: `${f.body.name} is not bound to this session's role` }, f.id);
         } else if (f.op === 'session.renew') {
           send('ack', {}, f.id);
           const s = sessionOf[f.body.session];
@@ -114,7 +119,7 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
   await new Promise((r) => http.listen(0, '127.0.0.1', r));
   const plane = {
     url: `http://127.0.0.1:${http.address().port}`,
-    key, events, frames, approvals, toolCalls, nacks, tokens, resent,
+    key, events, frames, approvals, toolCalls, nacks, tokens, resent, secretGets: [],
     /** Session bodies to hand back in the next welcome (a reconnect resumes them). */
     resumeOnWelcome: [],
     body(b) {

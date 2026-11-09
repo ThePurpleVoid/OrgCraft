@@ -13,7 +13,7 @@ A **runner** is the data plane: a process that holds checkouts, sandboxes and re
 | Direction | `op` | `body` | Meaning |
 | --- | --- | --- | --- |
 | runner → | `hello` | `runner`, `version`, `capabilities` (sandboxes: process, container, microvm; slots per pool; agent runtimes: `agent-sdk`, `agent-teams`; max sessions) | Sent first on every connect. The control plane answers with `welcome` (the protocol version it speaks, heartbeat interval, the runner's assignments) |
-| → runner | `session.start` | `session`, `run`, `team`, `teamVersion` (commit SHA), `role`, `instance`, `repo` (connector resource and ref; for a github.com repository also `installations`, the ids of the GitHub App installations the workspace proved it owns for the repository's account, set by the control plane only and left off when there is none: the runner mints tokens for these and no other), `worktree` (branch to create or reuse), `prompt` (brief, protocols, instructions, memory: resolved by the control plane), `tools` (team tool server URL, MCP servers of bound resources), `secrets` (names only; values come through `secret.get`), `caps` (cost, time, tool policy), `wake` (the message that woke it, verbatim) | Start, or resume, a role session |
+| → runner | `session.start` | `session`, `run`, `team`, `teamVersion` (commit SHA), `role`, `instance`, `repo` (connector resource and ref; for a github.com repository also `installations`, the ids of the GitHub App installations the workspace proved it owns for the repository's account, set by the control plane only and left off when there is none: the runner mints tokens for these and no other), `worktree` (branch to create or reuse), `prompt` (brief, protocols, instructions, memory: resolved by the control plane), `tools` (team tool server URL, MCP servers of bound resources; a **local** server, `{ command, args }`, may also carry `secrets` (names), `effects` (tool name or glob → read, write, send, destructive, payment or deploy; unnamed tools count as write), `egress` and `tier`, and runs in the runner's sidecar, never in the agent's process), `secrets` (names only; values come through `secret.get`), `caps` (cost, time, tool policy), `wake` (the message that woke it, verbatim) | Start, or resume, a role session |
 | → runner | `session.message` | `session`, `message` | Deliver a message to a session that is running |
 | → runner | `session.checkpoint` | `session`, `reason` | Bring the session to a safe point: push the branch, write memory, report. Used by change safety (ADR 0004) and upgrades |
 | → runner | `session.stop` | `session`, `mode` (finish-step, now) | Stop |
@@ -21,7 +21,7 @@ A **runner** is the data plane: a process that holds checkouts, sandboxes and re
 | runner → | `approval.wait` | `session`, `approval` (`action`, `command` or `call`, `why`) | A pre-tool policy check matched. The session is paused until `approval.result` arrives |
 | runner → | `step.io` | `session`, `id` (`io_<ulid>`), `part` (input, output), `mime`, `body` (at most 64 KiB after redaction), `bytes` (the full size), `truncated`, `redactions` (what was replaced: the names of the session's own secrets, such as `session-token` or `model-key`, also found in their JSON-escaped form, and the kinds of credential the secret patterns catch, such as `github token`, each replaced by `[secret: NAME]`) | A tool call's input or output, or a turn's own text, for the run inspector (N1). Sent before the event that names it, and only when `session.start.caps.capture` is `all` or `tools` (`tools` sends no turn text). A control plane that keeps no step I/O refuses it, harmlessly |
 | → runner | `approval.result` | `approval`, `decision`, `by` | Continue or refuse the paused call |
-| runner → | `secret.get` | `session`, `name` | Ask for one secret value. Only answered for bound resources of that session's role, and every release is audited |
+| runner → | `secret.get` | `session`, `name` | Ask for one secret value, for a local server's `secrets` (the sidecar). The `ack` carries `{ name, value, expires? }`; a `nack` refuses. Only answered for bound resources of that session's role, and every release is audited. The value stays in the sidecar's memory |
 | → runner | `secret.value` | `name`, `value`, `ttl` | Held in memory and never written to disk or logs |
 | runner → | `session.renew` | `session` | Renew a session token before it expires. Answered with `session.token` |
 | → runner | `session.token` | `session`, `token`, `tokenExpires` | The renewed token, for the runner's team tool server only |
@@ -59,7 +59,7 @@ Messages between roles, decisions, approvals, cards and run changes are always m
 
 ### The M3 subset
 
-M3 builds `hello`, `welcome`, `session.start` (with resume), `session.message`, `session.stop`, `session.checkpoint`, `events`, `approval.wait`, `approval.result`, `session.renew`, `session.token`, `ping`, `pong`, `ack` and `nack`, over the WebSocket. `secret.get` and `secret.value`, and the long-poll transport, come later ([M3 design](../product/m3-design.md) section 4).
+M3 builds `hello`, `welcome`, `session.start` (with resume), `session.message`, `session.stop`, `session.checkpoint`, `events`, `approval.wait`, `approval.result`, `session.renew`, `session.token`, `ping`, `pong`, `ack` and `nack`, over the WebSocket. `secret.get` came with the sidecar (L20); the long-poll transport comes later ([M3 design](../product/m3-design.md) section 4).
 
 ## Guarantees
 
@@ -67,3 +67,14 @@ M3 builds `hello`, `welcome`, `session.start` (with resume), `session.message`, 
 - **One writer per area is enforced in the runner,** by a pre-tool hook that checks every write against the team version's owned areas. The control plane does not depend on agents following the rule.
 - **Versioned sessions.** A session runs one `teamVersion` until it is checkpointed onto a newer one (ADR 0004). Events carry the version.
 - **Adapters, not vendors.** `agent-sdk` (Claude Agent SDK) is the first runtime adapter. The protocol names runtimes as capability strings, so another adapter can be added without touching it.
+
+## The sidecar (L20)
+
+Local MCP servers (`tools.mcp[name].command`) run in the runner's sidecar, not in the agent's process:
+- **Process.** Each server is its own process. It is started with only `PATH`, a private `HOME` and the values of its own `secrets`, which the runner gets with `secret.get`.
+- **How the agent reaches it.** The agent gets a loopback MCP endpoint for each server, with a token for that session.
+- **Policy.** The runner's policy decides every call as usual. A tool whose manifest effect is `send`, `destructive`, `payment` or `deploy` waits for a person, as `outbound-message`, `destructive-data`, `payment` or `deploy-production`.
+- **Only decided calls run.** The endpoint runs only a call the policy allowed and has not yet ended. It forwards the call with `_meta.idempotencyKey` = sha256(session + newline + the call id).
+- **Results.** A result is capped at 64 KiB, and the server's secrets and the secret patterns are redacted before the model sees it.
+- **Refused servers.** A server that can't start, whose secret was not released, or that is `tier: community` on a runner that can't enforce its `egress` list is left out. The runner reports it as `session.tool` with `rule: sidecar` and `decision: refused`.
+- **Stop.** Stopping the session stops its servers and drops their secrets.
