@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
   && setcap cap_setuid,cap_setgid+ep /usr/local/libexec/agent-team/setpriv \
   && apt-get purge -y libcap2-bin && apt-get autoremove -y
 WORKDIR /app
+COPY packages/calls/ packages/calls/
 COPY packages/events/ packages/events/
 COPY packages/github-app/ packages/github-app/
 COPY packages/model-prices/ packages/model-prices/

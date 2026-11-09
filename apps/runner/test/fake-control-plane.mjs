@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 const MAY_EMIT = (t) => /^session\./.test(t) || ['usage.recorded', 'report.heartbeat', 'chat.message'].includes(t) || /^proposal\.(opened|updated|accepted|failed|previewed)$/.test(t);
 const TOOL_EVENT = { report: 'report.status', handoff: 'message.handoff', bug: 'message.bug', signoff: 'message.signoff', blocked: 'message.blocked' };
 
-export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decide = () => ({ decision: 'approved', by: 'owner' }), sessionDefaults = () => ({}), tokenTtlMs = 15 * 60_000 } = {}) {
+export async function fakeControlPlane({ secrets = {}, key = 'rk_test', tenant = 'acme', decide = () => ({ decision: 'approved', by: 'owner' }), sessionDefaults = () => ({}), tokenTtlMs = 15 * 60_000 } = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const events = [], frames = [], approvals = [], toolCalls = [], nacks = [], resent = [];
   const live = new Map(); // role -> session id
@@ -24,7 +24,8 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
 
   const decided = new Map(); // approval id -> decision, so a resent approval.wait gets its answer again
   function decideLater(approvalId, req) {
-    setTimeout(() => Promise.resolve(decide(req)).then((d) => { decided.set(approvalId, d); send('approval.result', { approval: approvalId, ...d }); check(); }), 50).unref();
+    // Like apps/server since L6: the result echoes the hash the card was bound to (a test's decide may override it).
+    setTimeout(() => Promise.resolve(decide(req)).then((d) => { const r = { ...(req?.callsHash ? { callsHash: req.callsHash } : {}), ...d }; decided.set(approvalId, r); send('approval.result', { approval: approvalId, ...r }); check(); }), 50).unref();
   }
 
   const http = createServer(async (req, res) => {
@@ -45,7 +46,7 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
       if (input.action === 'accept' && (!Number.isInteger(input.pr) || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(input.headSha ?? ''))) return reply(422, { problems: ['an accept approval needs pr and headSha, so the merge can only land on the commit that was approved'] });
       const a = id('apr');
       approvals.push({ approval: a, via: 'tool', input, as: who });
-      decideLater(a, { action: input.action, call: input.call, pr: input.pr, headSha: input.headSha });
+      decideLater(a, { action: input.action, call: input.call, pr: input.pr, headSha: input.headSha, ...(input.callsHash ? { calls: input.calls, callsHash: input.callsHash } : {}) });
       return reply(200, { approval: a, card: id('card') });
     }
     if (tool === 'ask_owner') return reply(200, { card: id('card') });
@@ -89,6 +90,11 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
           approvals.push({ approval: a, via: 'policy', ...f.body });
           send('ack', { approval: a, card: id('card') }, f.id);
           decideLater(a, f.body.approval);
+        } else if (f.op === 'secret.get') {
+          // Released only for names bound to the session (here: the `secrets` map), and every release is recorded.
+          plane.secretGets.push(f.body);
+          if (Object.hasOwn(secrets, f.body.name)) send('ack', { name: f.body.name, value: secrets[f.body.name] }, f.id);
+          else send('nack', { ref: f.id, problem: `${f.body.name} is not bound to this session's role` }, f.id);
         } else if (f.op === 'session.renew') {
           send('ack', {}, f.id);
           const s = sessionOf[f.body.session];
@@ -114,7 +120,7 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
   await new Promise((r) => http.listen(0, '127.0.0.1', r));
   const plane = {
     url: `http://127.0.0.1:${http.address().port}`,
-    key, events, frames, approvals, toolCalls, nacks, tokens, resent,
+    key, events, frames, approvals, toolCalls, nacks, tokens, resent, secretGets: [],
     /** Session bodies to hand back in the next welcome (a reconnect resumes them). */
     resumeOnWelcome: [],
     body(b) {

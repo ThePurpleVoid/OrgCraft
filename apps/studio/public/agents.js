@@ -3,6 +3,7 @@
 // The brief is built by the team model's own helpers, so the file publish writes is the one the CLI would.
 import { $ as inStudio } from './env.js';
 import { addAgent, checkPack, checkSlug, draftRole, readPack, rolePack, SLUG, slugify, validate } from './team-model.mjs';
+import { t } from './i18n.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const field = (md, name) => (new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm').exec(md ?? '')?.[1] ?? '').trim();
@@ -78,13 +79,13 @@ export function openNewAgent(app) {
   const groups = [...new Set(roles.map((r) => r.group).filter((g) => g && g !== 'other'))].sort();
 
   dlg.innerHTML = `<form class="dialog agent-dialog" method="dialog">
-    <h2 id="agent-title">New agent</h2>
-    <p class="muted">An agent is a role on this team with its own brief. Pick where to start; you can change everything afterwards.</p>
+    <h2 id="agent-title">${t('catalog.custom.title')}</h2>
+    <p class="muted">A custom role is a role of this team's own, with its own job description. Pick where to start; you can change everything afterwards.</p>
     <div class="starts" role="radiogroup" aria-labelledby="agent-title">
       <div class="start" data-start="blank"><label><input type="radio" name="start" value="blank" checked> <strong>Blank</strong></label>
         <p>Start from the kit's role template: identity, owns, tools, wakes on, hands to, rules.</p></div>
       <div class="start" data-start="copy"><label><input type="radio" name="start" value="copy"> <strong>Copy a role</strong></label>
-        <p>Start from a role close to what you need. Your agent is a separate role; the one you copy stays as it is.</p>
+        <p>Start from a role close to what you need. Yours is a separate role; the one you copy stays as it is.</p>
         <input type="search" id="a-copy-q" placeholder="Search roles" aria-label="Role to copy">
         <div id="a-copy-list" class="copy-list" role="listbox" aria-label="Roles"></div></div>
       <div class="start" data-start="import"><label><input type="radio" name="start" value="import"> <strong>Import a file</strong></label>
@@ -101,7 +102,7 @@ export function openNewAgent(app) {
       <p id="a-check" class="check-line" role="status"></p>
       <label id="a-replace-l" class="row hint" hidden><input type="checkbox" id="a-replace"> Replace the kit's role of this name on this team (a kit upgrade will not change yours)</label>
     </div>
-    <p id="a-off" class="hint agent-note" hidden>An imported agent is added switched off, under Your agents. Switch it on when its checks pass.</p>
+    <p id="a-off" class="hint agent-note" hidden>An imported role is added switched off, in the catalog. Switch it on when its checks pass.</p>
     <div id="a-pack" class="pack-list" hidden></div>
     <p id="a-error" class="result error" role="alert"></p>
     <div class="dialog-foot"><span id="a-where" class="muted"></span>
@@ -123,7 +124,7 @@ export function openNewAgent(app) {
     }
     const s = slug.value.trim();
     const c = checkSlug(spec, kit, s, { replaceKit: st.replaceKit });
-    if (!name.value.trim()) return { error: 'Give the agent a name.' };
+    if (!name.value.trim()) return { error: 'Give the role a name.' };
     if (!c.ok) return { error: c.message, check: c };
     if (st.start === 'copy' && !st.from) return { error: 'Pick the role to copy.' };
     if (st.start === 'import' && !st.imported) return { error: st.importError || 'Pick a role file or a role pack folder.' };
@@ -159,7 +160,7 @@ export function openNewAgent(app) {
     let issues = [];
     if (many) {
       issues = issuesFor(p.filter((a) => a.check.ok));
-      $('#a-pack').innerHTML = `<p><strong>${p.length} agents in this pack.</strong> They are added switched off, under Your agents; switch each on when you want it.</p>` +
+      $('#a-pack').innerHTML = `<p><strong>${p.length} roles in this pack.</strong> They are added switched off, in the catalog; switch each on when you want it.</p>` +
         p.map((a) => {
           const said = (st.packIssues ?? []).filter((i) => i.where === `roles/${a.slug}`).map((i) => i.message);
           return `<div class="pack-role ${a.check.ok ? 'ok' : 'bad'}"><code>${esc(a.slug)}</code> <span>${esc(titleOf(a.md))}</span><span class="muted">${esc([a.check.message, ...said].join(' · '))}</span></div>`;

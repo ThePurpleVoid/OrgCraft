@@ -9,6 +9,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Problem, id, sha } from './store.mjs';
 import { checkTool, detailOf } from './tools.mjs';
 import { personActor } from './m3.mjs';
+import { boundCalls, redact } from './signed.mjs';
 import { createMeetings } from './meetings.mjs';
 import { canWork } from './deployment.mjs';
 import { checkIoRefs, ingestStepIo, projectTask, purgeIo } from './inspector.mjs';
@@ -317,12 +318,13 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   async function approvalDecided(tenant, team, { approval, decision, by, note, session }) {
     if (!session) return;
     const [s] = await db.tenant(tenant, ({ q }) => q('select runner from sessions where id = $1', [session]));
-    const [a] = await db.tenant(tenant, ({ q }) => q('select a.call, a.action, r.state as run_state from approvals a left join runs r on r.id = a.run where a.id = $1', [approval]));
+    const [a] = await db.tenant(tenant, ({ q }) => q('select a.call, a.action, a.calls_hash, r.state as run_state from approvals a left join runs r on r.id = a.run where a.id = $1', [approval]));
     // A merge is only ever let go while its run is running: a stopped or paused run lands nothing, whatever the runner does.
     if (decision === 'approved' && a?.action === 'accept' && a.run_state && a.run_state !== 'running') return;
     const conn = s?.runner ? reg()?.get(s.runner) : null;
     const headSha = a?.call && typeof a.call === 'object' ? a.call.headSha ?? null : null;
-    if (conn) await conn.send('approval.result', { approval, decision, by, note, ...(headSha ? { headSha } : {}) }).catch(() => {});
+    // ADR 0013: the hash this card was bound to, so the runner runs only the calls the person signed.
+    if (conn) await conn.send('approval.result', { approval, decision, by, note, ...(headSha ? { headSha } : {}), ...(a?.calls_hash ? { callsHash: a.calls_hash } : {}) }).catch(() => {});
   }
 
   // ---- Session tokens and the team tool endpoint (section 3) --------------------------------------------------------
@@ -400,7 +402,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         await ctx.q("update sessions set state = 'waiting' where id = $1", [sess.id]);
         const call = { command: redact(i.call), ...(i.pr ? { pr: i.pr } : {}), ...(i.headSha ? { headSha: i.headSha } : {}) };
         const links = [...(prLink(roster.repo, i.pr) ? [{ rel: 'pull-request', url: prLink(roster.repo, i.pr) }] : []), ...(i.links ?? []).filter((u) => /^https:\/\//.test(u)).map((url) => ({ rel: 'link', url }))];
-        const r = await m3.requestApproval(ctx, sess.team, { action: i.action, call, why: i.why, risk: i.risk, links, session: sess.id, run: sess.run, role: sess.role });
+        const r = await m3.requestApproval(ctx, sess.team, { action: i.action, call, why: i.why, links, session: sess.id, run: sess.run, role: sess.role, bound: i.bound ?? null });
         out = { approval: r.approval, card: r.card.id };
       }
       return out;
@@ -459,13 +461,13 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     async 'approval.wait'(conn, body) {
       const a = body.approval ?? {};
       if (body.resend && typeof a.id === 'string') {
-        const [row] = await db.tenant(conn.tenant, ({ q }) => q('select a.id, a.card, a.state, a.session, a.decided_by, a.call, a.action, r.state as run_state from approvals a left join runs r on r.id = a.run where a.id = $1', [a.id]));
+        const [row] = await db.tenant(conn.tenant, ({ q }) => q('select a.id, a.card, a.state, a.session, a.decided_by, a.call, a.action, a.calls_hash, r.state as run_state from approvals a left join runs r on r.id = a.run where a.id = $1', [a.id]));
         if (!row) throw new Problem(404, `no approval ${a.id}`);
         if (!row.session) throw new Problem(403, `approval ${a.id} is not a session's`);
         await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, row.session));
         if (body.session && body.session !== row.session) throw new Problem(403, `approval ${a.id} belongs to another session`);
         const held = row.state === 'approved' && row.action === 'accept' && row.run_state && row.run_state !== 'running'; // as in approvalDecided
-        if (row.state !== 'pending' && !held) setImmediate(() => conn.send('approval.result', { approval: row.id, decision: row.state, by: row.decided_by, ...(row.call?.headSha ? { headSha: row.call.headSha } : {}) }).catch(() => {}));
+        if (row.state !== 'pending' && !held) setImmediate(() => conn.send('approval.result', { approval: row.id, decision: row.state, by: row.decided_by, ...(row.call?.headSha ? { headSha: row.call.headSha } : {}), ...(row.calls_hash ? { callsHash: row.calls_hash } : {}) }).catch(() => {}));
         return { approval: row.id, card: row.card };
       }
       const { result } = await m3.tx(conn.tenant, async (ctx) => {
@@ -475,11 +477,14 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         const headSha = typeof a.headSha === 'string' && /^[0-9a-f]{7,64}$/.test(a.headSha) ? a.headSha : null;
         if (a.action === 'accept' && headSha && !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Problem(422, 'an accept approval needs the full head sha (40 or 64 hex characters)');
         if (a.action === 'accept' && (!pr || !headSha)) throw new Problem(422, 'an accept approval needs pr and headSha, so the merge can only land on the commit that was approved');
+        // ADR 0013: the held call, signed. A malformed list or a hash that is not theirs is refused, never shown.
+        const bound = boundCalls(a.calls, a.callsHash);
+        if (bound?.problem) throw new Problem(422, bound.problem);
         await ctx.q("update sessions set state = 'waiting' where id = $1", [sess.id]);
         const call = { command: redact(typeof a.call === 'string' ? a.call : JSON.stringify(a.call ?? '')), ...(pr ? { pr } : {}), ...(headSha ? { headSha } : {}) };
         const [run] = await ctx.q('select roster from runs where id = $1', [sess.run]);
         const link = prLink(run?.roster?.repo, pr);
-        const r = await m3.requestApproval(ctx, sess.team, { action: String(a.action ?? 'unclassified'), call, why: String(a.why ?? 'The team policy keeps this for a person.'), risk: a.risk, links: link ? [{ rel: 'pull-request', url: link }] : [], session: sess.id, run: sess.run, role: sess.role });
+        const r = await m3.requestApproval(ctx, sess.team, { action: String(a.action ?? 'unclassified'), call, why: String(a.why ?? 'The team policy keeps this for a person.'), links: link ? [{ rel: 'pull-request', url: link }] : [], session: sess.id, run: sess.run, role: sess.role, bound });
         return { approval: r.approval, card: r.card.id };
       });
       return result;
@@ -657,15 +662,4 @@ export function prLink(repo, pr) {
   return `${repo.url.replace(/\.git$/, '').replace(/\/+$/, '')}/pull/${pr}`;
 }
 
-/**
- * Removes what looks like a secret from a command before it is stored or shown on a card. Best effort: the runner's
- * own scans of what leaves a session are the real line; this only keeps the obvious shapes off cards and the log.
- */
-export function redact(text) {
-  return String(text ?? '')
-    .replace(/\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9-_]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b/g, '[redacted]')
-    .replace(/((?:token|password|secret|api[_-]?key)\s*[=:]\s*)\S+/gi, '$1[redacted]')
-    .slice(0, 16 * 1024);
-}
-
-export { personActor };
+export { personActor, redact };
