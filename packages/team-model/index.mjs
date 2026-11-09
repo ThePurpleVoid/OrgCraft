@@ -1383,6 +1383,9 @@ export function capabilityDiff(published, draft, kit) {
  *                     or its tier drops, verified → community → custom (`tier`: { from, to }). `subjects` are its seats.
  * Each item is { kind, subject, subjects?, resource, …, detail }; subject is the one seat, or null with `subjects`.
  */
+/** JSON with object keys sorted, so two equal values compare equal whatever their key order. */
+const canonical = (v) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x));
+
 const TIER_RANK = { custom: 0, community: 1, verified: 2 };
 // How much an effect is asked about before it runs, least first; a tool moving down this list asks less (L40).
 const EFFECT_RANK = { read: 0, write: 1, send: 2, deploy: 3, destructive: 4, payment: 5 };
@@ -1428,8 +1431,12 @@ export function systemsCapability(before, after) {
       continue;
     }
     const secrets = (x.secrets ?? []).filter((n) => !(was.secrets ?? []).includes(n));
-    const command = JSON.stringify(x.tools ?? null) !== JSON.stringify(was.tools ?? null);
-    const settings = JSON.stringify(x.config ?? {}) !== JSON.stringify(was.config ?? {}) || x.type !== was.type;
+    const command = canonical(x.tools ?? null) !== canonical(was.tools ?? null);
+    // Settings: type, config, and any field this function does not compare one by one (a field added later widens
+    // until it is taught to narrow); name is a label only. Compared canonically, so key order is not a change.
+    const KNOWN = new Set(['id', 'name', 'secrets', 'tools', 'permissions', 'effects', 'egress', 'tier']);
+    const rest = (r) => canonical(Object.fromEntries(Object.entries(r).filter(([k, v]) => !KNOWN.has(k) && v !== undefined && !(k === 'config' && v && !Object.keys(v).length))));
+    const settings = rest(x) !== rest(was);
     const tools = toolsWidened(was.permissions, x.permissions);
     const effects = effectsWidened(was.effects, x.effects);
     const egress = (x.egress ?? []).filter((h) => !(was.egress ?? []).includes(h));
