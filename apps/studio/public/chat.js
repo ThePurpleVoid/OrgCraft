@@ -320,7 +320,14 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       // Something changed since it was shown: nothing was approved. The cards are redrawn as they are now.
       takeCards(r.data.cards);
       render();
-      flashNote(t('card.changed'));
+      // Answered elsewhere (another window, another person) says who and when; a real change to an action says so.
+      const done = r.data.cards.find((c) => c?.answer || (c?.state && c.state !== 'open'));
+      const a = done?.answer;
+      const id = a ? (typeof a.by === 'object' ? a.by?.id : a.by) : null;
+      const who = id && id === me() ? t('notify.log.you') : (typeof a?.by === 'object' ? a.by?.name : null);
+      flashNote(r.data.cards.every((c) => c?.answer || (c?.state && c.state !== 'open'))
+        ? (who && a?.at ? t('card.answered', { person: who, time: fmtTime(a.at) }) : t('card.answered.unknown'))
+        : t('card.changed'));
       return focus(log.parentElement.querySelector('.focus-miss'), $('#doit', root));
     }
     if (!r.ok) { render(); if (!needsStepUp(r)) flashNote(r.data.error ?? `HTTP ${r.status}`); return focus($('#doit', root), log.parentElement.querySelector('.focus-miss')); }

@@ -78,7 +78,7 @@ test('one bound ask: one passkey for the set, scoped to it', { skip }, async () 
   const { cp, page, go } = await chat();
   ask(cp, 'A', { data: { facts: [{ text: 'send email to client@example.com: Launch posts' }], callsHash: 'h1' } });
   await go();
-  await page.locator('#doit .doitcov', { hasText: 'Takes option 1. Confirm with your passkey.' }).waitFor();
+  await page.locator('#doit .doitcov', { hasText: 'Takes the recommended answer. Confirm with your passkey.' }).waitFor();
   assert.match(await page.locator('#doit .doitcov').textContent(), /The passkey shows each payment and send\./);
   await page.locator('#doit').click();
   const dlg = page.locator('#stepup-dialog');
@@ -114,4 +114,15 @@ test('an ask that changed since it was shown: nothing is approved, the page says
   await page.locator('#doit').click();
   await page.locator('[data-card-id="card_B"] .answer').waitFor();
   assert.deepEqual(cp.doIts[0].asks.find((x) => x.approval === 'apr_B'), { approval: 'apr_B', version: 2 });
+});
+
+test('asks already answered elsewhere: who and when if known, else that it was answered; nothing approved', { skip }, async () => {
+  const { cp, page, go } = await chat();
+  ask(cp, 'A');
+  await go();
+  await page.locator('#doit .doitcov', { hasText: 'Takes the recommended answer.' }).waitFor();
+  cp.bump('card_A', { state: 'answered', answer: { option: 'approve', by: 'p_other', at: new Date().toISOString() } }, { silent: true });
+  await page.locator('#doit').click();
+  await page.getByText('This was already answered.').waitFor();
+  assert.equal(cp.doIts.length, 0);
 });
