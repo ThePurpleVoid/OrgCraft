@@ -55,6 +55,8 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
   const teams = new Set(['sample-app']);
   const emails = []; // { id, team, person, email, verified, kinds, code, tries, createdAt }
   const codes = []; // { email, code }
+  const prefs = new Map(); // person -> { timezone, quietHours, digest } (L25, as apps/server/email.mjs prefsView)
+  const deliveries = []; // { team, person, channel, at, event, kind, status, why, to } newest last; a test pushes rows
   const mail = { sink: true }; // false: the team has no email sink yet, so no code is sent
   // Slack (kit #110), in memory: the workspace connection, the people linked, the channels picked, and the
   // states Connect Slack handed out (the "Slack" sign-in in a test comes back with one of them).
@@ -124,6 +126,45 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       };
       const rpOk = (authData) => authData && authData.subarray(0, 32).equals(createHash('sha256').update(new URL(origin).hostname).digest());
       const verified = (authData) => (authData[32] & 0x05) === 0x05; // user present and user verified
+
+      // L25: quiet hours and the daily digest, and the team delivery log, as apps/server/email.mjs answers them.
+      if (p === '/v1/me/notifications') {
+        const breakthrough = Object.entries(KINDS).filter(([, k]) => k.breakthrough).map(([id]) => id);
+        const cur = prefs.get(who.id) ?? { timezone: 'UTC', quietHours: null, digest: null };
+        if (req.method === 'GET') return send(200, { ...cur, breakthrough });
+        if (req.method === 'PUT') {
+          const body = await read();
+          const time = (v) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v ?? ''));
+          const next = { ...cur };
+          if ('timezone' in body) { try { new Intl.DateTimeFormat('en', { timeZone: body.timezone }); } catch { return problem(400, 'bad-request', 'timezone is an IANA zone like "America/Los_Angeles"'); } next.timezone = body.timezone; }
+          if ('quietHours' in body) {
+            const q = body.quietHours;
+            if (q !== null && (!time(q?.from) || !time(q?.to) || q.from === q.to)) return problem(400, 'bad-request', 'quietHours needs two different times');
+            next.quietHours = q === null ? null : { from: q.from, to: q.to };
+          }
+          if ('digest' in body) {
+            const d = body.digest;
+            if (d !== null && (!time(d?.at) || (d.kinds ?? []).some((k) => !KINDS[k] || k === 'digest'))) return problem(400, 'bad-request', 'digest is { at, kinds } or null');
+            next.digest = d === null ? null : { at: d.at, kinds: [...new Set(d.kinds ?? cur.digest?.kinds ?? [])] };
+          }
+          prefs.set(who.id, next);
+          return send(200, { ...next, breakthrough });
+        }
+      }
+      const dl = /^\/v1\/teams\/([^/]+)\/notifications\/log$/.exec(p);
+      if (dl && req.method === 'GET') {
+        const [, team] = dl;
+        if (!teams.has(team)) return problem(404, 'not-found', `no team ${team}`);
+        const all = url.searchParams.get('all') === '1';
+        if (all && !(who.workspaces ?? []).some((w) => w.role === 'owner' || w.role === 'admin')) return problem(403, 'forbidden', 'all=1 needs an owner or admin');
+        const n = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
+        const before = url.searchParams.get('before');
+        const rows = deliveries.filter((d) => d.team === team && (all || d.person === who.id) && (!before || +new Date(d.at) < +before)).sort((a, b) => +new Date(b.at) - +new Date(a.at)).slice(0, n);
+        const items = rows.map((d) => ({ channel: d.channel, at: d.at, event: d.event, kind: d.kind, status: d.status, reason: d.reason ?? null, why: d.why ?? null, ...(d.person === who.id ? { to: d.to } : {}),
+          // backend-dev 431701b: everyone's view names each person (name, else login), null if never a member here.
+          ...(all ? { principal: d.person, name: (([l, m]) => (m ? m.name || l : null))(Object.entries(members).find(([, m]) => m.id === d.person) ?? []) } : {}) }));
+        return send(200, { items, next: rows.length === n ? String(+new Date(rows.at(-1).at)) : null });
+      }
 
       // The emails API of kit #101, in memory: the same paths, bodies and refusals as apps/server/server.mjs.
       const em = /^\/v1\/teams\/([^/]+)\/emails(?:\/([^/]+)(\/verify)?)?$/.exec(p);
@@ -311,7 +352,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
   // localhost, not 127.0.0.1: WebAuthn needs a domain for rpId, and browsers treat localhost as a secure context.
   origin = `http://localhost:${server.address().port}`;
   return {
-    origin, upstream, sessions, passkeys, stepUps, log, emails, codes, mail, teams, slack,
+    origin, upstream, sessions, passkeys, stepUps, log, emails, codes, mail, teams, slack, prefs, deliveries,
     /** Ages every session's sign-in, as if it happened `ms` ago. */
     age(ms) { for (const s of sessions.values()) s.authTime -= ms; },
     close: () => { server.closeAllConnections?.(); server.close(); },

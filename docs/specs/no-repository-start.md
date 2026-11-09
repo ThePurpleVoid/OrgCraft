@@ -43,7 +43,7 @@ A small module of our own on `node:crypto` (sha1) and `node:zlib`. No child proc
 
 ## 4. Server side
 
-### 4.1 Migration `014_managed_store.sql`
+### 4.1 Migration `022_managed_store.sql (014 to 021 are taken: runner health, step-up scope, approval calls and the claimed L18–L27 numbers)`
 
 013 is taken by `fix/deliveries-team-scope` (L3). Use the next free number when this lands. Expand-only, as the migration rule says.
 
@@ -208,7 +208,7 @@ Attach needs the owner's passkey, is `x-interactive-only`, and is announced on e
 | Step | What | Who | Tests |
 | --- | --- | --- | --- |
 | L9a | `packages/git-store` (objects, trees, commits, pack, bundle, zip, readBundle) | kit-core-dev | 3. Golden hashes and the real-git interop tests |
-| L9b | Migration 014, `managed.mjs` backend, CAS, handler backend choice | kit-core-dev (backend-dev reviews the SQL) | Publish/read round trip; two concurrent publishes, exactly one wins; stale base refused; limits; read set enforced |
+| L9b | Migration 022, `managed.mjs` backend, CAS, handler backend choice | kit-core-dev (backend-dev reviews the SQL) | Publish/read round trip; two concurrent publishes, exactly one wins; stale base refused; limits; read set enforced |
 | L9c | Change requests, checks, capability diff, self-widening refusal, accept with step-up, rollback via change request | kit-core-dev + backend-dev | Accept refused on red checks; non-empty diff without passkey refused; agent-authored self-widening refused; rollback that restores removed access needs passkey; `team.published` id collapses with a repeat |
 | L9d | Export, standing export, import | kit-core-dev | Exported bundle clones with real git and matches `main`; export refused without passkey and with a person token; standing export target change waits 24 h |
 | L9e | Attach and move back | kit-core-dev, after the GitHub hold lifts (it needs a real host for the end-to-end test; unit tests use a fake host) | Refused with open changes or non-empty repo; SHAs identical after push; backend switch is atomic |

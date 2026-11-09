@@ -896,7 +896,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (used) await ctx.audit({ actorKind: 'person', actorId: by, action: 'step-up', target: used, decision: 'used', rule: what });
       return used;
     });
-    if (!result) throw new StepUpRequired(what);
+    if (!result) throw new StepUpRequired(what, scope);
     return result;
   }
 

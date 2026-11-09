@@ -32,6 +32,8 @@ import { HOST_CARD_KINDS, hostMay } from './roles.mjs';
 import { PROVIDERS, createEmail, createNotifications, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 import { createHostedStudio } from './studio.mjs';
+import { pgObjects, pgRefs } from './managed-db.mjs';
+import { createChanges } from './changes.mjs';
 import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, describeRunner } from './deployment.mjs';
 
 /**
@@ -179,8 +181,16 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     return wait;
   };
   const runnerCards = async (t) => { const at = now(); return (await store.listRunners(db, t)).map((r) => describeRunner(r, runners?.get(r.id)?.hello && !runners.get(r.id).closed ? runners.get(r.id) : null, at, serverVersion)); };
-  const hostedStudio = createHostedStudio(studioOpts && studioOrigin ? {
+  // A managed team (ADR 0012, migration 022) needs no GitHub App: its files are in this database's Git store.
+  const managedStore = {
+    teamBackend: async (tn, tm) => (await db.tenant(tn, ({ q }) => q('select backend from teams where id = $1', [tm])))[0]?.backend ?? 'github',
+    store: (tn, tm) => pgObjects(db, tn, tm),
+    refs: (tn, tm) => pgRefs(db, tn, tm),
+  };
+  const changes = createChanges({ db, m3, now });
+  const hostedStudio = createHostedStudio(studioOrigin ? {
     origin: studioOrigin,
+    managed: managedStore,
     // The installations this workspace proved (S9) and the team's repository, unless the caller brings its own.
     ...(installations ? { teamRepo: (tn, tm) => installations.teamRepo(tn, tm), boundInstallations: (tn) => installations.bound(tn) } : {}),
     // Delegated publish: the person's consent on the host's current text, and the host's name for the PR line.
@@ -761,6 +771,15 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         return send(res, 200, body, { etag: tag });
       }
       // The rollout view after a publish merges (demo step 17): which roles have picked up the new team version.
+      // A managed team's change requests (ADR 0012, spec L9 section 4.5).
+      if (b === 'changes' && !c && m === 'GET') return send(res, 200, await changes.list(t, team, url.searchParams.get('state') ?? ''));
+      if (b === 'changes' && c && !parts[5] && m === 'GET') return send(res, 200, await changes.get(t, team, c));
+      if (b === 'changes' && c && parts[5] === 'accept' && !parts[6] && m === 'POST') {
+        const body = (await readJson(req, 16 * 1024)) ?? {};
+        return send(res, 200, await changes.accept(who, team, c, { stepUp, words: typeof body.words === 'string' ? body.words : '' }));
+      }
+      if (b === 'changes' && c && parts[5] === 'close' && !parts[6] && m === 'POST') { await readJson(req, 4 * 1024); return send(res, 200, await changes.close(who, team, c)); }
+      if (b === 'rollback' && !c && m === 'POST') return send(res, 201, await changes.rollback(who, team, (await readJson(req, 4 * 1024)) ?? {}));
       if (b === 'rollout' && !c && m === 'GET') return send(res, 200, await store.rollout(db, t, team, { version: url.searchParams.get('version') ?? '', publishedAt: url.searchParams.get('publishedAt') ?? '', now: now() }));
       if (b === 'report-tokens' && !c && m === 'POST') {
         const tok = await store.mintReportToken(db, t, team);

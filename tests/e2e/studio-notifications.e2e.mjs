@@ -11,7 +11,7 @@ import { mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { stubIssuer } from '../fixtures/stub-issuer.mjs';
-import { channelError, channelName, emailsHtml, shownKinds, teamFromPath } from '../../apps/studio/public/notifications.js';
+import { channelError, channelName, emailsHtml, logHtml, prefsHtml, shownKinds, teamFromPath } from '../../apps/studio/public/notifications.js';
 import { linkError } from '../../apps/studio/public/slack-callback.js';
 
 const require = createRequire(import.meta.url);
@@ -87,25 +87,25 @@ test('verify an address, save the suggested kinds, switch one more on, and remov
   await page.getByText('Verified. Choose what to email you about:').waitFor();
 
   // D49: the suggested two are ticked, but nothing is saved until Save.
-  const box = (label) => page.getByLabel(label, { exact: true });
+  const box = (label) => page.locator('section[aria-labelledby="emails-title"]').getByLabel(label, { exact: true });
   for (const [label, on] of [['Approval needed', true], ['Budget at 80%', false], ['Budget at 100%', true], ['A role is blocked', false], ['Meeting minutes', false]]) assert.equal(await box(label).isChecked(), on, label);
   await page.getByText('The email links to the Studio. You always approve there, never by replying.').waitFor();
   assert.deepEqual(iss.emails[0].kinds, [], 'nothing saved yet');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'emails-verified-light.png') });
   await box('Meeting minutes').check();
   assert.deepEqual(iss.emails[0].kinds, [], 'a tick waits for Save the first time');
-  await page.getByRole('button', { name: 'Save' }).click();
+  await page.locator('section[aria-labelledby="emails-title"]').getByRole('button', { name: 'Save' }).click();
   await page.getByText('Saved. You will get these emails.').waitFor();
   assert.deepEqual(iss.emails[0].kinds, ['approval', 'budget100', 'minutes']);
 
   // After that each switch saves at once.
   await box('A role is blocked').check();
-  await page.getByText('Saved.', { exact: true }).waitFor();
+  await page.locator('section[aria-labelledby="emails-title"]').getByText('Saved.', { exact: true }).waitFor();
   assert.deepEqual(iss.emails[0].kinds.sort(), ['approval', 'blocked', 'budget100', 'minutes']);
   for (const l of ['Approval needed', 'Budget at 100%', 'A role is blocked', 'Meeting minutes']) await box(l).uncheck();
   await page.getByText('Saved. Nothing is emailed to this address now; it stays verified.').waitFor();
   assert.deepEqual(iss.emails[0].kinds, []);
-  assert.equal(await page.getByRole('button', { name: 'Save' }).count(), 0, 'no suggestions after every kind was switched off');
+  assert.equal(await page.locator('section[aria-labelledby="emails-title"]').getByRole('button', { name: 'Save' }).count(), 0, 'no suggestions after every kind was switched off');
   await page.reload();
   await page.getByText('Verified. Choose what to email you about:').waitFor();
 
@@ -310,5 +310,104 @@ test('Slack: a callback that needs a sign-in first never carries the code into t
   // Back on the callback, the code this tab kept is tried once: here its state was not started by this person.
   await page.getByText('This sign-in with Slack was started somewhere else. Choose Connect Slack again from Notifications.').waitFor();
   assert.equal(await page.evaluate(() => sessionStorage.getItem('agent-team-slack-cb')), null);
+  await ctx.close();
+});
+
+test('quiet hours and the digest render what is saved, and the log never shows an address it was not given', () => {
+  const kinds = [{ id: 'approval', label: 'Approval needed' }, { id: 'budget100', label: 'Budget at 100%' }, { id: 'minutes', label: 'Meeting minutes' }, { id: 'digest', label: 'Daily digest' }];
+  const html = prefsHtml({ kinds, notes: new Map(), device: 'Europe/Paris', prefs: { timezone: 'America/Los_Angeles', quietHours: { from: '22:00', to: '07:00' }, digest: { at: '08:00', kinds: ['minutes'] }, breakthrough: ['approval', 'budget100'] } });
+  assert.match(html, /<option selected>America\/Los_Angeles<\/option>/);
+  assert.match(html, /value="22:00"/);
+  assert.match(html, /Approvals and budget stops always reach you, even in quiet hours, because the team is waiting on you\./);
+  assert.match(html, /name="dkind" value="minutes" checked/);
+  assert.doesNotMatch(html, /name="dkind" value="(approval|budget100|digest)"/, 'breakthrough kinds and the digest itself are not digest choices');
+  assert.match(html, /Use this device&#39;s time zone \(Europe\/Paris\)/);
+  const log = logHtml({ kinds, owner: true, log: { all: true, next: '1', items: [{ channel: 'email', at: new Date().toISOString(), kind: 'minutes', status: 'held', why: 'quiet hours', principal: 'per_kim', name: 'Kim Lo' }, { channel: 'slack', at: new Date().toISOString(), kind: 'approval', status: 'failed', reason: 'final', why: 'channel_not_found', to: '<U1>', principal: 'per_octo', name: 'Octo Cat' }, { channel: 'email', at: new Date().toISOString(), kind: 'approval', status: 'failed', reason: 'retry', principal: 'per_gone', name: null }, { channel: 'slack', at: new Date().toISOString(), kind: 'approval', status: 'skipped', reason: 'removed', principal: 'per_kim', name: 'Kim Lo' }, { channel: 'email', at: new Date().toISOString(), kind: 'approval', status: 'skipped', reason: 'nochannel', principal: 'per_kim', name: 'Kim Lo' }] }, me: { id: 'per_octo' } });
+  assert.match(log, /Held for the digest<\/td><td>It came in during quiet hours\./);
+  assert.doesNotMatch(log, /channel_not_found|quiet hours<\/p>/, 'never a provider\'s own error');
+  assert.doesNotMatch(log, /U1/, 'a Slack row never shows its raw user id (qa-web)');
+  assert.doesNotMatch(log, /per_kim|per_octo|per_gone/, 'no raw person ids');
+  // Who is back with names (backend-dev 431701b): You for your own, a name, or the CPO's words when there is none.
+  assert.match(log, /<th scope="col">Who<\/th>/);
+  assert.match(log, /<td>Kim Lo<\/td>/);
+  assert.match(log, /<td>You<\/td><td>Couldn&#39;t send<\/td><td>Slack didn&#39;t accept the message/);
+  assert.match(log, /<td>Someone who no longer has access<\/td><td>Couldn&#39;t send<\/td><td>Couldn&#39;t send yet\. We&#39;ll try again shortly\./);
+  assert.match(log, /Slack says that channel or person no longer exists\. Pick another one in Channels\./);
+  assert.match(log, /Email isn&#39;t set up for this team yet\. An owner can fix it in Channels\./);
+  // Just me: no Who column at all.
+  assert.doesNotMatch(logHtml({ kinds, owner: true, me: { id: 'per_octo' }, log: { all: false, next: null, items: [{ channel: 'email', at: new Date().toISOString(), kind: 'minutes', status: 'sent' }] } }), /<th scope="col">Who<\/th>/);
+  assert.match(log, /aria-pressed="true">Everyone/);
+  assert.match(log, /id="log-older"/);
+  assert.match(logHtml({ kinds, owner: false, log: { items: [], next: null, all: false, error: "The delivery log couldn't load. Try again in a moment." } }), /couldn&#39;t load\. Try again in a moment\. <button type="button" id="log-retry">Retry<\/button>/);
+  assert.match(logHtml({ kinds, owner: false, log: { items: [], next: null, all: false } }), /Nothing sent yet\. Messages show here as soon as the team needs you\./);
+});
+
+test('L25: set quiet hours and a digest, then read the delivery log, mine and everyone\'s', { skip }, async () => {
+  const now = Date.now();
+  iss.deliveries.push(
+    { team: 'sample-app', person: 'per_octo', channel: 'email', at: new Date(now - 60e3).toISOString(), event: 'evt_1', kind: 'minutes', status: 'held', why: null, to: 'd***@example.com' },
+    { team: 'sample-app', person: 'per_octo', channel: 'email', at: new Date(now - 120e3).toISOString(), event: 'evt_2', kind: 'approval', status: 'sent', why: null, to: 'd***@example.com' },
+    { team: 'sample-app', person: 'per_kim', channel: 'slack', at: new Date(now - 180e3).toISOString(), event: 'evt_3', kind: 'blocked', status: 'failed', why: 'channel_not_found', to: 'U2' },
+  );
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: SHOTS ? 2 : 1, timezoneId: 'Europe/Paris' });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${iss.origin}/teams/sample-app/notifications`);
+  await page.getByRole('link', { name: 'Continue with GitHub' }).click();
+  const prefs = page.locator('#prefs');
+  await prefs.getByRole('heading', { name: 'Quiet hours and the daily digest' }).waitFor();
+  // Approvals and budget stops always break through, and say why on hover.
+  await prefs.getByText('Approvals and budget stops always reach you, even in quiet hours, because the team is waiting on you.').waitFor();
+  assert.match(await prefs.locator('button.info').getAttribute('data-tip'), /^These are a decision only you can make/);
+  await prefs.locator('button.info').focus();
+  await page.getByRole('tooltip').getByText(/^These are a decision only you can make/).waitFor();
+  // The same start and end is said in words, and nothing is sent.
+  await prefs.getByLabel('No quiet hours').uncheck();
+  await prefs.getByLabel('Quiet from').fill('22:00');
+  await prefs.getByLabel('to', { exact: true }).fill('22:00');
+  await prefs.getByRole('button', { name: 'Save' }).click();
+  await prefs.getByRole('alert').getByText('Quiet hours need a start and an end that are different.').waitFor();
+  await prefs.getByLabel('No quiet hours').check();
+  await prefs.getByRole('button', { name: "Use this device's time zone (Europe/Paris)" }).click();
+  await prefs.getByLabel('No quiet hours').uncheck();
+  await prefs.getByLabel('Quiet from').fill('22:00');
+  await prefs.getByLabel('to', { exact: true }).fill('07:30');
+  await prefs.getByLabel('No daily digest').uncheck();
+  await prefs.getByLabel('Daily digest at').fill('08:15');
+  await prefs.getByLabel('Meeting minutes').check();
+  await prefs.getByRole('button', { name: 'Save' }).click();
+  await prefs.getByText('Saved.', { exact: true }).waitFor();
+  const saved = iss.prefs.get('per_octo');
+  assert.equal(saved.timezone, 'Europe/Paris');
+  assert.deepEqual(saved.quietHours, { from: '22:00', to: '07:30' });
+  assert.deepEqual(saved.digest, { at: '08:15', kinds: ['minutes'] });
+  await page.reload();
+  assert.equal(await prefs.getByLabel('Daily digest at').inputValue(), '08:15');
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'quiet-hours-light.png'), fullPage: true });
+
+  // The log: mine first; held says why on hover; an owner can see everyone's, with no one else's address.
+  const log = page.locator('#log');
+  await log.getByRole('heading', { name: 'Delivery log' }).waitFor();
+  assert.equal(await log.locator('tbody tr').count(), 2);
+  // The reason is in its own column, so no hover-only title (ALL-4).
+  assert.equal(await log.locator('tr.st-held td[title]').count(), 0);
+  await log.locator('tr.st-held td', { hasText: 'It came in during quiet hours.' }).waitFor();
+  await log.getByRole('button', { name: 'Everyone' }).click();
+  await log.locator('tbody tr').nth(2).waitFor();
+  assert.equal(await log.getByRole('button', { name: 'Everyone' }).getAttribute('aria-pressed'), 'true');
+  const kim = log.locator('tr', { hasText: 'A teammate is stuck' });
+  assert.doesNotMatch(await log.textContent(), /per_kim|per_octo/, 'no raw person ids');
+  await kim.getByRole('cell', { name: 'Someone who no longer has access' }).waitFor(); // per_kim was never a member here
+  await log.locator('tr', { hasText: 'Meeting minutes' }).getByRole('cell', { name: 'You', exact: true }).waitFor();
+  await kim.getByText("Couldn't send").waitFor();
+  await kim.getByText("Slack didn't accept the message. Check the channel, or reconnect Slack in Channels.").waitFor();
+  assert.doesNotMatch(await kim.textContent(), /U2|channel_not_found/, "someone else's address, and a provider's own error, are never shown");
+  // A phone: the page never scrolls sideways (the log scrolls inside itself), and the toggles are 44 px.
+  await page.setViewportSize({ width: 360, height: 780 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 360), 'no sideways scroll at 360px');
+  for (const el of [log.getByRole('button', { name: 'Everyone' }), page.locator('#prefs select'), page.getByLabel('Daily digest at'), page.getByRole('link', { name: 'Back to the team' })]) assert.ok((await el.boundingBox()).height >= 44, 'a 44 px target at 360px');
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'delivery-log-phone-light.png'), fullPage: true });
+  assert.deepEqual(errors, []);
   await ctx.close();
 });
