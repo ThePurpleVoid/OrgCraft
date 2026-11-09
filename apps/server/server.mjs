@@ -667,6 +667,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         // token can make the chat or the clients show something the system never said.
         const bad = events.map((e) => String(e?.type ?? '')).filter((ty) => !postable(ty));
         if (bad.length) throw new Problem(403, `these event types are written by the control plane or a runner, never posted: ${[...new Set(bad)].slice(0, 10).join(', ')}`, { type: 'forbidden', body: { refused: [...new Set(bad)].slice(0, 50) } });
+        // A sign-off's `checks` are the runner's own record; one posted here is the sender's words, so it is dropped.
+        for (const e of events) if (e?.type === 'message.signoff' && e.data && typeof e.data === 'object') delete e.data.checks;
         const stored = await did(m3.appendEvents(t, team, events));
         const sent = new Set(events.map((e) => e?.id));
         const mine = stored.filter(({ id }) => sent.has(id));

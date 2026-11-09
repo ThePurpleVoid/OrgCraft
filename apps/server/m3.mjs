@@ -7,6 +7,7 @@ import { atLeast } from './roles.mjs';
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
+import { gate, refusal, requireFresh } from './signoffs.mjs';
 import { checkMeetingDefs } from './meetings.mjs';
 import { approveScope, factsOf, redact as redactText, riskOf } from './signed.mjs';
 
@@ -76,6 +77,14 @@ const isInt = (v) => Number.isSafeInteger(v);
  * The context every write runs in: one tenant transaction, an `emit` that appends with the projections, and the
  * list of what was stored. `hooks.afterCommit` lets the bus send frames once the transaction is durable.
  */
+/** A merge card's sign-offs (governance G2): each with its version and whether it is fresh, and what blocks the merge. */
+const signoffData = (g) => ({ signoffs: g.signoffs.map(({ signoff, by, version, versionKind, result, unverified, fresh, problem }) => ({ signoff, by, version, versionKind, result, unverified, fresh, ...(problem ? { problem } : {}) })), ...(g.missing.length ? { blocked: refusal(g.missing) } : {}) });
+/** Approve is off, with the reason, while a sign-off on the pull request is not fresh. Deny always works. */
+const approvalOptions = (g) => [
+  { id: 'approve', label: 'Approve', style: 'primary', stepUp: true, ...(g && g.missing.length ? { disabled: true, reason: refusal(g.missing) } : {}) },
+  { id: 'deny', label: 'Deny', style: 'danger', stepUp: false },
+];
+
 export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   now ??= () => new Date();
   const checking = new Set();
@@ -109,6 +118,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   /** Projections that run for every stored event, whatever path appended it (the API, a runner, the tick). */
   async function project(ctx, { event }) {
     if (event.type === 'usage.recorded' && event.team) await recordUsage(ctx, event);
+    if ((event.type === 'message.signoff' || event.type === 'signoff.stale') && event.team && Number.isSafeInteger(Number(event.data?.pr)) && event.data.pr) await refreshShipCards(ctx, event.team, event.data.pr);
     if (hooks.project) await hooks.project(ctx, { event });
     return [];
   }
@@ -517,6 +527,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     const apr = id('apr');
     const expiresAt = new Date(ctx.now.getTime() + hours * 3_600_000);
     const callText = typeof call === 'string' ? call : JSON.stringify(call);
+    // Governance G2: a merge card shows the sign-offs on its pull request, each fresh or not for the head it merges.
+    const shipping = call && typeof call === 'object' && call.pr && call.headSha ? await gate(ctx.q, team, call.pr, call.headSha) : null;
     const card = await createCard(ctx, team, {
       kind: 'approval', subject: `approval/${apr}`, session, run, approval: apr,
       // The person sees exactly what a merge is bound to (D1): the PR and the short head sha, not lost in the body.
@@ -527,10 +539,11 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       // A bound card (ADR 0013) shows facts the server rendered from the signed calls, never the role's `call` text.
       data: {
         ...(call && typeof call === 'object' && call.pr ? { pr: call.pr, ...(call.headSha ? { headSha: call.headSha } : {}) } : {}),
+        ...(shipping ? signoffData(shipping) : {}),
         ...(bound ? { facts: factsOf(bound.calls, redactText), callsHash: bound.hash } : { call: callText.length > 2000 ? `${callText.slice(0, 2000)}…` : callText }),
       },
       body: bound ? why : `${why}\n\n${describeCall(call)}`,
-      options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger', stepUp: false }],
+      options: approvalOptions(shipping),
       risk: r, expiresAt, links: links.filter((l) => l && typeof l.url === 'string').slice(0, 20),
     });
     await ctx.q(`insert into approvals(id, tenant, team, run, session, role, action, call, why, risk, card, expires_at, calls, calls_hash) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
@@ -540,6 +553,22 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       { subject: `approval/${apr}`, ...(run ? { run } : {}), ...(role ? { actor: { kind: 'role', id: role, session, via: 'tool' } } : {}) });
     await ctx.audit({ team, actorKind: role ? 'role' : 'system', actorId: role ?? 'control-plane', session, action: 'approval', target: apr, decision: 'needs-approval', rule: action, event: ev.id });
     return { approval: apr, card };
+  }
+
+  /**
+   * A sign-off on a pull request arrived or went stale: every open merge card for it shows the sign-offs again, and
+   * its Approve option is off while any is not fresh (governance G2). The card's version moves, as for any change.
+   */
+  async function refreshShipCards(ctx, team, pr) {
+    const open = await ctx.q(`select a.call, c.id from approvals a join cards c on c.id = a.card
+                              where a.team = $1 and a.state = 'pending' and c.state = 'open' and a.call->>'pr' = $2 and a.call ? 'headSha'`, [team, String(pr)]);
+    for (const r of open) {
+      const g = await gate(ctx.q, team, r.call.pr, r.call.headSha);
+      const [row] = await ctx.q(`update cards set version = version + 1,
+                                   card = card || jsonb_build_object('version', version + 1, 'options', $2::jsonb, 'data', coalesce(card->'data', '{}'::jsonb) - 'blocked' || $3::jsonb)
+                                 where id = $1 returning card`, [r.id, JSON.stringify(approvalOptions(g)), JSON.stringify(signoffData(g))]);
+      await ctx.emit(team, 'card.updated', { card: row.card }, { subject: row.card.subject });
+    }
   }
 
   /** POST /v1/approvals/{id}: approving needs a fresh step-up; denying never does. */
@@ -553,11 +582,14 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   async function decideIn(ctx, apr, { decision, note, version }, by, stepUp) {
     if (!decision) throw new Problem(400, 'option is approve or deny');
-    const [a] = await ctx.q('select id, team, run, session, card, state, expires_at, calls_hash from approvals where id = $1 for update', [apr]);
+    const [a] = await ctx.q('select id, team, run, session, card, state, expires_at, calls_hash, call from approvals where id = $1 for update', [apr]);
     if (!a) throw new Problem(404, 'no such approval');
     if (a.state === 'pending' && new Date(a.expires_at).getTime() <= ctx.now.getTime()) throw new Problem(409, 'this approval expired', { body: { ...(await currentCard(ctx, a.card)), state: 'expired' } });
     const open = await lockOpenCard(ctx, a.card, version);
     if (a.state !== 'pending') throw new Problem(409, `this approval is ${a.state}`, { body: await currentCard(ctx, a.card) });
+    // Governance G2: a merge is approved only while every sign-off on its pull request is fresh for the head it merges.
+    // Checked before step-up, so a refused approve spends no token.
+    if (decision === 'approved' && a.call && typeof a.call === 'object' && a.call.pr && a.call.headSha) await requireFresh(ctx.q, a.team, a.call.pr, a.call.headSha);
     let stepUpId = null;
     // ADR 0013: approving a bound card needs a step-up bound to it: tenant, team, approval, card version and calls.
     const scope = a.calls_hash ? approveScope({ tenant: ctx.tenant, team: a.team, approval: apr, version: open.version, callsHash: a.calls_hash }) : null;
