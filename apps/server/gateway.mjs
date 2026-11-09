@@ -20,6 +20,10 @@ const KEY = /^[A-Za-z0-9:._@/-]{1,200}$/;
 const EFFECT_KEY = /^[A-Za-z0-9:._-]{8,200}$/;
 const SLOWED_EVERY_MS = 60_000;
 const RESULT_MAX = 16 * 1024;
+/** An effect still `started` this long after it began was cut off (a crash, a lost link): nobody knows if it went. */
+export const EFFECT_STALE_MS = 15 * 60_000;
+/** The longest a request from the Studio or the API waits for a slot; past it, the answer is a 503 with retry-after. */
+export const FETCH_WAIT_MAX_MS = 15_000;
 
 /**
  * Pacing per kind of key: `rate` calls a second and `burst` calls at once, set below the providers' published limits.
@@ -51,12 +55,13 @@ export function keysFor({ provider, account = null, installation = null, tenant 
   return out;
 }
 
-export function createGateway({ db, m3 = null, now = () => new Date(), limits = DEFAULT_LIMITS, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+export function createGateway({ db, m3 = null, now = () => new Date(), limits = DEFAULT_LIMITS, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), fetchWaitMaxMs = FETCH_WAIT_MAX_MS, effectStaleMs = EFFECT_STALE_MS }) {
   const lim = (kind) => limits[kind] ?? DEFAULT_LIMITS[kind];
 
   /**
-   * Reserves a slot on every key of `call` and answers { waitMs, keys } (0 when it may go now). The reservation is
-   * made whether it waits or not, so calls queue in the order they asked: a burst is paced, never dropped.
+   * Reserves a slot on every key of `call` at once and answers { waitMs, keys } (0 when it may go now). The reservation
+   * is made whether it waits or not, so calls queue in the order they asked: a burst is paced, never dropped. Calls
+   * that span a tenant share and a shared account go through `stage` (or `pace`) instead, which is what keeps C1 fair.
    */
   async function take(call) {
     return takeKeys(call, keysFor(call));
@@ -75,8 +80,9 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
         rows.push({ ...k, r });
       }
       // GCRA per key: the key lets the call go at max(now, tat - (burst - 1) * interval); a block holds it longer.
-      // The call goes when every key lets it. Each key counts the call at the time it let it go, so a tenant waiting
-      // on its own share never pushes the shared account's clock into the future for other tenants (C1 fairness).
+      // The call goes when every key lets it, and every key counts it at that time. Keys taken together are only ever
+      // one stage (the caller's own keys, or the shared account alone; see `stage`), so a tenant waiting on its own
+      // share never pushes the shared account's clock into the future for other tenants (C1 fairness).
       for (const row of rows) {
         const { rate, burst } = lim(row.kind);
         row.interval = 1000 / rate;
@@ -85,8 +91,8 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
         row.allowAt = Math.max(t, row.tat - (burst - 1) * row.interval, blocked);
         goAt = Math.max(goAt, row.allowAt);
       }
-      for (const { key, kind, r, interval, tat, allowAt } of rows) {
-        const next = Math.max(tat, allowAt) + interval;
+      for (const { key, kind, r, interval, tat } of rows) {
+        const next = Math.max(tat, goAt) + interval;
         const slow = goAt - t >= 2000 && (!r.slowed_at || t - new Date(r.slowed_at).getTime() >= SLOWED_EVERY_MS);
         if (slow) slowed.push({ key, kind, reason: r.blocked_until && new Date(r.blocked_until).getTime() > t ? r.blocked_reason ?? 'blocked' : 'rate' });
         await q('update governor_buckets set tat = $2, updated_at = $3' + (slow ? ', slowed_at = $3' : '') + ' where key = $1', [key, new Date(next).toISOString(), at.toISOString()]);
@@ -104,6 +110,21 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
       ...(call.session ? { session: call.session } : {}),
       detail: `Calls to ${call.provider === 'github' ? 'GitHub' : 'the model provider'} are being paced: this one waits about ${Math.ceil(waitMs / 1000)} s. Nothing is dropped.`,
     }, { subject: `gateway/${call.provider}` }));
+  }
+
+  /**
+   * One stage of a paced call, answered at once (never slept on, so a runner's other requests never wait behind it).
+   * Stage `own` reserves the caller's own keys (its installation and its tenant's share) and answers
+   * { waitMs, next: 'account' } (or next null for a call with no own keys left to take); the caller waits waitMs, then
+   * asks stage `account`, which reserves the shared App or key and answers { waitMs, next: null }. The call goes when
+   * that wait is over.
+   */
+  async function stage(call, which = 'own') {
+    const keys = keysFor(call);
+    if (which === 'account') return { ...(await takeKeys(call, keys.slice(0, 1))), stage: 'account', next: null };
+    if (which !== 'own') throw new Problem(400, 'stage is own or account');
+    if (keys.length === 1) return { ...(await takeKeys(call, keys)), stage: 'account', next: null };
+    return { ...(await takeKeys(call, keys.slice(1))), stage: 'own', next: 'account' };
   }
 
   /**
@@ -151,7 +172,15 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
     return async (url, init) => {
       const installation = /\/app\/installations\/(\d+)\//.exec(String(url))?.[1] ?? null;
       const call = { provider: 'github', installation, ...context(url, init) };
-      await pace(call);
+      // A person's request waits at most fetchWaitMaxMs for a slot; past it, it is answered with a 503 that says when
+      // to try again, never held for the length of a provider's hold. (The slot it took is spent; the cost is one
+      // interval on the keys, not a call.)
+      for (let which = 'own'; which;) {
+        const r = await stage(call, which);
+        if (r.waitMs > fetchWaitMaxMs) return busy(r.waitMs);
+        if (r.waitMs > 0) await sleep(r.waitMs);
+        which = r.next;
+      }
       const res = await f(url, init);
       if (res.status === 429 || res.status === 403) {
         const h = (n) => res.headers?.get?.(n);
@@ -170,6 +199,12 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
     };
   }
 
+  function busy(waitMs) {
+    const s = Math.ceil(waitMs / 1000);
+    return new Response(JSON.stringify({ type: 'paced', message: `GitHub is being paced for this workspace: try again in about ${s} s. Nothing was sent.`, retryAfter: s }),
+      { status: 503, headers: { 'content-type': 'application/json', 'retry-after': String(s) } });
+  }
+
   // ---- Effects (R5) -------------------------------------------------------------------------------------------------
 
   /**
@@ -177,32 +212,55 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
    * { state: 'repeat', result } when it was already done (send nothing; this is its result), and throws 409 while
    * the same key is in flight. A key that failed may be tried again.
    */
-  async function begin(ctx, { key, team = null, session = null, tool, callHash = null }) {
+  async function begin(ctx, { key, team = null, session = null, tool, callHash = null, approval = null }) {
     if (typeof key !== 'string' || !EFFECT_KEY.test(key)) throw new Problem(400, 'key is the effect\'s idempotency key: 8 to 200 letters, digits or :._-');
     if (typeof tool !== 'string' || !tool || tool.length > 200) throw new Problem(400, 'tool names the effect');
     if (callHash !== null && (typeof callHash !== 'string' || callHash.length > 200)) throw new Problem(400, 'callHash is text');
-    const [row] = await ctx.q(`insert into effects(tenant, key, team, session, tool, call_hash) values ($1, $2, $3, $4, $5, $6)
-                               on conflict (tenant, key) do nothing returning key`, [ctx.tenant, key, team, session, tool, callHash]);
+    const [row] = await ctx.q(`insert into effects(tenant, key, team, session, tool, call_hash, started_at) values ($1, $2, $3, $4, $5, $6, $7)
+                               on conflict (tenant, key) do nothing returning key`, [ctx.tenant, key, team, session, tool, callHash, ctx.now.toISOString()]);
     if (row) return { state: 'first' };
-    const [e] = await ctx.q('select tool, call_hash, state, result from effects where tenant = $1 and key = $2 for update', [ctx.tenant, key]);
+    const [e] = await ctx.q('select tool, call_hash, team, state, result, started_at from effects where tenant = $1 and key = $2 for update', [ctx.tenant, key]);
     // The same key for another call is a bug or an attack: never answer it with someone else's result.
     if (e.tool !== tool || (e.call_hash && callHash && e.call_hash !== callHash)) throw new Problem(409, `idempotency key ${key.slice(0, 40)} belongs to another call`, { type: 'effect-key' });
     if (e.state === 'done') return { state: 'repeat', result: e.result ?? null };
+    // Still started long after it began: whoever sent it was cut off, and nobody knows whether it went. It becomes
+    // `unknown`, and is never sent again on a runner's word: only with a person's approval to resend it (action
+    // `effect-resend`, its call the key), or ended by effect.end once a person has said what happened.
+    if (e.state === 'started' && ctx.now.getTime() - new Date(e.started_at).getTime() >= effectStaleMs) {
+      await ctx.q("update effects set state = 'unknown' where tenant = $1 and key = $2", [ctx.tenant, key]);
+      e.state = 'unknown';
+    }
     if (e.state === 'started') throw new Problem(409, 'this effect is already being sent; wait for its result', { type: 'effect-in-flight' });
-    await ctx.q("update effects set state = 'started', attempts = attempts + 1, done_at = null where tenant = $1 and key = $2", [ctx.tenant, key]);
+    if (e.state === 'unknown') {
+      if (!(await approved(ctx, approval, e.team, key))) return { state: 'unknown', startedAt: new Date(e.started_at).toISOString(), detail: 'It may or may not have been sent. Ask a person (approval action effect-resend, call the key) before sending it again.' };
+    }
+    await ctx.q("update effects set state = 'started', attempts = attempts + 1, started_at = $3, done_at = null where tenant = $1 and key = $2", [ctx.tenant, key, ctx.now.toISOString()]);
     return { state: 'first', retry: true };
   }
 
-  /** Records how an effect ended: ok with its (bounded) result, or failed (it may be tried again). */
-  async function end(ctx, { key, ok, result = null, session = null }) {
+  /**
+   * Records how an effect ended: ok with its (bounded) result, or failed (it may be tried again). A started effect is
+   * ended by the session that began it. An unknown one only with a person's approval (action effect-resend, call the
+   * key), since marking it failed would let it be sent again: ok when they say it went, failed when it did not.
+   */
+  async function end(ctx, { key, ok, result = null, session = null, approval = null }) {
     if (typeof key !== 'string' || !EFFECT_KEY.test(key)) throw new Problem(400, 'key is the effect\'s idempotency key');
     const json = result === null || result === undefined ? null : JSON.stringify(result);
     const kept = json && json.length > RESULT_MAX ? JSON.stringify({ truncated: true, bytes: json.length }) : json;
-    const rows = await ctx.q(`update effects set state = $3, result = $4::jsonb, done_at = $5 where tenant = $1 and key = $2 and state = 'started' ${session ? 'and session = $6' : ''} returning key`,
-      [ctx.tenant, key, ok ? 'done' : 'failed', kept, ctx.now.toISOString(), ...(session ? [session] : [])]);
-    if (!rows.length) throw new Problem(409, 'no effect in flight with that key', { type: 'effect-key' });
+    const [e] = await ctx.q('select state, session, team from effects where tenant = $1 and key = $2 for update', [ctx.tenant, key]);
+    const mine = e?.state === 'started' && (!session || e.session === session);
+    const decided = e?.state === 'unknown' && await approved(ctx, approval, e.team, key);
+    if (!mine && !decided) throw new Problem(409, e?.state === 'unknown' ? 'this effect may or may not have gone: a person decides (approval effect-resend)' : 'no effect in flight with that key', { type: 'effect-key' });
+    await ctx.q('update effects set state = $3, result = $4::jsonb, done_at = $5 where tenant = $1 and key = $2', [ctx.tenant, key, ok ? 'done' : 'failed', kept, ctx.now.toISOString()]);
     return { state: ok ? 'done' : 'failed' };
   }
 
-  return { take, pace, block, wrapFetch, begin, end, keysFor };
+  /** A person approved resending (or settling) this unknown effect: action effect-resend, its call the key, on its team. */
+  async function approved(ctx, approval, team, key) {
+    if (typeof approval !== 'string' || !approval) return false;
+    return (await ctx.q(`select 1 from approvals where id = $1 and tenant = $2 and team = $3 and state = 'approved' and action = 'effect-resend' and call->>'command' = $4`,
+      [approval, ctx.tenant, team, key])).length > 0;
+  }
+
+  return { take, stage, pace, block, wrapFetch, begin, end, keysFor };
 }

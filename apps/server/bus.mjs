@@ -558,8 +558,10 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     },
 
     /**
-     * The outbound governor (L20g, R1a): a slot for one call to a provider on this session's behalf. The ack comes
-     * when the call may go, { waitedMs }: a busy key never refuses, it only delays. `installation` names a GitHub App
+     * The outbound governor (L20g, R1a): a slot for one call to a provider on this session's behalf, in two stages so
+     * it is answered at once and never holds the runner's other requests (they run one at a time per connection).
+     * Stage `own` (the default) answers { waitMs, next: 'account' }: wait, then ask stage `account`, whose waitMs is
+     * the last wait before the call goes. A busy key never refuses, it only delays. `installation` names a GitHub App
      * installation the call uses.
      */
     async pace(conn, body) {
@@ -567,7 +569,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       const sess = await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, body?.session));
       const installation = body?.installation === undefined || body.installation === null ? null : String(body.installation);
       if (installation !== null && !/^\d{1,20}$/.test(installation)) throw new Problem(400, 'installation is a GitHub App installation id');
-      return gateway.pace({ provider: body?.provider, installation, tenant: conn.tenant, team: sess.team, session: sess.id });
+      return gateway.stage({ provider: body?.provider, installation, tenant: conn.tenant, team: sess.team, session: sess.id }, body?.stage ?? 'own');
     },
 
     /**
@@ -585,14 +587,15 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
 
     /**
      * An outward effect is about to be sent (R5): its idempotency key is recorded first. The ack is { state: 'first' }
-     * (send it), or { state: 'repeat', result } (it was done already: send nothing, use this result); a key in flight
-     * is refused.
+     * (send it), { state: 'repeat', result } (it was done already: send nothing, use this result), or
+     * { state: 'unknown' } (it was cut off 15 minutes or more ago: ask a person, approval action effect-resend with the
+     * key as its call, and begin again with `approval`); a key in flight is refused.
      */
     async 'effect.begin'(conn, body) {
       if (!gateway) throw new Problem(501, 'this control plane has no gateway');
       const { result } = await m3.tx(conn.tenant, async (ctx) => {
         const sess = await ownSession(ctx.q, conn, body?.session);
-        return gateway.begin(ctx, { key: body?.key, team: sess.team, session: sess.id, tool: body?.tool, callHash: body?.callHash ?? null });
+        return gateway.begin(ctx, { key: body?.key, team: sess.team, session: sess.id, tool: body?.tool, callHash: body?.callHash ?? null, approval: body?.approval ?? null });
       });
       return result;
     },
@@ -602,7 +605,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (!gateway) throw new Problem(501, 'this control plane has no gateway');
       const { result } = await m3.tx(conn.tenant, async (ctx) => {
         const sess = await ownSession(ctx.q, conn, body?.session);
-        return gateway.end(ctx, { key: body?.key, ok: body?.ok === true, result: body?.result ?? null, session: sess.id });
+        return gateway.end(ctx, { key: body?.key, ok: body?.ok === true, result: body?.result ?? null, session: sess.id, approval: body?.approval ?? null });
       });
       return result;
     },

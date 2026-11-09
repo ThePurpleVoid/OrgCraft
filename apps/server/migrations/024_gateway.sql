@@ -8,7 +8,8 @@
 --
 -- `effects`: every outward effect's idempotency key (task, step and call hash, or the sidecar's key), per tenant. The
 -- first call records `started`, then `done` with its result or `failed`; a repeat of a done key is answered with the
--- first result and never sent again, and a repeat while it is started is refused.
+-- first result and never sent again, and a repeat while it is started is refused. One still started 15 minutes after
+-- `started_at` was cut off: it becomes `unknown` and is sent again only with a person's approval.
 --
 -- Additive: two new tables. Older servers ignore both.
 --
@@ -32,10 +33,11 @@ create table effects (
   session text,
   tool text not null check (length(tool) between 1 and 200),
   call_hash text,
-  state text not null default 'started' check (state in ('started', 'done', 'failed')),
+  state text not null default 'started' check (state in ('started', 'done', 'failed', 'unknown')),
   result jsonb,
   attempts int not null default 1,
   created_at timestamptz not null default now(),
+  started_at timestamptz not null default now(),
   done_at timestamptz,
   primary key (tenant, key)
 );

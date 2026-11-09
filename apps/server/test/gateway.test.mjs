@@ -75,7 +75,7 @@ test('a provider\'s slow-down holds the keys until it says; an abuse answer hold
 });
 
 test('the code-host fetch is paced and learns from a 429 or a secondary-limit 403, and never retries', async () => {
-  await withGateway(async ({ g, slept, db }) => {
+  await withGateway(async ({ g, slept, db, tick }) => {
     let calls = 0;
     const answers = [new Response('{}', { status: 200 }), new Response('{"message":"You have exceeded a secondary rate limit"}', { status: 403 }), new Response('{}', { status: 200 })];
     const f = g.wrapFetch(async () => { calls++; return answers.shift(); });
@@ -84,8 +84,15 @@ test('the code-host fetch is paced and learns from a 429 or a secondary-limit 40
     assert.equal(calls, 2, 'not retried');
     const [b] = await db.system("select blocked_until from governor_buckets where key = 'github-app:shared'");
     assert.ok(b.blocked_until, 'the App is held');
-    await f('https://api.github.com/repos/o/r', {});
-    assert.equal(slept.at(-1), 60_000, 'the next call waits out the hold instead of being sent');
+    const busy = await f('https://api.github.com/repos/o/r', {});
+    assert.equal(busy.status, 503, 'a person\'s request is not held for a minute: it is told to try again');
+    assert.equal(busy.headers.get('retry-after'), '60');
+    assert.equal((await busy.json()).type, 'paced');
+    assert.equal(calls, 2, 'and nothing was sent');
+    tick(50_000);
+    assert.equal((await f('https://api.github.com/repos/o/r', {})).status, 200);
+    assert.ok(slept.at(-1) > 9_000 && slept.at(-1) <= 10_000, `a wait under the cap is waited out (${slept.at(-1)} ms)`);
+    assert.equal(calls, 3);
   });
 });
 
@@ -118,6 +125,29 @@ test('acceptance R5: replaying an effect\'s idempotency key causes exactly one e
   });
 });
 
+test('an effect cut off mid-send becomes unknown, and is sent again only with a person\'s approval', async () => {
+  await withGateway(async ({ g, m3, db, tick }) => {
+    await db.system("insert into teams(id, tenant, name) values ('shop', 'acme', 'shop')");
+    const begin = (extra = {}) => m3.tx('acme', (ctx) => g.begin(ctx, { key: 'eff_crashed01', team: 'shop', session: 'ses_a', tool: 'mcp__mail__send', ...extra })).then((r) => r.result);
+    assert.equal((await begin()).state, 'first');
+    tick(10 * 60_000);
+    await assert.rejects(begin(), /already being sent/, 'ten minutes in, it may still be going');
+    tick(6 * 60_000);
+    const u = await begin();
+    assert.equal(u.state, 'unknown', 'fifteen minutes on, nobody knows whether it went');
+    assert.match(u.detail, /Ask a person/);
+    assert.equal((await begin()).state, 'unknown', 'and it stays that way on a runner\'s word');
+    await assert.rejects(m3.tx('acme', (ctx) => g.end(ctx, { key: 'eff_crashed01', ok: false, session: 'ses_a' })), /a person decides/, 'marking it failed would let it be resent');
+    const card = async (id, state, command) => db.system(`insert into approvals(id, tenant, team, session, action, call, card, state, expires_at) values ($1, 'acme', 'shop', 'ses_a', 'effect-resend', $2, 'crd_' || $1, $3, now() + interval '1 day')`, [id, JSON.stringify({ command }), state]);
+    await card('apr_pending', 'pending', 'eff_crashed01');
+    await card('apr_other', 'approved', 'eff_someother');
+    await card('apr_yes', 'approved', 'eff_crashed01');
+    assert.equal((await begin({ approval: 'apr_pending' })).state, 'unknown', 'a pending card is not an answer');
+    assert.equal((await begin({ approval: 'apr_other' })).state, 'unknown', 'an approval for another effect does not count');
+    assert.deepEqual(await begin({ approval: 'apr_yes' }), { state: 'first', retry: true }, 'the person said send it again');
+  });
+});
+
 test('runner ops: pace answers a wait, effect.begin and effect.end keep a replay to one effect, governor.report holds the keys', async () => {
   await plane(async (p) => {
     await p.call('POST', '/teams', { id: 'shop' });
@@ -128,8 +158,12 @@ test('runner ops: pace answers a wait, effect.begin and effect.end keep a replay
     assert.equal((await p.call('POST', '/teams/shop/runs', { team: roster })).status, 201);
     await p.call('POST', '/teams/shop/chat', { text: 'Hello' });
     const s = (await runner.next((f) => f.op === 'session.start')).body;
-    const waits = await Promise.all(Array.from({ length: 4 }, async () => { const f = await runner.request('pace', { session: s.session, provider: 'github', installation: 42 }); assert.equal(f.op, 'ack', JSON.stringify(f)); return f.body.waitedMs; }));
-    assert.deepEqual(waits.sort((a, b) => a - b).map((w) => w > 0), [false, false, true, true], 'the ack comes when the call may go: a burst of 2, then the installation\'s 5 a second');
+    const waits = [];
+    for (let i = 0; i < 4; i++) { const f = await runner.request('pace', { session: s.session, provider: 'github', installation: 42 }); assert.equal(f.op, 'ack', JSON.stringify(f)); assert.equal(f.body.next, 'account'); waits.push(f.body.waitMs); }
+    assert.deepEqual(waits.map((w) => w > 0), [false, false, true, true], 'stage own: a burst of 2, then the installation\'s 5 a second');
+    const acct = await runner.request('pace', { session: s.session, provider: 'github', installation: 42, stage: 'account' });
+    assert.deepEqual([acct.op, acct.body.stage, acct.body.next], ['ack', 'account', null]);
+    assert.equal((await runner.request('pace', { session: s.session, provider: 'github', stage: 'later' })).op, 'nack');
     assert.equal((await runner.request('pace', { session: s.session, provider: 'smtp' })).op, 'nack');
     assert.equal((await runner.request('pace', { session: 'ses_other', provider: 'model' })).op, 'nack', 'only for its own sessions');
     const b1 = await runner.request('effect.begin', { session: s.session, key: 'sha256-abcdef0123', tool: 'mcp__mail__send', callHash: 'c1' });
@@ -141,5 +175,15 @@ test('runner ops: pace answers a wait, effect.begin and effect.end keep a replay
     assert.equal(rep.op, 'ack');
     const [held] = await p.db.system("select blocked_until from governor_buckets where key = 'model:shared'");
     assert.ok(Date.parse(held.blocked_until) - Date.now() > 19_000, 'the model account is held for what the provider said');
+    // A paced call never holds the runner's other requests (they run one at a time per connection): the ack says how
+    // long to wait, at once, and another session's request right behind it is answered at once too.
+    const t0 = Date.now();
+    const [slow, other] = await Promise.all([
+      runner.request('pace', { session: s.session, provider: 'model' }),
+      runner.request('effect.begin', { session: s.session, key: 'sha256-behindpace', tool: 'mcp__mail__send' }),
+    ]);
+    assert.ok(slow.body.waitMs > 19_000, JSON.stringify(slow.body));
+    assert.equal(other.body.state, 'first');
+    assert.ok(Date.now() - t0 < 2000, `both answered at once (${Date.now() - t0} ms)`);
   }, { tickMs: 0, gatewayLimits: LIMITS });
 });
