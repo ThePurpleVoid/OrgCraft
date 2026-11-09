@@ -68,8 +68,8 @@ export function widensLine(x, name, system = (s) => s) {
       return t('widens.resource-widened', sys);
     }
     // L40 (kit-core-dev systemsCapability): a new system is listed before anyone is bound to it.
-    // No connector type on screen (qa-web L40 N2): the words carry no {type} once the CPO drops it; until then it is empty.
-    case 'system-added': return t('widens.system-added', { system: system(x.resource ?? ''), type: '' }).replace(/\s*\(\)/, '');
+    // No connector type on screen (qa-web L40 N2).
+    case 'system-added': return t('widens.system-added', { system: system(x.resource ?? '') });
     default: return x.detail ?? '';
   }
 }

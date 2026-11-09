@@ -215,8 +215,8 @@ test('a send that only takes access away says what it removes; the running heade
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.goto(`${base}/#chat`);
   const head = page.locator('#run-systems');
-  await head.getByText('The running team still uses the systems it started with').waitFor();
-  await head.getByText("They take access away").waitFor();
+  await head.getByText('While the team is working, it keeps the systems it started with').waitFor();
+  await head.getByText("Your changes take access away").waitFor();
   assert.equal(await head.getByRole('button', { name: 'Stop the team now' }).isVisible(), true);
   await head.getByRole('button', { name: 'Send them now' }).click();
   const dlg = page.locator('#stepup-dialog');
@@ -226,7 +226,7 @@ test('a send that only takes access away says what it removes; the running heade
   assert.doesNotMatch(listed.join(' '), /(?<!Old )wiki\b|chief-of-staff/);
   await dlg.locator('#stepup-secret').fill(cp.stepUpSecret);
   await dlg.locator('button[type="submit"]').click();
-  await head.getByText('Sent. The team uses them from its next start.').waitFor();
+  await head.getByText('Sent. The team uses them the next time it starts.').waitFor();
   assert.deepEqual(cp.systems.resources.map((r) => r.id), ['drive']);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'run-systems');
   cp.runs.find((r) => r.id === 'run_systems').state = 'stopped';
