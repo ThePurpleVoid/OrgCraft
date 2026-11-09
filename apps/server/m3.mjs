@@ -474,7 +474,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (!atLeast(role, need)) throw new Problem(403, `a ${row.kind} card needs the ${need} role or above; you are ${role}`, { type: 'forbidden' });
       if (row.kind === 'approval') {
         const [a] = await ctx.q('select id from approvals where card = $1', [cid]);
-        return decideIn(ctx, a.id, { decision: option === 'approve' ? 'approved' : option === 'deny' ? 'denied' : null, note, version }, by, stepUp);
+        return decideIn(ctx, a.id, { decision: option === 'approve' ? 'approved' : option === 'deny' ? 'denied' : null, note, version, channel: 'chat' }, by, stepUp);
       }
       const chosen = row.card.options.find((o) => o.id === option);
       if (!chosen) throw new Problem(400, `option is one of ${row.card.options.map((o) => o.id).join(', ')}`);
@@ -595,7 +595,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       const n = (await ctx.q('select count(*)::int as n from standing_rules where team = $1 and created_at <= (select created_at from standing_rules where id = $2)', [team, covered.rule.id]))[0].n;
       for (const u of covered.uses) await ctx.q('insert into standing_rule_uses(tenant, team, rule, approval, amount, recipient) values ($1, $2, $3, $4, $5, $6)', [ctx.tenant, team, covered.rule.id, apr, u.amount, u.recipient]);
       // ledger.byrule: "Done under standing rule #{n}: {what}".
-      return { approval: apr, card: await settle(ctx, team, { apr, cid: card.id, session, run, decision: 'approved', by: `rule:${covered.rule.id}`, note: `Done under standing rule #${n}: ${ruleLine(covered.rule.spec)}`, kind: 'rule-used', rule: covered.rule.id, hash: bound.hash, extra: { ruleNumber: n, ruleLine: ruleLine(covered.rule.spec) } }) };
+      return { approval: apr, card: await settle(ctx, team, { apr, cid: card.id, session, run, decision: 'approved', by: `rule:${covered.rule.id}`, note: `Done under standing rule #${n}: ${ruleLine(covered.rule.spec)}`, kind: 'rule-used', rule: covered.rule.id, hash: bound.hash, extra: { ruleNumber: n, ruleForm: covered.rule.spec, ruleLine: ruleLine(covered.rule.spec) } }) };
     }
     return { approval: apr, card };
   }
@@ -618,10 +618,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     if (!['approved', 'denied'].includes(decision)) throw new Problem(400, 'decision is approved or denied');
     if (version !== undefined && !isInt(version)) throw new Problem(400, 'version is the card version you saw');
     if (note !== undefined && (typeof note !== 'string' || note.length > 4000)) throw new Problem(400, 'a note is text of at most 4,000 characters');
-    return tx(tenant, (ctx) => decideIn(ctx, apr, { decision, note, version }, by, stepUp));
+    return tx(tenant, (ctx) => decideIn(ctx, apr, { decision, note, version, channel: 'approvals' }, by, stepUp));
   }
 
-  async function decideIn(ctx, apr, { decision, note, version }, by, stepUp) {
+  async function decideIn(ctx, apr, { decision, note, version, channel = null }, by, stepUp) {
     if (!decision) throw new Problem(400, 'option is approve or deny');
     const [a] = await ctx.q('select id, team, run, session, card, state, expires_at, calls_hash from approvals where id = $1 for update', [apr]);
     if (!a) throw new Problem(404, 'no such approval');
@@ -638,7 +638,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       { actor: personActor(by), subject: `approval/${apr}`, ...(a.run ? { run: a.run } : {}) });
     await ctx.audit({ team: a.team, actorKind: 'person', actorId: by, session: a.session, action: 'approval', target: apr, decision, event: ev.id, detail: stepUpId || a.calls_hash ? { ...(stepUpId ? { stepUp: stepUpId } : {}), ...(a.calls_hash ? { callsHash: a.calls_hash } : {}) } : null });
     // The ledger keeps the person's own words (their note), exactly (L22, R11.2).
-    await ledgerRow(ctx.q, ctx.tenant, a.team, { kind: decision, approval: apr, by, words: note ?? null, callsHash: a.calls_hash ?? null });
+    await ledgerRow(ctx.q, ctx.tenant, a.team, { kind: decision, approval: apr, by, words: note ?? null, callsHash: a.calls_hash ?? null, channel });
     hooks.approvalDecided && ctx.after.push(() => hooks.approvalDecided(ctx.tenant, a.team, { approval: apr, decision, by, note: note ?? null, session: a.session }));
     return { card, event: ev.id, approval: apr, decision };
   }

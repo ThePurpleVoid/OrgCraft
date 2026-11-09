@@ -5,7 +5,7 @@
 -- standing_rules: the owner deciding in advance, from a fixed list of kinds, each with a limit per period. The server
 -- matches signed calls against the structured form only; the owner's words are kept beside it, never parsed.
 --
--- Rollback: drop table standing_rule_uses, approval_ledger, standing_rules; alter table approvals drop column effect_hash;
+-- Rollback: drop table standing_rule_uses, approval_ledger, standing_rules; alter table approvals drop column effect_hash; drop index events_outside_results;
 -- delete from schema_migrations where name = '023_approvals_ledger.sql'.
 
 create table standing_rules (
@@ -47,7 +47,9 @@ create table approval_ledger (
   rule text,
   by text not null,
   words text check (words is null or length(words) <= 4000),
-  calls_hash text check (calls_hash is null or calls_hash ~ '^[0-9a-f]{64}$')
+  calls_hash text check (calls_hash is null or calls_hash ~ '^[0-9a-f]{64}$'),
+  -- Where a person decided: chat (the card), approvals (POST /v1/approvals), email or slack; null for the server's own.
+  channel text check (channel is null or channel in ('chat', 'approvals', 'email', 'slack'))
 );
 create index approval_ledger_team on approval_ledger(team, at);
 
@@ -56,6 +58,8 @@ create index approval_ledger_team on approval_ledger(team, at);
 alter table approvals add column effect_hash text check (effect_hash is null or effect_hash ~ '^[0-9a-f]{64}$');
 create index approvals_denied_hash on approvals(team, calls_hash) where state = 'denied';
 create index approvals_denied_effect on approvals(team, effect_hash) where state = 'denied' and effect_hash is not null;
+-- rule.never.outside: a call whose output came from outside the team, for this session, since a person last decided.
+create index events_outside_results on events((envelope->'actor'->>'session'), received_at) where type = 'session.result' and envelope->'data'->>'outside' = 'true';
 
 do $$ declare t text; begin
   foreach t in array array['standing_rules', 'standing_rule_uses', 'approval_ledger'] loop
