@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **An approval is bound to the exact call it covers** (ADR 0013 rule 1, runner side; local PR L6). Before, `request_approval` ended by telling the model to "go ahead with exactly that call": an instruction, not a binding. Now:
+  - The runner signs every held call: `approval.wait` carries the canonical `calls` and their sha256 `callsHash`, and the call runs only if the approval names that hash (once the control plane echoes it). What runs is the signed record, not the model's object.
+  - A `request_approval` that names its call as JSON lets through exactly that call, once, within 15 minutes, in that session. Any other call is held and asked for again, and a grant never overrides a refusal.
+  - A `request_approval` in words approves a decision, never a call: the step is still held and asked for with its exact input.
+  - Contracts additive (`calls`, `callsHash`). The server's half (the step-up challenge over the hash, refusing other calls at the gateway, server-rendered facts) is backend-dev's. **What existing teams see:** nothing in their files. An agent that asks in words gets its step asked for again when it makes the call.
 - **Runner resilience, before the real M3 exit test** (#28). This is an offline pass with the fake model. `tests/e2e/m3-resilience.e2e.mjs` kills the runner mid-session, takes the control plane away, cuts the runner's link, pauses at 100% of the daily budget and expires an approval while the runner is down. It runs in process and, in CI, with the runner image. What it found and fixed:
   - A restarted runner's sessions were "resumed" on it as ghosts, and messages to them were acked and lost. Now `hello.sessions` decides which sessions resume. The lost ones start again from their checkpoints, with what woke them since they were last idle. A message for a session the runner does not have is nacked, and the session is started again.
   - Stopping a run while its runner was away stopped nothing, so on reconnect the session merged a pull request approved before the stop. Now the session stops in the control plane at once, and the runner gets `session.stop` with the welcome.
