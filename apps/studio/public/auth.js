@@ -132,12 +132,12 @@ export async function addPasskey(name, stepUpHeader = {}) {
 }
 
 /** One passkey assertion traded for one su_ token. Resolves { token } or { error }. */
-export async function passkeyStepUp() {
+export async function passkeyStepUp(scope) {
   const ch = await call('GET', '/v1/auth/step-up/challenge');
   if (!ch.ok) return { error: ch.data.error ?? `HTTP ${ch.status}` };
   let cred;
   try { cred = await navigator.credentials.get({ publicKey: requestOptions(ch.data) }); } catch (e) { return { error: ceremonyError(e) }; }
-  const r = await call('POST', '/v1/auth/step-up', { webauthn: credentialJSON(cred) });
+  const r = await call('POST', '/v1/auth/step-up', { webauthn: credentialJSON(cred), ...(scope ? { scope } : {}) });
   if (!r.ok) return { error: r.status === 429 ? 'Too many tries. Wait a few minutes, then try again.' : r.data.error ?? `HTTP ${r.status}` };
   return { token: r.data.token };
 }
@@ -149,7 +149,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
  * gesture). Resolves the x-step-up header for one call, or null when the person cancels. The token lives only in
  * the returned object; the caller sends it once and lets it go.
  */
-export function stepUpDialog(why, { doc = document } = {}) {
+export function stepUpDialog(why, { doc = document, scope = null } = {}) {
   let dlg = doc.getElementById('passkey-stepup');
   if (!dlg) {
     dlg = doc.createElement('dialog');
@@ -173,7 +173,7 @@ export function stepUpDialog(why, { doc = document } = {}) {
     go.onclick = async () => {
       go.disabled = true;
       dlg.querySelector('.result').textContent = '';
-      const r = await passkeyStepUp();
+      const r = await passkeyStepUp(scope);
       go.disabled = false;
       if (r.token) return finish({ 'x-step-up': r.token });
       dlg.querySelector('.result').textContent = r.error;
@@ -189,7 +189,8 @@ export function stepUpDialog(why, { doc = document } = {}) {
 export async function withStepUp(why, method, path, body) {
   const r = await call(method, path, body);
   if (!needsStepUp(r)) return r;
-  const header = await stepUpDialog(why);
+  // The control plane names what the step-up must be bound to (ADR 0013), e.g. resume:<run>.
+  const header = await stepUpDialog(why, { scope: r.data?.scope ?? null });
   if (!header) return { ok: false, status: 0, cancelled: true, data: { error: 'Cancelled: nothing was changed.' } };
   return call(method, path, body, header);
 }

@@ -1,4 +1,4 @@
-// The managed team store in Postgres (migration 014, ADR 0012, spec L9 step L9b): the Studio's managed backend on
+// The managed team store in Postgres (migration 015, ADR 0012, spec L9 step L9b): the Studio's managed backend on
 // pgObjects and pgRefs, compare-and-swap on main, change request numbers, and row-level security between tenants.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +10,7 @@ import { managedBackend } from '../../studio/managed.mjs';
 const file = (path, content, mode = '100644') => ({ path, content, mode });
 const backend = (db, tenant, team, opts = {}) => managedBackend({ store: pgObjects(db, tenant, team), refs: pgRefs(db, tenant, team), ...opts });
 
-test('014: a managed team publishes and reads back through Postgres; main moves only on accept', async () => {
+test('015: a managed team publishes and reads back through Postgres; main moves only on accept', async () => {
   await plane(async ({ db }) => {
     await store.createTeam(db, 'acme', { id: 'shop' });
     assert.equal((await db.system("select backend from teams where id = 'shop'"))[0].backend, 'github', 'existing and new teams default to github');
@@ -32,7 +32,7 @@ test('014: a managed team publishes and reads back through Postgres; main moves 
   });
 });
 
-test('014: concurrent publishes straight away, exactly one wins; numbers never repeat; a stale accept is refused', async () => {
+test('015: concurrent publishes straight away, exactly one wins; numbers never repeat; a stale accept is refused', async () => {
   await plane(async ({ db }) => {
     await store.createTeam(db, 'acme', { id: 'shop' });
     const b = backend(db, 'acme', 'shop', { autoAccept: true });
@@ -50,7 +50,7 @@ test('014: concurrent publishes straight away, exactly one wins; numbers never r
   });
 });
 
-test('014: row-level security keeps one tenant\'s objects, refs and changes from another', async () => {
+test('015: row-level security keeps one tenant\'s objects, refs and changes from another', async () => {
   await plane(async ({ db }) => {
     await store.ensureTenant(db, 'globex');
     await store.createTeam(db, 'acme', { id: 'shop' });

@@ -211,7 +211,8 @@ jobs:
         run: node deploy/vercel/build.mjs --api https://example.invalid --out "$RUNNER_TEMP/site" && test -f "$RUNNER_TEMP/site/vercel.json"
 
   studio-browser:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to Ubuntu 26, which Playwright 1.56.1's --with-deps install does not support.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

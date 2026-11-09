@@ -11,6 +11,8 @@
   # Fly's proxy appends the peer to x-forwarded-for, so the caller is the first entry from the right; behind the
   # Vercel site (x-agent-team-edge matches AGENT_TEAM_EDGE_SECRET) it is one further left (apps/server identity.mjs).
   AGENT_TEAM_PROXY_HOPS = "1"
+  # The deployment tile (GET /v1/deployment, L29). Local mode and a plain self-hosted server work it out themselves.
+  AGENT_TEAM_MODE = "hosted"
 
 [http_service]
   internal_port = 8080

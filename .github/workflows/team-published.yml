@@ -1,4 +1,4 @@
-# Tells the control plane which team version is live on main (Agent Team Kit `report.mjs published`), so the rollout
+# Tells the control plane which team version is live on main (OrgCraft `report.mjs published`), so the rollout
 # view can say which roles have picked it up. One event per commit; re-runs collapse. It never fails the build: with
 # no control plane secrets yet, it says so and skips.
 #

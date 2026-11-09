@@ -174,3 +174,19 @@ test('#28 E: one shared agent user serves one team only', async () => {
     await cp.close();
   }
 });
+
+test('ADR 0011: two teammates of one role are two sessions: two agent users, two copies, two branches, two memory files', { skip }, async () => {
+  const { start, as } = await world();
+  const umask = process.umask(0o007);
+  try {
+    const a = await start('ses_m1', 'support-agent', 'support-agent/run_1');
+    const b = await start('ses_m2', 'support-agent-2', 'support-agent-2/run_1');
+    assert.notEqual(a.slot.uid, b.slot.uid, 'two agent users');
+    assert.notEqual(a.copy.cwd, b.copy.cwd, 'two working copies');
+    assert.notEqual(a.copy.branch, b.copy.branch, 'two branches');
+    assert.notEqual(a.memoryPath, b.memoryPath, 'two memory files');
+    assert.match(b.memoryPath, /support-agent-2\.md$/, 'memory keys on the member id, never the role type');
+    assert.equal((await as(a, 'cat "$1" 2>/dev/null; exit 0', b.memoryPath)).out.trim(), '', 'neither reads the other\'s memory');
+    await a.stop('now'); await b.stop('now');
+  } finally { process.umask(umask); }
+});

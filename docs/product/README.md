@@ -1,6 +1,6 @@
-# Agent Team Studio
+# OrgCraft Studio
 
-The plan for turning Agent Team Kit into a visual product, deployed online and built to last ([ADR 0005](../adr/0005-online-first-built-to-last.md)). You lay out your team on a canvas, connect your repositories, backends, databases and frontends, publish to your repository, and then talk to your chief of staff and let the team run.
+The plan for turning OrgCraft into a visual product, deployed online and built to last ([ADR 0005](../adr/0005-online-first-built-to-last.md)). You lay out your team on a canvas, connect your repositories, backends, databases and frontends, publish to your repository, and then talk to your chief of staff and let the team run.
 
 | Doc | What it answers | Owner |
 | --- | --- | --- |

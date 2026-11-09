@@ -1,6 +1,6 @@
-# Agent Team Studio: product requirements
+# OrgCraft Studio: product requirements
 
-Owner: product manager. Status: draft 1, 2026-11-05. Working name: **Agent Team Studio** ("the Studio").
+Owner: product manager. Status: draft 1, 2026-11-05. Working name: **OrgCraft Studio** ("the Studio").
 
 ## The owner's words
 
@@ -18,7 +18,7 @@ Owner: product manager. Status: draft 1, 2026-11-05. Working name: **Agent Team 
 
 ## 1. Vision
 
-Today Agent Team Kit is a text product: you pick a preset, write `.agent-team/` files, sync, paste the instructions into a Claude project and open threads by hand. It works, and it has run a real product. But only someone who already knows Claude Code projects, worktrees, bash and markdown briefs can set it up.
+Today OrgCraft is a text product: you pick a preset, write `.agent-team/` files, sync, paste the instructions into a Claude project and open threads by hand. It works, and it has run a real product. But only someone who already knows Claude Code projects, worktrees, bash and markdown briefs can set it up.
 
 The Studio makes the team something you **see and build**:
 
@@ -282,6 +282,6 @@ The Studio is a web app. People also need to look after their teams from a phone
 
 1. ~~Runtime for the MVP's "let it run".~~ **Decided 2026-11-05: our own runner on the Claude Agent SDK.** The reasoning: our own runner on the Claude Agent SDK, with built-in agent teams and subagents as zero-infrastructure modes. The other option, driving claude.ai projects and cloud sessions as today, can't be controlled from our own app. See [ADR 0002](../adr/0002-runtime-agent-sdk-runner.md). The owner chose it.
 2. Hosted service: whether, when and how to charge. Not needed for the MVP; [deployment](deployment.md) keeps the door open.
-3. Name: "Agent Team Studio" is a working name.
+3. Name: "OrgCraft Studio" is a working name.
 4. ~~How notifications are sent in local mode.~~ **Decided 2026-11-06:** there is no local special case. Email and Slack are connectors, connected the same way locally and online: the workspace's email provider by API key (SMTP as a fallback), or a person's own mail account through OAuth.
 5. ~~Committing meeting minutes.~~ **Decided 2026-11-06:** off by default, with a per-meeting switch to commit them under `docs/team/meetings/`.

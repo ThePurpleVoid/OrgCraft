@@ -22,32 +22,49 @@ const links = z.array(link).max(20, 'holds at most 20 links');
 const STATUSES = ['idle', 'working', 'waiting', 'blocked', 'review', 'done'];
 
 const workItem = { issue: issue.optional(), task: text(200).optional() };
+/**
+ * Governance G1: what the sender passes on without having checked it itself in this task. An empty list is
+ * "Unverified: none"; leaving it out is "not stated", which the board and the gate never read as none.
+ */
+const unverified = z.array(need(500)).max(20, 'holds at most 20 items').optional();
+const FULL_SHA = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
+const VERSION_KINDS = ['commit', 'revision', 'draft'];
+/** Governance G2: a sign-off names the exact version it checked; a commit is named in full. */
+function versionProblem(a) {
+  if (a.versionKind && !a.version) return 'versionKind needs the version it describes';
+  if (!a.version) return null;
+  const kind = a.versionKind ?? (FULL_SHA.test(a.version) ? 'commit' : null);
+  if (!kind) return 'say what the version is with versionKind: commit, revision or draft';
+  if (kind === 'commit' && !FULL_SHA.test(a.version)) return 'a commit version is the full commit id (40 or 64 hex characters), so the sign-off can only count for exactly that commit';
+  a.versionKind = kind;
+  return null;
+}
 const needsWorkItem = (a) => (a.issue || a.task?.trim() ? null : 'needs an issue or a task, so the work can be found again');
 
 export const TOOLS = {
   report: {
     description: 'Report your status to the team board. Report working (with the task) when you start, waiting (with what you wait on) the moment you wait, and done when you finish.',
-    shape: { status: z.enum(STATUSES), task: text(200).optional(), waitingOn: text(200).optional(), issue: issue.optional(), pr: posInt.optional(), branch: text(200).optional(), commit: text(80).optional(), detail: text().optional() },
+    shape: { status: z.enum(STATUSES), task: text(200).optional(), waitingOn: text(200).optional(), issue: issue.optional(), pr: posInt.optional(), branch: text(200).optional(), commit: text(80).optional(), detail: text().optional(), unverified },
     check: (a) => (['working', 'waiting'].includes(a.status) && !a.task?.trim() ? `a ${a.status} report needs the task` : a.status === 'waiting' && !a.waitingOn?.trim() ? 'a waiting report needs waitingOn: a role, or a short reason such as "CI on PR 57"' : null),
   },
   handoff: {
     description: 'Send a HANDOFF to another role; it wakes that role. Say what changed, how to verify it, and when the receiver is done.',
-    shape: { to: role, ...workItem, changed: need(), verify: need(), doneWhen: need(), branch: text(200).optional(), commit: text(80).optional(), pr: posInt.optional(), artifact: link.optional() },
+    shape: { to: role, ...workItem, changed: need(), verify: need(), doneWhen: need(), branch: text(200).optional(), commit: text(80).optional(), pr: posInt.optional(), artifact: link.optional(), unverified },
     check: needsWorkItem,
   },
   bug: {
     description: 'Send a BUG to the role that owns the thing that is wrong. Evidence (a screenshot or a log) is required.',
-    shape: { to: role, ...workItem, where: need(500), steps: need(), expected: need(), actual: need(), severity: z.number().int().min(1).max(4), evidence: links, build: text(200).optional() },
+    shape: { to: role, ...workItem, where: need(500), steps: need(), expected: need(), actual: need(), severity: z.number().int().min(1).max(4), evidence: links, build: text(200).optional(), unverified },
     check: (a) => needsWorkItem(a) ?? (a.evidence.length ? null : 'evidence needs at least one link: a screenshot or a log'),
   },
   signoff: {
-    description: 'Send a SIGNOFF after testing. Evidence (screenshot or log links) is required: a SIGNOFF without evidence is refused.',
-    shape: { to: role, ...workItem, testedOn: need(500), walked: need(), result: z.enum(['pass', 'fail']), evidence: links, pr: posInt.optional() },
-    check: (a) => needsWorkItem(a) ?? (a.evidence.length ? null : 'evidence needs at least one link: a screenshot or a log. A SIGNOFF without evidence is refused'),
+    description: 'Send a SIGNOFF after testing. Evidence (screenshot or log links) is required: a SIGNOFF without evidence is refused. Name the exact version you checked (version: the full commit id, or the document or draft revision, with versionKind), because a sign-off counts only for that version. List in unverified what you pass on without having checked it yourself; an empty list means you checked everything. The runner attaches the calls it saw you run as the evidence behind that.',
+    shape: { to: role, ...workItem, testedOn: need(500), walked: need(), result: z.enum(['pass', 'fail']), evidence: links, pr: posInt.optional(), version: text(200).optional(), versionKind: z.enum(VERSION_KINDS).optional(), unverified },
+    check: (a) => needsWorkItem(a) ?? (a.evidence.length ? null : 'evidence needs at least one link: a screenshot or a log. A SIGNOFF without evidence is refused') ?? versionProblem(a),
   },
   blocked: {
     description: 'Say you are BLOCKED: what you need, from whom (a role, or owner), and what you do meanwhile. A question for the owner goes to the front door this way, with your recommendation; keep working on it unless the step cannot be undone.',
-    shape: { ...workItem, need: need(), needFrom: z.string().refine((s) => s === 'owner' || slug.test(s), 'must be a role slug or owner'), meanwhile: need(), to: role.optional(), recommendation: text().optional() },
+    shape: { ...workItem, need: need(), needFrom: z.string().refine((s) => s === 'owner' || slug.test(s), 'must be a role slug or owner'), meanwhile: need(), to: role.optional(), recommendation: text().optional(), unverified },
     check: (a) => needsWorkItem(a) ?? (a.needFrom === 'owner' && !a.recommendation?.trim() ? 'a question for the owner needs your recommendation' : null),
   },
   ask_owner: {
