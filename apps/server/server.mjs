@@ -28,6 +28,7 @@ import { HOST_CARD_KINDS, hostMay } from './roles.mjs';
 import { PROVIDERS, createEmail, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 import { createHostedStudio } from './studio.mjs';
+import { pgObjects, pgRefs } from './managed-db.mjs';
 
 /**
  * The event types POST /v1/teams/{team}/events takes (issue #135): the kit's own reports and messages (report.mjs,
@@ -152,8 +153,15 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   // The deployment's own Studio page (hosted mode, apps/server/studio.mjs): off until the M4 GitHub App is set up.
   const studioOrigin = identity?.origin ?? (publicUrl ? new URL(publicUrl).origin : null);
   const installations = identity?.installations?.enabled ? identity.installations : null;
-  const hostedStudio = createHostedStudio(studioOpts && studioOrigin ? {
+  // A managed team (ADR 0012, migration 014) needs no GitHub App: its files are in this database's Git store.
+  const managedStore = {
+    teamBackend: async (tn, tm) => (await db.tenant(tn, ({ q }) => q('select backend from teams where id = $1', [tm])))[0]?.backend ?? 'github',
+    store: (tn, tm) => pgObjects(db, tn, tm),
+    refs: (tn, tm) => pgRefs(db, tn, tm),
+  };
+  const hostedStudio = createHostedStudio(studioOrigin ? {
     origin: studioOrigin,
+    managed: managedStore,
     // The installations this workspace proved (S9) and the team's repository, unless the caller brings its own.
     ...(installations ? { teamRepo: (tn, tm) => installations.teamRepo(tn, tm), boundInstallations: (tn) => installations.bound(tn) } : {}),
     // Delegated publish: the person's consent on the host's current text, and the host's name for the PR line.

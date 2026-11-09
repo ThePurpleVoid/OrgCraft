@@ -196,3 +196,28 @@ test('delegated publish: a host server reads, previews and publishes for its use
 
   } finally { await gh.close(); }
 });
+
+test('a managed team (ADR 0012) needs no GitHub App: it starts empty, and a publish opens change 1 in the deployment\'s store', async () => {
+  await plane(async ({ call, db }) => {
+    await call('POST', '/teams', { id: 'shop' });
+    await db.system("update teams set backend = 'managed' where id = 'shop'");
+    const read = await call('GET', '/teams/shop/studio/v1/team', undefined, studioHeaders());
+    assert.equal(read.status, 200, JSON.stringify(read.body));
+    assert.deepEqual([read.body.noTeam, read.body.managed, read.body.repo, read.body.git.head], [true, true, null, null]);
+    const draft = await call('POST', '/teams/shop/studio/v1/team/from-template', { id: read.body.templates[0].id, project: 'Shop', owner: 'Sam', timezone: 'UTC' }, writeHeaders());
+    assert.equal(draft.status, 200, JSON.stringify(draft.body));
+    const pub = await call('POST', '/teams/shop/studio/v1/team/publish', { spec: draft.body.spec, base: null, message: 'Start the team' }, writeHeaders({ 'idempotency-key': 'managed-1' }));
+    assert.equal(pub.status, 200, JSON.stringify(pub.body));
+    assert.deepEqual([pub.body.branch, pub.body.pr.number, pub.body.pr.url], ['cr/1', 1, '/studio/changes/1']);
+    const [cr] = await db.system("select number, state, base, head from change_requests where team = 'shop'");
+    assert.deepEqual([cr.number, cr.state, cr.base, cr.head], [1, 'open', null, pub.body.commit]);
+    assert.ok((await db.system("select count(*)::int as n from managed_objects where team = 'shop'"))[0].n > 10);
+    const [row] = await db.system("select target, detail from audit where tenant = 'acme' and action = 'publish'");
+    assert.deepEqual([row.target, row.detail.managed, row.detail.repo], ['cr/1', true, null]);
+    const pr = await call('GET', '/teams/shop/studio/v1/team/pr?branch=cr/1', undefined, studioHeaders());
+    assert.deepEqual([pr.status, pr.body.state], [200, 'open']);
+    // A team on GitHub is unchanged: still off until the app is set up.
+    await call('POST', '/teams', { id: 'blog' });
+    assert.equal((await call('GET', '/teams/blog/studio/v1/team', undefined, studioHeaders())).status, 503);
+  }, { publicUrl: ORIGIN });
+});

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Start with no repository: the managed team store** (step L9b; ADR 0012, spec L9 section 4). `apps/studio/managed.mjs` `managedBackend({ store, refs })` is a third Studio backend, with the same shape as the GitHub one. It keeps the team's files as real Git objects in OrgCraft's own store.
+  - A publish writes a commit and opens change request `cr/<n>`. Accepting it moves `main` by compare-and-swap, fast-forward only. A stale base gets the usual 409 `stale`, and nothing is ever forced.
+  - A team with no version yet reads as empty (`base: null`), so the page offers templates.
+  - `createStudioHandler({ backend })` takes it in place of `repo` and a token.
+  - Migration `014_managed_store.sql` adds `teams.backend` (default `github`), `managed_refs`, `change_requests`, `managed_objects` and `standing_exports`, all under tenant row-level security; the app role may not update or delete objects.
+  - `apps/server/managed-db.mjs` holds the Postgres refs and objects. The hosted Studio serves a team whose `backend` is `managed` without the GitHub App.
+  - What the store holds clones with real `git`.
 - **`packages/git-store`: Git objects without `git`** (no-repository start, step L9a; ADR 0012). Writes blobs, trees and commits in Git's own format, whole-object packs and v2 bundles. Reads bundles real Git wrote, deltas included. Writes the export zip. `node:crypto` and `node:zlib` only, with no child processes and no new dependency. The Studio's `blobId` now uses it. Tests run `git fsck --strict` on what it writes, clone its bundles with real Git, and read a delta-packed bundle Git wrote. Nothing uses it yet: the managed backend is L9b. **What existing teams see on sync:** nothing.
 
 ## 0.21.1
