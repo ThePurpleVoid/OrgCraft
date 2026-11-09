@@ -35,10 +35,11 @@ before(async () => {
   execFileSync('git', ['-C', root, 'add', '-A']);
   execFileSync('git', ['-C', root, 'commit', '-qm', 'team']);
   cp = await fakeControlPlane({ team: 'sample-app', running: false });
-  // A stand-in for gh: "pr view" prints what the test put in ghOut, and fails while there is none (no change open).
+  // A stand-in for gh: "pr view" prints what the test put in ghOut; with none it answers as gh does when no change is
+  // open; ghOut holding "broken" is a gh that can't be read (signed out, offline).
   const bin = mkdtempSync(join(tmpdir(), 'studio-pending-gh-'));
   ghOut = join(bin, 'pr.json');
-  writeFileSync(join(bin, 'gh'), `#!/bin/sh\n[ "$1 $2" = "pr view" ] && [ -f '${ghOut}' ] && cat '${ghOut}' && exit 0\nexit 1\n`);
+  writeFileSync(join(bin, 'gh'), `#!/bin/sh\n[ "$1 $2" = "pr view" ] || exit 1\n[ -f '${ghOut}' ] || { echo 'no pull requests found for branch' >&2; exit 1; }\ngrep -q broken '${ghOut}' && { echo 'gh: not logged in' >&2; exit 4; }\ncat '${ghOut}'\n`);
   chmodSync(join(bin, 'gh'), 0o755);
   studio = createStudio({ root, env: { ...cp.env, AGENT_TEAM_GH: join(bin, 'gh') } });
   await new Promise((r) => studio.listen(0, '127.0.0.1', r));
@@ -87,9 +88,10 @@ test('a pending set waits, the code host reports it accepted, and Switch on now 
   // The code host reports the change accepted: the chat says so, and the plan offers to switch it on.
   cp.readyPending();
   await page.reload();
-  await page.locator('.timeline', { hasText: 'GitHub reports that the change was accepted. Its system changes are ready to switch on.' }).waitFor();
+  await page.locator('.timeline', { hasText: 'Your team\'s checks say the change was accepted. OrgCraft hasn\'t confirmed this itself. Its system changes are ready to switch on.' }).waitFor();
   line = await openStart(page);
-  await line.getByText('GitHub reports that the change was accepted.').waitFor();
+  await line.getByText("Your team's checks say the change was accepted.", { exact: false }).waitFor();
+  assert.match(await line.locator('button.info').getAttribute('data-tip'), /not from your code host/, 'the tooltip says who reported it');
   await line.getByRole('button', { name: 'Switch on now' }).click();
   const dlg = page.locator('#stepup-dialog');
   await dlg.locator('#stepup-why', { hasText: 'Switch on the system changes from the accepted change' }).waitFor();
@@ -153,6 +155,16 @@ test('Send them now from a branch whose change is still open waits for it; a pur
   assert.deepEqual(cp.systemsPuts.at(-1).pending, { sha: head, pr: 12 }, 'stored as pending, bound to the commit');
   assert.equal(cp.systems.version, before, 'nothing switched on: an unreviewed widening does not apply');
   assert.notEqual(cp.systems.bindings[0]?.permission, 'deploy');
+
+  // gh can't be read on a pushed branch: it fails closed, waiting as pending with no PR number.
+  cp.dropPending('withdrawn');
+  writeFileSync(ghOut, 'broken');
+  const s0 = await state(page);
+  assert.equal((await post(page, '/v1/team/systems', { version: s0.version, hash: s0.hash })).status, 401);
+  assert.equal((await post(page, '/v1/team/step-up', { secret: cp.stepUpSecret, scope: `systems:${cp.team}` })).status, 200);
+  assert.equal((await post(page, '/v1/team/systems', { version: s0.version, hash: s0.hash })).status, 200);
+  assert.deepEqual(cp.systemsPuts.at(-1).pending, { sha: head }, 'waits, with no PR number');
+  assert.equal(cp.systems.version, before);
 
   // The same branch with no upstream: nothing is open for it, so the send applies directly.
   cp.dropPending('withdrawn');

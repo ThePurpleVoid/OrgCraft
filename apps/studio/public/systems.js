@@ -81,4 +81,10 @@ export async function applyPending({ stepUp, name, system, state }) {
 export const droppedLine = (reason, days = 30) => t({ withdrawn: 'systems.dropped.closed', expired: 'systems.dropped.expired', 'base-moved': 'systems.dropped.moved', 'merged-different': 'systems.dropped.merged-different' }[reason] ?? 'systems.dropped.moved', { days });
 
 /** "{code host} reports that the change was accepted…": the host by name when the Studio knows it. */
-export const readyLine = (host) => t('systems.ready', { 'code host': host || t('systems.codehost.other') });
+export const readyLine = () => t('systems.ready');
+/** The ⓘ beside the ready line: the report comes from the team's own checks, which OrgCraft does not vouch for. */
+export function readyTip() {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'info'; b.dataset.tip = t('systems.ready.tip'); b.setAttribute('aria-label', t('tip.button', { term: t('systems.ready.term') })); b.textContent = 'ⓘ';
+  return b;
+}

@@ -6,7 +6,7 @@
 import { apiUrl, ask, askText, requestJson } from './env.js';
 import { t } from './i18n.js';
 import { personWord, ruleLine } from './approvals.js';
-import { applyPending, droppedLine, readyLine, sendSystems, showItems, systemsState } from './systems.js';
+import { applyPending, droppedLine, readyLine, readyTip, sendSystems, showItems, systemsState } from './systems.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -91,11 +91,10 @@ const by = (e) => { const b = e.data?.by; const n = typeof b === 'object' ? b?.n
 /** Who did it, after a middle dot ("A run started · Dana"), so the line never reads as the team acting "by" someone. */
 const who = (e) => { const b = e.data?.by; const n = typeof b === 'object' ? b?.name ?? b?.id : b; return n ? ` · ${n}` : ''; };
 /** The code host by name, once the Studio says (GET /v1/team/me), for "{code host} reports…" (L40b). */
-let codeHostName = null;
 /** Run and budget events, as one line each in the chat. */
 const TIMELINE = {
   // L40b: a pending systems set the code host reports accepted, or one dropped, and why.
-  'systems.pending.ready': () => readyLine(codeHostName),
+  'systems.pending.ready': () => readyLine(),
   'systems.pending.dropped': (e) => droppedLine(e.data?.reason),
   'run.started': (e) => `A run started${who(e)}`,
   'run.paused': (e) => `The run was paused${who(e)}${e.data?.reason ? ` (${e.data.reason})` : ''}`,
@@ -567,8 +566,8 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     if (s.result === 'done' && (s.inSync || !s.pending)) return [t(running ? 'run.systems.sent' : 'publish.systems.done')];
     const p = s.pending?.ours ? s.pending : null;
     if (p?.ready) {
-      const lead = s.result === 'failed' ? t('start.systems.failed') : readyLine(s.codeHost);
-      return [`${lead} `, button('switchon', t('systems.switchon'), switchOn)];
+      if (s.result === 'failed') return [`${t('start.systems.failed')} `, button('switchon', t('systems.switchon'), switchOn)];
+      return [`${readyLine()} `, readyTip(), ' ', button('switchon', t('systems.switchon'), switchOn)];
     }
     if (p) return [t('publish.systems.onapproval')];
     if (s.result === 'dropped') return [droppedLine('base-moved')];
@@ -605,7 +604,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   }
 
   async function load() {
-    if (st.me === undefined) { st.me = null; api('/v1/team/me').then((r) => { if (r.ok && r.data.codeHost) codeHostName = r.data.codeHost; if (r.ok && r.data.id) { st.me = r.data.id; render(); } }); }
+    if (st.me === undefined) { st.me = null; api('/v1/team/me').then((r) => { if (r.ok && r.data.id) { st.me = r.data.id; render(); } }); }
     const r = await api('/v1/team/chat');
     st.loaded = true;
     if (r.data.connected === false) { st.connected = false; return render(); }

@@ -40,7 +40,8 @@ export function prSupport(root, env = process.env) {
 
 /**
  * The open change request (pull request) for the branch HEAD is on, as { pr, branch }, or null. Null on the default
- * branch, on a detached HEAD, on a purely local branch (no upstream), and when gh is missing or finds none open. A send
+ * branch, on a detached HEAD, on a purely local branch (no upstream), and when gh finds none open or the PR is closed.
+ * { pr: null } when gh can't be read for a pushed branch. A send
  * of systems from a branch with an open change waits as a pending set instead of applying (L40b, CTO ruling): systems
  * nobody has reviewed must not widen a team's access.
  */
@@ -50,12 +51,15 @@ export function openChangeRequest(root, env = process.env) {
   const head = run('git', ['-C', root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { env }).out.replace(/^origin\//, '');
   if (head ? branch === head : ['main', 'master'].includes(branch)) return null;
   if (!run('git', ['-C', root, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { env }).ok) return null;
+  // Fails closed (CTO ruling): when gh can't say (missing, signed out, offline), a pushed branch waits as pending with
+  // no PR number. Only gh's own "no pull requests found" means nothing is open.
   const view = run(ghBin(env), ['pr', 'view', branch, '--json', 'number,state'], { cwd: root, env, timeout: 15_000 });
-  if (!view.ok) return null;
+  if (!view.ok) return /no (?:open )?pull requests? found/i.test(view.err) ? null : { pr: null, branch };
   try {
     const j = JSON.parse(view.out);
-    return j?.state === 'OPEN' && Number.isInteger(j.number) && j.number > 0 ? { pr: j.number, branch } : null;
-  } catch { return null; }
+    if (j?.state !== 'OPEN') return null;
+    return { pr: Number.isInteger(j.number) && j.number > 0 ? j.number : null, branch };
+  } catch { return { pr: null, branch }; }
 }
 
 /**
