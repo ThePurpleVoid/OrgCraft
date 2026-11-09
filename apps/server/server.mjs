@@ -644,6 +644,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return send(res, 201, await m3.stepUp(t, me, body?.secret, { verifier: stepUpVerifier, bearer, scope: body?.scope ?? null }), {}, { secrets: ['token'] });
     }
     if (a === 'runs' && team && b && !c && m === 'POST') return send(res, 200, await did(m3.controlRun(t, team, b, me, { stepUp })));
+    // Governance G3 (L39): "Do it" approves the lettered asks of one card at once, with one step-up for the set.
+    if (a === 'approvals' && team === 'do-it' && !b && m === 'POST') return send(res, 200, await did(m3.doIt(t, await readJson(req, 16 * 1024), me, { stepUp })));
     if (a === 'approvals' && team && !b && m === 'POST') return send(res, 200, await did(m3.decideApproval(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
     if (a === 'cards' && team && !b && m === 'GET') return send(res, 200, await m3.getCard(t, team));
     if (a === 'cards' && team && !b && m === 'POST') return send(res, 200, await did(m3.answerCard(t, team, await readJson(req, 16 * 1024), me, { stepUp, role: who.role })));
