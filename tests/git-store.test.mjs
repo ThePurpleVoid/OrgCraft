@@ -9,8 +9,9 @@ import { dirname, join } from 'node:path';
 import { deflateSync } from 'node:zlib';
 import {
   EMPTY_TREE, GitStoreError, applyChanges, hashObject, importBundle, listTree, memoryStore, readBundle, readCommit,
-  readObject, readTree, reachable, writeBundle, writeCommit, writeObject, writeTree,
+  readObject, readTree, reachable, writeBundle, writeCommit, writeObject, writeTree, readPack, splitPath, MAX_OBJECT,
 } from '../packages/git-store/index.mjs';
+import { createHash } from 'node:crypto';
 import { crc32, writeZip } from '../packages/git-store/zip.mjs';
 
 const hasGit = (() => { try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
@@ -182,4 +183,44 @@ test('real git: we read a bundle git wrote, deltas included, and write it back w
   git(dirname(work), 'clone', '-q', '-b', 'main', ours, work);
   assert.equal(git(work, 'rev-parse', 'HEAD'), refs['refs/heads/main']);
   assert.equal(git(work, 'rev-list', '--count', 'HEAD'), '12');
+});
+
+// Code review L9a sev3: a pack can't make the store inflate or allocate more than the caps, whatever its headers say.
+const packOf = (entries) => {
+  const parts = [Buffer.from('PACK'), Buffer.from([0, 0, 0, 2]), Buffer.from([0, 0, 0, entries.length]), ...entries];
+  const body = Buffer.concat(parts);
+  return Buffer.concat([body, createHash('sha1').update(body).digest()]);
+};
+const varint = (n) => { const out = []; do { let b = n % 128; n = Math.floor(n / 128); if (n) b |= 0x80; out.push(b); } while (n); return Buffer.from(out); };
+
+test('readPack: an entry whose header says 1 byte but inflates to 50 MB is refused without inflating it', async () => {
+  const bomb = deflateSync(Buffer.alloc(50 * 1024 * 1024));
+  const pack = packOf([Buffer.concat([Buffer.from([0x31]), bomb])]); // blob, size 1
+  assert.ok(pack.length < 200 * 1024, `the pack is ${pack.length} bytes`);
+  global.gc?.();
+  const before = process.memoryUsage().rss;
+  assert.throws(() => readPack(pack), (e) => e instanceof GitStoreError && e.code === 'corrupt');
+  assert.ok(process.memoryUsage().rss - before < 20 * 1024 * 1024, 'nothing near the inflated size was allocated');
+});
+
+test('readPack: declared sizes over the caps are refused before anything is allocated', () => {
+  // An entry that says it is 2^40 bytes.
+  const huge = Buffer.concat([Buffer.from([0xb0]), varint(2 ** 36), deflateSync(Buffer.from('x'))]);
+  assert.throws(() => readPack(packOf([huge])), (e) => e instanceof GitStoreError && e.code === 'too-large');
+  // A delta whose result says 2^45 bytes: a GitStoreError, not a RangeError.
+  const base = Buffer.concat([Buffer.from([0x31]), deflateSync(Buffer.from('a'))]);
+  const delta = Buffer.concat([varint(1), varint(2 ** 45)]);
+  const ofs = Buffer.concat([Buffer.from([0x60 | delta.length]), Buffer.from([base.length + 12 - 12]), deflateSync(delta)]);
+  assert.throws(() => readPack(packOf([base, ofs])), (e) => e instanceof GitStoreError && e.code === 'too-large');
+  // And the total: two entries under the per-object cap but over a small total cap.
+  const two = packOf([Buffer.concat([Buffer.from([0x3a]), deflateSync(Buffer.alloc(10))]), Buffer.concat([Buffer.from([0x3a]), deflateSync(Buffer.alloc(10))])]);
+  assert.throws(() => readPack(two, { maxTotal: 15 }), (e) => e.code === 'too-large');
+  assert.equal(readPack(two).objects.length, 2, 'under the default caps it reads');
+});
+
+test('writeObject refuses an object over the cap, and ".GIT" is refused like ".git"', async () => {
+  const store = memoryStore();
+  await assert.rejects(writeObject(store, 'blob', Buffer.alloc(MAX_OBJECT + 1)), (e) => e.code === 'too-large');
+  assert.throws(() => splitPath('.GIT/config'), /bad path/);
+  assert.throws(() => splitPath('a/.Git/x'), /bad path/);
 });

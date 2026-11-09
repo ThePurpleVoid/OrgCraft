@@ -29,6 +29,12 @@ test('diffTeams: a name change alone is member-renamed, and impact applies it at
   assert.deepEqual([item.severity, item.recommended, item.choices], ['safe', 'apply-now', ['apply-now']]);
 });
 
+test('diffTeams: renaming a role\'s own seat (L11b Name field) is member-renamed for that seat only', () => {
+  const published = team({ 'roles/backend-dev-2.extend.md': member('Maya') });
+  const draft = team({ 'roles/backend-dev-2.extend.md': member('Maya'), 'roles/backend-dev.extend.md': '**Name:** Ana\n' });
+  assert.deepEqual(diffTeams(published, draft, kit).map((c) => [c.kind, c.role, c.from, c.to]), [['member-renamed', 'backend-dev', 'Backend dev', 'Ana']]);
+});
+
 test('diffTeams: Based on changing is type-changed, treated as a brief change (and no separate brief item)', () => {
   const published = team({ 'roles/backend-dev-2.extend.md': member('Maya') });
   const draft = team({ 'roles/backend-dev-2.extend.md': member('Maya', 'web-dev') });

@@ -13,6 +13,7 @@ import { boundCalls, redact } from './signed.mjs';
 import { createMeetings } from './meetings.mjs';
 import { canWork } from './deployment.mjs';
 import { localDay, nextDay } from './budget-day.mjs';
+import { checkIoRefs, ingestStepIo, projectTask, purgeIo } from './inspector.mjs';
 import { memberHeld } from './live.mjs';
 import { resolveTo } from './routing.mjs';
 import { createCaps } from './caps.mjs';
@@ -80,6 +81,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     if (!event.team) return;
     const { q } = ctx;
     await meetings.project(ctx, event);
+    await projectTask(q, ctx.tenant, event);
     // Event triggers inside the team (N2, L21): may emit trigger.fired, which this projection then delivers.
     if (triggers) await triggers.project(ctx, event);
     if (SESSION_STATE[event.type] && event.actor?.session) {
@@ -92,8 +94,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     const run = await activeRun(q, event.team);
     if (!run) return;
     for (const t of await targets(q, run, event)) {
-      const [d] = await q(`insert into deliveries(id, tenant, team, event, run, role, instance) values ($1, $2, $3, $4, $5, $6, $7)
-                           on conflict do nothing returning id`, [id('dlv'), ctx.tenant, event.team, event.id, run.id, t.role, t.instance]);
+      const [d] = await q(`insert into deliveries(id, tenant, team, event, run, role, instance, task) values ($1, $2, $3, $4, $5, $6, $7, $8)
+                           on conflict do nothing returning id`, [id('dlv'), ctx.tenant, event.team, event.id, run.id, t.role, t.instance, event.task ?? null]);
       if (d) ctx.after.push(() => deliver(ctx.tenant, d.id));
     }
   }
@@ -156,7 +158,9 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       const outside = wake.type === 'trigger.fired' && triggers ? await triggers.outsideOf(q, d.team, wake.data?.source) : null;
       if (s && LIVE.includes(s.state) && conn) {
         await q("update deliveries set state = 'sent', session = $2, attempts = attempts + 1, next_at = now() + make_interval(secs => $3) where id = $1", [d.id, s.id, ACK_SECONDS]);
-        return { d, conn, op: 'session.message', body: { session: s.id, message: wake, delivery: d.id, ...(outside ? { outside } : {}) } };
+        // The session's events now belong to this delivery's task, caused by its wake (ADR 0009).
+        await q('update sessions set task = $2, cause = $3 where id = $1', [s.id, d.task ?? null, wake.id]);
+        return { d, conn, op: 'session.message', body: { session: s.id, message: wake, delivery: d.id, ...(outside ? { outside } : {}), ...(d.task ? { task: d.task } : {}), cause: wake.id } };
       }
       // No live session: start one, unless the run is at its session cap.
       const [{ n }] = await q('select count(*)::int as n from sessions where run = $1 and state = any($2)', [run.id, [...LIVE, 'unknown']]);
@@ -181,6 +185,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       else await q("insert into sessions(id, tenant, team, run, role, instance, state, runner, team_version, branch, token_hash, token_expires) values ($1, $2, $3, $4, $5, $6, 'starting', $7, $8, $9, $10, $11)",
         [sid, tenant, run.team, run.id, d.role, d.instance, choice.runner, run.team_version, branch, tok.hash, tok.expires.toISOString()]);
       await q("update deliveries set state = 'sent', session = $2, attempts = attempts + 1, next_at = now() + make_interval(secs => $3) where id = $1", [d.id, sid, ACK_SECONDS]);
+      await q('update sessions set task = $2, cause = $3 where id = $1', [sid, d.task ?? null, wake.id]);
       const roster = run.roster ?? {};
       const body = {
         session: sid, run: run.id, team: run.team, teamVersion: run.team_version, role: d.role, instance: d.instance,
@@ -193,7 +198,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         // ADR 0011 (L17): a teammate's type and display name, for its prompt; it is still addressed by its member id.
         ...(role.type ? { type: role.type } : {}), ...(role.name ? { name: role.name } : {}),
         wake, ...(outside ? { outside } : {}), resume: Boolean(s), ...(s?.checkpoint ? { checkpoint: s.checkpoint } : {}),
-        token: tok.token, tokenExpires: tok.expires.toISOString(), delivery: d.id,
+        token: tok.token, tokenExpires: tok.expires.toISOString(), delivery: d.id, ...(d.task ? { task: d.task } : {}), cause: wake.id,
       };
       return { d, conn: choice.conn, op: 'session.start', body };
     });
@@ -495,6 +500,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
           const env = { ...e, tenant: conn.tenant, team: sess.team, source: `/tenants/${conn.tenant}/teams/${sess.team}`, run: sess.run, teamVersion: sess.team_version ?? e.teamVersion,
             actor: { kind: 'role', id: sess.role, instance: sess.instance ?? null, session: sess.id, via: e.actor?.via === 'tool' ? 'tool' : 'hook' } };
           if (e.type === 'chat.message') env.data = { ...(e.data ?? {}), from: sess.role };
+          // Step I/O named by this event must be this session's own (N1); outside output is marked on its row.
+          await checkIoRefs(ctx.q, sess.id, env);
           // One stored event per deployment, whatever id the frame had, so a repeat after a reconnect is a no-op.
           if (e.type === 'proposal.previewed') { env.data = m3.checkPreviewed(e.data); env.id = `previewed-${env.data.ref}-${env.data.deployment}`; await m3.previewForMerge(ctx, sess.team, env.data); }
           const out = await m3.appendIn(ctx, sess.team, [env]);
@@ -558,6 +565,14 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         return caps.lease(ctx, sess, body?.amount);
       });
       return result;
+    },
+
+    /** A tool call's input or output, or a turn's own text, for the run inspector (N1): stored outside the log. */
+    async 'step.io'(conn, body) {
+      return db.tenant(conn.tenant, async ({ q }) => {
+        const sess = await ownSession(q, conn, body.session);
+        return ingestStepIo(q, conn.tenant, sess, body, { now: now(), problem: (m) => new Problem(400, m) });
+      });
     },
 
     /** A fresh session token, sent as session.token. */
@@ -668,6 +683,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       // A runner gone for ten minutes is not coming back for its sessions: they can start elsewhere.
       await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where state = 'unknown' and last_seen < now() - interval '10 minutes'"));
     }
+    // Step I/O past its retention goes for real (N1), as the owner, with an audit row per batch.
+    await purgeIo(db).catch((e) => log.error?.(`step io purge: ${e.message}`));
     // A revoke on any instance closes the socket here.
     const live = reg();
     if (live?.all) {

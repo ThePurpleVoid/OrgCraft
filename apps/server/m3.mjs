@@ -853,7 +853,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     return tx(tenant, async (ctx) => {
       // Sent through the API: its usage counts toward the day but never against a session's spend lease (L24s).
       ctx.outside = true;
-      const s = await appendIn(ctx.q, tenant, team, events, { project: (qq, x) => project(ctx, x), now: ctx.now });
+      // outside: the sender's actor and data are its own words, so no session it names gives the event a task.
+      const s = await appendIn(ctx.q, tenant, team, events, { project: (qq, x) => project(ctx, x), now: ctx.now, outside: true });
       ctx.stored.push(...s);
       return s;
     });
@@ -867,7 +868,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (used) await ctx.audit({ actorKind: 'person', actorId: by, action: 'step-up', target: used, decision: 'used', rule: what });
       return used;
     });
-    if (!result) throw new StepUpRequired(what);
+    if (!result) throw new StepUpRequired(what, scope);
     return result;
   }
 
@@ -880,7 +881,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   return {
     appendIn: appendInTx, onStored: (fn) => listeners.push(fn), hooks,
-    requireStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
+    requireStepUp, useStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
     createCard, changeCard, getCard, answerCard, requestApproval, decideApproval, readyToTry, previewArrived, checkPreviewed, previewForMerge,
     stepUp, mintStepUp, postChat, getChat, inbox, teamExtras, useStepUp, today,
