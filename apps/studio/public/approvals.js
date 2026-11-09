@@ -60,6 +60,8 @@ export const kindName = (kind) => t(`rule.kind.${kind}`);
  * a server that sends no name at all gets the CPO's neutral words (never claim they lost access). Never an id.
  */
 let org = '';
+/** The same words for a person anywhere (chat cards too): `name` undefined when the server sent no name field. */
+export const personWord = (id, name, me, organization = '') => (id && me && id === me ? t('notify.log.you') : name ? name : name === null ? t('notify.log.who.unknown') : t('person.loading', { organization: organization || org || t('org.fallback') }));
 const person = (id, name, me) => (id && me && id === me ? t('notify.log.you') : name ? name : name === null ? t('notify.log.who.unknown') : t('person.loading', { organization: org || t('org.fallback') }));
 
 /** Use this period: "Used 3 times this week. $40.00 left." */
@@ -117,7 +119,9 @@ function ledgerLineMarked(it, me) {
     return words === null ? line.replace('"\u0000"', () => t('ledger.noword')) : line.replace('\u0000', () => words);
   };
   let text;
-  if (it.kind === 'approved' || it.kind === 'denied') text = q(`${it.kind === 'approved' ? 'ledger.approved' : 'ledger.declined'}${v.letter ? '' : '.noletter'}`);
+  // A Do it tap (L39): one line for the letters it covered; the ledger keeps no words the person didn't type.
+  if (it.kind === 'approved' && it.tap === 'do-it' && Array.isArray(it.covered)) text = fill('ledger.doit', { ...v, list: andList(it.covered.filter((x) => /^[A-E]$/.test(x))) });
+  else if (it.kind === 'approved' || it.kind === 'denied') text = q(`${it.kind === 'approved' ? 'ledger.approved' : 'ledger.declined'}${v.letter ? '' : '.noletter'}`);
   else if (it.kind === 'doit') text = fill('ledger.doit', v);
   else if (it.kind === 'rule-added') text = q('ledger.rule');
   else if (it.kind === 'rule-used') text = fill('ledger.byrule', v);
@@ -126,8 +130,17 @@ function ledgerLineMarked(it, me) {
   return text;
 }
 
+const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+
 export function ledgerHtml(lg, me, { error = null } = {}) {
+  // One Do it tap writes a row per ask: the page shows the tap once.
+  const taps = new Set();
   const items = (lg?.items ?? []).map((it) => {
+    if (it.tap === 'do-it' && Array.isArray(it.covered)) {
+      const key = `${it.at}|${it.by}|${it.covered.join(',')}`;
+      if (taps.has(key)) return '';
+      taps.add(key);
+    }
     const line = ledgerLine(it, me, { marked: true });
     if (!line) return '';
     const long = (it.words ?? '').length > WORDS_CUT;

@@ -299,7 +299,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
   const relay = async (res, fn) => {
     if (!chat.connected) return send(res, 503, { connected: false, error: 'connect a control plane: set AGENT_TEAM_SERVER, AGENT_TEAM_SERVER_TOKEN and AGENT_TEAM_SERVER_TEAM' });
     try { return send(res, 200, await fn()); } catch (e) {
-      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(typeof e.body?.scope === 'string' ? { scope: e.body.scope } : {}), ...(e.status === 409 && e.body?.id ? { card: e.body } : {}) });
+      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(typeof e.body?.scope === 'string' ? { scope: e.body.scope } : {}), ...(e.status === 409 && e.body?.id ? { card: e.body } : {}), ...(e.status === 409 && Array.isArray(e.body?.cards) ? { cards: e.body.cards } : {}) });
       if (e instanceof RunRefused) return send(res, 409, { error: e.message, type: 'not-published' });
       return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
     }
@@ -359,6 +359,11 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         return relay(res, async () => ({ connected: true, ...(await chat.live()) }));
       }
       // Approvals (L22): the standing rules and the ledger, from the control plane only.
+      // Who is signed in to the control plane, so a page can say "You" for this person's own answers (L39).
+      if (req.method === 'GET' && url.pathname === '/v1/team/me') {
+        if (!chat.connected) return send(res, 200, { connected: false });
+        return relay(res, async () => { const me = await chat.me(); return { connected: true, id: me?.id ?? me?.person?.id ?? null }; });
+      }
       if (req.method === 'GET' && url.pathname === '/v1/team/approvals') {
         if (!chat.connected) return send(res, 200, { connected: false });
         const before = url.searchParams.get('before');
@@ -443,6 +448,12 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (member) {
           if (!['paused', 'off'].includes(input.state)) throw new HttpError(400, 'state is paused or off');
           return relay(res, () => chat.setMember(decodeURIComponent(member[1]), input.state, reason, key));
+        }
+        // L39 "Do it": up to five lettered asks, each with the card version the person saw.
+        if (url.pathname === '/v1/team/do-it') {
+          const asks = input.asks;
+          if (!Array.isArray(asks) || !asks.length || asks.length > 5 || asks.some((x) => !x || typeof x.approval !== 'string' || x.approval.length > 100 || !Number.isInteger(x.version))) throw new HttpError(400, 'asks is 1 to 5 of { approval, version }');
+          return relay(res, () => chat.doIt({ asks: asks.map((x) => ({ approval: x.approval, version: x.version })), key: typeof input.key === 'string' ? input.key.slice(0, 80) : undefined }));
         }
         // L40: sends the systems as published (the repository's HEAD, never the page's draft) to the control plane.
         // The control plane asks for a step-up scoped systems:<team>; the page gets it and calls again.
