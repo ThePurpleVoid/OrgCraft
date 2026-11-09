@@ -22,7 +22,8 @@ const sha = (s) => createHash('sha256').update(String(s)).digest('hex');
 const rid = (p, n = 12) => `${p}${randomBytes(n).toString('base64url')}`;
 
 export class StepUpNeeded extends Problem {
-  constructor(what) { super(401, `${what} needs step-up: confirm with your passkey`, { type: 'step-up-required' }); }
+  /** `scope`, when set, is what the passkey step-up must be bound to (POST /v1/me/passkeys/step-up with { scope }), as m3's StepUpRequired says it. */
+  constructor(what, scope = null) { super(401, `${what} needs step-up: confirm with your passkey${scope ? ` for ${scope}` : ''}`, { type: 'step-up-required', ...(scope ? { body: { scope } } : {}) }); }
 }
 
 /**
@@ -63,7 +64,8 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
       rpName, rpID, userName: who.session.login, userDisplayName: who.session.name ?? who.session.login,
       userID: new TextEncoder().encode(who.principal), attestationType: 'none',
       excludeCredentials: (await mine(who.principal)).map((p) => ({ id: p.credential_id })),
-      authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
+      // Discoverable, so the passkey alone can sign the person in (L27).
+      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
       timeout: CHALLENGE_SECONDS * 1000,
     });
     await challenges.put('register', who.principal, options.challenge);
@@ -158,9 +160,9 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
   }
 
   /** A su_ token for this person in this tenant, used up here. */
-  async function requireStepUp(who, token, what) {
-    if (!who.tenant || !token) throw new StepUpNeeded(what);
-    try { return await m3.requireStepUp(who.tenant, who.principal, token, what); } catch (e) { if (e?.type === 'step-up-required') throw new StepUpNeeded(what); throw e; }
+  async function requireStepUp(who, token, what, scope = null) {
+    if (!who.tenant || !token) throw new StepUpNeeded(what, scope);
+    try { return await m3.requireStepUp(who.tenant, who.principal, token, what, scope); } catch (e) { if (e?.type === 'step-up-required') throw new StepUpNeeded(what, scope); throw e; }
   }
 
   return { list, registrationOptions, register, remove, challenge, stepUp, requireStepUp, rpID };

@@ -133,6 +133,28 @@ export const PROBES = {
 };
 
 /**
+ * Test connection through the gateway (L20g): the probe is an effect keyed test:<credential>:<minute>, so a double
+ * tap sends one call and answers the second with the first's status and body; GitHub calls are paced on the
+ * installation and tenant (wrapFetch). An effect whose outcome is unknown is not sent again.
+ */
+export function probeThrough(gateway, m3, send = fetch) {
+  if (!gateway) return null;
+  return async (url, init, { tenant, key }) => {
+    const b = (await m3.tx(tenant, (ctx) => gateway.begin(ctx, { key, tool: 'credential.test' }))).result;
+    if (b.state === 'repeat') return new Response(b.result?.body ?? '{}', { status: b.result?.status ?? 200 });
+    if (b.state !== 'first') return new Response(JSON.stringify({ error: 'unknown' }), { status: 409 });
+    const go = String(url).startsWith('https://api.github.com/') ? gateway.wrapFetch(send, () => ({ tenant })) : send;
+    let res, body;
+    try {
+      res = await go(url, { ...init, signal: AbortSignal.timeout(10_000) });
+      body = (await res.text()).slice(0, 2000);
+    } catch (e) { await m3.tx(tenant, (ctx) => gateway.end(ctx, { key, ok: false })); throw e; }
+    await m3.tx(tenant, (ctx) => gateway.end(ctx, { key, ok: res.ok, result: { status: res.status, body } }));
+    return new Response(body, { status: res.status });
+  };
+}
+
+/**
  * `outbound(url, init, { tenant, key })` makes the probe's call: the gateway's pacing (L20g) when it is wired, else
  * fetch. A test within a minute of the last one answers that one again, so a double tap sends one probe.
  */

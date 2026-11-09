@@ -95,6 +95,11 @@ export async function fakeControlPlane({ secrets = {}, key = 'rk_test', tenant =
           plane.secretGets.push(f.body);
           if (Object.hasOwn(secrets, f.body.name)) send('ack', { name: f.body.name, value: secrets[f.body.name] }, f.id);
           else send('nack', { ref: f.id, problem: `${f.body.name} is not bound to this session's role` }, f.id);
+        } else if (f.op === 'spend.lease' && plane.lease) {
+          // L24s: a test's lease rule; without one, the ack below carries no amount, as from a server without leases.
+          plane.leaseAsks.push(f.body);
+          const r = plane.lease(f.body);
+          if (r?.nack) send('nack', { ref: f.id, problem: r.nack }, f.id); else send('ack', r, f.id);
         } else if (f.op === 'session.renew') {
           send('ack', {}, f.id);
           const s = sessionOf[f.body.session];
@@ -120,7 +125,7 @@ export async function fakeControlPlane({ secrets = {}, key = 'rk_test', tenant =
   await new Promise((r) => http.listen(0, '127.0.0.1', r));
   const plane = {
     url: `http://127.0.0.1:${http.address().port}`,
-    key, events, frames, approvals, toolCalls, nacks, tokens, resent, secretGets: [],
+    key, events, frames, approvals, toolCalls, nacks, tokens, resent, secretGets: [], leaseAsks: [], lease: null,
     /** Session bodies to hand back in the next welcome (a reconnect resumes them). */
     resumeOnWelcome: [],
     body(b) {
