@@ -103,3 +103,9 @@ test('a name may not be another seat\'s id, a role type on the team or "owner" (
   const bad = importLayer({ 'team.json': teamJson, 'roles/backend-dev-2.extend.md': '**Name:** Owner\n**Based on:** backend-dev\n**Reports to:** cto\n' }, kit);
   assert.ok(validate(bad, kit).some((i) => i.level === 'error' && i.where === 'roles/backend-dev-2' && /is already a teammate's id, a role or "owner"/.test(i.message)));
 });
+
+test('validate checks only names someone gave: a role title that matches another role\'s id is not an error', () => {
+  const designer = '# Designer\n\n**Reports to:** owner\n**Model:** standard\n\n## Hands to\n- owner\n';
+  const spec = importLayer({ 'team.json': teamJson, 'roles/brand-designer.md': designer, 'roles/designer.md': designer.replace('# Designer', '# Product designer') }, kit);
+  assert.ok(!validate(spec, kit).some((i) => /is already a teammate's id/.test(i.message)));
+});

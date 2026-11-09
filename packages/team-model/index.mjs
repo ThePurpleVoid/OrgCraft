@@ -537,7 +537,9 @@ function checkMembers(spec, kit, roles, manager) {
   const onTypes = [...new Set(onIds.map((x) => typeOf(spec, x)))];
   for (const slug of on.keys()) {
     const k = nameKey(name(slug));
-    const clash = addressClash(name(slug), slug, onIds, onTypes);
+    // Only a name someone gave (a Name field, or a teammate's own "# " line): a computed name is a role's title, and
+    // a title that matches another role's id must not turn into an error on upgrade (code review L35).
+    const clash = seatName(spec.roles[slug]) ? addressClash(name(slug), slug, onIds, onTypes) : null;
     if (clash) add('error', `roles/${slug}`, clash);
     if (seen.has(k)) add('error', `roles/${slug}`, `${seen.get(k)} and ${slug} are both called ${name(slug)}; give one of them another name`);
     else seen.set(k, slug);
