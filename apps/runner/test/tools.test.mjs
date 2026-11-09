@@ -99,3 +99,12 @@ test('meeting_start: the front door only', () => {
   no('meeting_start', { title: 'x', attendees: ['nobody'] }, /not a role/, door);
   no('meeting_start', { title: 'x', attendees: [] }, /at least one/, door);
 });
+
+test('ADR 0011: a teammate\'s prompt names it by its name and member id, says its role, and keeps the member id as its address', async () => {
+  const { systemPrompt } = await import('../session.mjs');
+  assert.match(systemPrompt({}, 'cto'), /^You are the cto on this team/, 'a team without members reads as before');
+  const p = systemPrompt({}, 'support-agent-2', null, { type: 'support-agent', name: 'Maya' });
+  assert.match(p, /^You are Maya \(support-agent-2\), a support-agent on this team\b/);
+  assert.match(p, /Teammates address you as support-agent-2\./);
+  assert.match(systemPrompt({}, 'x', null, { name: 'Bad\nName' }), /^You are Bad Name \(x\)/, 'a name is one line');
+});
