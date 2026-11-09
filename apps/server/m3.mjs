@@ -191,12 +191,15 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     const cost = isInt(event.data?.cost) && event.data.cost > 0 ? event.data.cost : 0;
     if (!cost) return;
     const b = await budgetRow(q, team);
-    const day = localDay(new Date(event.time), b?.timeZone ?? 'UTC');
+    // The day it was received, never the sender's date (security on L24s): a usage.recorded dated yesterday would
+    // otherwise land on a closed day and today's cap would never trip.
+    const day = localDay(ctx.now, b?.timeZone ?? 'UTC');
     const [d] = await q(`insert into budget_days(tenant, team, day, spent) values ($1, $2, $3::date, $4)
                          on conflict (team, day) do update set spent = budget_days.spent + excluded.spent
                          returning spent, raised, warned_at, exhausted_at`, [ctx.tenant, team, day, cost]);
     // The session's spend lease (R4) counts what it reported against what it was given.
-    if (event.actor?.session) await q('update spend_leases set used = used + $2 where session = $1 and team = $3 and ended_at is null', [event.actor.session, cost, team]);
+    // Only a runner's own usage (not one posted through the API, which names whatever session it likes).
+    if (event.actor?.session && !ctx.outside) await q('update spend_leases set used = used + $2 where session = $1 and team = $3 and ended_at is null', [event.actor.session, cost, team]);
     if (b?.perDay !== null && b?.perDay !== undefined) {
       const cap = b.perDay + Number(d.raised);
       const spent = Number(d.spent);
@@ -848,6 +851,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   async function appendEvents(tenant, team, events) {
     await getTeam(db, tenant, team);
     return tx(tenant, async (ctx) => {
+      // Sent through the API: its usage counts toward the day but never against a session's spend lease (L24s).
+      ctx.outside = true;
       const s = await appendIn(ctx.q, tenant, team, events, { project: (qq, x) => project(ctx, x), now: ctx.now });
       ctx.stored.push(...s);
       return s;

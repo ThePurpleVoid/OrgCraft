@@ -151,3 +151,19 @@ test('B8: a hosted deployment keeps budgets in US dollars (runners price in USD 
     assert.deepEqual([run.status, run.body.type], [422, 'currency']);
   }, { tickMs: 0, mode: 'hosted' });
 });
+
+test('security on L24s: usage dated in the past counts toward today; usage posted through the API never fills a session\'s lease', async () => {
+  await plane(async (p) => {
+    const { runner, qa } = await team(p);
+    const g = await lease(runner, qa, 50);
+    const yesterday = new Date(Date.now() - 36 * 3600_000).toISOString();
+    // Posted with an admin key, dated yesterday and naming QA's session.
+    const posted = { ...usage(qa, 30), time: yesterday };
+    assert.equal((await p.call('POST', '/teams/shop/events', { events: [posted] })).status, 200);
+    const day = (await p.call('GET', '/teams/shop/caps')).body.caps[0];
+    assert.equal(day.spent, 30, 'counted on the day it arrived');
+    const [row] = await p.db.system('select used from spend_leases where id = $1', [g.lease]);
+    assert.equal(Number(row.used), 0, 'not against QA\'s lease');
+    assert.equal(day.leased, 50);
+  }, { tickMs: 0 });
+});
