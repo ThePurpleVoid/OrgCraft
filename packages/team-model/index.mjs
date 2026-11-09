@@ -1473,7 +1473,7 @@ export function meetingEstimate(meeting, roles, prices, { turn = { inputTokens: 
 // (CPO story "team templates", D29 to D36):
 //   template.json   { "schema": "agent-team/team-template@1", "id", "title", "summary", "group",
 //                     "preset" (the base, default "minimal") and optionally "roles" (the exact kit roles to switch on),
-//                     "dormant": [slug], "values": {...}, "extensions": { slug: "<role>.extend.md text" },
+//                     "dormant": [slug], "off": [slug] (on the team, drawn as Off, until switched on), "values": {...}, "extensions": { slug: "<role>.extend.md text" },
 //                     "systems": [{ "type", "name", "for": [slug] }]   suggested, never bound, never secrets
 //                     "areas": [{ "path", "writer", "notes" }]          → ownership.json
 //                     "checks": { gates.json }                          → gates.json
@@ -1514,6 +1514,13 @@ export function templateSpec(files, kit, { project, owner = 'the owner', timezon
     if (!spec.roles[slug]) continue;
     spec.roles[slug].extension = parseExtension(text);
     spec.roles[slug].extensionText = text;
+  }
+  // "off": roles the template lists but starts switched off (team.json excludes them), so the Studio draws them as Off
+  // and switching one on is a one-line team.json change.
+  for (const slug of t.off ?? []) {
+    if (!spec.roles[slug]) continue;
+    spec.roles[slug].enabled = false;
+    spec.layout = { ...(spec.layout ?? {}), exclude: [...new Set([...(spec.layout?.exclude ?? []), slug])] };
   }
   for (const slug of t.dormant ?? []) {
     const r = spec.roles[slug];
@@ -1565,6 +1572,8 @@ export function checkTemplate(files, kit) {
   const agentSlugs = new Set(agents.map((a) => a.slug));
   for (const s of t.roles ?? []) if (!(s in kit.roles) && !agentSlugs.has(s)) add('error', 'template.json', `roles lists "${s}", which is neither a kit role nor one of the template's agents`);
   for (const s of t.dormant ?? []) if (!(s in kit.roles) && !agentSlugs.has(s)) add('error', 'template.json', `dormant lists "${s}", which is not on the team`);
+  if (t.off !== undefined && !Array.isArray(t.off)) add('error', 'template.json', 'off must be a list of role ids');
+  for (const s of Array.isArray(t.off) ? t.off : []) if (!(s in kit.roles)) add('error', 'template.json', `off lists "${s}", which is not a kit role`);
   for (const s of Object.keys(t.extensions ?? {})) if (!(s in kit.roles)) add('error', `extensions/${s}`, 'extends a role the kit does not have');
   for (const s of t.systems ?? []) {
     if (!String(s.type ?? '').trim() || !String(s.name ?? '').trim()) add('error', 'template.json', 'every suggested system needs a type and a name');

@@ -189,3 +189,20 @@ test('a failed first publish leaves the repository\'s own untracked AGENTS.md al
     assert.deepEqual(readdirSync(root).sort(), ['.git', 'AGENTS.md']);
   });
 });
+
+test('a template\'s "off" roles start switched off but listed, and switching one on is a one-file change (demo step 13)', async () => {
+  const { templateSpec, compileLayer, importLayer, checkTemplate } = await import('../packages/team-model/index.mjs');
+  const { loadKit } = await import('../packages/team-model/node.mjs');
+  const kit = loadKit();
+  const files = { 'template.json': readFileSync(join(KIT, 'team/templates/startup-product-team/template.json'), 'utf8') };
+  assert.deepEqual(checkTemplate(files, kit).filter((i) => i.level === 'error'), []);
+  const spec = templateSpec(files, kit, { project: 'Acme' });
+  assert.equal(spec.roles['performance-tester'].enabled, false);
+  const out = compileLayer(spec, kit);
+  assert.deepEqual(JSON.parse(out['team.json']).exclude, ['performance-tester']);
+  const on = importLayer(out, kit);
+  on.roles['performance-tester'].enabled = true;
+  const after = compileLayer(on, kit);
+  assert.deepEqual(Object.keys({ ...out, ...after }).filter((k) => out[k] !== after[k]), ['team.json']);
+  assert.ok(checkTemplate({ 'template.json': files['template.json'].replace('"off": ["performance-tester"]', '"off": ["no-such-role"]') }, kit).some((i) => /off lists "no-such-role"/.test(i.message)));
+});
