@@ -1,6 +1,8 @@
 // The Studio's page: the bar, the editor's three panes, the other pages and the dialogs. mount() renders it into its
 // root, so the same markup serves the local Studio (index.html mounts into body) and a host's admin page.
 // No inline styles or scripts (embed spec 4, strict CSP).
+import { t } from './i18n.js';
+
 export const SHELL = `
 <header class="bar">
   <div class="brand"><strong>Agent Team Studio</strong> <span id="project" class="muted"></span></div>
@@ -22,8 +24,8 @@ export const SHELL = `
 <main class="layout team-only">
   <aside class="palette" aria-label="Role library">
     <div class="palette-head"><input id="search" type="search" placeholder="Search roles" aria-label="Search roles"><button id="new-agent" type="button" class="primary edit-only">New agent</button></div>
-    <p class="hint"><span class="edit-only">Switch roles on and off, or drag one onto a manager on the canvas.</span><span class="small-only">The roles in this team. Change them on a larger screen.</span></p>
-    <div id="library"></div>
+    <p id="cat-how" class="hint edit-only">${t('catalog.how')}</p>
+    <div id="library" data-catalog></div>
   </aside>
   <section class="canvas-wrap" aria-label="Org chart">
     <div class="canvas-head">
@@ -46,7 +48,7 @@ export const SHELL = `
   </section>
   <aside class="inspector" aria-label="Role inspector">
     <div id="inspector"><p class="muted">Pick a role on the canvas or in the library.</p></div>
-    <h2>Problems</h2>
+    <h2>${t('check.heading')}</h2>
     <ul id="issues" class="issues"></ul>
   </aside>
 </main>

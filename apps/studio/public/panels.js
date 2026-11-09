@@ -3,6 +3,9 @@
 //
 // ctx: { spec(), change(fn), render(), team (roles on the team, from derive), esc, api(path, body), selectSystem(id), selectRole(slug) }
 
+import { t, tip } from './i18n.js';
+import { LEVELS } from './wiring.js';
+
 export const SYSTEM_TYPES = [
   ['repository', 'Repository'], ['database', 'Database'], ['backend', 'Backend or API'], ['hosting', 'Frontend hosting'],
   ['observability', 'Monitoring'], ['mcp', 'Any MCP server'], ['other', 'Other'],
@@ -135,7 +138,7 @@ function bindingRow(ctx, b, show) {
   const role = ctx.team.find((r) => r.slug === b.role);
   const label = show === 'role' ? (role?.title ?? b.role) : (res?.name || b.resource);
   return `<li><span class="grow">${esc(label)}</span>
-    <select data-binding="${esc(b.role)}|${esc(b.resource)}" aria-label="Permission">${PERMS.map((p) => `<option ${p === b.permission ? 'selected' : ''}>${p}</option>`).join('')}</select>
+    <select data-binding="${esc(b.role)}|${esc(b.resource)}" aria-label="${esc(t('wiring.level'))}">${LEVELS.map(([p, k]) => `<option value="${p}" ${p === b.permission ? 'selected' : ''} title="${esc(tip(p === 'write' ? 'change' : p === 'deploy' ? 'act' : 'read'))}">${esc(t(k))}</option>`).join('')}</select>
     <button type="button" class="icon" data-unbind="${esc(b.role)}|${esc(b.resource)}" aria-label="Remove">×</button></li>`;
 }
 

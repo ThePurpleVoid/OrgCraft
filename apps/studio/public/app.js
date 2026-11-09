@@ -1,6 +1,8 @@
 // Agent Team Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
-import { checkUpgrade, DEFAULT_TARGETS, resolveSpec, setEnabled, setField, splitBrief, TARGETS, teamPacks, teamTargets, validate } from './team-model.mjs';
+import { addMember, applyExtension, checkUpgrade, DEFAULT_TARGETS, displayName, membersOf, poolOf, resolveSpec, setDisplayName, setEnabled, setField, splitBrief, TARGETS, teamPacks, teamTargets, typeOf, validate } from './team-model.mjs';
+import { t, tip } from './i18n.js';
+import { drawLines, renderWiring, wireWiring } from './wiring.js';
 import { createChat } from './chat.js';
 import { createMeetings } from './meetings.js';
 import { createGallery, rolesLine, rulesLine } from './gallery.js';
@@ -34,6 +36,7 @@ let view = null; // derived each render
 let zoom = 'fit'; // or a number
 let mode = 'org'; // org | flow | systems | areas | checks
 let selectedSystem = null;
+let wiring = null; // the teammate whose wiring view is open (B2.1), or null for the org chart
 let flow = { key: '', edges: [], unresolved: [] }; // hand-offs, from the server, for the spec they were made from
 let sugg = null; // owned area and check suggestions from the repository
 let scale = 1;
@@ -73,11 +76,16 @@ function derive() {
   const bySlug = new Map(roles.map((r) => [r.slug, r]));
   const info = (slug) => {
     const r = spec.roles[slug];
-    const md = bySlug.get(slug)?.md ?? r.brief ?? S.kit.roles[slug] ?? '';
+    // A seat that is off is not resolved; its brief is still its role's brief with its own changes on top.
+    const base = r.source === 'member' ? (spec.roles[r.type]?.brief ?? S.kit.roles[r.type]) : (r.brief ?? S.kit.roles[slug]);
+    const md = bySlug.get(slug)?.md ?? (base && r.extension ? applyExtension(base, { ...r.extension, fields: (r.extension.fields ?? []).filter((f) => f.name !== 'Based on') }) : base) ?? '';
     const model = field(md, 'Model');
+    const type = typeOf(spec, slug);
     return {
-      slug, md, enabled: r.enabled, source: r.source,
-      title: titleOf(md, slug), model, tier: (/^[a-z]+/i.exec(model)?.[0] ?? '').toLowerCase(),
+      slug, md, enabled: r.enabled, source: r.source, type,
+      // ADR 0011: people see the teammate's name; the role it is based on is its subtitle.
+      title: displayName(spec, S.kit, slug), typeTitle: titleOf(spec.roles[type]?.brief ?? S.kit.roles[type] ?? md, type),
+      pool: poolOf(md), model, tier: (/^[a-z]+/i.exec(model)?.[0] ?? '').toLowerCase(),
       group: field(md, 'Group').toLowerCase() || 'other',
       reportsTo: (field(md, 'Reports to').split(/\s/)[0] ?? '').toLowerCase(),
       dormant: /^dormant/i.test(field(md, 'Status')),
@@ -86,7 +94,37 @@ function derive() {
   };
   const all = Object.keys(spec.roles).sort().map(info);
   const safety = assess({ published, draft: spec, kit: S.kit, board, head: S.git?.head });
-  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team: all.filter((r) => r.enabled && bySlug.has(r.slug)), issues: checksOf(spec), safety };
+  const team = all.filter((r) => r.enabled && bySlug.has(r.slug));
+  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team, issues: checksOf(spec), safety, draft: draftChanges(), looks: thingsToLook(team, bySlug) };
+}
+
+/**
+ * B1.1-6: what changed since the last publish, per teammate (its seat: on or off, brief, changes, name) plus the
+ * team's data files, so the canvas can draw changed cards dashed and count them. Nothing is published yet: all of it.
+ */
+function draftChanges() {
+  const seat = (sp, slug) => { const r = sp?.roles?.[slug]; return r ? JSON.stringify([r.enabled, r.brief ?? null, r.extension ?? null]) : JSON.stringify([false, null, null]); };
+  const slugs = new Set([...Object.keys(spec.roles), ...Object.keys(published?.roles ?? {})]);
+  const changed = new Set([...slugs].filter((s) => seat(published, s) !== seat(spec, s)));
+  const data = ['ownership', 'gates', 'resources', 'meetings', 'values', 'options', 'rules'].filter((k) => JSON.stringify(published?.[k] ?? null) !== JSON.stringify(spec[k] ?? null));
+  return { changed, count: changed.size + data.length };
+}
+
+/**
+ * B1.1-7: the live checks shown on the cards and under "Things to look at before you publish": a teammate whose
+ * manager is not on the team (sync would hang it under the chief of staff), and two that report to each other.
+ * They clear as soon as they are fixed, because they are computed from the draft on every change.
+ */
+function thingsToLook(team, resolved) {
+  const out = [];
+  const on = new Set(team.map((r) => r.slug));
+  for (const r of team) {
+    const raw = /\*\*Reports to:\*\*\s*\S+\s*\((\S+) is not part of this team\)/.exec(resolved.get(r.slug)?.md ?? '');
+    if (raw && !on.has(raw[1])) out.push({ slug: r.slug, kind: 'nomanager', text: t('check.nomanager', { teammate: r.title }) });
+  }
+  const mgr = new Map(team.map((r) => [r.slug, r.reportsTo]));
+  for (const r of team) { const m = mgr.get(r.slug); if (m && mgr.get(m) === r.slug && r.slug < m) out.push({ slug: r.slug, kind: 'loop', text: t('check.loop', { teammate: r.title, teammate2: team.find((x) => x.slug === m)?.title ?? m }) }); }
+  return out;
 }
 
 /**
@@ -142,9 +180,12 @@ function ext(slug) {
 }
 function setExtField(slug, name, value) {
   const r = spec.roles[slug];
-  if (r.brief !== undefined && !r.extension) return setField(spec, slug, name, value);
+  if (r.brief !== undefined && !r.extension) {
+    if (value === '') { r.brief = r.brief.replace(new RegExp(`^\\*\\*${name}:\\*\\*.*\\n`, 'm'), ''); return spec; }
+    return setField(spec, slug, name, value);
+  }
   const e = ext(slug);
-  const kitValue = field(S.kit.roles[slug] ?? r.brief, name);
+  const kitValue = field(r.source === 'member' ? (spec.roles[r.type]?.brief ?? S.kit.roles[r.type]) : (S.kit.roles[slug] ?? r.brief), name);
   e.fields = e.fields.filter((f) => f.name !== name);
   if (value !== kitValue) e.fields.push({ name, value });
 }
@@ -298,27 +339,57 @@ function nodeSvg(r, p, extra = '') {
   else if (live?.on && mode !== 'systems') extra += l ? ` live s-${l.status}${l.stale ? ' stale' : ''}` : ' live none';
   // The reason replaces the tier on an amber card: it is what the owner needs to read there (criterion 3).
   // A role that reports for itself, with no hook events (another coding agent): its card says so (D46).
-  const tier = three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : own?.self_reported ? 'self-reported' : ''].filter(Boolean).join(' · '))
-    : l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}${replaces ? ' · replaces kit' : ''}` : '';
+  const subtitle = r.off || !r.enabled ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle });
+  const tier = r.off ? subtitle : three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : own?.self_reported ? 'self-reported' : ''].filter(Boolean).join(' · '))
+    : l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : subtitle;
   const state = three ? (own ? [stateWord(own), taskOf(own)].filter(Boolean).join(' · ') : '') : '';
+  const look = view.looks.find((x) => x.slug === r.slug);
   const flag = view.issues.some((i) => i.level === 'error' && i.where === `roles/${r.slug}`) ? ' ⚠' : r.changed ? ' •' : '';
+  if (view.draft.changed.has(r.slug)) extra += ' draft';
+  if (look) extra += ' look';
   const tip = three && own ? `${r.title}: ${stateWord(own)}${taskOf(own) ? ` · ${taskOf(own)}` : ''}${own.branch ? ` · branch ${own.branch}` : ''}${own.pr ? ` · PR #${own.pr}` : ''}${hot ? ` · ${hot.map(reasonOf).join(', ')}` : ''}${own.self_reported ? ` · ${SELF_REPORTED}` : ''}` : '';
-  return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${extra}" data-slug="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}${hot ? `, ${esc(hot.map(reasonOf).join(', '))}, work in progress` : ''}">
+  return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${r.off ? ' off' : ''}${extra}" data-slug="${r.slug}" data-node="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}, ${esc(r.off ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle }))}${hot ? `, ${esc(hot.map(reasonOf).join(', '))}, work in progress` : ''}">
     <rect class="card" width="${W}" height="${H}"></rect>
     <rect class="stripe" width="4" height="${H - 16}" x="8" y="8" fill="${groupColor(r.group)}"></rect>
     <text class="title" x="20" y="23">${esc(r.title.length > 21 ? r.title.slice(0, 20) + '…' : r.title)}${flag}</text>
     <text class="meta" x="20" y="41">${esc(tier.length > 28 ? tier.slice(0, 27) + '…' : tier)}</text>
+    ${look ? `<g class="badge-warn" transform="translate(${W - 10},-6)"><circle r="9"></circle><text text-anchor="middle" y="4">!</text><title>${esc(look.text)}</title></g>` : ''}
     ${three ? `${state ? `<circle class="dot" cx="24" cy="${H - 15}" r="4"></circle><text class="state" x="33" y="${H - 11}">${esc(state.length > 25 ? state.slice(0, 24) + '…' : state)}</text>` : ''}${tip ? `<title>${esc(tip)}</title>` : ''}`
     : `${replaces && !l ? `<title>${esc(view.issues.find((i) => i.where === `roles/${r.slug}` && /replaces the kit/.test(i.message))?.message ?? 'Replaces the kit role of this name on this team')}</title>` : ''}
     ${l ? `<circle class="dot" cx="${W - 14}" cy="16" r="5"></circle>${l.threads > 1 ? `<text class="threads" x="${W - 24}" y="20" text-anchor="end">${l.threads}</text>` : ''}<title>${esc(`${r.title}: ${liveLine(l)}${l.pr ? ` · PR #${l.pr}` : ''}${l.issue ? ` · issue #${l.issue}` : ''}`)}</title>` : ''}`}
   </g>`;
 }
 
+/** What the wiring view reads and how it edits the draft. */
+const wiringCtx = {
+  spec: () => spec, view: () => view, kit: null, esc,
+  change: (fn) => change(fn), render: () => render(),
+  resolved: (slug) => view.bySlug.get(slug)?.md ?? '',
+  setSection: (slug, name, m, text) => change(() => setExtSection(slug, name, m, text)),
+  close: () => openWiring(null),
+};
+let wiringWired = false;
+/** Opens teammate `slug`'s wiring view in place of the chart (null closes it), with its own address (ALL-6). */
+function openWiring(slug) {
+  wiring = slug && spec.roles[slug] ? slug : null;
+  if (wiring) selected = wiring;
+  render();
+  showPage(wiring ? `team?wiring=${encodeURIComponent(wiring)}` : 'team');
+  (wiring ? $('#canvas h2') : $(`#canvas [data-node="${CSS.escape(selected ?? '')}"]`))?.focus?.();
+}
+
 function renderCanvas() {
+  stateEl().dataset.wiring = wiring ? 'on' : '';
+  if (wiring) {
+    if (!wiringWired) { wireWiring($('#canvas'), wiringCtx, () => wiring); wiringWired = true; }
+    renderWiring($('#canvas'), wiringCtx, wiring);
+    $('#summary').textContent = view.draft.count ? t('canvas.changes', { n: view.draft.count }) : '';
+    return;
+  }
   const canvasMode = ['org', 'flow', 'systems'].includes(mode);
   stateEl().dataset.mode = mode;
   for (const b of $$('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
-  $('#summary').textContent = `${view.team.length} roles on · ${view.all.length - view.team.length} off · kit ${S.kitVersion}`;
+  $('#summary').textContent = view.draft.count ? t('canvas.changes', { n: view.draft.count }) : '';
   if (mode === 'systems') renderSystemsStrip($('#systems-strip'), ctx, selectedSystem);
   if (!canvasMode) {
     if (!sugg) loadSuggestions();
@@ -330,6 +401,13 @@ function renderCanvas() {
   ROW = H + 12;
   // A role switched off in the draft while it has work in flight stays on the canvas, greyed, so its work is seen.
   const ghosts = sf.on ? view.all.filter((r) => !r.enabled && sf.hot.has(r.slug)) : [];
+  // B1.1-3: a teammate that is switched off keeps its place, dimmed, and says Off: a teammate of its own (a member),
+  // one the team or its template lists as off, or one that is on in the published team.
+  const shown = new Set([...view.team, ...ghosts].map((r) => r.slug));
+  for (const r of view.all) {
+    if (r.enabled || shown.has(r.slug)) continue;
+    if (r.source === 'member' || (spec.layout?.exclude ?? []).includes(r.slug) || published?.roles?.[r.slug]?.enabled) { ghosts.push({ ...r, off: true }); shown.add(r.slug); }
+  }
   const cards = [...view.team, ...ghosts];
   const lay = layout(cards);
   const { pos, w, h } = lay;
@@ -478,8 +556,8 @@ function wireCanvas() {
     const system = e.dataTransfer.getData('text/x-system');
     if (system) { if (t && t.dataset.slug !== 'owner') { selected = t.dataset.slug; selectedSystem = null; bind(ctx, t.dataset.slug, system); render(); } return; }
     if (!slug) return;
-    if (t) setManager(slug, t.dataset.slug);
-    else { change(() => setEnabled(spec, slug, true)); selected = slug; render(); }
+    // A role from the catalog always adds a teammate (B1.2-2); dropped on a card, it reports there.
+    addTeammate(slug, t?.dataset.slug);
   });
 }
 
@@ -491,56 +569,75 @@ function libState(slug) {
   return row ? `<span class="state s-${esc(row.status)}${(row.age_s ?? 0) > QUIET_S ? ' quiet' : ''}">${esc(stateWord(row))}</span>` : '';
 }
 
+/**
+ * The role catalog (B1.2): every role a teammate can be based on, by department, with "{n} on the team". A role never
+ * leaves the catalog: dragging it (or pressing Enter on it) adds another teammate. The team's own roles come first;
+ * the rest of the kit is under "Browse all roles…".
+ */
+function catalogRows() {
+  const types = new Map();
+  for (const r of view.all) {
+    if (r.source === 'member' || r.source === 'missing') continue;
+    const md = spec.roles[r.slug]?.brief ?? S.kit.roles[r.slug] ?? r.md;
+    types.set(r.slug, { type: r.slug, title: titleOf(md, r.slug), group: field(md, 'Group').toLowerCase() || 'other', custom: isCustom(spec.roles[r.slug]), count: membersOf(spec, r.slug).length, used: r.enabled || membersOf(spec, r.slug, { enabledOnly: false }).length > 1 || (spec.layout?.exclude ?? []).includes(r.slug) });
+  }
+  return [...types.values()];
+}
+
 function renderLibrary() {
   const q = query.toLowerCase();
-  const groups = new Map();
-  const mine = [];
-  for (const r of view.all) {
-    if (q && !`${r.title} ${r.slug} ${r.group}`.toLowerCase().includes(q)) continue;
-    if (isCustom(spec.roles[r.slug])) { mine.push(r); continue; }
-    if (!groups.has(r.group)) groups.set(r.group, []);
-    groups.get(r.group).push(r);
-  }
-  const row = (r) => `<label class="lib-role${r.slug === selected ? ' selected' : ''}" draggable="true" data-slug="${r.slug}">
-      <input type="checkbox" ${r.enabled ? 'checked' : ''} data-toggle="${r.slug}" aria-label="${r.enabled ? 'Switch off' : 'Switch on'} ${esc(r.title)}">
-      <span class="name">${esc(r.title)}</span>${libState(r.slug)}<span class="tag${isCustom(spec.roles[r.slug]) ? ' has-export' : ''}">${r.source === 'project-replaces-kit' ? 'replaces kit' : imported.has(r.slug) ? 'imported' : isCustom(spec.roles[r.slug]) ? 'custom' : r.source === 'kit' ? '' : 'yours'}${r.dormant ? ' dormant' : ''}</span>${isCustom(spec.roles[r.slug]) ? `<button type="button" class="link export" data-export="${r.slug}" aria-label="Export ${esc(r.title)} as a role pack" title="Export as a role pack">Export</button>` : ''}</label>`;
+  const rows = catalogRows().filter((c) => !q || `${c.title} ${c.type} ${c.group}`.toLowerCase().includes(q));
   const byTitle = (a, b) => a.title.localeCompare(b.title);
-  const keys = [...groups.keys()].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
-  // Your agents: the custom roles on this team, on or off (PRD 6.6 A6), each still in its own group's colour.
-  const yours = mine.length ? `<div class="group-title yours"><span class="dot" data-paint="var(--warn)"></span>Your agents</div>` +
-    mine.sort(byTitle).map((r) => row(r).replace('<span class="name">', `<span class="dot" data-paint="${groupColor(r.group)}" title="${esc(r.group)}"></span><span class="name">`)).join('') : '';
-  // A group only custom agents use (a new one, D8) gets its own section in its colour, like a kit group, listing its
-  // agents again (criterion 13). These rows open the agent; switching it on or off stays in Your agents.
-  const kitGroups = new Set(view.all.filter((r) => !isCustom(spec.roles[r.slug])).map((r) => r.group));
-  const fresh = [...new Set(mine.map((r) => r.group))].filter((g) => g && !kitGroups.has(g));
-  const ref = (r) => `<button type="button" class="lib-ref${r.slug === selected ? ' selected' : ''}" data-slug="${esc(r.slug)}" draggable="true"><span class="name">${esc(r.title)}</span><span class="tag">${imported.has(r.slug) ? 'imported' : 'custom'}${r.enabled ? '' : ' · off'}${r.dormant ? ' · dormant' : ''}</span></button>`;
-  const section = (g) => (groups.has(g)
-    ? `<div class="group-title"><span class="dot" data-paint="${groupColor(g)}"></span>${esc(g)}</div>` + groups.get(g).sort(byTitle).map(row).join('')
-    : `<div class="group-title" data-group="${esc(g)}"><span class="dot" data-paint="${groupColor(g)}"></span>${esc(g)}</div>` + mine.filter((r) => r.group === g).sort(byTitle).map(ref).join(''));
-  const order = [...keys, ...fresh].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
-  $('#library').innerHTML = (yours + order.map(section).join('')) || '<p class="muted">No roles match.</p>';
+  const order = (a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b);
+  const row = (c) => `<li><button type="button" class="lib-role cat-role${selected && typeOf(spec, selected) === c.type ? ' selected' : ''}" draggable="true" data-type="${esc(c.type)}" data-slug="${esc(c.type)}"
+      aria-describedby="cat-how" data-tip="${esc(tip('role'))}">
+      <span class="dot" data-paint="${groupColor(c.group)}" aria-hidden="true"></span><span class="name">${esc(c.title)}</span>${libState(c.type)}
+      <span class="count${c.count ? '' : ' none'}">${esc(t('catalog.count', { n: c.count }))}</span>${c.custom ? `<span class="tag">${esc(t('catalog.custom'))}</span>` : ''}</button>${c.custom ? `<button type="button" class="link export" data-export="${esc(c.type)}" aria-label="Export ${esc(c.title)} as a role pack" title="Export as a role pack">Export</button>` : ''}</li>`;
+  const block = (list) => {
+    const groups = new Map();
+    for (const c of list) { if (!groups.has(c.group)) groups.set(c.group, []); groups.get(c.group).push(c); }
+    return [...groups.keys()].sort(order).map((g) => `<h3 class="group-title"><span class="dot" data-paint="${groupColor(g)}" aria-hidden="true"></span>${esc(g)}</h3><ul class="plain cat-list">${groups.get(g).sort(byTitle).map(row).join('')}</ul>`).join('');
+  };
+  // While searching, everything that matches; otherwise the team's own roles, then the whole catalog folded.
+  const ours = q ? rows : rows.filter((c) => c.used || c.custom);
+  const rest = q ? [] : rows.filter((c) => !c.used && !c.custom);
+  $('#library').innerHTML = (block(ours) + (rest.length ? `<details class="browse"${S.browseOpen ? ' open' : ''}><summary>${esc(t('catalog.browse'))}</summary>${block(rest)}</details>` : '')) || `<p class="muted">${esc(t('search.empty', { query }))}</p>`;
   paint($('#library'));
 }
 
-function wireLibrary() {
-  $('#library').addEventListener('change', (e) => {
-    const slug = e.target.dataset.toggle;
-    if (slug) switchRole(slug, e.target.checked);
+/** Adds a teammate with role `type`: the role's own seat when it is free (switched on), else "{Role} 2", "{Role} 3"… */
+function addTeammate(type, manager) {
+  if (locked()) return flash(lockedNote());
+  let id = type;
+  change(() => {
+    const own = spec.roles[type];
+    const free = own && !own.enabled && membersOf(spec, type, { enabledOnly: false }).length === 1 && !(spec.layout?.exclude ?? []).includes(type);
+    if (free) setEnabled(spec, type, true);
+    else id = addMember(spec, S.kit, { type, ...(manager && manager !== 'owner' ? { reportsTo: manager } : {}) }).id;
+    if (free && manager && manager !== 'owner') setExtField(type, 'Reports to', manager);
   });
+  selected = id;
+  render();
+  announce(`${view.bySlug.get(id)?.title ?? id}: ${t('teammate.subtitle.ai', { role: view.bySlug.get(id)?.typeTitle ?? type })}`);
+  return id;
+}
+
+const announce = (text) => note(text);
+
+function wireLibrary() {
   $('#library').addEventListener('click', async (e) => {
     const out = e.target.closest('[data-export]');
     if (out) { e.preventDefault(); const said = await exportPack(spec, out.dataset.export); if (said !== 'cancelled') note(said); return; }
-    const l = e.target.closest('.lib-role, .lib-ref');
-    if (l && !e.target.dataset.toggle) {
-      e.preventDefault();
-      // A custom agent opens in its editor (on a large screen); any other role in the inspector.
-      if (isCustom(spec.roles[l.dataset.slug]) && !locked()) return openEditor(l.dataset.slug);
-      select(l.dataset.slug);
-      // On a phone the inspector sits below the canvas: bring it into view, or the tap seems to do nothing.
-      if (small.matches) $('#inspector').scrollIntoView({ block: 'start' });
-    }
+    // Pressing a role adds a teammate with it (the keyboard and screen-reader way to drag, B1.1-4), under the
+    // teammate that is selected, or the team's lead. On a phone the team is read-only: it shows the role instead.
+    const l = e.target.closest('.cat-role');
+    if (!l) return;
+    e.preventDefault();
+    if (locked()) { const first = membersOf(spec, l.dataset.type)[0]; if (first) select(first); else flash(lockedNote()); if (small.matches) $('#inspector').scrollIntoView({ block: 'start' }); return; }
+    const lead = view.team.find((r) => r.reportsTo === 'owner')?.slug;
+    addTeammate(l.dataset.type, selected && spec.roles[selected]?.enabled ? selected : lead);
   });
-  $('#library').addEventListener('dragstart', (e) => { const l = e.target.closest('.lib-role, .lib-ref'); if (l) { e.dataTransfer.setData('text/x-role', l.dataset.slug); e.dataTransfer.effectAllowed = 'copy'; } });
+  $('#library').addEventListener('dragstart', (e) => { const l = e.target.closest('.cat-role'); if (l) { e.dataTransfer.setData('text/x-role', l.dataset.type); e.dataTransfer.effectAllowed = 'copy'; } });
   $('#search').addEventListener('input', (e) => { query = e.target.value; renderLibrary(); });
   $('#new-agent').onclick = () => {
     if (locked()) return flash(lockedNote());
@@ -603,22 +700,38 @@ function renderInspector() {
   const role = spec.roles[r.slug];
   const managers = view.team.filter((m) => m.slug !== r.slug && !under(r.slug, m.slug));
   const ownProject = role.brief !== undefined;
-  const kitMd = S.kit.roles[r.slug];
-  const head = `<div class="row between"><h2 class="flush">${esc(r.title)}</h2>
-      <span class="badge${r.changed ? ' changed' : ''}">${ownProject ? 'your role' : r.changed ? 'kit role, changed' : 'kit role'}</span></div>
-    <p class="muted"><code>${esc(r.slug)}</code></p>
+  // A teammate based on a role: the role's brief is the kit's (or the team's own role's), and the teammate's
+  // changes sit on top of it as an extension, so kit upgrades still reach it (B1.3-8).
+  const typeMd = spec.roles[r.type]?.brief ?? S.kit.roles[r.type];
+  const kitMd = r.source === 'member' ? typeMd : S.kit.roles[r.slug];
+  const seats = membersOf(spec, r.type).length;
+  // B1.3-6: each field says whether it is the role's default or this team's change, with a reset.
+  // A field is "your change" when this teammate's file sets it to something other than the role's own value.
+  const own = (name) => { const f = (role.extension?.fields ?? []).find((x) => x.name === name); return !!f && f.value !== field(kitMd ?? '', name); };
+  const mark = (name) => (ownProject && r.source !== 'member' ? '' : own(name)
+    ? `<span class="fmark changed">${esc(t('inspector.changed'))}</span><button type="button" class="link" data-reset-field="${esc(name)}">${esc(t('inspector.reset'))}</button>`
+    : `<span class="fmark">${esc(t('inspector.default'))}</span>`);
+  const head = `<div class="teammate-head"><h2 class="flush">${esc(r.title)}</h2>
+      ${r.title !== r.typeTitle ? `<p class="subtitle muted">${esc(r.typeTitle)}</p>` : ''}</div>
     ${nowOnLive(r)}
-    <label class="row"><input type="checkbox" id="i-enabled" ${r.enabled ? 'checked' : ''}> On this team</label>
-    <div class="field"><span>Model tier</span><select id="i-tier">${TIERS.map((t) => `<option ${t === r.tier ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-    <div class="field"><span>Reports to</span><select id="i-manager">
-      <option value="owner" ${r.reportsTo === 'owner' ? 'selected' : ''}>The owner</option>
+    <div class="field"><label for="i-name">${esc(t('inspector.name'))}</label><input id="i-name" maxlength="60" value="${esc(r.title)}" autocomplete="off" aria-describedby="i-name-msg"><span id="i-name-msg" class="field-msg" role="status"></span></div>
+    <div class="field"><span>${esc(t('inspector.role'))}</span><span class="value" data-tip="${esc(tip('role'))}">${esc(r.typeTitle)} <span class="muted">· ${esc(t('catalog.count', { n: seats }))}</span></span></div>
+    <p class="row">${r.enabled ? '' : `<span class="pill off">${esc(t('canvas.off'))}</span>`}<button type="button" id="i-enabled" aria-pressed="${!r.enabled}">${esc(r.enabled ? t('canvas.turnoff') : t('canvas.turnon'))}</button></p>
+    <div class="field"><label for="i-manager">${esc(t('inspector.reportsto'))} ${mark('Reports to')}</label><select id="i-manager">
+      <option value="owner" ${r.reportsTo === 'owner' ? 'selected' : ''}>${esc(spec.values?.OWNER || 'The owner')}</option>
       ${managers.map((m) => `<option value="${m.slug}" ${m.slug === r.reportsTo ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select></div>
-    <label class="row"><input type="checkbox" id="i-dormant" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>`;
+    <div class="field"><label for="i-tier">${esc(t('inspector.model'))} ${mark('Model')}</label><select id="i-tier">${TIERS.map((x) => `<option ${x === r.tier ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+    <div class="field"><label for="i-pool" data-tip="${esc(tip('extra.hands'))}">${esc(t('inspector.hands'))} ${mark('Pool')}</label><input id="i-pool" type="number" min="1" max="10" step="1" value="${Number.isInteger(r.pool) ? r.pool : 1}" inputmode="numeric"></div>
+    <p class="row"><button type="button" id="i-wiring" class="primary">${esc(t('teammate.openwiring'))}</button></p>
+    <p class="row"><button type="button" id="i-another">${esc(t('inspector.another'))}</button>${ownProject || (spec.roles[r.type]?.brief !== undefined) ? `<button type="button" id="i-editjob" data-type="${esc(r.type)}">${esc(t('inspector.editjob'))}</button>` : ''}</p>
+    <p id="i-editjob-warn" class="notice warn" role="alert" hidden>${esc(t('inspector.editjob.warn', { n: seats }))} <button type="button" class="link" id="i-editjob-go">${esc(t('inspector.editjob'))}</button></p>
+    <label class="row"><input type="checkbox" id="i-dormant" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>
+    <p class="hint advanced">Id: <code>${esc(r.slug)}</code></p>`;
   let body;
   if (ownProject && small.matches) {
     body = `<p class="notice">Open the Studio on a larger screen to edit this agent.</p>`;
   } else if (ownProject) {
-    body = `<p class="row"><button type="button" id="i-edit" class="primary">Edit this agent</button><button type="button" id="i-export">Export as a role pack</button></p>`;
+    body = `<p class="row"><button type="button" id="i-export">Export as a role pack</button></p>`;
   } else {
     const sections = splitBrief(kitMd).sections.filter((s) => !/^## every thread/i.test(s.heading));
     const mine = new Map((role.extension?.sections ?? []).map((s) => [s.name.toLowerCase(), s]));
@@ -634,14 +747,32 @@ function renderInspector() {
   }
   el.innerHTML = head + (r.enabled ? roleSystemsHtml(ctx, r.slug) : '') + body;
   wireBindings(el, ctx);
-  $('#i-enabled').onchange = (e) => switchRole(r.slug, e.target.checked);
+  $('#i-enabled').onclick = () => switchRole(r.slug, !r.enabled);
   $('#i-tier').onchange = (e) => change(() => setExtField(r.slug, 'Model', r.model.replace(/^[a-z]+/i, e.target.value) || e.target.value));
   $('#i-manager').onchange = (e) => setManager(r.slug, e.target.value);
+  const name = $('#i-name');
+  name.onchange = () => {
+    const v = name.value;
+    try { const probe = JSON.parse(JSON.stringify(spec)); setDisplayName(probe, r.slug, v, S.kit); } catch (err) {
+      $('#i-name-msg').textContent = err.status === 409 ? t('teammate.dupname', { name: err.message.replace(/^Another teammate is already called /, '') }) : err.message;
+      name.setAttribute('aria-invalid', 'true'); return;
+    }
+    name.removeAttribute('aria-invalid');
+    change(() => setDisplayName(spec, r.slug, v, S.kit));
+  };
+  $('#i-pool').onchange = (e) => { const n = Math.max(1, Math.min(10, Math.round(+e.target.value || 1))); change(() => setExtField(r.slug, 'Pool', n === 1 ? '' : String(n))); };
+  $('#i-another').onclick = () => addTeammate(r.type, r.reportsTo);
+  $('#i-wiring').onclick = () => openWiring(r.slug);
+  const job = $('#i-editjob');
+  // B1.3-5: the job description is the role's, shared by every teammate based on it, so say so before opening it.
+  if (job) job.onclick = () => { if (seats > 1) { $('#i-editjob-warn').hidden = false; $('#i-editjob-go').focus(); } else openEditor(r.type); };
+  const go = $('#i-editjob-go');
+  if (go) go.onclick = () => openEditor(r.type);
+  for (const b of el.querySelectorAll('[data-reset-field]')) b.onclick = () => change(() => { const e2 = spec.roles[r.slug].extension; e2.fields = e2.fields.filter((f) => f.name !== b.dataset.resetField || (r.source === 'member' && f.name === 'Based on')); });
   $('#i-dormant').onchange = (e) => change(() => setExtField(r.slug, 'Status', e.target.checked ? `dormant until the owner or the lane's executive opens it for a request.` : 'active'));
   const reset = $('#i-reset');
-  if (reset) reset.onclick = () => change(() => { delete spec.roles[r.slug].extension; });
-  const ed = $('#i-edit');
-  if (ed) ed.onclick = () => openEditor(r.slug);
+  // A teammate based on a role keeps what makes it a seat (its role, manager and name); the rest goes back to the role's.
+  if (reset) reset.onclick = () => change(() => { const x = spec.roles[r.slug]; if (x.source === 'member') x.extension = { ...x.extension, sections: [{ name: 'Owns (writes)', mode: 'replace', text: 'Nothing yet.' }] }; else delete x.extension; });
   const out = $('#i-export');
   if (out) out.onclick = async () => { const said = await exportPack(spec, r.slug); if (said !== 'cancelled') note(said); };
   const brief = $('#i-brief');
@@ -700,7 +831,8 @@ function renderIssues() {
   const pill = $('#checks');
   pill.className = `pill ${errors ? 'error' : 'ok'}`;
   pill.textContent = errors ? `${errors} error${errors > 1 ? 's' : ''}, ${list.length - errors} warnings` : `No problems${list.length ? ` · ${list.length} warnings` : ''}`;
-  $('#issues').innerHTML = list.length ? list.map((i) => `<li class="${i.level}" data-where="${esc(i.where)}"><strong>${i.level}</strong> · ${esc(i.where)}: ${esc(i.message)}</li>`).join('') : '<li class="none">No problems.</li>';
+  const looks = view.looks.map((l) => `<li class="warning look" data-where="roles/${esc(l.slug)}"><button type="button" class="link" data-look="${esc(l.slug)}">${esc(l.text)}</button></li>`).join('');
+  $('#issues').innerHTML = looks + (list.length ? list.map((i) => `<li class="${i.level}" data-where="${esc(i.where)}"><strong>${i.level}</strong> · ${esc(i.where)}: ${esc(i.message)}</li>`).join('') : looks ? '' : '<li class="none">No problems.</li>');
 }
 
 let flashTimer = null;
@@ -991,13 +1123,15 @@ async function setPage(raw) {
     if (p === 'meetings') meetings ??= createMeetings({ root: $('#meetings-page'), ctx: meetingsCtx });
     const role = params.get('role');
     if (p === 'team' && role && spec.roles?.[role]) { selected = role; selectedSystem = null; }
+    wiring = p === 'team' && params.get('wiring') && spec.roles?.[params.get('wiring')] ? params.get('wiring') : null;
+    if (wiring) selected = wiring;
     render();
     if (p === 'team' && role && !spec.roles?.[role]) flash('That role is not on this team any more.');
     const shown = p === 'meetings' && params.get('id') ? meetings.show(params.get('id')) : 'shown';
     if (shown === 'missing') flash('That meeting is not in this team any more.');
     if (shown === 'dirty') flash('Save or cancel the meeting you are editing, then open the link again.');
   }
-  showPage(p);
+  showPage(p === 'team' && wiring ? `team?wiring=${encodeURIComponent(wiring)}` : p);
 }
 
 /** What the Meetings view reads from the team and how it edits the draft. */
@@ -1250,7 +1384,7 @@ function load(initial) {
   $('#confirm').onclick = confirmPublish;
   $('#issues').addEventListener('click', (e) => {
     const w = e.target.closest('li')?.dataset.where ?? '';
-    const m = /^roles\/(.+)$/.exec(w);
+    const m = /^roles\/(.+?)(\.extend\.md)?$/.exec(w);
     if (m && view.bySlug.has(m[1])) return select(m[1]);
     const to = /^ownership/.test(w) ? 'areas' : /^gates/.test(w) ? 'checks' : /^(resources|bindings)/.test(w) ? 'systems' : null;
     if (to) setMode(to);
