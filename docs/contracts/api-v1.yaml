@@ -134,7 +134,7 @@ paths:
     get:
       x-min-role: viewer
       tags: [studio]
-      summary: "The Studio (hosted mode): the team as the Studio reads it from the team's GitHub repository, with base (the default branch's head sha), git and features. 503 until the deployment's GitHub App is set up; 409 no-repo when the team has no repository connected"
+      summary: "The Studio (hosted mode): the team as the Studio reads it from the team's GitHub repository, with base (the default branch's head sha), git, features, and (kit 0.22, additive) members[] and catalog[] computed from the spec exactly as the local Studio returns them (plans team-json-0.22 section 4: each teammate with id, name, type, lane, pool, handsTo, problems; each role type with count of enabled teammates). 503 until the deployment's GitHub App is set up; 409 no-repo when the team has no repository connected"
       responses: { "200": { description: OK } }
   /teams/{team}/studio/v1/team/pr:
     parameters: [ { $ref: "#/components/parameters/team" } ]
