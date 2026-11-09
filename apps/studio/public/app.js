@@ -1298,7 +1298,7 @@ async function setPage(raw) {
   if (p !== 'rollout') rolloutView?.close();
   if (p !== 'approvals') approvalsView?.close();
   if (p === 'approvals') {
-    approvalsView ??= createApprovals({ root: $('#approvals-page') });
+    approvalsView ??= createApprovals({ root: $('#approvals-page'), organization: () => spec?.values?.ORGANIZATION || spec?.values?.PROJECT_NAME || '' });
     approvalsView.open();
   } else if (p === 'rollout') {
     rolloutView ??= createRollout({ root: $('#rollout-page'), titleOf: roleTitle, apiUrl });

@@ -124,7 +124,7 @@ const fmtDay = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' 
  * L22, the lines above an approval's facts (strings-now §6b): asked again after a decline (declines stick, AI-10),
  * what the teammate says changed, and a card that replaced one whose calls changed. `me` is the viewer's id, if known.
  */
-export function declineHtml(card, me = null) {
+export function declineHtml(card, me = null, org = '') {
   const d = card.data ?? {};
   const out = [];
   const db = d.declinedBefore;
@@ -134,7 +134,7 @@ export function declineHtml(card, me = null) {
     const mine = db.declinedBy && me ? db.declinedBy === me : !db.declinedByName;
     if (mine && what) out.push(t('card.declined.before', { date, reason: what }));
     else {
-      out.push(t('card.declined.other', { person: mine ? t('notify.log.you') : db.declinedByName || t('notify.log.who.unknown'), date }));
+      out.push(t('card.declined.other', { person: mine ? t('notify.log.you') : db.declinedByName || (db.declinedByName === null ? t('notify.log.who.unknown') : t('person.loading', { organization: org || t('org.fallback') })), date }));
       if (what) out.push(t('card.changed.what', { reason: what }));
     }
     if (db.cooldownUntil ?? db.until) out.push(t('card.cooldown', { date: fmtDay(db.cooldownUntil ?? db.until) }));
@@ -163,7 +163,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
         <button id="run-start" type="button" class="primary" hidden>Start a run…</button>
         <button id="run-pause" type="button"></button>
         <button id="run-stop" type="button" class="danger">Stop</button>
-        <button id="runner-add" type="button" hidden>Add a runner…</button>
+        <button id="runner-add" type="button" data-tip="${esc(t('runner.connect.tip'))}" hidden>${esc(t('runner.connect'))}</button>
       </div>
     </div>
     <dialog id="start-dialog" class="start-dialog">
@@ -282,7 +282,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
       ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="${esc(t('stepup.label.interim'))}" placeholder="${esc(t('stepup.label.interim'))}" required><button type="submit" class="primary">${esc(t('stepup.button'))}</button></form>` : ''}
       <h3>${esc(card.title)}</h3>
-      ${card.kind === 'approval' ? declineHtml(card, me()) : ''}
+      ${card.kind === 'approval' ? declineHtml(card, me(), organization()) : ''}
       ${boundHtml(card)}
       ${factsHtml(card)}
       ${card.body ? `${factsHtml(card) ? '<p class="muted why-label">Why, in the teammate\'s words:</p>' : ''}<div class="md">${md(card.body)}</div>` : ''}

@@ -162,7 +162,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     }
     // Live overrides (L18), like apps/server/live.mjs: setting needs no step-up; lifting one needs a step-up bound to
     // lift:<id>; only a lift clears one (a run that starts does not).
-    if (p === '/v1/me' && req.method === 'GET') return send(res, 200, { id: 'per_owner', login: 'owner', name: 'Owner' });
+    if (p === '/v1/me' && req.method === 'GET') return send(res, 200, { id: 'per_owner', login: 'owner', name: 'Owner', workspaces: [{ tenant: 't', role: 'owner' }] });
     if (p === `/v1/teams/${team}/standing-rules` && req.method === 'GET') {
       return send(res, 200, { kinds: [['refund', true], ['pay.known', true], ['send.known', true], ['reply', false], ['merge', false], ['cost', false]].map(([id, enforced]) => ({ id, enforced })), never: ['newrecipient', 'live', 'delete', 'passkey', 'outside'], rules });
     }

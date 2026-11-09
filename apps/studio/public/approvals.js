@@ -25,27 +25,37 @@ export const money = (minor, currency = 'USD') => {
 /** A rule's one line in the CPO's words, from its structured form (never from anyone's prose). */
 export function ruleLine(form = {}) {
   const period = form.period ? t(`rule.period.${form.period}`) : null;
-  return fill(`rule.${form.kind}`, { amount: form.maxEach != null ? money(form.maxEach, form.currency) : null, total: form.total != null ? money(form.total, form.currency) : null, system: form.system, channel: form.channel, n: form.n, period });
+  const base = fill(`rule.${form.kind}`, { amount: form.maxEach != null ? money(form.maxEach, form.currency) : null, total: form.total != null ? money(form.total, form.currency) : null, all: form.totalAll != null ? money(form.totalAll, form.currency) : null, system: form.system, channel: form.channel, n: form.n, period });
+  // Every field a covered call may carry, so the line never reads narrower than the rule (security sev 2, code review).
+  const fixed = Object.entries(form.fixed ?? {}).map(([k, v]) => `${k} ${JSON.stringify(v)}`);
+  const fields = [form.recipientField, form.amountField, form.currencyField, ...(form.free ?? []), ...Object.keys(form.fixed ?? {})].filter(Boolean);
+  return [base, fixed.length ? t('rule.part.with', { fixed: fixed.join(', ') }) : null, fields.length ? t('rule.part.fields', { fields: fields.join(', ') }) : null].filter(Boolean).join(' · ');
 }
 
 /** A kind's name alone, for the kinds a rule cannot be made for yet: the first part of its line. */
-export const kindName = (kind) => t(`rule.${kind}`).split(' · ')[0];
+export const kindName = (kind) => t(`rule.kind.${kind}`);
 
-/** "You" for the viewer, else the name the server gave, else the CPO's words for someone it has no name for. Never an id. */
-const person = (id, name, me) => (id && me && id === me ? t('notify.log.you') : name || t('notify.log.who.unknown'));
+/**
+ * "You" for the viewer; else the name the server gave; null from the server means they no longer have access here;
+ * a server that sends no name at all gets the CPO's neutral words (never claim they lost access). Never an id.
+ */
+let org = '';
+const person = (id, name, me) => (id && me && id === me ? t('notify.log.you') : name ? name : name === null ? t('notify.log.who.unknown') : t('person.loading', { organization: org || t('org.fallback') }));
 
 /** Use this period: "Used 3 times this week. $40.00 left." */
 export function usedLine(r) {
   const f = r.form ?? {};
   const n = r.used?.n ?? 0;
   const left = f.amountField ? money(Math.max(0, (f.total ?? 0) - (r.used?.amount ?? 0)), f.currency) : String(Math.max(0, (f.n ?? 0) - n));
-  const period = t(`rule.period.${f.period}`);
-  const out = [t('rule.used', { n, period, left })];
-  if (f.amountField ? (r.used?.amount ?? 0) >= f.total : n >= f.n) out.push(t('rule.limit.hit', { period }));
+  const thisPeriod = t(`rule.this.${f.period}`);
+  let line = t(n === 1 ? 'rule.used.one' : 'rule.used', { n, 'this period': thisPeriod, left, reset: r.resetsAt ? fmtAt(r.resetsAt) : '\u0000' });
+  if (!r.resetsAt) line = line.replace(/\s*[^.]*\u0000[^.]*\./, '');
+  const out = [line];
+  if (f.amountField ? (r.used?.amount ?? 0) >= f.total : n >= f.n) out.push(t('rule.limit.hit', { 'this period': thisPeriod }));
   return out.join(' ');
 }
 
-export function rulesHtml(data, me) {
+export function rulesHtml(data, me, { owner = true } = {}) {
   if (!data) return '';
   const rules = data.rules ?? [];
   const live = rules.filter((r) => r.live);
@@ -53,12 +63,12 @@ export function rulesHtml(data, me) {
   const row = (r) => `<li class="rule${r.live ? '' : ' gone'}" data-rule="${esc(r.id)}">
       <p><strong>#${esc(r.number)}</strong> ${esc(ruleLine(r.form))}</p>
       <p class="muted">${esc(t('rule.owner', { person: person(r.createdBy, r.createdByName, me), date: fmtDay(r.createdAt), words: r.words }))}</p>
-      ${r.live ? `<p class="hint">${esc(usedLine(r))} ${esc(t('rule.expires', { date: fmtDay(r.expiresAt) }))}</p><button type="button" data-withdraw="${esc(r.id)}">${esc(t('rule.withdraw'))}</button>`
+      ${r.live ? `<p class="hint">${esc(usedLine(r))} ${esc(t('rule.expires', { date: fmtDay(r.expiresAt) }))}</p>${owner ? `<button type="button" data-withdraw="${esc(r.id)}">${esc(t('rule.withdraw'))}</button>` : ''}`
     : `<p class="hint">${esc(t('rule.withdrawn', { person: person(r.withdrawnBy, r.withdrawnByName, me), date: fmtDay(r.withdrawnAt) }))}</p>`}
     </li>`;
   const later = (data.kinds ?? []).filter((k) => !k.enforced);
   return `<section class="panel stack" id="rules" aria-labelledby="rules-title">
-    <h2 id="rules-title">${esc(t('approvals.rules.heading'))}</h2>
+    <h2 id="rules-title" tabindex="-1">${esc(t('approvals.rules.heading'))}</h2>
     ${live.length ? `<ul class="plain rules">${live.map(row).join('')}</ul>` : `<p class="muted">${esc(t('approvals.rules.empty'))}</p>`}
     ${gone.length ? `<details><summary>${esc(t('approvals.rules.withdrawn'))}</summary><ul class="plain rules">${gone.map(row).join('')}</ul></details>` : ''}
     ${later.length ? `<ul class="plain kinds">${later.map((k) => `<li aria-disabled="true"><span>${esc(kindName(k.id))}</span> <span class="pill">${esc(t('rule.unavailable'))}</span></li>`).join('')}</ul>` : ''}
@@ -75,10 +85,10 @@ export function ledgerLine(it, me) {
   const words = full === null ? null : full.length > WORDS_CUT ? `${full.slice(0, WORDS_CUT)}…` : full;
   // The rule's line from its structured form when the ledger gives it (the CPO's words), else the line given.
   if (it.ruleForm) it = { ...it, ruleLine: ruleLine(it.ruleForm) };
-  const v = { time, person: who, letter: it.letter ?? '', what: it.what ?? it.ruleLine ?? (it.action ? String(it.action).replace(/[-_]+/g, ' ') : ''), channel: it.channel ? t(`ledger.via.${it.channel}`) : null, n: it.ruleNumber, 'rule line': it.ruleLine, list: it.list };
+  const v = { time, person: who, letter: it.letter ?? '', what: it.what ?? it.ruleLine ?? '', channel: it.channel ? t(`ledger.via.${it.channel}`) : null, n: it.ruleNumber, 'rule line': it.ruleLine, list: it.list };
   const q = (key) => {
     const line = fill(key, { ...v, words: '\u0000' });
-    return words === null ? line.replace('"\u0000"', t('ledger.noword')) : line.replace('\u0000', words);
+    return words === null ? line.replace('"\u0000"', () => t('ledger.noword')) : line.replace('\u0000', () => words);
   };
   let text;
   if (it.kind === 'approved' || it.kind === 'denied') text = q(`${it.kind === 'approved' ? 'ledger.approved' : 'ledger.declined'}${v.letter ? '' : '.noletter'}`);
@@ -105,8 +115,8 @@ export function ledgerHtml(lg, me, { error = null } = {}) {
   </section>`;
 }
 
-export function createApprovals({ root }) {
-  const st = { me: null, rules: null, ledger: null, error: null, note: null, connected: true };
+export function createApprovals({ root, organization = () => '' }) {
+  const st = { me: null, owner: false, rules: null, ledger: null, error: null, note: null, connected: true };
   let ctl = null;
   const get = async (path, body) => { const r = await requestJson(path, body); return { ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) }; };
 
@@ -114,14 +124,14 @@ export function createApprovals({ root }) {
     if (!st.connected) { root.innerHTML = `<p class="muted">${esc(t('approvals.offline'))}</p>`; return; }
     root.innerHTML = `<h2 class="sr-only">${esc(t('nav.approvals'))}</h2>
       ${st.note ? `<p class="result ${st.note.kind}" role="${st.note.kind === 'error' ? 'alert' : 'status'}">${esc(st.note.text)}</p>` : ''}
-      <div class="approvals-grid">${rulesHtml(st.rules, st.me)}${ledgerHtml(st.ledger, st.me, { error: st.error })}</div>`;
+      <div class="approvals-grid">${rulesHtml(st.rules, st.me, { owner: st.owner })}${ledgerHtml(st.ledger, st.me, { error: st.error })}</div>`;
   }
 
   async function load(before = null) {
     const r = await get(`/v1/team/approvals${before ? `?before=${encodeURIComponent(before)}` : ''}`).catch(() => null);
     if (!r?.ok) { st.error = t('approvals.ledger.failed'); return render(); }
     if (r.data.connected === false) { st.connected = false; return render(); }
-    st.connected = true; st.error = null; st.me = r.data.me ?? st.me;
+    st.connected = true; st.error = null; st.me = r.data.me ?? st.me; st.owner = !!r.data.owner; org = organization() || org;
     if (r.data.rules) st.rules = r.data.rules;
     st.ledger = before ? { items: [...(st.ledger?.items ?? []), ...(r.data.ledger?.items ?? [])], next: r.data.ledger?.next ?? null } : r.data.ledger;
     render();

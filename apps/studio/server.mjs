@@ -290,7 +290,8 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (before !== null && !/^\d{1,18}$/.test(before)) throw new HttpError(400, 'before is the next value of the previous page');
         return relay(res, async () => {
           const [me, rules, ledger] = await Promise.all([chat.me().catch(() => null), before ? null : chat.rules(), chat.ledger(before)]);
-          return { connected: true, me: me?.id ?? me?.person?.id ?? null, ...(rules ? { rules } : {}), ledger };
+          // owner: whether Withdraw is offered (the control plane's DELETE is owner-only).
+          return { connected: true, me: me?.id ?? me?.person?.id ?? null, owner: (me?.workspaces ?? []).some((w) => w.role === 'owner'), ...(rules ? { rules } : {}), ledger };
         });
       }
       if (req.method === 'GET' && url.pathname === '/v1/team/runners') {
