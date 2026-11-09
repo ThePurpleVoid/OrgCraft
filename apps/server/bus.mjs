@@ -458,7 +458,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         await ctx.q("update sessions set state = 'waiting' where id = $1", [sess.id]);
         const call = { command: redact(i.call), ...(i.pr ? { pr: i.pr } : {}), ...(i.headSha ? { headSha: i.headSha } : {}) };
         const links = [...(prLink(roster.repo, i.pr) ? [{ rel: 'pull-request', url: prLink(roster.repo, i.pr) }] : []), ...(i.links ?? []).filter((u) => /^https:\/\//.test(u)).map((url) => ({ rel: 'link', url }))];
-        const r = await m3.requestApproval(ctx, sess.team, { action: i.action, call, why: i.why, links, session: sess.id, run: sess.run, role: sess.role, bound: i.bound ?? null });
+        const r = await m3.requestApproval(ctx, sess.team, { action: i.action, call, why: i.why, links, session: sess.id, run: sess.run, role: sess.role, bound: i.bound ?? null, changedWhat: i.changed ?? null });
         out = { approval: r.approval, card: r.card.id };
       }
       return out;
@@ -543,7 +543,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         const call = { command: redact(typeof a.call === 'string' ? a.call : JSON.stringify(a.call ?? '')), ...(pr ? { pr } : {}), ...(headSha ? { headSha } : {}) };
         const [run] = await ctx.q('select roster from runs where id = $1', [sess.run]);
         const link = prLink(run?.roster?.repo, pr);
-        const r = await m3.requestApproval(ctx, sess.team, { action: String(a.action ?? 'unclassified'), call, why: String(a.why ?? 'The team policy keeps this for a person.'), links: link ? [{ rel: 'pull-request', url: link }] : [], session: sess.id, run: sess.run, role: sess.role, bound });
+        const r = await m3.requestApproval(ctx, sess.team, { action: String(a.action ?? 'unclassified'), call, why: String(a.why ?? 'The team policy keeps this for a person.'), links: link ? [{ rel: 'pull-request', url: link }] : [], session: sess.id, run: sess.run, role: sess.role, bound, changedWhat: typeof a.changed === 'string' ? a.changed.slice(0, 500) : null });
         return { approval: r.approval, card: r.card.id };
       });
       return result;

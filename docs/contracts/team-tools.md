@@ -110,6 +110,7 @@ Emits `decision.requested` (with `cardId` and `session`) and `card.updated` with
 | `why` | yes | |
 | `risk` | no | `low`, `medium`, `high` |
 | `links` | no | for example the pull request |
+| `changed` | no | at most 500 characters: what is different since a person declined the same effect on the same target (L22). Within 7 days of a decline, a re-ask without it is declined again at once; with it, a person sees it as "what changed". The exact same calls are declined again either way |
 
 Emits `approval.requested` (with `cardId` and `session`) and `card.updated` with an `approval` card whose approve option has `stepUp: true`. The HTTP call returns `{ "approval": "<id>", "card": "<id>" }`; the runner's tool server then holds the tool result until `approval.result` arrives, and returns `{ "approval": "<id>", "decision": "approved" | "denied" | "expired", "note": "…" }` to the model.
 

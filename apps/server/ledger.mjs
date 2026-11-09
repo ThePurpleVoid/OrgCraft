@@ -141,11 +141,45 @@ export async function coveredBy(ctx, team, { action, bound, session }) {
   return null;
 }
 
-/** An earlier "no" to these exact signed calls in this team, within 7 days (declines stick, AI-10). */
-export async function declinedBefore(ctx, team, hash) {
+/**
+ * Input fields that name who or what a call acts on: a recipient, payee, customer or account. Matching declines on
+ * these (plus the tool, which names the system and the effect) means a re-ask for $63.99 in place of $64.00, or the
+ * same email reworded, is still the thing that was declined (CPO, AI-10).
+ */
+const TARGET_FIELDS = ['to', 'recipient', 'recipients', 'customer', 'customer_id', 'customerId', 'payee', 'payee_id', 'payeeId', 'account', 'account_id', 'accountId', 'email', 'user', 'user_id', 'userId', 'channel', 'phone', 'number'];
+const targetOf = (input) => {
+  const out = [];
+  for (const k of TARGET_FIELDS) {
+    const v = input?.[k];
+    for (const x of Array.isArray(v) ? v : [v]) if (typeof x === 'string' || typeof x === 'number') out.push(`${k}=${String(x).trim().toLowerCase()}`);
+  }
+  return out.sort();
+};
+
+/**
+ * The effect key of a set of signed calls: each call's tool (system and effect) with its targets, order ignored. Null
+ * when any call names no target: then only the exact same calls count as asked before.
+ */
+export function effectHash(calls) {
+  if (!Array.isArray(calls) || !calls.length) return null;
+  const parts = [];
+  for (const c of calls) {
+    const t = targetOf(c.input);
+    if (!t.length) return null;
+    parts.push(`${c.tool}\n${t.join('\n')}`);
+  }
+  return sha(`effect/1\n${[...new Set(parts)].sort().join('\n\n')}`);
+}
+
+/**
+ * An earlier "no" from a person in this team, within 7 days (declines stick, AI-10), to the same effect on the same
+ * target (or the exact same calls). `exact` says whether nothing at all changed.
+ */
+export async function declinedBefore(ctx, team, hash, effect = null) {
   if (!hash) return null;
-  const [r] = await ctx.q(`select id, decided_at, decided_by from approvals where team = $1 and calls_hash = $2 and state = 'denied'
-    and decided_by not like 'rule:%' and decided_at > $3::timestamptz - make_interval(days => $4) order by decided_at desc limit 1`, [team, hash, ctx.now, DECLINE_DAYS]);
+  const [r] = await ctx.q(`select id, decided_at, decided_by, calls_hash = $2 as exact from approvals where team = $1 and (calls_hash = $2 or ($5::text is not null and effect_hash = $5)) and state = 'denied'
+    and decided_by not like 'rule:%' and decided_by not in ('ledger', 'changed') and decided_at > $3::timestamptz - make_interval(days => $4)
+    order by (calls_hash = $2) desc, decided_at desc limit 1`, [team, hash, ctx.now, DECLINE_DAYS, effect]);
   return r ? { ...r, until: new Date(new Date(r.decided_at).getTime() + DECLINE_DAYS * 86_400_000) } : null;
 }
 

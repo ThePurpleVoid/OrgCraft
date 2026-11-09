@@ -22,9 +22,9 @@ async function setup({ call, base, su }) {
   return { runner, s };
 }
 const refund = (customer, amount = 1200) => ({ tool: 'mcp__payments__refund', input: { amount, currency: 'USD', customer } });
-async function ask(p, s, calls, why = 'Refund the customer') {
+async function ask(p, s, calls, why = 'Refund the customer', changed = undefined) {
   const callsHash = hashCalls(calls.map((c) => callOf(c.tool, c.input)));
-  const r = await p.call('POST', `/sessions/${s.session}/tools/request_approval`, { action: 'payment', call: JSON.stringify(calls), why, calls, callsHash }, { authorization: `Bearer ${s.token}` });
+  const r = await p.call('POST', `/sessions/${s.session}/tools/request_approval`, { action: 'payment', call: JSON.stringify(calls), why, calls, callsHash, ...(changed ? { changed } : {}) }, { authorization: `Bearer ${s.token}` });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return { ...r.body, callsHash, card: (await p.call('GET', `/cards/${r.body.card}`)).body };
 }
@@ -54,7 +54,8 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
     const a = await ask(p, s, [refund('cus_dana')]);
     assert.equal(a.card.state, 'answered', 'covered: no card waits for anyone');
     assert.equal(a.card.answer.by, `rule:${made.body.id}`);
-    assert.equal(a.card.answer.note, 'Done under standing rule #1.');
+    assert.equal(a.card.answer.note, 'Done under standing rule #1: Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments');
+    assert.deepEqual([a.card.answer.ruleNumber, a.card.answer.ruleLine], [1, 'Refunds · up to $20.00 each · at most $30.00 per customer per week · in Payments']);
     const res = await runner.next((f) => f.op === 'approval.result' && f.body.approval === a.approval);
     assert.deepEqual([res.body.decision, res.body.callsHash], ['approved', a.callsHash]);
 
@@ -98,7 +99,7 @@ test('pay.known and send.known never cover someone new; a merge is never covered
   });
 });
 
-test('declines stick for 7 days; a changed call raises a new card and supersedes the old one', async () => {
+test('declines stick for 7 days on the same effect and target; a re-ask must say what changed; a changed call supersedes', async () => {
   await plane(async (p) => {
     const { runner, s } = await setup(p);
     const a = await ask(p, s, [refund('cus_zed', 9000)]);
@@ -107,19 +108,43 @@ test('declines stick for 7 days; a changed call raises a new card and supersedes
     const again = await ask(p, s, [refund('cus_zed', 9000)]);
     assert.equal(again.card.state, 'answered');
     assert.equal(again.card.answer.option, 'deny');
-    assert.match(again.card.answer.note, /^Declined before, on \d{4}-\d\d-\d\d\. The team can't ask for this again until \d{4}-\d\d-\d\d, unless something changes\.$/);
-    assert.equal(again.card.data.declinedBefore.approval, a.approval);
+    assert.match(again.card.answer.note, /^Declined on \d{4}-\d\d-\d\d\. The team can't ask for this again until \d{4}-\d\d-\d\d, unless something changes\.$/);
+    const before = again.card.data.declinedBefore;
+    assert.equal(before.approval, a.approval);
+    assert.equal(Date.parse(before.cooldownUntil) - Date.parse(before.declinedOn), 7 * 86_400_000);
+    assert.equal(before.declinedBy, 'admin');
     const res = await runner.next((f) => f.op === 'approval.result' && f.body.approval === again.approval);
     assert.equal(res.body.decision, 'denied');
-    // Something changed: a new card for a person.
-    const changed = await ask(p, s, [refund('cus_zed', 8000)]);
+    // A cent less, same customer, same system: still what was declined (AI-10), unless the teammate says what changed.
+    const cent = await ask(p, s, [refund('cus_zed', 8999)]);
+    assert.deepEqual([cent.card.state, cent.card.answer.option], ['answered', 'deny']);
+    // The exact same calls stay declined even with a reason: nothing changed.
+    const same = await ask(p, s, [refund('cus_zed', 9000)], 'Refund the customer', 'they called again');
+    assert.equal(same.card.state, 'answered');
+    // Saying what changed puts it in front of a person, who sees what changed.
+    const changed = await ask(p, s, [refund('cus_zed', 8000)], 'Refund the customer', 'The customer sent the receipt; it is $80, not $90.');
     assert.equal(changed.card.state, 'open');
-    // Asked again with other calls while that one waits: the old card is superseded, the new one says so.
-    const newer = await ask(p, s, [refund('cus_zed', 7000)]);
-    assert.deepEqual(newer.card.data.changed, { from: [changed.approval] });
+    assert.equal(changed.card.data.changed.what, 'The customer sent the receipt; it is $80, not $90.');
+    assert.equal(changed.card.data.declinedBefore.approval, a.approval);
+    // Another customer is another target: no cool-down.
+    // (Asked in the same session while that card waits: the earlier one is superseded, and the new one says so.)
+    const other = await ask(p, s, [refund('cus_amy', 9000)]);
+    assert.equal(other.card.state, 'open');
+    assert.equal(other.card.data.declinedBefore, undefined);
+    assert.deepEqual(other.card.data.changed, { from: [changed.approval] });
     const old = (await p.call('GET', `/cards/${changed.card.id}`)).body;
     assert.deepEqual([old.state, old.answer.note], ['superseded', 'This changed since you were asked.']);
     const ledger = (await p.call('GET', '/teams/shop/ledger')).body.items.map((l) => [l.kind, l.words ?? null]);
-    assert.deepEqual(ledger.reverse(), [['denied', 'not this week'], ['declined-again', null]]);
+    assert.deepEqual(ledger.reverse(), [['denied', 'not this week'], ['declined-again', null], ['declined-again', null], ['declined-again', null]]);
   });
+});
+
+test('effectHash: the tool and its targets, not the amount or the wording', async () => {
+  const { effectHash } = await import('../ledger.mjs');
+  const a = effectHash([refund('cus_zed', 9000)]);
+  assert.equal(effectHash([refund('CUS_ZED ', 1)]), a);
+  assert.notEqual(effectHash([refund('cus_amy', 9000)]), a);
+  assert.notEqual(effectHash([{ tool: 'mcp__other__refund', input: { customer: 'cus_zed', amount: 9000 } }]), a);
+  assert.equal(effectHash([{ tool: 'mcp__mail__send', input: { to: 'a@b.example', body: 'Hi' } }]), effectHash([{ tool: 'mcp__mail__send', input: { to: 'a@b.example', body: 'Hello there' } }]));
+  assert.equal(effectHash([{ tool: 'mcp__x__do', input: { text: 'no target' } }]), null);
 });
