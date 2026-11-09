@@ -383,7 +383,7 @@ function nodeSvg(r, p, extra = '') {
   else if (live?.on && mode !== 'systems') extra += l ? ` live s-${l.status}${l.stale ? ' stale' : ''}` : ' live none';
   // The reason replaces the tier on an amber card: it is what the owner needs to read there (criterion 3).
   // A role that reports for itself, with no hook events (another coding agent): its card says so (D46).
-  const subtitle = r.off || !r.enabled ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle });
+  const subtitle = r.off || !r.enabled ? t('canvas.off') : liveCtl?.isPaused(r.slug) ? t('badge.paused') : t('teammate.subtitle.ai', { role: r.typeTitle });
   const tier = r.off ? subtitle : three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : own?.self_reported ? 'self-reported' : ''].filter(Boolean).join(' · '))
     : l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : subtitle;
   const state = three ? (own ? [stateWord(own), taskOf(own)].filter(Boolean).join(' · ') : '') : '';
@@ -506,7 +506,7 @@ function renderList() {
     const off = !r.enabled;
     return `<li class="tree-item${off ? ' off' : ''}${view.draft.changed.has(r.slug) ? ' draft' : ''}" data-depth="${Math.min(depth, 6)}">
       <button type="button" class="tree-btn${r.slug === selected ? ' selected' : ''}" data-node="${esc(r.slug)}" data-slug="${esc(r.slug)}">
-        <span class="name">${esc(r.title)}</span><span class="muted sub">${esc(off ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle }))}</span>
+        <span class="name">${esc(r.title)}</span><span class="muted sub">${esc(off ? t('canvas.off') : liveCtl?.isPaused(r.slug) ? t('badge.paused') : t('teammate.subtitle.ai', { role: r.typeTitle }))}</span>
         ${look ? `<span class="badge-dot" title="${esc(look.text)}" aria-label="${esc(look.text)}">!</span>` : ''}</button></li>`
       + kids.get(r.slug).sort((a, b) => a.title.localeCompare(b.title)).map((c) => item(c, depth + 1)).join('');
   };
@@ -1520,7 +1520,7 @@ function load(initial) {
   // L18: Stop everything, Pause and the live banner, when a control plane is connected (the Studio asks it).
   // A host page's Studio (embedded) has no route to the control plane's live state yet: nothing is offered there.
   if (!S.noTeam && !env.embedded) {
-    liveCtl = createLive({ say: note, titleOf: roleTitle, onChange: () => { if (spec && selected && !editor?.slug && stateEl().dataset.page === 'team') { renderInspector(); lockInspector(); } } });
+    liveCtl = createLive({ say: note, titleOf: roleTitle, onChange: () => { if (spec && !editor?.slug && stateEl().dataset.page === 'team') { renderCanvas(); if (selected) { renderInspector(); lockInspector(); } } } });
     liveCtl.wire(life.signal);
     liveCtl.load();
     const again = setInterval(() => liveCtl?.load(), 20_000);

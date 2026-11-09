@@ -61,7 +61,7 @@ export function createLive({ say = () => {}, titleOf = (x) => x, onChange = () =
     const box = $('#live-banner');
     if (!box) return;
     box.hidden = !st.items.length && !st.error;
-    box.innerHTML = st.items.map((x) => `<p class="live-row" data-live="${esc(x.id)}"><span class="live-text">${esc(x.kind === 'halt' ? t('stop.all.done') : x.text ?? '')}</span>${x.reason ? ` <span class="muted">${esc(x.reason)}</span>` : ''}
+    box.innerHTML = st.items.map((x) => `<p class="live-row" data-live="${esc(x.id)}"><span class="live-text">${esc(x.kind === 'halt' ? t('stop.all.done') : t(`stop.member.${x.state === 'off' ? 'off' : 'paused'}`, { teammate: titleOf(x.member) }))}</span>${x.reason ? ` <span class="muted">${esc(x.reason)}</span>` : ''}
         <button type="button" data-lift="${esc(x.id)}" aria-label="${esc(`${t('stop.resume')}: ${x.kind === 'halt' ? t('stop.all') : titleOf(x.member)}`)}">${esc(t('stop.resume'))}</button></p>`).join('')
       + (st.items.length ? `<p class="hint">${esc(t('stop.resume.passkey'))}</p>` : '')
       + (st.error ? `<p class="result error">${esc(st.error)}</p>` : '');
@@ -86,9 +86,14 @@ export function createLive({ say = () => {}, titleOf = (x) => x, onChange = () =
   /** SH-5: one tap, no passkey, no confirm: stopping must never wait. */
   const stopAll = () => act(async () => { const r = await api('/v1/team/live/stop-everything', { key: newId() }); if (r.ok) say(t('stop.all.done')); return r; });
   /** SH-10: a teammate stops taking work at once, from any screen size; no Git, code host or publish involved. */
-  const pause = (member) => act(() => api(`/v1/team/live/members/${encodeURIComponent(member)}`, { state: 'paused', key: newId() }));
+  const pause = (member) => act(() => api(`/v1/team/live/members/${encodeURIComponent(member)}`, { state: 'paused', key: newId() }))
+    .then((r) => { const box = $('#live-banner'); if (r?.ok && box && !box.hidden) box.scrollIntoView({ block: 'nearest' }); return r; });
   /** Resume: the control plane asks for a step-up bound to this change; nothing is lifted without it. */
-  const lift = (id) => act(async () => {
+  const lift = (id) => liftOnce(id).finally(() => {
+    const again = [...document.querySelectorAll('#live-banner [data-lift]')].find((b) => b.dataset.lift === id);
+    if (again) again.focus();
+  });
+  const liftOnce = (id) => act(async () => {
     let r = await api('/v1/team/live/lift', { id });
     if (needsStepUp(r)) {
       if (!(await stepUp(t('stop.resume.passkey'), r.data.scope ?? `lift:${id}`))) return { ok: true, data: {} };

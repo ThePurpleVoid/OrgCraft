@@ -72,7 +72,8 @@ test('Stop everything in one tap; the banner stays through a run start; Resume n
   await banner.getByRole('button', { name: 'Resume: Stop everything' }).click();
   const dlg = page.locator('#live-stepup');
   await dlg.getByText('Resuming needs your passkey.').waitFor();
-  await dlg.getByRole('button', { name: 'Cancel' }).click();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.activeElement?.matches?.('#live-banner [data-lift]'));
   assert.equal(cp.live.length, 1, 'nothing lifted without the step-up');
   await banner.getByRole('button', { name: 'Resume: Stop everything' }).click();
   await dlg.getByLabel('Step-up secret').fill('wrong');
@@ -104,9 +105,14 @@ test('SH-10: Pause a teammate from a 360 px phone; it stops at once, and comes b
   const box = await pause.boundingBox();
   assert.ok(box.height >= 44, `a 44 px target (${box.height})`);
   await pause.click();
-  await page.locator('#live-banner', { hasText: `${slug} is paused` }).waitFor();
+  await page.locator('#live-banner', { hasText: / is paused\. Its work waits until you resume it\./ }).waitFor();
   assert.deepEqual(cp.live.map((x) => [x.kind, x.member, x.state]), [['member', slug, 'paused']]);
   assert.equal(await page.locator('#i-live-pause').count(), 0, 'paused already: the banner has Resume');
+  const name = (await item.locator('.name').textContent()).trim();
+  assert.match(await page.locator('#live-banner .live-text').textContent(), new RegExp(`^${name} is paused`), 'the teammate\'s name, never the id');
+  await page.locator(`#canvas .tree-btn[data-node="${slug}"] .sub`, { hasText: /^Paused$/ }).waitFor();
+  const top = (await page.locator('#live-banner').boundingBox()).y;
+  assert.ok(top >= 0 && top < 780, `the banner is on screen after Pause (${top})`);
   // No horizontal scroll with the banner on a phone.
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'pause-teammate-phone-light.png') });
