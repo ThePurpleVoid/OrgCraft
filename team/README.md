@@ -2,7 +2,7 @@
 
 {{PROJECT_NAME}} is built by a team of Claude Code threads, one per role. The owner talks to one door, the chief of staff, who forwards the owner's words verbatim to the executive whose lane owns the request; executives route inside their lane.
 
-The team comes from [Agent Team Kit](https://github.com/ThePurpleVoid/OrgCraft), pinned in `.agent-team/team.json`. This repository holds only what is specific to {{PROJECT_NAME}}; everything else is generated.
+The team comes from [OrgCraft](https://github.com/ThePurpleVoid/OrgCraft), pinned in `.agent-team/team.json`. This repository holds only what is specific to {{PROJECT_NAME}}; everything else is generated.
 
 ## What is generated and what is ours
 

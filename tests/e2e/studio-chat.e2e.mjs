@@ -295,7 +295,7 @@ test('a resume refused because today\'s budget is spent says so in words, and Ra
     await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
     await su.getByRole('button', { name: 'Confirm' }).click();
     // Each step-up is used once, so resuming asks again.
-    await su.getByText("Resuming a run that today's cap paused lets the team spend again.").waitFor();
+    await su.getByText('Resuming the run lets the team carry on working and spending.').waitFor();
     assert.equal(plane.budget.perDay, 8000);
     await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
     await su.getByRole('button', { name: 'Confirm' }).click();

@@ -1,4 +1,4 @@
-// team-report: the hosted Agent Team Kit board.
+// team-report: the hosted OrgCraft board.
 //
 //   POST  with header x-team-token: TEAM_REPORT_TOKEN   body: one report from scripts/agent-team/team-status.sh
 //         -> { ok: true, id }

@@ -23,11 +23,18 @@ export const ROUTES = [
   ['GET', '/me/inbox', 'viewer'],
   ['POST', '/auth/step-up', 'viewer'],
   ['POST', '/runs/{run}/{action}', 'editor'],
+  ['POST', '/live/stop-everything', 'editor'],
+  ['GET', '/teams/{team}/live', 'viewer'],
+  ['POST', '/teams/{team}/live/stop-everything', 'editor'],
+  ['PUT', '/teams/{team}/live/members/{member}', 'editor'],
+  ['DELETE', '/teams/{team}/live/{override}', 'editor'],
   ['POST', '/approvals/{approval}', 'approver'],
   ['GET', '/cards/{card}', 'viewer'],
   ['POST', '/cards/{card}', 'approver'],
   ['POST', '/runners/codes', 'admin'],
   ['GET', '/runners', 'admin'],
+  ['GET', '/deployment', 'viewer'],
+  ['POST', '/deployment/check', 'editor'],
   ['DELETE', '/runners/{runner}', 'admin'],
   // Hosts (studio-embed.md section 6): registering one makes a sign-in client, so it is an admin's, with step-up.
   ['GET', '/hosts', 'admin'],
@@ -134,8 +141,10 @@ export function routeOf(method, path) {
  * refused for a host, so a new route is closed to hosts until someone decides otherwise.
  */
 export const HOST_ROUTES = new Set([
-  'GET /me/summary', 'GET /me/stream', 'GET /me/inbox',
+  'GET /me/summary', 'GET /me/stream', 'GET /me/inbox', 'GET /deployment',
   'POST /runs/{run}/{action}',
+  // Stop everything and pausing a teammate (L18) stay one tap from a host; lifting needs step-up, so never through one.
+  'POST /live/stop-everything', 'GET /teams/{team}/live', 'POST /teams/{team}/live/stop-everything', 'PUT /teams/{team}/live/members/{member}',
   'GET /cards/{card}', 'POST /cards/{card}',
   'GET /teams', 'GET /teams/{team}', 'GET /teams/{team}/events', 'GET /teams/{team}/events/stream', 'POST /teams/{team}/stream-tickets',
   'GET /teams/{team}/budget',

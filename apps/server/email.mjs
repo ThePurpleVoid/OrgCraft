@@ -186,7 +186,7 @@ export function compose(event, { teamName, titles = {} } = {}) {
 /** The verification email (no link, no footer). */
 export function verifyEmail(code) {
   return {
-    subject: `Your code for Agent Team Studio: ${code}`,
+    subject: `Your code for OrgCraft Studio: ${code}`,
     text: ['Enter this code in the Studio to get team emails at this address:', code, `It expires in ${CODE_MINUTES} minutes. If you did not ask for it, ignore this email; nothing will be sent.`].join('\n'),
     html: `<p>Enter this code in the Studio to get team emails at this address:</p><p style="font-size:24px;font-weight:600;letter-spacing:4px">${esc(code)}</p><p>It expires in ${CODE_MINUTES} minutes. If you did not ask for it, ignore this email; nothing will be sent.</p>`,
   };

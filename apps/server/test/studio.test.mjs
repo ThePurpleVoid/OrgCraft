@@ -130,7 +130,7 @@ test('roles: a viewer reads, an editor publishes, only an admin changes commands
     assert.match(JSON.parse(code.body.toString()).error, /commands/);
     const ok = await hosted.handle(req('POST', '/v1/team/publish'), as('admin'), 'shop', body({ spec: gated, base, message: 'gate' }));
     assert.equal(ok.status, 200, ok.body.toString());
-    assert.match(gh.git(['log', '-1', '--format=%B', JSON.parse(ok.body.toString()).commit]), /Published-by: admin \(p-admin\) via Agent Team Studio/);
+    assert.match(gh.git(['log', '-1', '--format=%B', JSON.parse(ok.body.toString()).commit]), /Published-by: admin \(p-admin\) via OrgCraft Studio/);
     const evil = await hosted.handle(req('POST', '/v1/team/preview', { origin: 'https://evil.example' }), as('admin'), 'shop', body({ spec, base }));
     assert.equal(evil.status, 403);
     // The cookie and bearer of the deployment are never passed on.
@@ -174,7 +174,7 @@ test('delegated publish: a host server reads, previews and publishes for its use
     assert.match(pr.body, /Published through Shop &#64;admin for `ana x &#64;bob`\./);
     assert.ok(!/@/.test(pr.body.split('Published through')[1].split('\n')[0]), 'no @ from the host');
     const msg = gh.git(['log', '-1', '--format=%B', out.commit]);
-    assert.match(msg, /Published-by: editor \(p-editor\) via Agent Team Studio/);
+    assert.match(msg, /Published-by: editor \(p-editor\) via OrgCraft Studio/);
     assert.ok(!/ana|Shop/.test(msg.split('Published-by:')[1]), 'the trailer is our person only');
     const audited = rows.find((r) => r.action === 'publish' && r.decision === 'allowed');
     assert.equal(audited.actorId, 'p-editor');

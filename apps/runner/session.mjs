@@ -31,15 +31,24 @@ const HEARTBEAT_MS = 5 * 60_000;
 const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 80);
 
 /** The system prompt: the role's brief, the protocols, the project's instructions and the role's memory file. */
-export function systemPrompt(p = {}, role, memoryPath) {
+export function systemPrompt(p = {}, role, memoryPath, { type, name } = {}) {
   const part = (title, body) => (body ? `\n\n# ${title}\n\n${String(body).trim()}` : '');
+  // A teammate is a member: its id (role) is who it is; its type is the job it does; its name is what people call it
+  // (ADR 0011). Two members of one type are two teammates, each with its own session, copy and memory.
+  const shown = oneLine(name), job = oneLine(type);
+  const who = shown || (job && job !== role)
+    ? `You are ${shown ? `${shown} (${role})` : role}${job && job !== role ? `, a ${job}` : ''} on this team, running as a session of the team's runner. Teammates address you as ${role}.`
+    : `You are the ${role} on this team, running as a session of the team's runner.`;
   return [
-    `You are the ${role} on this team, running as a session of the team's runner.`,
+    who,
     'Use the team tools (report, handoff, bug, signoff, blocked, ask_owner, request_approval) for every report and message the protocols describe; they are checked and delivered for you.',
     'Writes outside your owned areas are refused, and the steps the protocols keep for the owner (such as merging) wait for a person\'s approval.',
     memoryPath ? `Your memory file is ${memoryPath}: rewrite it (Identity, Current task, Open items, Decisions, Lessons) at the end of every task.` : '',
   ].filter(Boolean).join(' ') + part('Your brief', p.brief) + part('Team protocols', p.protocols) + part('Project instructions', p.instructions) + part(`Your memory file (roles/${role}.md)`, p.memory);
 }
+
+/** A display name or type for the prompt: one line, at most 80 characters, or '' when there is none. */
+const oneLine = (v) => (typeof v === 'string' ? v.replace(/[\r\n\t]+/g, ' ').trim().slice(0, 80) : '');
 
 /** A message that wakes a session, as the prompt of its next turn. The owner's words travel verbatim and quoted. */
 export function wakePrompt(m, role, { resume = false } = {}) {
@@ -257,7 +266,7 @@ export class Session {
     try {
       out = await this.deps.adapter.turn({
         session: this.id, role: this.role, model: this.model, cwd: this.copy.cwd, env: this.env, resume: this.resume, sandbox: this.slot ?? null,
-        systemPrompt: systemPrompt(this.body.prompt, this.role, this.memoryPath), prompt: this.takeNote(wakePrompt(message, this.role, { resume })),
+        systemPrompt: systemPrompt(this.body.prompt, this.role, this.memoryPath, { type: this.body.type, name: this.body.name }), prompt: this.takeNote(wakePrompt(message, this.role, { resume })),
         signal: this.abort.signal, maxBudgetUsd: remaining === null ? undefined : remaining / 100, mcp: this.body.tools?.mcp ?? {},
         tools: Object.entries(TOOLS).map(([name, t]) => ({ name, description: t.description, shape: t.shape })),
         callTool: (name, args) => this.callTool(name, args),
@@ -314,9 +323,12 @@ export class Session {
       }
     }
     if (name === 'request_approval' && local.input.action === 'accept' && this.proposes()) return this.acceptFlow(local.input);
+    // A sign-off carries the runner's own record of what this session ran and saw succeed (governance G1): the
+    // evidence behind its unverified list. The agent can't write it; the tool's shape has no such field.
+    const input = name === 'signoff' ? { ...local.input, checks: this.steps.checks() } : local.input;
     let r;
     try {
-      r = await this.deps.tools.call(name, local.input);
+      r = await this.deps.tools.call(name, input);
     } catch (e) {
       return { text: `The control plane could not be reached (${e.message}). Nothing was sent; try again shortly.`, isError: true };
     }
@@ -359,8 +371,12 @@ export class Session {
   }
 
   /** Secret values the session knows by name, for `[secret: NAME]` in step I/O. */
+  /**
+   * The session's own secrets, by name: one list for step I/O redaction and for the push and memory checks. The
+   * session token, the loopback proxy's token, the model key, the runner key, and the merger app's key and tokens.
+   */
   namedSecrets() {
-    return [['model-proxy-token', this.proxyToken], ['session-token', this.token], ['model-key', process.env.ANTHROPIC_API_KEY], ['runner-key', this.deps.runnerKey], ...(this.deps.proposals?.secrets?.() ?? []).map((v) => ['merger', v])]
+    return [['session-token', this.token], ['model-proxy-token', this.proxyToken], ['model-key', process.env.ANTHROPIC_API_KEY], ['runner-key', this.deps.runnerKey], ...(this.deps.proposals?.secrets?.() ?? []).map((v) => ['merger', v])]
       .filter(([, v]) => typeof v === 'string' && v).map(([name, value]) => ({ name, value }));
   }
 
@@ -412,11 +428,8 @@ export class Session {
     return new Promise((resolve) => this.afterTurn.push(async () => resolve(await go())));
   }
 
-  /** Values that must never leave in a push or the memory file: the session's proxy token, the model key, the runner key. */
-  secretValues() {
-    // The merger app's key and its installation tokens are the runner's too: none may leave in a commit or a memory.
-    return [this.proxyToken, process.env.ANTHROPIC_API_KEY, this.deps.runnerKey, ...(this.deps.proposals?.secrets?.() ?? [])].filter(Boolean);
-  }
+  /** Values that must never leave in a push or the memory file: the same list as namedSecrets. */
+  secretValues() { return this.namedSecrets().map((x) => x.value); }
 
   /** Checkpoint and push through the runner's checks (ownership, symlinks, secrets); never throws. */
   async save(reason) {

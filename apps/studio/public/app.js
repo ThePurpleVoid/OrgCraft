@@ -1,4 +1,4 @@
-// Agent Team Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
+// OrgCraft Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
 import { addMember, applyExtension, checkUpgrade, DEFAULT_TARGETS, displayName, membersOf, poolOf, resolveSpec, setDisplayName, setEnabled, setField, splitBrief, TARGETS, teamPacks, teamTargets, typeOf, validate } from './team-model.mjs';
 import { t, tip } from './i18n.js';
@@ -1122,7 +1122,7 @@ async function openPublish() {
   $('#changes').innerHTML = '<p class="muted pad">Working out what changes…</p>';
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
   $('#branch').value ||= `agent-team/publish-${stamp}`;
-  $('#message').value ||= 'Update the agent team (Agent Team Studio)';
+  $('#message').value ||= 'Update the agent team (OrgCraft Studio)';
   renderImpact();
   dlg.showModal();
   await previewPublish();
@@ -1254,7 +1254,7 @@ function applyFeatures() {
 
 /** The view a failed start shows, inside the Studio's own root (never the host's body). */
 function fatal(message) {
-  env.root.innerHTML = `<main class="fatal"><h1>Agent Team Studio</h1><p role="alert"></p></main>`;
+  env.root.innerHTML = `<main class="fatal"><h1>OrgCraft Studio</h1><p role="alert"></p></main>`;
   env.root.querySelector('.fatal p').textContent = message;
 }
 
