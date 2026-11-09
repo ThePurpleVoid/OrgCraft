@@ -342,6 +342,42 @@ paths:
       x-interactive-only: [resume]
       description: "Pause and stop never need step-up. Resuming does, whoever paused the run, with a step-up bound to scope resume:<run> (ADR 0013; before, only after a budget pause). Resume is interactive only: a host's token may pause or stop, never resume (403)"
       responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required); the body's scope names what to step up for" }, "403": { description: "Resume through a host" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
+  /live/stop-everything:
+    post:
+      x-min-role: editor
+      tags: [live]
+      summary: "Stop everything in every team of the workspace (L18, G17.5): each team gets the same live change as POST /teams/{team}/live/stop-everything. No step-up, no code host, no publish"
+      responses: { "200": { description: "{ live: [{ team, ...LiveChange }] }" } }
+  /teams/{team}/live:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [live]
+      summary: "The live changes in force (L18, review-2 R2): emergency controls kept as control-plane state, never in Git. Each is { id, kind (halt, member), member, state (paused, off), reason, by, at, runs (halt: the runs it paused), text, liveChange }. The Studio shows them on the next publish diff (liveChange: 'Live change by ... Keep it?') and as the banner"
+      responses: { "200": { description: "{ live: [LiveChange] }" } }
+  /teams/{team}/live/stop-everything:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: editor
+      tags: [live]
+      summary: "Stop everything for this team: every running run pauses (reason owner), no run starts or resumes (409 halted) and no teammate gets work until it is lifted. One tap, no step-up; works with the code host down. Emits live.changed and an audit row. Body (optional): { reason }"
+      responses: { "200": { description: LiveChange } }
+  /teams/{team}/live/members/{member}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: member, in: path, required: true, schema: { type: string }, description: "A teammate id, like web-dev, or role#instance" } ]
+    put:
+      x-min-role: editor
+      tags: [live]
+      summary: "Pause or switch off one teammate live: { state: paused | off, reason? }. Its new work is held; its live sessions stop (paused: at a safe point, with a checkpoint; off: now). No step-up. A publish whose run no longer has the teammate clears an off change as 'published'"
+      responses: { "200": { description: LiveChange }, "400": { description: "state is not paused or off, or the teammate id is malformed" } }
+  /teams/{team}/live/{override}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: override, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: editor
+      tags: [live]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      x-interactive-only: [lift]
+      summary: "Lift one live change. Needs a step-up bound to scope lift:<override> (ADR 0013: stopping is cheap, carrying on is not); a host never sends one. Lifting Stop everything resumes the runs it paused, unless today's budget is spent; lifting a teammate releases its held work and restarts what the pause stopped"
+      responses: { "200": { description: "LiveChange with lifted: true (and resumed: [run ids] for a halt)" }, "401": { description: "Step-up required; the body's scope names the change" }, "404": { description: "No such live change, or already lifted" } }
   /teams/{team}/chat:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:

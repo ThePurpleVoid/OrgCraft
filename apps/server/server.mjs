@@ -19,6 +19,7 @@ import * as store from './store.mjs';
 import { attachRunners } from './runners.mjs';
 import { createM3 } from './m3.mjs';
 import { createBus } from './bus.mjs';
+import { createLive } from './live.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
@@ -43,6 +44,7 @@ function wireBus(m3, bus) {
   m3.hooks.project = bus.project;
   m3.hooks.runChanged = bus.runChanged;
   m3.hooks.approvalDecided = bus.approvalDecided;
+  m3.hooks.memberChanged = bus.memberChanged;
 }
 
 const { Problem } = store;
@@ -183,6 +185,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   let tickMisses = [];
   const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl, installationsFor: installations ? (tn, url) => installations.forRepo(tn, url) : null });
   if (!givenBus) wireBus(m3, bus);
+  const overrides = createLive({ db, m3 });
   // Every write of the m3 module and the bus reaches the live streams and the sinks once it commits.
   m3.onStored((stored) => { const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); });
   /** Runs an m3 write and tells the hub and sinks about what it stored. */
@@ -648,6 +651,17 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (a === 'teams' && !team) {
       if (m === 'GET') return send(res, 200, { teams: await store.listTeams(db, t) });
       if (m === 'POST') return send(res, 201, await store.createTeam(db, t, (await readJson(req, 16 * 1024)) ?? {}));
+    }
+    // Live overrides (L18): emergency controls as control-plane state, never Git. Stopping is one tap; lifting needs
+    // a step-up scoped to the one change (a host never sends one, so a host can stop but never lift).
+    if (a === 'live' && team === 'stop-everything' && !b && m === 'POST') return send(res, 200, await overrides.stopEverywhere(t, me, { reason: ((await readJson(req, 4 * 1024)) ?? {}).reason ?? null }));
+    if (a === 'teams' && team && b === 'live') {
+      const d = parts[5];
+      if (!c && m === 'GET') return send(res, 200, await overrides.list(t, team));
+      if (c === 'stop-everything' && !d && m === 'POST') return send(res, 200, await overrides.stopEverything(t, team, me, { reason: ((await readJson(req, 4 * 1024)) ?? {}).reason ?? null }));
+      if (c === 'members' && d && !parts[6] && m === 'PUT') return send(res, 200, await overrides.setMember(t, team, d, (await readJson(req, 4 * 1024)) ?? {}, me));
+      if (c && c !== 'members' && c !== 'stop-everything' && !d && m === 'DELETE') return send(res, 200, await overrides.lift(t, team, c, me, { stepUp }));
+      throw new Problem(404, 'not found');
     }
     if (a === 'teams' && team) {
       if (!b && m === 'GET') return send(res, 200, await store.getTeam(db, t, team));

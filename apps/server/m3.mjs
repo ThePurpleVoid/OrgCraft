@@ -8,6 +8,7 @@ import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
 import { checkMeetingDefs } from './meetings.mjs';
+import { halted, reconcile } from './live.mjs';
 
 const scrypt = promisify(scryptCb);
 
@@ -320,6 +321,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       }
       const [going] = await ctx.q("select id from runs where team = $1 and state <> 'stopped' limit 1", [team]);
       if (going) throw new Problem(409, `run ${going.id} is still going; stop it first`);
+      if (await halted(ctx.q, team)) throw new Problem(409, 'Stop everything is on for this team; lift it first (it needs a passkey)', { type: 'halted' });
       const t = await today(ctx.q, team, ctx.now);
       if (t.state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it or start tomorrow", { type: 'budget-exhausted' });
       const rid = id('run');
@@ -328,6 +330,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
                                  on conflict (team) where state <> 'stopped' do nothing returning ${RUN_COLS}`,
         [rid, tenant, team, mode, JSON.stringify(caps), JSON.stringify(roster), roster.version, by]);
       if (!row) throw new Problem(409, 'another run of this team started just now; stop it first');
+      await reconcile(ctx, team, roster, by);
       await ctx.emit(team, 'run.started', { mode, by, caps, frontDoor: roster.frontDoor, roles: roster.roles.length }, { actor: personActor(by), subject: `run/${rid}`, run: rid, teamVersion: roster.version ?? undefined });
       await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'start', mode } });
       hooks.runStarted && ctx.after.push(() => hooks.runStarted(tenant, team, rid));
@@ -374,6 +377,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
         return runView(row);
       }
       if (r.state !== 'paused') throw new Problem(409, `the run is ${r.state}`);
+      if (await halted(ctx.q, r.team)) throw new Problem(409, 'Stop everything is on for this team; lift it first (it needs a passkey)', { type: 'halted' });
       // Whoever paused it, nothing resumes while today's budget is spent (issue #28 U2).
       if ((await today(ctx.q, r.team, ctx.now)).state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it (the budget card) or wait for tomorrow", { type: 'budget-exhausted' });
       if (!(await useStepUp(ctx, by, stepUp, `resume:${rid}`))) throw new StepUpRequired(r.reason === 'budget' ? 'Resuming a run the budget paused' : 'Resuming a paused run', `resume:${rid}`);
@@ -830,7 +834,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     requireStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
     createCard, changeCard, getCard, answerCard, requestApproval, decideApproval, readyToTry, previewArrived, checkPreviewed, previewForMerge,
-    stepUp, mintStepUp, postChat, getChat, inbox, teamExtras,
+    stepUp, mintStepUp, postChat, getChat, inbox, teamExtras, useStepUp, today,
   };
 }
 

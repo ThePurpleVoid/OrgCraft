@@ -11,6 +11,7 @@ import { checkTool, detailOf } from './tools.mjs';
 import { personActor } from './m3.mjs';
 import { createMeetings } from './meetings.mjs';
 import { canWork } from './deployment.mjs';
+import { memberHeld } from './live.mjs';
 
 export const SESSION_TOKEN_MINUTES = 15;
 const ACK_SECONDS = 30;
@@ -120,6 +121,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (!run || run.state === 'stopped' || !ev) { await q("update deliveries set state = 'dead' where id = $1", [d.id]); return null; }
       const money = await remaining(q, run);
       if (run.state !== 'running' || money.exhausted) { await q("update deliveries set state = 'held' where id = $1", [d.id]); return null; }
+      // A teammate paused or switched off live (L18): its work waits, held, until the live change is lifted.
+      if (await memberHeld(q, d.team, d.role, d.instance)) { await q("update deliveries set state = 'held' where id = $1", [d.id]); return null; }
       const wake = ev.envelope;
       const [s] = await q("select * from sessions where run = $1 and role = $2 and coalesce(instance, '') = coalesce($3, '') for update", [run.id, d.role, d.instance]);
       const conn = s?.runner ? reg()?.get(s.runner) : null;
@@ -292,6 +295,53 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
           await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where id = $1 and state = any($2)", [s.id, LIVE]));
           await conn.send('session.stop', { session: s.id, mode: 'now', reason }).catch(() => {});
         }
+      })().catch((e) => log.error?.(`bus: stopping ${s.id}: ${e.message}`));
+    }
+  }
+
+  /**
+   * A live change to one teammate (L18). paused: its live sessions come to a safe point (checkpoint) and stop;
+   * off: they stop now; on (lifted): what the pause stopped starts again from its checkpoint, then its held work goes.
+   * Each step re-checks the override, so a lift that lands meanwhile wins.
+   */
+  async function memberChanged(tenant, team, role, instance, state) {
+    const run = await db.tenant(tenant, ({ q }) => activeRun(q, team));
+    if (!run) return;
+    const mine = "role = $2 and ($3::text is null or coalesce(instance, '') = $3)";
+    if (state === 'on') {
+      if (run.state !== 'running') return; // the run's own resume releases it
+      const due = await db.tenant(tenant, async ({ q }) => {
+        if (await memberHeld(q, team, role, instance)) return [];
+        const [ev] = await q("select id from events where team = $1 and type = 'live.changed' and envelope->'data'->>'op' = 'lifted' order by seq desc limit 1", [team]);
+        const out = [];
+        if (ev) {
+          for (const s of await q(`select role, instance from sessions where run = $1 and state = 'stopped' and ${mine}`, [run.id, role, instance])) {
+            const [d] = await q('insert into deliveries(id, tenant, team, event, run, role, instance) values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing returning id',
+              [id('dlv'), tenant, team, ev.id, run.id, s.role, s.instance]);
+            if (d) out.push(d);
+          }
+        }
+        out.push(...(await q(`update deliveries set state = 'pending', next_at = now() where run = $1 and state = 'held' and ${mine} returning id`, [run.id, role, instance])));
+        return out;
+      });
+      for (const d of due) await deliver(tenant, d.id);
+      return;
+    }
+    const live = await db.tenant(tenant, ({ q }) => q(`select id, runner from sessions where run = $1 and state = any($4) and runner is not null and ${mine}`, [run.id, role, instance, [...LIVE, 'unknown']]));
+    const stillHeld = (q) => memberHeld(q, team, role, instance);
+    for (const s of live) {
+      const conn = reg()?.get(s.runner);
+      if (!conn) {
+        await db.tenant(tenant, async ({ q }) => { if (await stillHeld(q)) await q("update sessions set state = 'stopped' where id = $1 and state = any($2)", [s.id, [...LIVE, 'unknown']]); });
+        continue;
+      }
+      (async () => {
+        if (state === 'paused') {
+          const cp = await conn.send('session.checkpoint', { session: s.id, reason: 'member-paused' }, { timeoutMs: CHECKPOINT_MS }).catch(() => null);
+          if (cp && (cp.commit || cp.memory !== undefined)) await saveCheckpoint(tenant, s.id, cp);
+        }
+        const stopped = await db.tenant(tenant, async ({ q }) => ((await stillHeld(q)) ? q("update sessions set state = 'stopped' where id = $1 and state = any($2) returning id", [s.id, LIVE]) : []));
+        if (stopped.length) await conn.send('session.stop', { session: s.id, mode: state === 'paused' ? 'finish-step' : 'now', reason: state === 'paused' ? 'member-paused' : 'member-off' }).catch(() => {});
       })().catch((e) => log.error?.(`bus: stopping ${s.id}: ${e.message}`));
     }
   }
@@ -611,7 +661,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     });
   }
 
-  return { project, deliver, tick, toolCall, authSession, ops, onLost, welcome, runChanged, approvalDecided, saveCheckpoint, meetings };
+  return { project, deliver, tick, toolCall, authSession, ops, onLost, welcome, runChanged, memberChanged, approvalDecided, saveCheckpoint, meetings };
 }
 
 /**
