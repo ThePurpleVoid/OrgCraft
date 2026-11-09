@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Start with no repository: the managed team store** (step L9b; ADR 0012, spec L9 section 4). `apps/studio/managed.mjs` `managedBackend({ store, refs })` is a third Studio backend, with the same shape as the GitHub one. It keeps the team's files as real Git objects in OrgCraft's own store.
+  - A publish writes a commit and opens change request `cr/<n>`. Accepting it moves `main` by compare-and-swap, fast-forward only. A stale base gets the usual 409 `stale`, and nothing is ever forced.
+  - A team with no version yet reads as empty (`base: null`), so the page offers templates.
+  - `createStudioHandler({ backend })` takes it in place of `repo` and a token.
+  - Migration `014_managed_store.sql` adds `teams.backend` (default `github`), `managed_refs`, `change_requests`, `managed_objects` and `standing_exports`, all under tenant row-level security; the app role may not update or delete objects.
+  - `apps/server/managed-db.mjs` holds the Postgres refs and objects. The hosted Studio serves a team whose `backend` is `managed` without the GitHub App.
+  - What the store holds clones with real `git`.
+- **`packages/git-store`: Git objects without `git`** (no-repository start, step L9a; ADR 0012). Writes blobs, trees and commits in Git's own format, whole-object packs and v2 bundles. Reads bundles real Git wrote, deltas included. Writes the export zip. `node:crypto` and `node:zlib` only, with no child processes and no new dependency. The Studio's `blobId` now uses it. Tests run `git fsck --strict` on what it writes, clone its bundles with real Git, and read a delta-packed bundle Git wrote. Nothing uses it yet: the managed backend is L9b. **What existing teams see on sync:** nothing.
 - **Change safety for teammates (team-json-0.22 §5.4, local PR L14, kit half).** `diffTeams` now compares a teammate's brief the way sync writes it, and has five new kinds: `member-added` (instead of `role-added` for a teammate), `member-renamed` (the name alone; `impact` applies it at once), `type-changed` (Based on; treated as a brief change), `pool` (shrinking lets the extra sessions finish their task first) and `hands-to` (the structured targets, with `removed` and `added`). A prose change in Hands to is still a `brief` change. In `impact`, a dropped Hands to target with hand-offs still queued from that teammate (`inventory.roles[target].queuedFrom`) offers `reroute-queued` (recommended) or `keep-queued`. Switching off a teammate with hand-offs addressed to its role (`queuedByType`) adds `reroute-queued` to its choices.
 - **What a change widens: `capabilityDiff(published, draft, kit)`** (ADR 0013 rule 2, architecture S2-09). It returns typed items, each with the seat it widens:
   - a seat added, or its Based on changed;
@@ -22,14 +30,6 @@
 - **Hands to is structured in every kit brief.** Each line that names a role is now `- <role id>: what is handed over` (or just `- <role id>`), so the Studio and Publish can warn about orphans and overlaps. Sync shows each line as `- Title (role id): what`. It leaves out a line to a role the team does not have, and drops the section when nothing is left. Lines that name no single role stay as prose. The kit's own wiring to a role that is off, or to a role the team has several of, no longer warns; a team's own line still does.
 - **`{{ROLE}}` in a brief is the role's own id.** The kit briefs' "Every thread, every task" footer uses it, and sync fills it in for each role and teammate, so a teammate's footer points at its own brief and memory file. A new role drafted or renamed in the Studio gets the same.
 - **What existing teams see on sync:** every role's Hands to section is rewritten: lines become `- Title (role id): what`, and lines to roles you do not have are gone. The footer and the rest of each brief read as before. Teams with their own `## Hands to` edits keep them; a line in your own words that names no role stays prose.
-- **Start with no repository: the managed team store** (step L9b; ADR 0012, spec L9 section 4). `apps/studio/managed.mjs` `managedBackend({ store, refs })` is a third Studio backend, with the same shape as the GitHub one. It keeps the team's files as real Git objects in OrgCraft's own store.
-  - A publish writes a commit and opens change request `cr/<n>`. Accepting it moves `main` by compare-and-swap, fast-forward only. A stale base gets the usual 409 `stale`, and nothing is ever forced.
-  - A team with no version yet reads as empty (`base: null`), so the page offers templates.
-  - `createStudioHandler({ backend })` takes it in place of `repo` and a token.
-  - Migration `014_managed_store.sql` adds `teams.backend` (default `github`), `managed_refs`, `change_requests`, `managed_objects` and `standing_exports`, all under tenant row-level security; the app role may not update or delete objects.
-  - `apps/server/managed-db.mjs` holds the Postgres refs and objects. The hosted Studio serves a team whose `backend` is `managed` without the GitHub App.
-  - What the store holds clones with real `git`.
-- **`packages/git-store`: Git objects without `git`** (no-repository start, step L9a; ADR 0012). Writes blobs, trees and commits in Git's own format, whole-object packs and v2 bundles. Reads bundles real Git wrote, deltas included. Writes the export zip. `node:crypto` and `node:zlib` only, with no child processes and no new dependency. The Studio's `blobId` now uses it. Tests run `git fsck --strict` on what it writes, clone its bundles with real Git, and read a delta-packed bundle Git wrote. Nothing uses it yet: the managed backend is L9b. **What existing teams see on sync:** nothing.
 
 ## 0.21.1
 
