@@ -200,3 +200,18 @@ test('a team in a code host has no change requests here, and a host never reache
     assert.deepEqual([r.status, r.body.type], [409, 'not-managed']);
   }, { publicUrl: ORIGIN });
 });
+
+test('L40b: a systems change pending on a managed change switches on when the server accepts that change', async () => {
+  await plane(async (ctx) => {
+    const { call, su } = ctx;
+    const { publish } = await managedTeam(ctx);
+    const n = await publish((s) => { s.values = { ...s.values, PROJECT_NAME: 'Shop online' }; }, 'Rename', 'l40b');
+    const head = (await call('GET', `/teams/shop/changes/${n}`)).body.head;
+    const set = { resources: [{ id: 'slack', type: 'slack', secrets: ['SLACK_BOT_TOKEN'] }], bindings: [], expect: 0, pending: { sha: head, pr: n } };
+    assert.equal((await call('PUT', '/teams/shop/systems', set, await su('systems:shop'))).status, 200);
+    assert.equal((await call('GET', '/teams/shop/systems')).body.version, 0);
+    assert.equal((await call('POST', `/teams/shop/changes/${n}/accept`, {})).status, 200);
+    const now = (await call('GET', '/teams/shop/systems')).body;
+    assert.deepEqual([now.version, now.resources.map((r) => r.id), now.pending], [1, ['slack'], null]);
+  }, { publicUrl: ORIGIN });
+});

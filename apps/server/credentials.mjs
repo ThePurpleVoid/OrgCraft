@@ -15,7 +15,7 @@
 // The frozen systems come from team_systems, which only an admin sets (with a step-up); never from a run request.
 // Every release is an audit row, without the value.
 import { randomBytes } from 'node:crypto';
-import { Problem, getTeam, publishedId } from './store.mjs';
+import { Problem, getTeam } from './store.mjs';
 import { seal, unseal } from './vault.mjs';
 
 const NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -188,27 +188,38 @@ async function writeSystems(ctx, team, prev, next, who, extra = {}) {
   return { version, ...diff };
 }
 
+/** Drops a team's pending systems, audited, and tells the team's clients so the Studio can show the owner (L40b). */
+async function dropPendingIn(ctx, team, p, why, by = null) {
+  await ctx.q('delete from team_systems_pending where team = $1', [team]);
+  await ctx.audit({ team, actorKind: by ? 'person' : 'system', actorId: by ?? 'control-plane', action: 'team.systems.pending', target: team, decision: why === 'withdrawn' ? 'withdrawn' : 'refused', rule: why, detail: { sha: p.sha, pr: p.pr } });
+  await ctx.emit?.(team, 'systems.pending.dropped', { sha: p.sha, pr: p.pr ?? null, reason: why }, by ? { actor: { kind: 'person', id: by } } : {});
+}
+
+/** Drops an expired pending set; true when one was dropped. */
+export async function expirePending(ctx, team) {
+  const [p] = await ctx.q('select sha, pr, expires_at from team_systems_pending where team = $1 for update', [team]);
+  if (!p || new Date(p.expires_at).getTime() > ctx.now.getTime()) return false;
+  await dropPendingIn(ctx, team, p, 'expired');
+  return true;
+}
+
 /**
- * L40b: makes a team's pending systems its systems once team.published for exactly the pending commit is in the log,
- * and only when the base it was confirmed against has not moved (else it is dropped, audited, never applied). An
- * expired one is dropped. Runs inside a transaction; called when a publish is stored, and again at run start.
+ * L40b: makes a team's pending systems its systems, only on a publish the server itself vouches for (security sev2):
+ * a managed change it fast-forwarded (`shas`: the change's head and the commit main moved to), or an admin's
+ * "Switch on now" with a fresh step-up after the pull request merged (`shas` null). Never on a report-token or posted
+ * team.published, which any teammate can send. Only when the base it was confirmed against has not moved (else it
+ * is dropped and the owner told). Runs inside a transaction.
  */
-export async function activatePending(ctx, team) {
+export async function activatePending(ctx, team, { shas = null, via, by = null } = {}) {
   const [p] = await ctx.q('select sha, pr, resources, bindings, expect, created_by, expires_at from team_systems_pending where team = $1 for update', [team]);
   if (!p) return null;
-  const drop = async (why) => {
-    await ctx.q('delete from team_systems_pending where team = $1', [team]);
-    await ctx.audit({ team, actorKind: 'system', actorId: 'control-plane', action: 'team.systems.pending', target: team, decision: 'refused', rule: why, detail: { sha: p.sha, pr: p.pr } });
-    return null;
-  };
-  if (new Date(p.expires_at).getTime() <= ctx.now.getTime()) return drop('expired');
-  const [pub] = await ctx.q('select 1 from events where team = $1 and id = $2', [team, publishedId(p.sha)]);
-  if (!pub) return null;
+  if (new Date(p.expires_at).getTime() <= ctx.now.getTime()) { await dropPendingIn(ctx, team, p, 'expired'); return null; }
+  if (shas && !shas.includes(p.sha)) return null;
   const [prev] = await ctx.q('select resources, bindings, version from team_systems where team = $1 for update', [team]);
-  if ((prev?.version ?? 0) !== p.expect) return drop('base-moved');
+  if ((prev?.version ?? 0) !== p.expect) { await dropPendingIn(ctx, team, p, 'base-moved'); return null; }
   await ctx.q('delete from team_systems_pending where team = $1', [team]);
-  // Recorded as the admin who confirmed it, with the commit it was bound to.
-  return writeSystems(ctx, team, prev, { resources: p.resources, bindings: p.bindings }, p.created_by, { sha: p.sha, pr: p.pr, via: 'published' });
+  // Recorded as the admin who confirmed it (and who switched it on, when that was a person), with its commit.
+  return writeSystems(ctx, team, prev, { resources: p.resources, bindings: p.bindings }, p.created_by, { sha: p.sha, pr: p.pr, via, ...(by ? { switchedOnBy: by } : {}) });
 }
 
 /**
@@ -392,9 +403,7 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
         [tenant, team, sha, pend.pr ?? null, JSON.stringify(next.resources), JSON.stringify(next.bindings), prev?.version ?? 0, who, ctx.now, new Date(ctx.now.getTime() + PENDING_DAYS * 86_400_000)]);
       const diff = systemsDiff(prev, next);
       await ctx.audit({ team, actorKind: 'person', actorId: who, action: 'team.systems.pending', target: team, decision: 'allowed', detail: { sha, pr: pend.pr ?? null, expect: prev?.version ?? 0, ...(old && old.sha !== sha ? { replaced: old.sha } : {}), ...diff } });
-      // Already published (the merge came first): it applies now.
-      const applied = await activatePending(ctx, team);
-      return applied ? { ...applied, applied: true } : { version: prev?.version ?? 0, pending: { sha, pr: pend.pr ?? null }, ...diff };
+      return { version: prev?.version ?? 0, pending: { sha, pr: pend.pr ?? null }, ...diff };
     });
     return { ...next, ...result };
   }
@@ -440,17 +449,30 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
   async function dropPending(tenant, team, who, sha = null) {
     await getTeam(db, tenant, team);
     const { result } = await m3.tx(tenant, async (ctx) => {
-      const gone = await ctx.q(`delete from team_systems_pending where team = $1 ${sha ? 'and sha = $2' : ''} returning sha, pr`, sha ? [team, sha] : [team]);
-      if (gone.length) await ctx.audit({ team, actorKind: 'person', actorId: who, action: 'team.systems.pending', target: team, decision: 'withdrawn', detail: { sha: gone[0].sha, pr: gone[0].pr } });
-      return { dropped: gone.length ? gone[0].sha : null };
+      const [p] = await ctx.q('select sha, pr from team_systems_pending where team = $1 for update', [team]);
+      if (!p || (sha && p.sha !== sha)) return { dropped: null };
+      await dropPendingIn(ctx, team, p, 'withdrawn', who);
+      return { dropped: p.sha };
     });
     return result;
   }
 
-  /** A team.published was stored: apply the team's pending systems if they were bound to that commit. */
-  async function published(tenant, team) {
-    return (await m3.tx(tenant, (ctx) => activatePending(ctx, team))).result;
+  /**
+   * "Switch on now" (L40b): the pull request merged on the code host, which the server can't see for itself yet, so an
+   * admin says so with a fresh step-up scoped to the team. Applies the pending set bound to `sha`, if its base is
+   * unmoved. (When the server can check the merge through the GitHub App, that check replaces this tap.)
+   */
+  async function applyPending(tenant, team, who, body, stepUp) {
+    await getTeam(db, tenant, team);
+    const sha = String(body?.sha ?? '');
+    if (!SHA.test(sha)) throw new Problem(400, 'sha is the commit the pending change is bound to');
+    const [p] = await db.tenant(tenant, ({ q }) => q('select sha from team_systems_pending where team = $1', [team]));
+    if (!p || p.sha !== sha) throw new Problem(409, 'no pending change for that commit', { type: 'no-pending' });
+    await m3.requireStepUp(tenant, who, stepUp, 'Switching on what the team can reach', systemsScope(team));
+    const { result } = await m3.tx(tenant, (ctx) => activatePending(ctx, team, { shas: [sha], via: 'switched-on', by: who }));
+    if (!result) throw new Problem(409, 'the pending change could not be switched on: it expired, or the team\'s systems changed since it was confirmed; confirm it again', { type: 'pending-dropped' });
+    return { ...result, applied: true };
   }
 
-  return { list, add, test, remove, release, getSystems, putSystems, dropPending, published };
+  return { list, add, test, remove, release, getSystems, putSystems, dropPending, applyPending };
 }

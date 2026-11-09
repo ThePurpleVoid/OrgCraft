@@ -20,13 +20,8 @@ async function setup({ call }) {
   return { publish };
 }
 const systems = async (call) => (await call('GET', '/teams/shop/systems')).body;
-/** The publish hook runs after the write commits; wait for it. */
-async function until(fn, ms = 3000) {
-  const end = Date.now() + ms;
-  for (;;) { if (await fn()) return; if (Date.now() > end) throw new Error('not in time'); await new Promise((r) => setTimeout(r, 20)); }
-}
 
-test('a pending set applies only when team.published for its exact commit arrives, with an audit row naming the commit', async () => {
+test('a published commit never switches a pending set on by itself: not a report-token publish, not a posted event', async () => {
   await plane(async ({ call, su, db }) => {
     const { publish } = await setup({ call });
     assert.equal((await call('PUT', '/teams/shop/systems', { ...slack(), pending: { sha: SHA, pr: 7 } }, await su('systems:shop'))).status, 400, 'a pending change names the version it was confirmed against');
@@ -34,36 +29,38 @@ test('a pending set applies only when team.published for its exact commit arrive
     const put = await call('PUT', '/teams/shop/systems', { ...slack(), expect: 0, pending: { sha: SHA, pr: 7 } }, await su('systems:shop'));
     assert.equal(put.status, 200, JSON.stringify(put.body));
     assert.deepEqual([put.body.version, put.body.pending, put.body.added], [0, { sha: SHA, pr: 7 }, ['slack']]);
-    let now = await systems(call);
+    const now = await systems(call);
     assert.deepEqual([now.version, now.resources, now.pending.sha, now.pending.expect], [0, [], SHA, 0], 'nothing applies before the merge');
-
-    await publish(OTHER);
-    await new Promise((r) => setTimeout(r, 100));
-    assert.equal((await systems(call)).version, 0, 'another commit applies nothing');
-
+    // Security sev2: the report token (every teammate and CI hold it) and a posted event can both say "published".
     await publish(SHA);
-    await until(async () => (await systems(call)).version === 1);
-    now = await systems(call);
-    assert.deepEqual([now.resources.map((r) => r.id), now.pending], [['slack'], null]);
-    const rows = await db.system("select action, decision, actor_id, detail from audit where action in ('team.systems', 'team.systems.pending') order by at");
-    assert.deepEqual(rows.map((r) => [r.action, r.decision]), [['team.systems.pending', 'allowed'], ['team.systems', 'allowed']]);
-    assert.deepEqual([rows[1].detail.sha, rows[1].detail.via, rows[1].detail.added], [SHA, 'published', ['slack']]);
-    assert.equal(rows[1].actor_id, rows[0].actor_id, 'recorded as the admin who confirmed it');
+    const forged = { specversion: '1.0', id: `published-${SHA}`, source: '/tenants/acme/teams/shop', type: 'team.published', time: new Date().toISOString(), tenant: 'acme', team: 'shop', version: 1, actor: { kind: 'system', id: 'repository' }, data: { version: SHA, via: 'managed' } };
+    await call('POST', '/teams/shop/events', { events: [{ ...forged, id: 'published-x' }] });
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual([(await systems(call)).version, (await systems(call)).pending.sha], [0, SHA], 'still pending');
+
+    // "Switch on now": an admin says the pull request merged, with a fresh step-up for the team.
+    assert.equal((await call('POST', '/teams/shop/systems/pending/apply', { sha: OTHER }, await su('systems:shop'))).status, 409, 'another commit');
+    assert.equal((await call('POST', '/teams/shop/systems/pending/apply', { sha: SHA })).status, 401);
+    assert.equal((await call('POST', '/teams/shop/systems/pending/apply', { sha: SHA }, await su('systems:cafe'))).status, 401);
+    const on = await call('POST', '/teams/shop/systems/pending/apply', { sha: SHA }, await su('systems:shop'));
+    assert.deepEqual([on.status, on.body.applied, on.body.version, on.body.added], [200, true, 1, ['slack']]);
+    assert.deepEqual([(await systems(call)).resources.map((r) => r.id), (await systems(call)).pending], [['slack'], null]);
+    const rows = await db.system("select action, actor_id, detail from audit where action in ('team.systems', 'team.systems.pending') order by at");
+    assert.deepEqual(rows.map((r) => r.action), ['team.systems.pending', 'team.systems']);
+    assert.deepEqual([rows[1].detail.sha, rows[1].detail.via, rows[1].detail.switchedOnBy], [SHA, 'switched-on', rows[0].actor_id]);
   });
 });
 
-test('a step-up for another team is refused, a superseded set never applies, and a moved base drops it', async () => {
+test('a step-up for another team is refused, a superseded set never applies, and a moved base drops it and tells the owner', async () => {
   await plane(async ({ call, su, db }) => {
-    const { publish } = await setup({ call });
+    await setup({ call });
     const r = await call('PUT', '/teams/shop/systems', { ...slack(), expect: 0, pending: { sha: SHA } }, await su('systems:cafe'));
     assert.deepEqual([r.status, r.body.scope], [401, 'systems:shop']);
 
     assert.equal((await call('PUT', '/teams/shop/systems', { ...slack('read'), expect: 0, pending: { sha: SHA } }, await su('systems:shop'))).status, 200);
     assert.equal((await call('PUT', '/teams/shop/systems', { ...slack('write'), expect: 0, pending: { sha: NEWER } }, await su('systems:shop'))).status, 200);
     assert.equal((await systems(call)).pending.sha, NEWER, 'the newer set replaced the older one');
-    await publish(SHA);
-    await new Promise((r) => setTimeout(r, 100));
-    assert.equal((await systems(call)).version, 0, 'the superseded set never applies');
+    assert.equal((await call('POST', '/teams/shop/systems/pending/apply', { sha: SHA }, await su('systems:shop'))).status, 409, 'the superseded set never applies');
     const [replaced] = await db.system("select detail from audit where action = 'team.systems.pending' order by at desc limit 1");
     assert.equal(replaced.detail.replaced, SHA);
 
@@ -72,23 +69,30 @@ test('a step-up for another team is refused, a superseded set never applies, and
     assert.equal((await systems(call)).pending, null, 'a direct change drops the pending set');
     assert.equal((await call('PUT', '/teams/shop/systems', { ...slack('write'), expect: 1, pending: { sha: NEWER } }, await su('systems:shop'))).status, 200);
     await db.system("update team_systems set version = 5 where team = 'shop'");
-    await publish(NEWER);
-    await until(async () => (await db.system("select count(*)::int as n from audit where action = 'team.systems.pending' and rule = 'base-moved'"))[0].n === 1);
+    const late = await call('POST', '/teams/shop/systems/pending/apply', { sha: NEWER }, await su('systems:shop'));
+    assert.deepEqual([late.status, late.body.type], [409, 'pending-dropped']);
     assert.deepEqual([(await systems(call)).version, (await systems(call)).pending], [5, null]);
+    // Code review sev4: the owner is told, not only the audit.
+    const dropped = await db.system("select envelope from events where team = 'shop' and type = 'systems.pending.dropped'");
+    assert.deepEqual(dropped.map((e) => [e.envelope.data.sha, e.envelope.data.reason]), [[NEWER, 'base-moved']]);
   });
 });
 
-test('closing the pull request drops the pending set; a set whose commit is already published applies at once', async () => {
-  await plane(async ({ call, su }) => {
-    const { publish } = await setup({ call });
+test('closing the pull request drops the pending set; an expired one is dropped at the next run start', async () => {
+  await plane(async ({ call, su, db }) => {
+    await setup({ call });
     assert.equal((await call('PUT', '/teams/shop/systems', { ...slack(), expect: 0, pending: { sha: SHA, pr: 7 } }, await su('systems:shop'))).status, 200);
     assert.deepEqual((await call('DELETE', `/teams/shop/systems/pending?sha=${OTHER}`)).body, { dropped: null }, 'only the named commit');
     assert.deepEqual((await call('DELETE', `/teams/shop/systems/pending?sha=${SHA}`)).body, { dropped: SHA });
-    await publish(SHA);
-    await new Promise((r) => setTimeout(r, 100));
-    assert.equal((await systems(call)).version, 0);
-    // The merge came first: the confirmation applies at once.
-    const late = await call('PUT', '/teams/shop/systems', { ...slack(), expect: 0, pending: { sha: SHA } }, await su('systems:shop'));
-    assert.deepEqual([late.body.applied, late.body.version], [true, 1]);
+    assert.equal((await call('POST', '/teams/shop/systems/pending/apply', { sha: SHA }, await su('systems:shop'))).status, 409);
+    const events = await db.system("select envelope from events where team = 'shop' and type = 'systems.pending.dropped'");
+    assert.deepEqual(events.map((e) => e.envelope.data.reason), ['withdrawn']);
+
+    assert.equal((await call('PUT', '/teams/shop/systems', { ...slack(), expect: 0, pending: { sha: SHA } }, await su('systems:shop'))).status, 200);
+    await db.system("update team_systems_pending set expires_at = now() - interval '1 minute' where team = 'shop'");
+    assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 1000 }, await su())).status, 200);
+    await call('POST', '/teams/shop/runs', { team: { version: 'abc123', roles: [{ slug: 'chief-of-staff', reportsTo: 'owner', areas: [] }] } });
+    assert.equal((await systems(call)).pending, null);
+    assert.deepEqual((await db.system("select envelope from events where team = 'shop' and type = 'systems.pending.dropped'")).map((e) => e.envelope.data.reason), ['withdrawn', 'expired']);
   });
 });

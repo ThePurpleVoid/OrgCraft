@@ -10,7 +10,7 @@ import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
 import { checkMeetingDefs } from './meetings.mjs';
 import { dayBounds, dayStart, localDay, nextDay, timeZoneOf } from './budget-day.mjs';
 import { approveScope, factsOf, redact as redactText, riskOf } from './signed.mjs';
-import { activatePending, freezeSystems } from './credentials.mjs';
+import { expirePending, freezeSystems } from './credentials.mjs';
 import { checkTriggers } from './triggers.mjs';
 import { halted } from './live.mjs';
 import { coveredBy, declinedBefore, ledgerRow, ruleLine, targetsOf } from './ledger.mjs';
@@ -362,8 +362,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       const t = await today(ctx.q, team, ctx.now);
       if (t.state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it or start tomorrow", { type: 'budget-exhausted' });
       // L20: the team's systems as an admin last set them, frozen with the run (the bindings of this run's members).
-      // L40b: a pending set whose commit is published applies first (in case the publish hook missed it).
-      await activatePending(ctx, team);
+      // L40b: an expired pending set is dropped (and the owner told); a pending set never applies here.
+      await expirePending(ctx, team);
       const [sys] = await ctx.q('select resources, bindings, version from team_systems where team = $1', [team]);
       const systems = freezeSystems(sys, roster.roles);
       if (systems) roster.systems = systems;

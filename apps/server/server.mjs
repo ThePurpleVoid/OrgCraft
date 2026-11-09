@@ -241,8 +241,6 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (!stored.length) return;
     live.emit(team, stored);
     sinks?.wake();
-    // L40b: a publish applies the team's pending systems when they were bound to that commit.
-    for (const x of stored) if (x.event?.type === 'team.published') vault.published(x.event.tenant, team).catch((e) => console.error('pending systems', e?.message ?? e));
   };
 
   /** Who is calling: the admin token, or (hosted) a signed-in person's cookie. `tenant` is null for a person who is
@@ -715,7 +713,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     // Hooks and triggers (N2, L21).
     // L20: the team's systems (resources.json), set only by an admin with a step-up; runs freeze them.
     if (a === 'teams' && team && b === 'systems' && !c && m === 'GET') return send(res, 200, await vault.getSystems(t, team));
-    if (a === 'teams' && team && b === 'systems' && c === 'pending' && m === 'DELETE') return send(res, 200, await vault.dropPending(t, team, me, url.searchParams.get('sha')));
+    if (a === 'teams' && team && b === 'systems' && c === 'pending' && parts[5] === 'apply' && m === 'POST') return send(res, 200, await vault.applyPending(t, team, me, await readJson(req, 4 * 1024), stepUp));
+    if (a === 'teams' && team && b === 'systems' && c === 'pending' && !parts[5] && m === 'DELETE') return send(res, 200, await vault.dropPending(t, team, me, url.searchParams.get('sha')));
     if (a === 'teams' && team && b === 'systems' && !c && m === 'PUT') return send(res, 200, await vault.putSystems(t, team, me, await readJson(req, 256 * 1024), stepUp, { ifMatch: req.headers['if-match'] ?? null }));
     if (a === 'teams' && team && b === 'hooks') {
       const d = parts[5];
