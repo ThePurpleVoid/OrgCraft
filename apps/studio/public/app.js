@@ -1,6 +1,8 @@
 // OrgCraft Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
-import { checkUpgrade, DEFAULT_TARGETS, resolveSpec, setEnabled, setField, splitBrief, TARGETS, teamPacks, teamTargets, validate } from './team-model.mjs';
+import { addMember, applyExtension, checkUpgrade, DEFAULT_TARGETS, displayName, membersOf, poolOf, resolveSpec, setDisplayName, setEnabled, setField, splitBrief, TARGETS, teamPacks, teamTargets, typeOf, validate } from './team-model.mjs';
+import { t, tip } from './i18n.js';
+import { drawLines, renderWiring, wireWiring } from './wiring.js';
 import { createChat } from './chat.js';
 import { createMeetings } from './meetings.js';
 import { createRollout } from './rollout.js';
@@ -10,6 +12,10 @@ import { createAgentEditor } from './agent-editor.js';
 import { QUIET_S, assess, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
 import { $, $$, apiUrl, ask, configure, env, feature, paint, request, requestJson, stateEl } from './env.js';
 import { SHELL } from './shell.js';
+import { infoButton, installTips } from './tooltip.js';
+
+/** The glossary tooltip (a function named `tip` is shadowed where the card builds its own hover text). */
+const glossary = (key) => tip(key);
 import { bind, renderAreas, renderChecks, renderSystemInspector, renderSystemsStrip, roleSystemsHtml, wireBindings } from './panels.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -35,6 +41,7 @@ let view = null; // derived each render
 let zoom = 'fit'; // or a number
 let mode = 'org'; // org | flow | systems | areas | checks
 let selectedSystem = null;
+let wiring = null; // the teammate whose wiring view is open (B2.1), or null for the org chart
 let flow = { key: '', edges: [], unresolved: [] }; // hand-offs, from the server, for the spec they were made from
 let sugg = null; // owned area and check suggestions from the repository
 let scale = 1;
@@ -70,16 +77,24 @@ const lockedNote = () => (previewing ? 'This is a preview. Use this template to 
 
 // ------------------------------------------------------------------------------------------------ model
 
+/** A role's name as people read it: the title the team's pack gives it, else the kit's (CPO ruling, L10 round 3). */
+const roleName = (type, md = '') => spec.roles[type]?.extension?.title ?? titleOf(spec.roles[type]?.brief ?? S.kit.roles[type] ?? md, type);
+
 function derive() {
   const { roles } = resolveSpec(spec, S.kit);
   const bySlug = new Map(roles.map((r) => [r.slug, r]));
   const info = (slug) => {
     const r = spec.roles[slug];
-    const md = bySlug.get(slug)?.md ?? r.brief ?? S.kit.roles[slug] ?? '';
+    // A seat that is off is not resolved; its brief is still its role's brief with its own changes on top.
+    const base = r.source === 'member' ? (spec.roles[r.type]?.brief ?? S.kit.roles[r.type]) : (r.brief ?? S.kit.roles[slug]);
+    const md = bySlug.get(slug)?.md ?? (base && r.extension ? applyExtension(base, { ...r.extension, fields: (r.extension.fields ?? []).filter((f) => f.name !== 'Based on') }) : base) ?? '';
     const model = field(md, 'Model');
+    const type = typeOf(spec, slug);
     return {
-      slug, md, enabled: r.enabled, source: r.source,
-      title: titleOf(md, slug), model, tier: (/^[a-z]+/i.exec(model)?.[0] ?? '').toLowerCase(),
+      slug, md, enabled: r.enabled, source: r.source, type,
+      // ADR 0011: people see the teammate's name; the role it is based on is its subtitle.
+      title: displayName(spec, S.kit, slug), typeTitle: roleName(type, md),
+      pool: poolOf(md), model, tier: (/^[a-z]+/i.exec(model)?.[0] ?? '').toLowerCase(),
       group: field(md, 'Group').toLowerCase() || 'other',
       reportsTo: (field(md, 'Reports to').split(/\s/)[0] ?? '').toLowerCase(),
       dormant: /^dormant/i.test(field(md, 'Status')),
@@ -88,7 +103,43 @@ function derive() {
   };
   const all = Object.keys(spec.roles).sort().map(info);
   const safety = assess({ published, draft: spec, kit: S.kit, board, head: S.git?.head });
-  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team: all.filter((r) => r.enabled && bySlug.has(r.slug)), issues: checksOf(spec), safety };
+  const team = all.filter((r) => r.enabled && bySlug.has(r.slug));
+  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team, issues: checksOf(spec), safety, draft: draftChanges(), looks: thingsToLook(team, bySlug) };
+}
+
+/**
+ * B1.1-6: what changed since the last publish, per teammate (its seat: on or off, brief, changes, name) plus the
+ * team's data files, so the canvas can draw changed cards dashed and count them. Nothing is published yet: all of it.
+ */
+/**
+ * An off teammate that keeps its place on the chart (B1.1-3): a teammate of its own (a member), or a role that is on in
+ * the published team and switched off in this draft. A kit role the team never had is not one (B4.1-3).
+ */
+const offSeat = (r) => !r.enabled && (r.source === 'member' || !!published?.roles?.[r.slug]?.enabled);
+
+function draftChanges() {
+  const seat = (sp, slug) => { const r = sp?.roles?.[slug]; return r ? JSON.stringify([r.enabled, r.brief ?? null, r.extension ?? null]) : JSON.stringify([false, null, null]); };
+  const slugs = new Set([...Object.keys(spec.roles), ...Object.keys(published?.roles ?? {})]);
+  const changed = new Set([...slugs].filter((s) => seat(published, s) !== seat(spec, s)));
+  const data = ['ownership', 'gates', 'resources', 'meetings', 'values', 'options', 'rules'].filter((k) => JSON.stringify(published?.[k] ?? null) !== JSON.stringify(spec[k] ?? null));
+  return { changed, count: changed.size + data.length };
+}
+
+/**
+ * B1.1-7: the live checks shown on the cards and under "Things to look at before you publish": a teammate whose
+ * manager is not on the team (sync would hang it under the chief of staff), and two that report to each other.
+ * They clear as soon as they are fixed, because they are computed from the draft on every change.
+ */
+function thingsToLook(team, resolved) {
+  const out = [];
+  const on = new Set(team.map((r) => r.slug));
+  for (const r of team) {
+    const raw = /\*\*Reports to:\*\*\s*\S+\s*\((\S+) is not part of this team\)/.exec(resolved.get(r.slug)?.md ?? '');
+    if (raw && !on.has(raw[1])) out.push({ slug: r.slug, kind: 'nomanager', text: t('check.nomanager', { teammate: r.title }) });
+  }
+  const mgr = new Map(team.map((r) => [r.slug, r.reportsTo]));
+  for (const r of team) { const m = mgr.get(r.slug); if (m && mgr.get(m) === r.slug && r.slug < m) out.push({ slug: r.slug, kind: 'loop', text: t('check.loop', { teammate: r.title, teammate2: team.find((x) => x.slug === m)?.title ?? m }) }); }
+  return out;
 }
 
 /**
@@ -129,7 +180,13 @@ function change(fn, { quiet = false, key = '' } = {}) {
 function syncUndo() {
   $('#undo').disabled = !undo.length;
   $('#redo').disabled = !redo.length;
+  // "Publish {n} changes"; with nothing to publish it is disabled and says so (CPO ruling on L10). A new team's
+  // first publish counts each teammate.
+  const n = pendingCount();
+  const pub = $('#publish');
+  if (pub) { pub.textContent = n ? t('canvas.publish', { n }) : t('canvas.publish.none'); pub.disabled = !n; }
 }
+const pendingCount = () => (S?.noTeam ? view?.team.length ?? 0 : view?.draft.count ?? 0);
 function step(from, to) {
   if (!from.length) return;
   lastEdit = { key: '', at: 0 };
@@ -144,9 +201,12 @@ function ext(slug) {
 }
 function setExtField(slug, name, value) {
   const r = spec.roles[slug];
-  if (r.brief !== undefined && !r.extension) return setField(spec, slug, name, value);
+  if (r.brief !== undefined && !r.extension) {
+    if (value === '') { r.brief = r.brief.replace(new RegExp(`^\\*\\*${name}:\\*\\*.*\\n`, 'm'), ''); return spec; }
+    return setField(spec, slug, name, value);
+  }
   const e = ext(slug);
-  const kitValue = field(S.kit.roles[slug] ?? r.brief, name);
+  const kitValue = field(r.source === 'member' ? (spec.roles[r.type]?.brief ?? S.kit.roles[r.type]) : (S.kit.roles[slug] ?? r.brief), name);
   e.fields = e.fields.filter((f) => f.name !== name);
   if (value !== kitValue) e.fields.push({ name, value });
 }
@@ -183,7 +243,11 @@ const ctx = {
 
 // ------------------------------------------------------------------------------------------------ canvas
 
-const W = 176, GX = 22, GY = 48, IND = 22;
+const W = 208, GX = 22, GY = 48, IND = 22;
+// B1.1-11: the smallest card text is 13 px, so the chart never draws smaller than 12/13 of its size. A wide org wraps
+// its rows to the canvas instead (layout's maxW), so no teammate is ever cut off at the side; a tall one scrolls down.
+const MIN_SCALE = 0.93;
+const PAD = 24;
 let H = 54, ROW = H + 12; // a third line, the board state, when the team is running (change safety, criterion 1)
 
 /**
@@ -191,7 +255,7 @@ let H = 54, ROW = H + 12; // a third line, the board state, when the team is run
  * (two levels, up to ten roles) is drawn as a lane, listed down a column and indented by depth; a manager's
  * direct reports that manage no one stack in one column beside its other reports.
  */
-function layout(team) {
+function layout(team, maxW = Infinity) {
   const kids = new Map(team.map((r) => [r.slug, []]));
   kids.set('owner', []);
   const present = new Set(team.map((r) => r.slug));
@@ -232,33 +296,51 @@ function layout(team) {
     } };
   };
   const stack = (list) => ({ w: W + IND, h: list.length * ROW - 12, list });
+  // A manager's reports sit side by side; when they are wider than the canvas they wrap onto more rows (B1.1-11),
+  // and the line to a later row runs down the block's left edge, between the blocks, so it crosses no card.
+  const rowsOf = (parts) => {
+    const rows = [];
+    for (const p of parts) {
+      const row = rows.at(-1);
+      if (row && row.w + GX + p.w <= maxW) { row.parts.push(p); row.w += GX + p.w; } else rows.push({ parts: [p], w: p.w });
+    }
+    for (const r of rows) r.h = Math.max(...r.parts.map((p) => p.h));
+    return rows;
+  };
   const block = (s) => {
     if (isLane(s)) return lane(s);
     const list = kids.get(s);
     const leaves = list.filter((c) => !kids.get(c).length);
     const parts = list.filter((c) => kids.get(c).length).map(block);
     if (leaves.length) parts.push(stack(leaves));
-    const inner = parts.reduce((n, p) => n + p.w, 0) + GX * Math.max(0, parts.length - 1);
-    const w = Math.max(W, inner);
-    return { w, head: w / 2, h: H + (parts.length ? GY + Math.max(...parts.map((p) => p.h)) : 0), at(x, y) {
+    const rows = rowsOf(parts);
+    const w = Math.max(W, ...rows.map((r) => r.w));
+    const tall = rows.reduce((n, r) => n + GY + r.h, 0);
+    return { w, head: w / 2, h: H + tall, at(x, y) {
       const me = { x: x + (w - W) / 2, y };
       pos.set(s, me);
-      let cx = x + (w - inner) / 2;
-      const cy = y + H + GY;
-      const bar = y + H + GY / 2;
-      for (const p of parts) {
-        if (p.list) {
-          p.list.forEach((c, i) => {
-            const at = { x: cx + IND, y: cy + i * ROW };
-            pos.set(c, at);
-            edges.push(`M${me.x + W / 2},${me.y + H} V${bar} H${cx + 8} V${at.y + H / 2} H${at.x}`);
-          });
-        } else {
-          p.at(cx, cy);
-          edges.push(`M${me.x + W / 2},${me.y + H} V${bar} H${cx + p.head} V${cy}`);
+      let top = y + H;
+      rows.forEach((row, k) => {
+        const cy = top + GY;
+        const bar = top + GY / 2;
+        // The first row hangs from the manager; a later row from a line down the block's left edge.
+        const from = k === 0 ? `M${me.x + W / 2},${me.y + H} V${bar}` : `M${me.x + W / 2},${me.y + H} V${y + H + GY / 2} H${x - GX / 2} V${bar}`;
+        let cx = x + (w - row.w) / 2;
+        for (const p of row.parts) {
+          if (p.list) {
+            p.list.forEach((c, i) => {
+              const at = { x: cx + IND, y: cy + i * ROW };
+              pos.set(c, at);
+              edges.push(`${from} H${cx + 8} V${at.y + H / 2} H${at.x}`);
+            });
+          } else {
+            p.at(cx, cy);
+            edges.push(`${from} H${cx + p.head} V${cy}`);
+          }
+          cx += p.w + GX;
         }
-        cx += p.w + GX;
-      }
+        top = cy + row.h;
+      });
     } };
   };
   const root = block('owner');
@@ -300,27 +382,62 @@ function nodeSvg(r, p, extra = '') {
   else if (live?.on && mode !== 'systems') extra += l ? ` live s-${l.status}${l.stale ? ' stale' : ''}` : ' live none';
   // The reason replaces the tier on an amber card: it is what the owner needs to read there (criterion 3).
   // A role that reports for itself, with no hook events (another coding agent): its card says so (D46).
-  const tier = three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : own?.self_reported ? 'self-reported' : ''].filter(Boolean).join(' · '))
-    : l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : r.tier ? `${r.tier}${r.dormant ? ' · dormant' : ''}${replaces ? ' · replaces kit' : ''}` : '';
+  const subtitle = r.off || !r.enabled ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle });
+  const tier = r.off ? subtitle : three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : own?.self_reported ? 'self-reported' : ''].filter(Boolean).join(' · '))
+    : l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : subtitle;
   const state = three ? (own ? [stateWord(own), taskOf(own)].filter(Boolean).join(' · ') : '') : '';
+  const look = view.looks.find((x) => x.slug === r.slug);
   const flag = view.issues.some((i) => i.level === 'error' && i.where === `roles/${r.slug}`) ? ' ⚠' : r.changed ? ' •' : '';
+  if (view.draft.changed.has(r.slug)) extra += ' draft';
+  if (look) extra += ' look';
   const tip = three && own ? `${r.title}: ${stateWord(own)}${taskOf(own) ? ` · ${taskOf(own)}` : ''}${own.branch ? ` · branch ${own.branch}` : ''}${own.pr ? ` · PR #${own.pr}` : ''}${hot ? ` · ${hot.map(reasonOf).join(', ')}` : ''}${own.self_reported ? ` · ${SELF_REPORTED}` : ''}` : '';
-  return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${extra}" data-slug="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}${hot ? `, ${esc(hot.map(reasonOf).join(', '))}, work in progress` : ''}">
+  return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${r.off ? ' off' : ''}${extra}" data-slug="${r.slug}" data-node="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}, ${esc(r.off ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle }))}${hot ? `, ${esc(hot.map(reasonOf).join(', '))}, work in progress` : ''}${look ? `, ${esc(look.text)}` : ''}">
     <rect class="card" width="${W}" height="${H}"></rect>
     <rect class="stripe" width="4" height="${H - 16}" x="8" y="8" fill="${groupColor(r.group)}"></rect>
-    <text class="title" x="20" y="23">${esc(r.title.length > 21 ? r.title.slice(0, 20) + '…' : r.title)}${flag}</text>
-    <text class="meta" x="20" y="41">${esc(tier.length > 28 ? tier.slice(0, 27) + '…' : tier)}</text>
+    <text class="title" x="20" y="23">${esc(r.title.length > 24 ? r.title.slice(0, 23) + '…' : r.title)}${flag}</text>
+    <text class="meta" x="20" y="41"${tier === subtitle ? ` data-tip="${esc(glossary(r.off || !r.enabled ? 'grey.dot' : 'ai.teammate'))}"` : ''}>${esc(tier.length > 27 ? tier.slice(0, 26) + '…' : tier)}</text>
+    ${look ? `<g class="badge-warn" transform="translate(${W - 10},-6)" data-tip="${esc(look.text)}"><circle r="9"></circle><text text-anchor="middle" y="4">!</text></g>` : ''}
     ${three ? `${state ? `<circle class="dot" cx="24" cy="${H - 15}" r="4"></circle><text class="state" x="33" y="${H - 11}">${esc(state.length > 25 ? state.slice(0, 24) + '…' : state)}</text>` : ''}${tip ? `<title>${esc(tip)}</title>` : ''}`
     : `${replaces && !l ? `<title>${esc(view.issues.find((i) => i.where === `roles/${r.slug}` && /replaces the kit/.test(i.message))?.message ?? 'Replaces the kit role of this name on this team')}</title>` : ''}
     ${l ? `<circle class="dot" cx="${W - 14}" cy="16" r="5"></circle>${l.threads > 1 ? `<text class="threads" x="${W - 24}" y="20" text-anchor="end">${l.threads}</text>` : ''}<title>${esc(`${r.title}: ${liveLine(l)}${l.pr ? ` · PR #${l.pr}` : ''}${l.issue ? ` · issue #${l.issue}` : ''}`)}</title>` : ''}`}
   </g>`;
 }
 
+/** What the wiring view reads and how it edits the draft. */
+const wiringCtx = {
+  spec: () => spec, view: () => view, kit: null, esc,
+  change: (fn) => change(fn), render: () => render(),
+  resolved: (slug) => view.bySlug.get(slug)?.md ?? '',
+  setSection: (slug, name, m, text) => change(() => setExtSection(slug, name, m, text)),
+  close: () => openWiring(null),
+  locked: () => locked(),
+};
+let wiringWired = false;
+/** Opens teammate `slug`'s wiring view in place of the chart (null closes it), with its own address (ALL-6). */
+function openWiring(slug) {
+  wiring = slug && spec.roles[slug] ? slug : null;
+  if (wiring) selected = wiring;
+  render();
+  showPage(wiring ? `team?wiring=${encodeURIComponent(wiring)}` : 'team');
+  (wiring ? $('#canvas h2') : $(`#canvas [data-node="${CSS.escape(selected ?? '')}"]`))?.focus?.();
+}
+
 function renderCanvas() {
+  stateEl().dataset.wiring = wiring ? 'on' : '';
+  if (wiring) {
+    if (!wiringWired) { wireWiring($('#canvas'), wiringCtx, () => wiring); wiringWired = true; }
+    renderWiring($('#canvas'), wiringCtx, wiring);
+    // On a phone (or in a preview) the wiring reads but does not change (B1.7): wires open, nothing is added or deleted.
+    if (locked()) for (const c of $$('#canvas :is(select, input, textarea, [data-del], #w-bind, #w-hand, .chip)')) { c.disabled = true; c.draggable = false; }
+    $('#summary').textContent = pendingCount() ? t('canvas.changes', { n: pendingCount() }) : '';
+    return;
+  }
   const canvasMode = ['org', 'flow', 'systems'].includes(mode);
   stateEl().dataset.mode = mode;
+  // B1.7 / B1.1-12: a phone gets the team as a list, top of the org first, read-only, and says so.
+  if (small.matches && mode === 'org') { renderList(); return; }
   for (const b of $$('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
-  $('#summary').textContent = `${view.team.length} roles on · ${view.all.length - view.team.length} off · kit ${S.kitVersion}`;
+  $('#summary').textContent = pendingCount() ? t('canvas.changes', { n: pendingCount() }) : '';
   if (mode === 'systems') renderSystemsStrip($('#systems-strip'), ctx, selectedSystem);
   if (!canvasMode) {
     if (!sugg) loadSuggestions();
@@ -332,8 +449,18 @@ function renderCanvas() {
   ROW = H + 12;
   // A role switched off in the draft while it has work in flight stays on the canvas, greyed, so its work is seen.
   const ghosts = sf.on ? view.all.filter((r) => !r.enabled && sf.hot.has(r.slug)) : [];
+  // B1.1-3: a teammate that is switched off keeps its place, dimmed, and says Off: a teammate of its own (a member),
+  // one the team or its template lists as off, or one that is on in the published team.
+  const shown = new Set([...view.team, ...ghosts].map((r) => r.slug));
+  for (const r of view.all) {
+    if (r.enabled || shown.has(r.slug)) continue;
+    // B4.1-3: a kit role the team never had (another industry's, left out by its template) stays in the catalog only.
+    if (offSeat(r)) { ghosts.push({ ...r, off: true }); shown.add(r.slug); }
+  }
   const cards = [...view.team, ...ghosts];
-  const lay = layout(cards);
+  // The widest chart that still fits the canvas at the smallest scale: rows wrap to it, so nothing is cut at the side.
+  const room = $('#canvas').clientWidth - 24; // room for a vertical scroll bar
+  const lay = layout(cards, room > 0 ? room / MIN_SCALE - PAD * 2 : Infinity);
   const { pos, w, h } = lay;
   let edges = lay.edges.map((d) => `<path class="edge" d="${d}"></path>`);
   if (mode === 'flow') {
@@ -341,9 +468,10 @@ function renderCanvas() {
     edges = edges.map((e) => e.replace('class="edge"', 'class="edge faint"')).concat(flow.edges.filter((x) => pos.has(x.from) && pos.has(x.to) && (!selected || x.from === selected || x.to === selected))
       .map((x) => handoff(pos.get(x.from), pos.get(x.to), !selected ? 'all' : x.from === selected ? 'out' : 'in')));
   }
-  const PAD = 24;
-  const fit = Math.min(1, ($('#canvas').clientWidth - 8) / (w + PAD * 2));
-  scale = zoom === 'fit' ? Math.max(0.4, fit) : zoom;
+  // Fit to screen fits both ways (B1.1-5), down to the 12 px text floor; below that a tall team scrolls down, never sideways.
+  const box = $('#canvas');
+  const fit = Math.min(1, (box.clientWidth - 24) / (w + PAD * 2), (box.clientHeight - 8) / (h + PAD * 2));
+  scale = Math.max(MIN_SCALE, zoom === 'fit' ? fit : zoom);
   $('#zoom-level').textContent = `${Math.round(scale * 100)}%`;
   const owner = pos.get('owner');
   const nodes = cards.filter((r) => pos.has(r.slug)).map((r) => nodeSvg(r, pos.get(r.slug))).join('');
@@ -352,13 +480,36 @@ function renderCanvas() {
     ${edges.join('')}
     <g class="node owner" data-slug="owner" transform="translate(${owner.x},${owner.y})"><rect class="card" width="${W}" height="${H}"></rect>
       <text class="title" x="20" y="23">${esc(spec.values?.OWNER || 'The owner')}</text><text class="meta" x="20" y="41">owner</text></g>
-    ${nodes}</svg>`;
+    ${nodes}</svg>${cards.length ? '' : `<p class="canvas-empty hint pad">${esc(t('canvas.empty'))}</p>`}`;
   if (live?.on) $('#summary').textContent += ` · ${liveSummary()}`;
   renderPopover();
   if (mode === 'flow') {
     const mine = selected ? flow.edges.filter((x) => x.from === selected || x.to === selected) : flow.edges;
     $('#summary').textContent += selected ? ` · ${view.bySlug.get(selected)?.title}: ${mine.filter((x) => x.from === selected).length} out, ${mine.filter((x) => x.to === selected).length} in` : ` · ${flow.edges.length} hand-offs`;
   }
+}
+
+/** The org as an indented list, for phones: each teammate under its manager, with its state and checks. */
+function renderList() {
+  for (const b of $$('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
+  $('#summary').textContent = pendingCount() ? t('canvas.changes', { n: pendingCount() }) : '';
+  const shown = [...view.team, ...view.all.filter((r) => !r.enabled && offSeat(r))];
+  const on = new Set(shown.map((r) => r.slug));
+  const kids = new Map([['owner', []], ...shown.map((r) => [r.slug, []])]);
+  for (const r of shown) (on.has(r.reportsTo) && r.reportsTo !== r.slug ? kids.get(r.reportsTo) : kids.get('owner')).push(r);
+  const seen = new Set();
+  const item = (r, depth) => {
+    if (seen.has(r.slug)) return '';
+    seen.add(r.slug);
+    const look = view.looks.find((x) => x.slug === r.slug);
+    const off = !r.enabled;
+    return `<li class="tree-item${off ? ' off' : ''}${view.draft.changed.has(r.slug) ? ' draft' : ''}" data-depth="${Math.min(depth, 6)}">
+      <button type="button" class="tree-btn${r.slug === selected ? ' selected' : ''}" data-node="${esc(r.slug)}" data-slug="${esc(r.slug)}">
+        <span class="name">${esc(r.title)}</span><span class="muted sub">${esc(off ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle }))}</span>
+        ${look ? `<span class="badge-dot" title="${esc(look.text)}" aria-label="${esc(look.text)}">!</span>` : ''}</button></li>`
+      + kids.get(r.slug).sort((a, b) => a.title.localeCompare(b.title)).map((c) => item(c, depth + 1)).join('');
+  };
+  $('#canvas').innerHTML = `<p class="hint phone-note">${esc(t('canvas.phone.readonly'))}</p><ul class="plain tree" aria-label="${esc(t('nav.team'))}">${kids.get('owner').map((r) => item(r, 0)).join('')}</ul>`;
 }
 
 function liveSummary() {
@@ -470,6 +621,7 @@ function wireCanvas() {
     const t = target(e, d);
     if (t?.dataset.slug) setManager(d.slug, t.dataset.slug); else render();
   });
+  canvas.addEventListener('click', (e) => { const b = e.target.closest('.tree-btn'); if (b) { select(b.dataset.slug); $('#inspector').scrollIntoView({ block: 'start' }); } });
   canvas.addEventListener('keydown', (e) => { const g = e.target.closest('.node'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); select(g.dataset.slug); } });
   // Dropping a role from the library: switch it on and put it under the card it lands on.
   canvas.addEventListener('dragover', (e) => { e.preventDefault(); for (const n of canvas.querySelectorAll('.node.drop')) n.classList.remove('drop'); e.target.closest?.('.node')?.classList.add('drop'); });
@@ -480,8 +632,8 @@ function wireCanvas() {
     const system = e.dataTransfer.getData('text/x-system');
     if (system) { if (t && t.dataset.slug !== 'owner') { selected = t.dataset.slug; selectedSystem = null; bind(ctx, t.dataset.slug, system); render(); } return; }
     if (!slug) return;
-    if (t) setManager(slug, t.dataset.slug);
-    else { change(() => setEnabled(spec, slug, true)); selected = slug; render(); }
+    // A role from the catalog always adds a teammate (B1.2-2); dropped on a card, it reports there.
+    addTeammate(slug, t?.dataset.slug);
   });
 }
 
@@ -493,56 +645,78 @@ function libState(slug) {
   return row ? `<span class="state s-${esc(row.status)}${(row.age_s ?? 0) > QUIET_S ? ' quiet' : ''}">${esc(stateWord(row))}</span>` : '';
 }
 
+/**
+ * The role catalog (B1.2): every role a teammate can be based on, by department, with "{n} on the team". A role never
+ * leaves the catalog: dragging it (or pressing Enter on it) adds another teammate. The team's own roles come first;
+ * the rest of the kit is under "Browse all roles…".
+ */
+function catalogRows() {
+  const types = new Map();
+  for (const r of view.all) {
+    if (r.source === 'member' || r.source === 'missing') continue;
+    const md = spec.roles[r.slug]?.brief ?? S.kit.roles[r.slug] ?? r.md;
+    types.set(r.slug, { type: r.slug, title: roleName(r.slug, md), group: field(md, 'Group').toLowerCase() || 'other', custom: isCustom(spec.roles[r.slug]), count: membersOf(spec, r.slug).length, used: r.enabled || membersOf(spec, r.slug, { enabledOnly: false }).length > 1 || offSeat(r) });
+  }
+  return [...types.values()];
+}
+
 function renderLibrary() {
   const q = query.toLowerCase();
-  const groups = new Map();
-  const mine = [];
-  for (const r of view.all) {
-    if (q && !`${r.title} ${r.slug} ${r.group}`.toLowerCase().includes(q)) continue;
-    if (isCustom(spec.roles[r.slug])) { mine.push(r); continue; }
-    if (!groups.has(r.group)) groups.set(r.group, []);
-    groups.get(r.group).push(r);
-  }
-  const row = (r) => `<label class="lib-role${r.slug === selected ? ' selected' : ''}" draggable="true" data-slug="${r.slug}">
-      <input type="checkbox" ${r.enabled ? 'checked' : ''} data-toggle="${r.slug}" aria-label="${r.enabled ? 'Switch off' : 'Switch on'} ${esc(r.title)}">
-      <span class="name">${esc(r.title)}</span>${libState(r.slug)}<span class="tag${isCustom(spec.roles[r.slug]) ? ' has-export' : ''}">${r.source === 'project-replaces-kit' ? 'replaces kit' : imported.has(r.slug) ? 'imported' : isCustom(spec.roles[r.slug]) ? 'custom' : r.source === 'kit' ? '' : 'yours'}${r.dormant ? ' dormant' : ''}</span>${isCustom(spec.roles[r.slug]) ? `<button type="button" class="link export" data-export="${r.slug}" aria-label="Export ${esc(r.title)} as a role pack" title="Export as a role pack">Export</button>` : ''}</label>`;
+  const rows = catalogRows().filter((c) => !q || `${c.title} ${c.type} ${c.group}`.toLowerCase().includes(q));
   const byTitle = (a, b) => a.title.localeCompare(b.title);
-  const keys = [...groups.keys()].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
-  // Your agents: the custom roles on this team, on or off (PRD 6.6 A6), each still in its own group's colour.
-  const yours = mine.length ? `<div class="group-title yours"><span class="dot" data-paint="var(--warn)"></span>Your agents</div>` +
-    mine.sort(byTitle).map((r) => row(r).replace('<span class="name">', `<span class="dot" data-paint="${groupColor(r.group)}" title="${esc(r.group)}"></span><span class="name">`)).join('') : '';
-  // A group only custom agents use (a new one, D8) gets its own section in its colour, like a kit group, listing its
-  // agents again (criterion 13). These rows open the agent; switching it on or off stays in Your agents.
-  const kitGroups = new Set(view.all.filter((r) => !isCustom(spec.roles[r.slug])).map((r) => r.group));
-  const fresh = [...new Set(mine.map((r) => r.group))].filter((g) => g && !kitGroups.has(g));
-  const ref = (r) => `<button type="button" class="lib-ref${r.slug === selected ? ' selected' : ''}" data-slug="${esc(r.slug)}" draggable="true"><span class="name">${esc(r.title)}</span><span class="tag">${imported.has(r.slug) ? 'imported' : 'custom'}${r.enabled ? '' : ' · off'}${r.dormant ? ' · dormant' : ''}</span></button>`;
-  const section = (g) => (groups.has(g)
-    ? `<div class="group-title"><span class="dot" data-paint="${groupColor(g)}"></span>${esc(g)}</div>` + groups.get(g).sort(byTitle).map(row).join('')
-    : `<div class="group-title" data-group="${esc(g)}"><span class="dot" data-paint="${groupColor(g)}"></span>${esc(g)}</div>` + mine.filter((r) => r.group === g).sort(byTitle).map(ref).join(''));
-  const order = [...keys, ...fresh].sort((a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b));
-  $('#library').innerHTML = (yours + order.map(section).join('')) || '<p class="muted">No roles match.</p>';
+  const order = (a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b);
+  const row = (c) => `<li><button type="button" class="lib-role cat-role${selected && typeOf(spec, selected) === c.type ? ' selected' : ''}" draggable="true" data-type="${esc(c.type)}" data-slug="${esc(c.type)}"${locked() ? ' aria-disabled="true"' : ''}
+      aria-describedby="cat-how" data-tip="${esc(tip('role'))}">
+      <span class="dot" data-paint="${groupColor(c.group)}" aria-hidden="true"></span><span class="name">${esc(c.title)}</span>${libState(c.type)}
+      <span class="count${c.count ? '' : ' none'}">${esc(t('catalog.count', { n: c.count }))}</span>${c.custom ? `<span class="tag has-export">${esc(t('catalog.custom'))}</span>` : ''}</button>${c.custom ? `<button type="button" class="link export" data-export="${esc(c.type)}" aria-label="Export ${esc(c.title)} as a role pack" title="Export as a role pack">Export</button>` : ''}</li>`;
+  const block = (list) => {
+    const groups = new Map();
+    for (const c of list) { if (!groups.has(c.group)) groups.set(c.group, []); groups.get(c.group).push(c); }
+    return [...groups.keys()].sort(order).map((g) => `<h2 class="group-title" data-group="${esc(g)}"><span class="dot" data-paint="${groupColor(g)}" aria-hidden="true"></span>${esc(g)}</h2><ul class="plain cat-list">${groups.get(g).sort(byTitle).map(row).join('')}</ul>`).join('');
+  };
+  // While searching, everything that matches; otherwise the team's own roles, then the whole catalog folded.
+  const ours = q ? rows : rows.filter((c) => c.used || c.custom);
+  const rest = q ? [] : rows.filter((c) => !c.used && !c.custom);
+  $('#library').innerHTML = (block(ours) + (rest.length ? `<details class="browse"${S.browseOpen ? ' open' : ''}><summary>${esc(t('catalog.browse'))}</summary>${block(rest)}</details>` : '')) || `<p class="muted">${esc(t('search.empty', { query }))}</p>`;
   paint($('#library'));
 }
 
-function wireLibrary() {
-  $('#library').addEventListener('change', (e) => {
-    const slug = e.target.dataset.toggle;
-    if (slug) switchRole(slug, e.target.checked);
+/** Adds a teammate with role `type`: the role's own seat when it is free (switched on), else "{Role} 2", "{Role} 3"… */
+function addTeammate(type, manager) {
+  if (locked()) return flash(lockedNote());
+  let id = type;
+  const own = spec.roles[type];
+  const free = own && !own.enabled && membersOf(spec, type, { enabledOnly: false }).length === 1 ;
+  // A custom role with an error in its checks stays off until it is fixed (CPO story D2), however it is switched on.
+  const why = free && isCustom(own) && switchOnRefusal(spec, S.kit, type);
+  if (why) { render(); return flash(why); }
+  change(() => {
+    if (free) setEnabled(spec, type, true);
+    else id = addMember(spec, S.kit, { type, ...(manager && manager !== 'owner' ? { reportsTo: manager } : {}) }).id;
+    if (free && manager && manager !== 'owner') setExtField(type, 'Reports to', manager);
   });
+  selected = id;
+  render();
+  announce(`${view.bySlug.get(id)?.title ?? id}: ${t('teammate.subtitle.ai', { role: view.bySlug.get(id)?.typeTitle ?? type })}`);
+  return id;
+}
+
+const announce = (text) => note(text);
+
+function wireLibrary() {
   $('#library').addEventListener('click', async (e) => {
     const out = e.target.closest('[data-export]');
     if (out) { e.preventDefault(); const said = await exportPack(spec, out.dataset.export); if (said !== 'cancelled') note(said); return; }
-    const l = e.target.closest('.lib-role, .lib-ref');
-    if (l && !e.target.dataset.toggle) {
-      e.preventDefault();
-      // A custom agent opens in its editor (on a large screen); any other role in the inspector.
-      if (isCustom(spec.roles[l.dataset.slug]) && !locked()) return openEditor(l.dataset.slug);
-      select(l.dataset.slug);
-      // On a phone the inspector sits below the canvas: bring it into view, or the tap seems to do nothing.
-      if (small.matches) $('#inspector').scrollIntoView({ block: 'start' });
-    }
+    // Pressing a role adds a teammate with it (the keyboard and screen-reader way to drag, B1.1-4), under the
+    // teammate that is selected, or the team's lead. On a phone the team is read-only: it shows the role instead.
+    const l = e.target.closest('.cat-role');
+    if (!l) return;
+    e.preventDefault();
+    if (locked()) { const first = membersOf(spec, l.dataset.type)[0]; if (first) select(first); else flash(lockedNote()); if (small.matches) $('#inspector').scrollIntoView({ block: 'start' }); return; }
+    const lead = view.team.find((r) => r.reportsTo === 'owner')?.slug;
+    addTeammate(l.dataset.type, selected && spec.roles[selected]?.enabled ? selected : lead);
   });
-  $('#library').addEventListener('dragstart', (e) => { const l = e.target.closest('.lib-role, .lib-ref'); if (l) { e.dataTransfer.setData('text/x-role', l.dataset.slug); e.dataTransfer.effectAllowed = 'copy'; } });
+  $('#library').addEventListener('dragstart', (e) => { const l = e.target.closest('.cat-role'); if (l) { e.dataTransfer.setData('text/x-role', l.dataset.type); e.dataTransfer.effectAllowed = 'copy'; } });
   $('#search').addEventListener('input', (e) => { query = e.target.value; renderLibrary(); });
   $('#new-agent').onclick = () => {
     if (locked()) return flash(lockedNote());
@@ -581,15 +755,17 @@ function teamHtml() {
   const from = spec.options?.from ? /^(.+)@(.*)$/.exec(spec.options.from) : null;
   const tpl = from && (S.templates ?? []).find((c) => c.id === from[1]);
   const rows = [
-    ['Project', v.PROJECT_NAME], ['Owner', v.OWNER], ['Time zone', v.TIMEZONE], ['Kit', S.kitVersion],
+    ['Project', v.PROJECT_NAME], ['Owner', v.OWNER], ['Time zone', v.TIMEZONE],
+    // Where it runs: the files and the version, off the page header (CPO ruling); never the word "Kit".
+    ['Files', `${where()}${S.git?.branch ? ` · ${S.git.branch}` : ''}`], ['Version', S.kitVersion && `OrgCraft ${S.kitVersion}`],
     ['Shared rules', rulesLine(teamPacks(spec.options)).replace(/^Shared rules: /, '')],
-    ...(from ? [['Started from', `${tpl?.title ?? from[1]}${from[2] ? ` (kit ${from[2]})` : ''}`]] : []),
+    ...(from ? [['Started from', `${tpl?.title ?? from[1]}${from[2] ? ` (OrgCraft ${from[2]})` : ''}`]] : []),
   ].filter(([, x]) => x);
   return `<h2>Team</h2><dl class="team-facts">${rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('')}</dl>
-    <h2>Coding agents</h2>
-    <label class="switch"><input type="checkbox" id="t-agents-md"${teamTargets(spec.options).includes('agents-md') ? ' checked' : ''}> Also write AGENTS.md, for coding agents other than Claude Code</label>
-    <p class="hint">Publish writes the team's instructions into AGENTS.md at the top of the repository. Text you wrote in that file yourself stays. Roles run by those agents show "self-reported" on the board: without hooks, a card changes only when the role reports.</p>
-    <p class="hint">Every team gets the core rules: one door for the owner's requests, the owner's words passed on unchanged, one writer per area, the four message kinds and the board. A team's template or preset adds the rest.</p>
+    <h2>${esc(t('settings.agentsmd.heading'))}</h2>
+    <label class="switch row-target"><input type="checkbox" id="t-agents-md"${teamTargets(spec.options).includes('agents-md') ? ' checked' : ''}> ${esc(t('settings.agentsmd'))}</label>
+    <p class="hint">${esc(t('settings.agentsmd.hint'))}</p>
+    <p class="hint">Every team gets the core rules: one door for the owner's requests, the owner's words passed on unchanged, one owner per area, the four message kinds and the board. A team's template or preset adds the rest.</p>
     <p class="muted">Pick a role on the canvas or in the library.</p>`;
 }
 
@@ -605,45 +781,83 @@ function renderInspector() {
   const role = spec.roles[r.slug];
   const managers = view.team.filter((m) => m.slug !== r.slug && !under(r.slug, m.slug));
   const ownProject = role.brief !== undefined;
-  const kitMd = S.kit.roles[r.slug];
-  const head = `<div class="row between"><h2 class="flush">${esc(r.title)}</h2>
-      <span class="badge${r.changed ? ' changed' : ''}">${ownProject ? 'your role' : r.changed ? 'kit role, changed' : 'kit role'}</span></div>
-    <p class="muted"><code>${esc(r.slug)}</code></p>
+  // A teammate based on a role: the role's brief is the kit's (or the team's own role's), and the teammate's
+  // changes sit on top of it as an extension, so kit upgrades still reach it (B1.3-8).
+  const typeMd = spec.roles[r.type]?.brief ?? S.kit.roles[r.type];
+  const kitMd = r.source === 'member' ? typeMd : S.kit.roles[r.slug];
+  const seats = membersOf(spec, r.type).length;
+  // B1.3-6: each field says whether it is the role's default or this team's change, with a reset.
+  // A field is "your change" when this teammate's file sets it to something other than the role's own value.
+  const own = (name) => { const f = (role.extension?.fields ?? []).find((x) => x.name === name); return !!f && f.value !== field(kitMd ?? '', name); };
+  const mark = (name) => (ownProject && r.source !== 'member' ? '' : own(name)
+    ? `<span class="fmark changed">${esc(t('inspector.changed'))}</span><button type="button" class="link" data-reset-field="${esc(name)}">${esc(t('inspector.reset'))}</button>`
+    : `<span class="fmark">${esc(t('inspector.default'))}</span>`);
+  const head = `<div class="teammate-head"><h2 class="flush">${esc(r.title)}</h2>
+      ${r.title !== r.typeTitle ? `<p class="subtitle muted">${esc(r.typeTitle)}</p>` : ''}</div>
     ${nowOnLive(r)}
-    <label class="row"><input type="checkbox" id="i-enabled" ${r.enabled ? 'checked' : ''}> On this team</label>
-    <div class="field"><span>Model tier</span><select id="i-tier">${TIERS.map((t) => `<option ${t === r.tier ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-    <div class="field"><span>Reports to</span><select id="i-manager">
-      <option value="owner" ${r.reportsTo === 'owner' ? 'selected' : ''}>The owner</option>
+    <div class="field"><label for="i-name">${esc(t('inspector.name'))} ${infoButton(tip('teammate'), esc, t('inspector.name'))}</label><input id="i-name" maxlength="60" value="${esc(r.title)}" autocomplete="off" aria-describedby="i-name-msg"><span id="i-name-msg" class="field-msg" role="status"></span></div>
+    <div class="field"><span>${esc(t('inspector.role'))} ${infoButton(tip('role'), esc, t('inspector.role'))}</span><span class="value">${esc(r.typeTitle)} <span class="muted">· ${esc(t('catalog.count', { n: seats }))}</span></span></div>
+    <p class="row">${r.enabled ? '' : `<span class="pill off">${esc(t('canvas.off'))}</span>`}<button type="button" id="i-enabled" role="switch" aria-checked="${r.enabled}">${esc(r.enabled ? t('canvas.turnoff') : t('canvas.turnon'))}</button></p>
+    <div class="field"><label for="i-manager">${esc(t('inspector.reportsto'))} ${mark('Reports to')}</label><button type="button" id="i-moveto" class="link" aria-controls="i-manager">${esc(t('canvas.moveto'))}</button><select id="i-manager">
+      <option value="owner" ${r.reportsTo === 'owner' ? 'selected' : ''}>${esc(spec.values?.OWNER || 'The owner')}</option>
       ${managers.map((m) => `<option value="${m.slug}" ${m.slug === r.reportsTo ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select></div>
-    <label class="row"><input type="checkbox" id="i-dormant" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>`;
+    <div class="field"><label for="i-tier">${esc(t('inspector.model'))} ${mark('Model')}</label><select id="i-tier">${TIERS.map((x) => `<option ${x === r.tier ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+    <div class="field"><label for="i-pool">${esc(t('inspector.hands'))} ${infoButton(tip('control.same.job.more.hands'), esc, t('inspector.hands'))} ${mark('Pool')}</label><input id="i-pool" type="number" min="1" max="10" step="1" value="${Number.isInteger(r.pool) ? r.pool : 1}" inputmode="numeric"></div>
+    <p class="row"><button type="button" id="i-wiring" class="primary">${esc(t('teammate.openwiring'))}</button></p>
+    <p class="row"><button type="button" id="i-another" data-tip="${esc(tip('control.add.another.set.up.differently'))}">${esc(t('inspector.another'))}</button>${ownProject || (spec.roles[r.type]?.brief !== undefined) ? `<button type="button" id="i-editjob" data-type="${esc(r.type)}" data-tip="${esc(tip('control.edit.the.job.description'))}">${esc(t('inspector.editjob'))}</button>` : ''}</p>
+    <p id="i-editjob-warn" class="notice warn" role="alert" hidden>${esc(t('inspector.editjob.warn', { n: seats }))} <button type="button" class="link" id="i-editjob-go">${esc(t('inspector.editjob'))}</button></p>
+    <label class="row"><input type="checkbox" id="i-dormant" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>
+    <p class="hint advanced">Id: <code>${esc(r.slug)}</code></p>`;
   let body;
   if (ownProject && small.matches) {
     body = `<p class="notice">Open the Studio on a larger screen to edit this agent.</p>`;
   } else if (ownProject) {
-    body = `<p class="row"><button type="button" id="i-edit" class="primary">Edit this agent</button><button type="button" id="i-export">Export as a role pack</button></p>`;
+    body = `<p class="row"><button type="button" id="i-export">Export as a role pack</button></p>`;
   } else {
     const sections = splitBrief(kitMd).sections.filter((s) => !/^## every thread/i.test(s.heading));
     const mine = new Map((role.extension?.sections ?? []).map((s) => [s.name.toLowerCase(), s]));
     body = `<div class="row between"><h2>What it does</h2>${r.changed ? '<button id="i-reset" type="button">Reset to kit</button>' : ''}</div>` +
       sections.map((s) => {
         const name = s.heading.replace(/^##\s+/, '');
+        const shown = name.replace(/\s*\(writes\)$/i, ''); // "Owns (writes)" reads as "Owns" (ALL-5)
         const m = mine.get(name.toLowerCase());
-        return `<details class="section"${m ? ' open' : ''}><summary>${esc(name)}${m ? `<span class="badge changed">${m.mode === 'replace' ? 'replaced' : 'added to'}</span>` : ''}</summary>
+        // B1.3-3: Rules is where an owner adds a rule, so it starts open.
+        return `<details class="section"${m || /^rules$/i.test(shown) ? ' open' : ''}><summary>${esc(shown)}${m ? `<span class="badge changed">${esc(t('inspector.changed'))} · ${m.mode === 'replace' ? 'replaced' : 'added to'}</span>` : ''}</summary>
           <div class="kit-text">${esc(s.body.join('\n').trim())}</div>
-          <div class="field"><span>Your text</span><textarea data-section="${esc(name)}" rows="3" placeholder="Added after the kit's text">${esc(m?.text ?? '')}</textarea></div>
+          <div class="field"><span>Your text</span><textarea data-section="${esc(name)}" aria-label="${esc(shown)}: your text" rows="3" placeholder="Added after the kit's text">${esc(m?.text ?? '')}</textarea></div>
           <label class="row hint"><input type="checkbox" data-replace="${esc(name)}" ${m?.mode === 'replace' ? 'checked' : ''}> Replace the kit's text instead of adding to it</label></details>`;
       }).join('');
   }
   el.innerHTML = head + (r.enabled ? roleSystemsHtml(ctx, r.slug) : '') + body;
   wireBindings(el, ctx);
-  $('#i-enabled').onchange = (e) => switchRole(r.slug, e.target.checked);
+  $('#i-enabled').onclick = () => switchRole(r.slug, !r.enabled);
   $('#i-tier').onchange = (e) => change(() => setExtField(r.slug, 'Model', r.model.replace(/^[a-z]+/i, e.target.value) || e.target.value));
   $('#i-manager').onchange = (e) => setManager(r.slug, e.target.value);
+  // B1.1-4: the keyboard and screen-reader way to drag a card onto another.
+  $('#i-moveto').onclick = () => { const m = $('#i-manager'); m.focus(); try { m.showPicker?.(); } catch { /* not every browser opens it */ } };
+  const name = $('#i-name');
+  name.onchange = () => {
+    const v = name.value;
+    try { const probe = JSON.parse(JSON.stringify(spec)); setDisplayName(probe, r.slug, v, S.kit); } catch (err) {
+      $('#i-name-msg').textContent = err.status === 409 ? t('teammate.dupname', { name: err.message.replace(/^Another teammate is already called /, '') }) : err.message;
+      name.setAttribute('aria-invalid', 'true'); return;
+    }
+    name.removeAttribute('aria-invalid');
+    change(() => setDisplayName(spec, r.slug, v, S.kit));
+  };
+  $('#i-pool').onchange = (e) => { const n = Math.max(1, Math.min(10, Math.round(+e.target.value || 1))); change(() => setExtField(r.slug, 'Pool', n === 1 ? '' : String(n))); };
+  $('#i-another').onclick = () => addTeammate(r.type, r.reportsTo);
+  $('#i-wiring').onclick = () => openWiring(r.slug);
+  const job = $('#i-editjob');
+  // B1.3-5: the job description is the role's, shared by every teammate based on it, so say so before opening it.
+  if (job) job.onclick = () => { if (seats > 1) { $('#i-editjob-warn').hidden = false; $('#i-editjob-go').focus(); } else openEditor(r.type); };
+  const go = $('#i-editjob-go');
+  if (go) go.onclick = () => openEditor(r.type);
+  for (const b of el.querySelectorAll('[data-reset-field]')) b.onclick = () => change(() => { const e2 = spec.roles[r.slug].extension; e2.fields = e2.fields.filter((f) => f.name !== b.dataset.resetField || (r.source === 'member' && f.name === 'Based on')); });
   $('#i-dormant').onchange = (e) => change(() => setExtField(r.slug, 'Status', e.target.checked ? `dormant until the owner or the lane's executive opens it for a request.` : 'active'));
   const reset = $('#i-reset');
-  if (reset) reset.onclick = () => change(() => { delete spec.roles[r.slug].extension; });
-  const ed = $('#i-edit');
-  if (ed) ed.onclick = () => openEditor(r.slug);
+  // A teammate based on a role keeps what makes it a seat (its role, manager and name); the rest goes back to the role's.
+  if (reset) reset.onclick = () => change(() => { const x = spec.roles[r.slug]; if (x.source === 'member') x.extension = { ...x.extension, sections: [{ name: 'Owns (writes)', mode: 'replace', text: 'Nothing yet.' }] }; else delete x.extension; });
   const out = $('#i-export');
   if (out) out.onclick = async () => { const said = await exportPack(spec, r.slug); if (said !== 'cancelled') note(said); };
   const brief = $('#i-brief');
@@ -702,7 +916,8 @@ function renderIssues() {
   const pill = $('#checks');
   pill.className = `pill ${errors ? 'error' : 'ok'}`;
   pill.textContent = errors ? `${errors} error${errors > 1 ? 's' : ''}, ${list.length - errors} warnings` : `No problems${list.length ? ` · ${list.length} warnings` : ''}`;
-  $('#issues').innerHTML = list.length ? list.map((i) => `<li class="${i.level}" data-where="${esc(i.where)}"><strong>${i.level}</strong> · ${esc(i.where)}: ${esc(i.message)}</li>`).join('') : '<li class="none">No problems.</li>';
+  const looks = view.looks.map((l) => `<li class="warning look" data-where="roles/${esc(l.slug)}"><button type="button" class="link" data-look="${esc(l.slug)}">${esc(l.text)}</button></li>`).join('');
+  $('#issues').innerHTML = looks + (list.length ? list.map((i) => `<li class="${i.level}" data-where="${esc(i.where)}"><strong>${i.level}</strong> · ${esc(i.where)}: ${esc(i.message)}</li>`).join('') : looks ? '' : '<li class="none">No problems.</li>');
 }
 
 let flashTimer = null;
@@ -757,15 +972,16 @@ function openEditor(slug, origin) {
 
 function render() {
   view = derive();
-  if (stateEl().dataset.page === 'meetings') { renderIssues(); syncUndo(); meetings?.render(); return; }
+  if (stateEl().dataset.page === 'meetings') { saveDraft(); renderIssues(); syncUndo(); meetings?.render(); return; }
+  saveDraft();
   if (editor?.slug) { renderLibrary(); renderIssues(); syncUndo(); editor.draw(); return; }
   renderCanvas();
   renderLibrary();
   renderInspector();
   renderIssues();
-  $('#undo').disabled = !undo.length;
-  $('#redo').disabled = !redo.length;
-  if (locked()) for (const el of $$('#inspector :is(input, select, textarea, button), #library input')) el.disabled = true;
+  syncUndo();
+  // Read-only: nothing that changes the team works, but looking does (the wiring view, the info buttons).
+  if (locked()) for (const el of $$('#inspector :is(input, select, textarea, button):not(#i-wiring, .info), #library input')) el.disabled = true;
   renderTemplateBar();
 }
 
@@ -987,7 +1203,12 @@ async function setPage(raw) {
   const p = (asked === 'meetings' || (asked === 'chat' && !S.noTeam && feature('chat', S.features)) || (asked === 'rollout' && !S.noTeam && rolloutOn())) && !previewing ? asked : 'team';
   if (meetings?.dirty && stateEl().dataset.page === 'meetings' && p !== 'meetings' && !(await ask('Discard the changes to this meeting?', { ok: 'Discard', cancel: 'Keep editing' }))) { if (env.urlState) history.replaceState(null, '', '#meetings'); return; }
   stateEl().dataset.page = p;
-  for (const b of $$('#pages [data-page]')) b.setAttribute('aria-pressed', String(b.dataset.page === p));
+  for (const b of $$('#pages [data-page]')) { b.setAttribute('aria-pressed', String(b.dataset.page === p)); if (b.dataset.page === p) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
+  $('#more-btn')?.classList.toggle('current', p === 'meetings' || p === 'rollout');
+  // ALL-3: one h1 per screen, the page's name (the gallery has its own).
+  const title = $(`#pages [data-page="${p}"]`)?.textContent.trim();
+  if (title && $('#page-title')) $('#page-title').textContent = title;
+  closeMore();
   if (p !== 'rollout') rolloutView?.close();
   if (p === 'rollout') {
     rolloutView ??= createRollout({ root: $('#rollout-page'), titleOf: roleTitle, apiUrl });
@@ -1000,14 +1221,18 @@ async function setPage(raw) {
     if (p === 'meetings') meetings ??= createMeetings({ root: $('#meetings-page'), ctx: meetingsCtx });
     const role = params.get('role');
     if (p === 'team' && role && spec.roles?.[role]) { selected = role; selectedSystem = null; }
+    wiring = p === 'team' && params.get('wiring') && spec.roles?.[params.get('wiring')] ? params.get('wiring') : null;
+    if (wiring) selected = wiring;
     render();
     if (p === 'team' && role && !spec.roles?.[role]) flash('That role is not on this team any more.');
     const shown = p === 'meetings' && params.get('id') ? meetings.show(params.get('id')) : 'shown';
     if (shown === 'missing') flash('That meeting is not in this team any more.');
     if (shown === 'dirty') flash('Save or cancel the meeting you are editing, then open the link again.');
   }
-  showPage(p);
+  showPage(p === 'team' && wiring ? `team?wiring=${encodeURIComponent(wiring)}` : p);
 }
+
+function closeMore() { const m = $('#more-menu'); if (m && !m.hidden) { m.hidden = true; $('#more-btn').setAttribute('aria-expanded', 'false'); } }
 
 /** What the Meetings view reads from the team and how it edits the draft. */
 const meetingsCtx = {
@@ -1046,7 +1271,7 @@ async function start() {
   small.addEventListener('change', () => { stateEl().classList.toggle('small', small.matches); if (spec) render(); }, { signal: life.signal });
   stateEl().classList.toggle('small', small.matches);
   wireTemplates();
-  if (S.noTeam) return showGallery();
+  if (S.noTeam) return restoreNewTeam() || showGallery();
   load(S.spec);
   setPage(initialPage ?? pageFromUrl());
 }
@@ -1071,6 +1296,7 @@ export function mount(el, opts = {}) {
   el.classList.add('ats');
   if (env.embedded) el.classList.add('ats-embedded');
   el.innerHTML = SHELL;
+  installTips(el, life.signal);
   start();
   return {
     destroy,
@@ -1106,7 +1332,7 @@ function showGallery() {
   stateEl().classList.remove('previewing');
   stateEl().classList.add('no-team');
   stateEl().dataset.page = 'gallery';
-  $('#project').textContent = `${where()}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
+  $('#project').textContent = '';
   gallery ??= createGallery({ root: $('#gallery-page'), ctx: { cards: () => S.templates ?? [], groups: () => S.groups ?? {}, onPick: pickTemplate, onAlmostEmpty: () => useTemplate('almost-empty') } });
   gallery.render();
   showPage('gallery');
@@ -1188,7 +1414,7 @@ function renderTemplateBar() {
   if (S.noTeam) {
     bar.hidden = false;
     bar.innerHTML = `<div class="tb-text"><strong>${made ? `A new team from the ${esc(made.title)} template.` : 'A new team.'}</strong> <span class="muted">Nothing is written to the repository until you publish.</span></div>
-      <div class="tb-actions"><button type="button" id="tb-back">Start over</button></div>`;
+      <div class="tb-actions"><button type="button" id="tb-back">${esc(t('canvas.discard'))}</button></div>`;
     return;
   }
   bar.hidden = true;
@@ -1201,9 +1427,10 @@ function wireTemplates() {
     if (b.id === 'tb-use') return useTemplate(b.dataset.template);
     if (b.id === 'tb-back') {
       return (async () => {
-        if (!previewing && undo.length && !(await ask('Discard this team? Nothing has been written yet.', { ok: 'Discard', cancel: 'Keep it', danger: true }))) return;
+        if (!previewing && undo.length && !(await ask(t('canvas.discard.confirm', { n: pendingCount() }), { ok: t('canvas.discard'), cancel: t('publish.keep'), danger: true }))) return;
         made = null;
         spec = null;
+        try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
         showGallery();
       })();
     }
@@ -1213,13 +1440,69 @@ function wireTemplates() {
 }
 
 /** Opens a team in the editor: the repository's, a template preview, or a new draft. Wires the page once. */
+// ------------------------------------------------------------------------------------------------ the draft
+// B1.1-10: unpublished changes survive a reload. The draft is kept in this browser per repository and branch, with
+// the published team it was made on; it comes back only on that same published team, and the owner can discard it.
+const draftKey = () => `orgcraft.draft:${where()}:${S.git?.branch ?? ''}`;
+const fingerprint = (x) => { const s = JSON.stringify(x); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return `${s.length}:${h}`; };
+function saveDraft() {
+  {
+    if (!spec || !published || previewing) return;
+    try {
+      // A new team, not published yet: all of it is the draft, with the template it came from.
+      if (S.noTeam) localStorage.setItem(draftKey(), JSON.stringify({ base: 'new', template: made?.id ?? 'almost-empty', from: published, spec, at: Date.now() }));
+      else if (JSON.stringify(spec) === JSON.stringify(published)) localStorage.removeItem(draftKey());
+      else localStorage.setItem(draftKey(), JSON.stringify({ base: fingerprint(published), spec, at: Date.now() }));
+    } catch { /* private mode or full: this session only */ }
+  }
+}
+const readDraft = () => { try { return JSON.parse(localStorage.getItem(draftKey()) ?? 'null'); } catch { return null; } };
+const restoredNote = (kept) => {
+  const box = $('#restored');
+  box.hidden = false;
+  box.querySelector('span').textContent = t('canvas.draft.restored', { time: new Date(kept.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+};
+/** A new team made from a template and not published yet comes back too (the repository still has no team). */
+function restoreNewTeam() {
+  const kept = readDraft();
+  if (kept?.base !== 'new' || !kept.spec) return false;
+  made = kept.template === 'almost-empty' ? null : cardOf(kept.template);
+  // The template as it was opened stays the baseline, so "{n} changes not published" counts the same after a reload.
+  load(kept.from ?? kept.spec);
+  spec = kept.spec;
+  restoredNote(kept);
+  setPage('team');
+  return true;
+}
+function restoreDraft() {
+  if (S.noTeam || previewing) return false;
+  const kept = readDraft();
+  if (!kept?.spec || kept.base === 'new') return false;
+  // Made on another published team (someone published since): it would undo their work, so it is not brought back.
+  if (kept.base !== fingerprint(published)) { try { localStorage.removeItem(draftKey()); } catch { /* ignore */ } return false; }
+  spec = kept.spec;
+  restoredNote(kept);
+  return true;
+}
+async function discardDraft() {
+  if (!(await ask(t('canvas.discard.confirm', { n: pendingCount() }), { ok: t('canvas.discard'), cancel: t('publish.keep'), danger: true }))) return;
+  try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
+  $('#restored').hidden = true;
+  if (S.noTeam) { made = null; spec = null; return showGallery(); }
+  spec = structuredClone(published);
+  undo.length = 0; redo.length = 0;
+  render();
+}
+
 function load(initial) {
   spec = initial;
   published = structuredClone(initial);
+  $('#restored').hidden = true;
+  restoreDraft();
   undo.length = 0; redo.length = 0;
   sugg = null; selected = null; selectedSystem = null; pop = null; picks = new Map();
   stateEl().classList.toggle('no-team', !!S.noTeam);
-  $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${where()}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
+  $('#project').textContent = [spec.values?.ORGANIZATION, spec.values?.PROJECT_NAME].filter(Boolean).join(' ▸ ');
   if (booted) return;
   booted = true;
   loadFollowUps();
@@ -1233,8 +1516,10 @@ function load(initial) {
   wireCanvas();
   wireLibrary();
   $('#zoom-in').onclick = () => { zoom = Math.min(1.5, scale + 0.1); renderCanvas(); };
-  $('#zoom-out').onclick = () => { zoom = Math.max(0.3, scale - 0.1); renderCanvas(); };
-  $('#zoom-fit').onclick = () => { zoom = zoom === 'fit' ? 1 : 'fit'; renderCanvas(); };
+  $('#zoom-out').onclick = () => { zoom = Math.max(MIN_SCALE, scale - 0.05); renderCanvas(); };
+  $('#zoom-fit').onclick = () => { zoom = 'fit'; renderCanvas(); };
+  $('#zoom-level').onclick = () => { zoom = 1; renderCanvas(); };
+  $('#restored-discard').onclick = discardDraft;
   addEventListener('resize', () => zoom === 'fit' && renderCanvas(), { signal: life.signal });
   $('#undo').onclick = () => step(undo, redo);
   $('#redo').onclick = () => step(redo, undo);
@@ -1261,7 +1546,7 @@ function load(initial) {
   $('#confirm').onclick = confirmPublish;
   $('#issues').addEventListener('click', (e) => {
     const w = e.target.closest('li')?.dataset.where ?? '';
-    const m = /^roles\/(.+)$/.exec(w);
+    const m = /^roles\/(.+?)(\.extend\.md)?$/.exec(w);
     if (m && view.bySlug.has(m[1])) return select(m[1]);
     const to = /^ownership/.test(w) ? 'areas' : /^gates/.test(w) ? 'checks' : /^(resources|bindings)/.test(w) ? 'systems' : null;
     if (to) setMode(to);
@@ -1269,7 +1554,12 @@ function load(initial) {
     if (r) ctx.selectSystem(r[1]);
   });
   $('#views').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setMode(b.dataset.view); });
-  $('#pages').addEventListener('click', (e) => { const b = e.target.closest('[data-page]'); if (b) setPage(b.dataset.page); });
+  $('#pages').addEventListener('click', (e) => {
+    if (e.target.closest('#more-btn')) { const m = $('#more-menu'); const show = m.hidden; m.hidden = !show; $('#more-btn').setAttribute('aria-expanded', String(show)); if (show) m.querySelector('button')?.focus(); return; }
+    const b = e.target.closest('[data-page]'); if (b) setPage(b.dataset.page);
+  });
+  $('#pages').addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#more-menu').hidden) { closeMore(); $('#more-btn').focus(); } });
+  env.root.addEventListener('click', (e) => { if (!e.target.closest('.more-wrap')) closeMore(); });
   if (env.urlState) addEventListener('hashchange', () => setPage(location.hash.slice(1)), { signal: life.signal });
   // Keys only when the Studio has focus or nothing does: a host page's own fields keep their Ctrl+Z.
   document.addEventListener('keydown', (e) => {

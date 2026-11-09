@@ -44,7 +44,7 @@
 .ats :is(.lib-role, .lib-ref).selected { outline: 2px solid var(--accent); }
 .ats .lib-role input { width: auto; margin: 0; }
 .ats :is(.lib-role, .lib-ref) .name { flex: 1; }
-.ats :is(.lib-role, .lib-ref) .tag { font-size: 11px; color: var(--muted); }
+.ats :is(.lib-role, .lib-ref) .tag { font-size: 12px; color: var(--muted); }
 
 .ats .canvas-wrap { display: flex; flex-direction: column; min-width: 0; }
 .ats .zoom button { padding: 2px 9px; min-width: 30px; }
@@ -59,7 +59,7 @@
 .ats .node.drop rect.card { fill: var(--drop); stroke: var(--accent); stroke-dasharray: 4 3; }
 .ats .node.dragging { opacity: .35; }
 .ats .node .title { font-weight: 600; fill: var(--ink); font-size: 13px; }
-.ats .node .meta { fill: var(--muted); font-size: 11.5px; }
+.ats .node .meta { fill: var(--muted); font-size: 13px; }
 .ats .node .stripe { rx: 2; }
 .ats .node.owner rect.card { fill: var(--off); }
 /* The live board on the canvas: a dot per role, coloured by what it is doing now. */
@@ -71,7 +71,7 @@
 .ats .node.stale .dot { fill: var(--warn); }
 .ats .node.stale rect.card { stroke-dasharray: 5 3; }
 .ats .node.live.none .meta { font-style: italic; }
-.ats .node .threads { fill: var(--muted); font-size: 11px; }
+.ats .node .threads { fill: var(--muted); font-size: 13px; }
 .ats .live-toggle[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 @media (prefers-reduced-motion: no-preference) { .ats .node.s-working .dot { animation: pulse 2s ease-in-out infinite; } }
 @keyframes pulse { 50% { opacity: .45; } }
@@ -79,7 +79,7 @@
 .ats .field { margin: 10px 0; }
 .ats .field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
 .ats .row { display: flex; gap: 8px; align-items: center; }
-.ats .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.ats .badge { font-size: 12px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .ats .badge.changed { color: var(--accent); border-color: var(--accent); }
 .ats details.section { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin: 8px 0; }
 .ats details.section summary { cursor: pointer; font-weight: 600; display: flex; justify-content: space-between; gap: 8px; }
@@ -131,7 +131,7 @@
 .ats button.icon { padding: 2px 8px; }
 /* data panels */
 .ats .panel { padding: 16px 20px; max-width: 980px; }
-.ats .panel h1 { font-size: 18px; margin: 0 0 6px; }
+.ats .panel h1, .ats .panel h2 { font-size: 18px; margin: 0 0 6px; }
 .ats .grid { width: 100%; border-collapse: collapse; margin: 8px 0; }
 .ats .grid th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 4px 6px; }
 .ats .grid td { padding: 3px 6px; vertical-align: middle; }
@@ -203,6 +203,9 @@
 .ats .card-msg .bound { margin: 4px 0; font-size: 13px; }
 .ats .card-msg .bound summary { cursor: pointer; min-height: 32px; display: list-item; padding: 4px 0; }
 .ats .card-msg .bound code { font-size: 12.5px; }
+.ats .card-msg .facts { margin: 6px 0; font-size: 13px; }
+.ats .card-msg .facts pre { margin: 4px 0; padding: 6px 8px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ats .card-msg .why-label { margin: 6px 0 0; font-size: 12.5px; }
 .ats .card-msg .bound .sha { margin: 2px 0 0; font-size: 12.5px; overflow-wrap: anywhere; }
 .ats .card-msg .links { font-size: 12.5px; margin: 4px 0; }
 .ats .card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
@@ -272,11 +275,13 @@
 .ats .palette-head input { flex: 1; min-width: 0; }
 .ats .palette-head button { white-space: nowrap; }
 .ats .group-title.yours { margin-top: 4px; }
-.ats .lib-role .export { font-size: 11px; display: none; }
-.ats .lib-role:is(:hover, :focus-within) .export { display: inline; }
-.ats .lib-role:is(:hover, :focus-within) .tag.has-export { display: none; }
-.ats.small .lib-role .export { display: none; }
-.ats.small .lib-role .tag.has-export { display: inline; }
+/* A custom role's Export sits over its tag, and shows on hover or focus (the row and the button are siblings). */
+.ats #library li:has(> .export) { position: relative; }
+.ats #library li > .export { font-size: 11px; display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); }
+.ats #library li:is(:hover, :focus-within) > .export { display: inline; }
+.ats #library li:is(:hover, :focus-within) .tag.has-export { visibility: hidden; }
+.ats.small #library li > .export { display: none; }
+.ats.small #library li .tag.has-export { visibility: visible; }
 .ats .agent-dialog { padding: 0; gap: 0; }
 .ats .agent-dialog > h2, .ats .agent-dialog > .muted { padding: 0 20px; }
 .ats .agent-dialog > h2 { padding-top: 18px; }
@@ -380,7 +385,7 @@
 @media (max-width: 1100px) { .ats .ed { grid-template-columns: 180px 1fr 320px; } }
 
 /* Change safety part 1 (mockup 06): the board state on each card, amber where the draft touches work in flight. */
-.ats .node .state { fill: var(--ink); font-size: 11.5px; }
+.ats .node .state { fill: var(--ink); font-size: 13px; }
 .ats .node.quiet .dot { fill: var(--muted); }
 .ats .node.quiet .state { fill: var(--muted); }
 .ats .node.live.none .state { fill: var(--muted); font-style: italic; }
@@ -400,7 +405,7 @@
 .ats .now-live ul { margin: 0 0 6px; padding-left: 18px; }
 .ats .now-live .reason { color: var(--warn); margin: 0 0 6px; }
 .ats .now-live .hint { margin: 0; }
-.ats .lib-role .state { font-size: 11px; color: var(--ok); }
+.ats .lib-role .state { font-size: 12px; color: var(--ok); }
 .ats .lib-role .state.s-waiting, .ats .lib-role .state.s-review { color: var(--accent); }
 .ats .lib-role .state.s-blocked { color: var(--error); }
 .ats .lib-role .state.quiet, .ats .lib-role .state.s-idle, .ats .lib-role .state.s-done { color: var(--muted); }
@@ -574,6 +579,108 @@
 .ats .n-channel .hint { margin-left: 4px; }
 @media (max-width: 640px) { .ats .n-steps > summary.button, .ats #slack-connect, .ats #channel-new { min-height: 44px; } }
 .ats .result button.link.tap { min-height: 44px; padding: 0 4px; }
+.ats .node.off { opacity: .5; }
+.ats .node.off rect.card { stroke-dasharray: 5 3; }
+.ats .cat-list { margin: 0 0 8px; }
+.ats .cat-role { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 6px 8px; min-height: 36px; cursor: grab; font: inherit; color: inherit; }
+.ats .cat-role:hover, .ats .cat-role:focus-visible { border-color: var(--line); background: var(--hover, rgba(127,127,127,.08)); }
+.ats .cat-role.selected { border-color: var(--accent); }
+.ats .cat-role .name { flex: 1; }
+.ats .cat-role .count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.ats .cat-role .count.none { opacity: .7; }
+.ats .browse > summary { cursor: pointer; padding: 6px 8px; color: var(--accent); }
+@media (max-width: 640px) { .ats .cat-role { min-height: 44px; } }
+.ats .fmark { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 10px; padding: 0 6px; margin-left: 6px; font-weight: 400; }
+.ats .fmark.changed { color: var(--accent); border-color: var(--accent); }
+.ats .teammate-head .subtitle { margin: 2px 0 8px; font-size: 13px; }
+.ats .field-msg { color: var(--error, #b42318); font-size: 13px; }
+.ats .advanced { margin-top: 12px; }
+.ats .node.draft rect.card { stroke-dasharray: 6 3; }
+.ats .badge-warn circle { fill: var(--warn, #9a6700); }
+.ats .badge-warn text { fill: var(--bg, #fff); font: 700 12px system-ui, sans-serif; }
+.ats .issues .look { list-style: none; }
+/* Wiring view (B2.1) */
+.ats .wiring { position: relative; padding: 12px 16px; }
+.ats .wiring-lines { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.ats .wline { fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: .7; }
+.ats .wline.outside { stroke: var(--warn, #9a6700); stroke-dasharray: 6 4; }
+.ats .wline.warn { stroke: var(--warn, #9a6700); }
+.ats .wiring-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 220px) minmax(0, 1fr); gap: 48px; align-items: start; position: relative; z-index: 1; }
+.ats .wcol h3 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 8px; } /* sentence case: the column headings are whole phrases */
+.ats .wcol .plain { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.ats .wcol.mid { align-self: center; }
+.ats .wcard { display: grid; gap: 2px; padding: 12px; border: 2px solid var(--accent); border-radius: 10px; background: var(--panel, #fff); }
+.ats .wcard.drop { outline: 3px dashed var(--accent); outline-offset: 3px; }
+.ats .wire-item { display: flex; align-items: center; gap: 4px; }
+.ats .wire-btn { flex: 1; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel, #fff); color: inherit; font: inherit; min-height: 36px; }
+.ats .wire-item.open .wire-btn { border-color: var(--accent); }
+.ats .wire-item.outside .wire-btn { border-style: dashed; border-color: var(--warn, #9a6700); }
+.ats .wire-item.warn .wire-btn { border-color: var(--warn, #9a6700); }
+.ats .wkind { font-weight: 600; margin-right: 4px; }
+.ats .wtray { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 6px; }
+.ats .wtray .chip { border: 1px dashed var(--line); border-radius: 14px; padding: 4px 10px; background: none; color: inherit; cursor: grab; font: inherit; }
+.ats .wadd .row { flex-wrap: wrap; gap: 6px; }
+.ats .wire-detail:not(:empty) { margin-top: 16px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.ats .wire-pick { position: absolute; right: 16px; top: 64px; z-index: 3; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, #fff); box-shadow: 0 6px 24px rgba(0,0,0,.15); }
+.ats .wiring-warn { margin: 8px 0; padding: 0; list-style: none; }
+.ats .wiring-warn li { color: var(--warn, #9a6700); }
+.ats .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 640px) {
+  .ats .wiring-cols { grid-template-columns: 1fr; gap: 16px; }
+  .ats .wire-btn { min-height: 44px; }
+}
+.ats .wcol .notes { margin-top: 8px; }
+.ats .wcol .note { font-size: 13px; color: var(--muted); border-left: 3px solid var(--line); padding: 2px 8px; }
+/* Shell (SH): skip link, More menu, phone bottom bar */
+.ats .skip { position: absolute; left: 8px; top: -48px; z-index: 50; padding: 8px 12px; background: var(--accent); color: var(--accent-ink, #fff); border-radius: 6px; }
+.ats .skip:focus { top: 8px; }
+.ats .more-wrap { position: relative; display: inline-flex; }
+.ats .more-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; display: grid; min-width: 160px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel, #fff); box-shadow: 0 6px 24px rgba(0,0,0,.15); }
+.ats .more-menu[hidden] { display: none; }
+.ats .more-menu button { text-align: left; }
+.ats .more-btn.current { font-weight: 600; }
+@media (max-width: 640px) {
+  .ats #pages { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; justify-content: space-around; padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel, #fff); border-radius: 0; }
+  .ats #pages > button, .ats #pages .more-btn { min-height: 44px; flex: 1; }
+  .ats .more-menu { top: auto; bottom: calc(100% + 8px); }
+  .ats body, .ats { padding-bottom: 64px; }
+}
+
+/* Phone list view (B1.7) */
+.ats .tree { display: grid; gap: 6px; padding: 8px 12px; margin: 0; list-style: none; }
+.ats .tree-item { margin-left: calc(var(--depth, 0) * 14px); }
+.ats .tree-item[data-depth="1"] { --depth: 1; } .ats .tree-item[data-depth="2"] { --depth: 2; } .ats .tree-item[data-depth="3"] { --depth: 3; }
+.ats .tree-item[data-depth="4"] { --depth: 4; } .ats .tree-item[data-depth="5"] { --depth: 5; } .ats .tree-item[data-depth="6"] { --depth: 6; }
+.ats .tree-btn { display: grid; grid-template-columns: 1fr auto; width: 100%; min-height: 44px; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel, #fff); color: inherit; font: inherit; }
+.ats .tree-btn .sub { grid-column: 1; font-size: 12px; }
+.ats .tree-btn .badge-dot { grid-column: 2; grid-row: 1 / span 2; align-self: center; width: 22px; height: 22px; border-radius: 50%; background: var(--warn, #9a6700); color: var(--bg, #fff); text-align: center; font-weight: 700; line-height: 22px; }
+.ats .tree-btn.selected { border-color: var(--accent); }
+.ats .tree-item.off .tree-btn { opacity: .6; border-style: dashed; }
+.ats .tree-item.draft .tree-btn { border-style: dashed; }
+.ats .phone-note { padding: 8px 12px 0; }
+@media (max-width: 640px) { .ats .palette { display: none; } }
+@media (max-width: 640px) { .ats .zoom, .ats .mode-hint { display: none; } }
+.ats ul.tree.plain { padding: 8px 16px; }
+
+/* Tooltips and first-time hints (ALL-4) */
+.ats-tip { position: absolute; z-index: 1000; padding: 6px 10px; border-radius: 6px; background: var(--ink); color: var(--panel); font-size: 13px; line-height: 1.4; pointer-events: none; box-shadow: 0 2px 8px rgb(0 0 0 / .2); }
+.ats-tip[hidden] { display: none; }
+.ats button.info { border: 0; background: none; padding: 0 2px; min-width: 24px; min-height: 24px; color: var(--muted); font: inherit; font-size: 13px; cursor: help; }
+.ats button.info:focus-visible { outline: 2px solid var(--accent); border-radius: 50%; }
+.ats [data-tip]:not(button):not(g):not(text) { text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--muted); }
+.ats .first-hint { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; margin: 0; padding: 6px 14px; border-bottom: 1px solid var(--line); background: var(--drop); color: var(--ink); }
+.ats .first-hint .link { color: var(--ink); text-decoration: underline; }
+.ats[data-hints-off~="team"] [data-hint-once="team"], .ats[data-hints-off~="wiring.view"] [data-hint-once="wiring.view"], .ats[data-hints-off~="role.catalog"] [data-hint-once="role.catalog"] { display: none; }
+@media (max-width: 640px) { .ats [data-hint-once="team"] { display: none; } }
+@media (pointer: coarse) { .ats button.info { min-width: 44px; min-height: 44px; } }
+
+/* The screen's h1 is its page name, for screen readers (ALL-3); the gallery shows its own. Phones: 44 px targets. */
+.ats[data-page="gallery"] #page-title { display: none; }
+@media (max-width: 640px) { .ats .skip, .ats #views button, .ats #live { min-height: 44px; } }
+.ats .skip:focus { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* Phones: whatever scrolls into view lands above the bottom bar, not under it. */
+@media (max-width: 640px) { html:has(.ats) { scroll-padding-bottom: 80px; } .ats main.layout { padding-bottom: 72px; } }
 
 /* The rollout page (CPO copy "Rollout view after a publish", D61 to D63): one line per role, read-only. */
 .ats:not([data-page="rollout"]) .rollout-only, .ats[data-page="rollout"] :is(main.layout, #agent-editor, .readonly-note, .team-only) { display: none !important; }
@@ -591,3 +698,11 @@
 @media (max-width: 640px) { .ats .ro-row { grid-template-columns: 12px 1fr; } .ats .ro-state { grid-column: 2; } }
 .ats .ro-head { text-transform: none; letter-spacing: 0; font-size: 18px; color: var(--ink); }
 .ats .ro-plain .ro-dot { background: var(--line); }
+
+/* B1.1-10: the restored draft's note */
+.ats .restored { margin: 0; padding: 6px 14px; border-bottom: 1px solid var(--line); background: var(--drop); color: var(--ink); }
+.ats .restored[hidden] { display: none; }
+
+/* The AGENTS.md switch: the whole row is the target (ALL-1). */
+.ats label.row-target { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.ats label.row-target input { width: 20px; height: 20px; flex: none; }

@@ -77,7 +77,7 @@ export const TOOLS = {
     check: (a, ctx) => (!ctx.frontDoor ? `No role asks the owner directly: send a BLOCKED to ${ctx.frontDoorRole ?? 'the front door'} with your recommendation` : !a.options.some((o) => o.id === a.recommended) ? 'recommended must be one of the option ids' : new Set(a.options.map((o) => o.id)).size !== a.options.length ? 'option ids must be different' : null),
   },
   request_approval: {
-    description: 'Ask the owner to approve a step the protocols keep for them (data that cannot be undone, a secret, money, a message to people outside the team, accepting a change, a production deploy). Name the exact call that will run. Waits until a person decides.',
+    description: 'Ask the owner to approve a step the protocols keep for them (data that cannot be undone, a secret, money, a message to people outside the team, accepting a change, a production deploy). Put the exact call in `call` as JSON, {"tool": "<tool name>", "input": {...}} or a list of those: the person signs exactly that, and only an identical call runs, once. A `call` in words approves a decision, not a call; the step itself is still held and asked for when you make it. Waits until a person decides.',
     shape: { action: need(80), call: need(), why: need(), risk: z.enum(['low', 'medium', 'high']).optional(), links: links.optional() },
   },
   meeting_start: {
