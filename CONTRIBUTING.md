@@ -12,7 +12,7 @@ Thanks for helping. The kit is small on purpose: briefs, protocols, a few script
 
 ## This repository has its own team
 
-Agent Team Kit is built by a team defined with Agent Team Kit. `team/` is the kit's source, the role library every team gets. `.agent-team/` is this repository's own project layer and `docs/team/` is the team generated from it, pinned to the last kit release. Fix a brief for everyone in `team/`; change this repository's team in `.agent-team/`. [docs/product/team.md](docs/product/team.md) explains how that team works.
+OrgCraft is built by a team defined with OrgCraft. `team/` is the kit's source, the role library every team gets. `.agent-team/` is this repository's own project layer and `docs/team/` is the team generated from it, pinned to the last kit release. Fix a brief for everyone in `team/`; change this repository's team in `.agent-team/`. [docs/product/team.md](docs/product/team.md) explains how that team works.
 
 ## Rules for briefs
 

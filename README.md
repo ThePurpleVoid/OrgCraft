@@ -1,4 +1,6 @@
-# Agent Team Kit
+# OrgCraft
+
+*Formerly Agent Team Kit. [What the rename changed, and what it kept](docs/renamed-to-orgcraft.md).*
 
 **Run a whole company of Claude Code agents on your repository.** One door for you, an executive per lane, and 48 role briefs (CTO, architect, devs, QA, reviewers, release manager, designers, marketing, sales, support, finance, legal and more) that hand work to each other in fixed shapes, sign off with evidence, and report to a board you can watch.
 
@@ -157,7 +159,7 @@ tests/                          tests for the CLI, scripts and tools, smoke scen
 
 `node scripts/agent-team/roster.mjs --check` validates every brief (tiers, reporting lines, loops, direct reports) and `--tree` prints the org.
 
-## Build the team visually: Agent Team Studio
+## Build the team visually: OrgCraft Studio
 
 ```sh
 npx --yes github:ThePurpleVoid/OrgCraft#v0.21.0 studio --open   # opens http://localhost:4848/?t=<launch token>
@@ -165,11 +167,11 @@ npx --yes github:ThePurpleVoid/OrgCraft#v0.21.0 studio --open   # opens http://l
 
 Switch roles on and off from the library, drag a card onto another to change who it reports to, and set each role's model tier, status and duties in the inspector. **Flow** shows who hands work to whom. In **Systems**, add your database, hosting or any MCP server and drag it onto the roles that may use it. **Owned areas** and **Checks** are suggested from your repository's folders and build files. The kit's rules run on every change. **Publish** shows every file that would change, then commits the team and its generated files on a new branch. It can also push that branch and open a pull request for review: with the GitHub CLI (`gh`) signed in on your machine, the Studio opens the pull request itself; without it, you get the branch and a link to open one. The pull request's body is the publish's change-safety plan. The Studio uses only your machine's own git and gh sign-in, and never force-pushes.
 
-![Agent Team Studio: the role library, the org chart and the inspector](docs/images/studio.png)
+![OrgCraft Studio: the role library, the org chart and the inspector](docs/images/studio.png)
 
 The Studio, like the dashboard, answers only on `localhost`, `127.0.0.1`, `[::1]` and the address it is bound to. That way a web page on another domain cannot reach it by pointing a DNS name at your machine. To open it under another name, list that name in `STUDIO_ALLOWED_HOSTS` (comma-separated).
 
-**In your own app.** The same Studio mounts in a site you already run, behind your own admin sign-in, with `createStudioHandler` from `agent-team-kit/studio/handler` ([docs/studio-in-your-app.md](docs/studio-in-your-app.md)). It publishes through your own GitHub App, or, with `controlPlane: { url, team, hostToken, dpopKey }`, through the team's deployment: your server signs in to it once, and the deployment reads the repository and opens the pull request for your signed-in user. A change to the commands the team runs is never published through your site; the page links the deployment's own Studio for that.
+**In your own app.** The same Studio mounts in a site you already run, behind your own admin sign-in, with `createStudioHandler` from `orgcraft/studio/handler` ([docs/studio-in-your-app.md](docs/studio-in-your-app.md)). It publishes through your own GitHub App, or, with `controlPlane: { url, team, hostToken, dpopKey }`, through the team's deployment: your server signs in to it once, and the deployment reads the repository and opens the pull request for your signed-in user. A change to the commands the team runs is never published through your site; the page links the deployment's own Studio for that.
 
 **Chat** talks to your team's chief of staff through the control plane (set `AGENT_TEAM_SERVER`, `AGENT_TEAM_SERVER_TOKEN` and `AGENT_TEAM_SERVER_TEAM`). With no run going, **Start a run…** starts one on the team as last published, once you set a daily cap. The Studio signs you in with the link it prints. To open it from a phone, start it with `--host 0.0.0.0` and open the network link it prints. That link is plain HTTP, so use it on trusted networks only.
 
@@ -238,7 +240,7 @@ The briefs work on their own and get better with these: [superpowers](https://gi
 
 ## Where this is going
 
-We are turning the kit into **Agent Team Studio**: you lay out your team on a canvas, connect your repositories, backends, databases and frontends, publish to your repository, then talk to your chief of staff and let the team run. The plan is in [docs/product/](docs/product/). This repository is built by its own kit-defined team ([how](docs/product/team.md)).
+We are turning the kit into **OrgCraft Studio**: you lay out your team on a canvas, connect your repositories, backends, databases and frontends, publish to your repository, then talk to your chief of staff and let the team run. The plan is in [docs/product/](docs/product/). This repository is built by its own kit-defined team ([how](docs/product/team.md)).
 
 ## Contributing
 

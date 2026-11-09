@@ -107,7 +107,7 @@ test('both backends publish the same tree: edit a brief, switch a role off, add 
     const out = await both(change);
     assert.ok(out.g.body.commit, what);
     assert.equal(out.github, out.local, `${what}\n${out.diff}`);
-    assert.match(execFileSync('git', ['--git-dir', out.r.bare, 'log', '-1', '--format=%B', out.g.body.commit], { encoding: 'utf8' }).trimEnd(), /\n\nPublished-by: Ada \(u_a\) via Agent Team Studio\n?$/, 'the trailer goes last');
+    assert.match(execFileSync('git', ['--git-dir', out.r.bare, 'log', '-1', '--format=%B', out.g.body.commit], { encoding: 'utf8' }).trimEnd(), /\n\nPublished-by: Ada \(u_a\) via OrgCraft Studio\n?$/, 'the trailer goes last');
   }
 });
 
@@ -277,9 +277,9 @@ test('S3: one customer\'s warm blob cache never answers another\'s read, and a t
 });
 
 test('S5: a newline in the name forges no trailer, user trailers are dropped, and @ pings nobody', () => {
-  const msg = core.commitMessage('Add a role\n\nCo-authored-by: Mallory <m@x>\nPublished-by: Eve (1) via Agent Team Studio', { id: 'u_1', name: 'Dana\nPublished-by: Eve (2) via Agent Team Studio' });
+  const msg = core.commitMessage('Add a role\n\nCo-authored-by: Mallory <m@x>\nPublished-by: Eve (1) via OrgCraft Studio', { id: 'u_1', name: 'Dana\nPublished-by: Eve (2) via OrgCraft Studio' });
   assert.equal(msg.match(/^Published-by:/gm).length, 1);
-  assert.match(msg, /\n\nPublished-by: Dana Published-by: Eve \(2\) via Agent Team Studio \(u_1\) via Agent Team Studio$/);
+  assert.match(msg, /\n\nPublished-by: Dana Published-by: Eve \(2\) via OrgCraft Studio \(u_1\) via OrgCraft Studio$/);
   assert.doesNotMatch(msg, /Co-authored-by/);
   const pr = core.pullRequestBody('Hi @team\n\nPing @everyone please');
   assert.doesNotMatch(pr.title + pr.body, /@/);

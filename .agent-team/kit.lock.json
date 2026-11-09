@@ -52,10 +52,10 @@
     "web-dev"
   ],
   "files": {
-    "docs/team/README.md": "7d8dac9b3a2aa3ecbe0cf85cb5a7aba6b8ea9b2b9c8e3946deaaeb175bb42e98",
+    "docs/team/README.md": "a8b428516e694b1316c1b3c34348b4a1654b235108c961fdcc446e8f1270d8ec",
     "docs/team/ownership.md": "20068c5e1021acdfcba1761c19b1aecc01a655a87fe020888503765ca13d177b",
-    "docs/team/project-instructions.md": "6ce10a64bae20a921184c0c2a8cc868f1c658849c1fcb390005bc807d87c80c7",
-    "docs/team/protocols.md": "eb90547bc8ccf3e55de4d5a9fdfb4327678bbb44ffe49b2a224d5af2a3de8171",
+    "docs/team/project-instructions.md": "548eff88330720b52100ecaf299d1327390eac224857e20e0839d333c30014e2",
+    "docs/team/protocols.md": "1e25652726c3daf209ea0b697de89f42873425aabf2443bb8a0622a936203440",
     "docs/team/role-template.md": "e2d78d8c1d7dd97b5d7455bf1e3039f2820f725c752e64a82b6d5e5997448765",
     "docs/team/roles/ai-engineer.md": "4e494b55377256fad0bb4700878db18fd5605d126ac3262721e71d20f6dcbb86",
     "docs/team/roles/architect.md": "e194970fac47ee99c103d1716c8add455247bb400014f16632de137499fcb507",

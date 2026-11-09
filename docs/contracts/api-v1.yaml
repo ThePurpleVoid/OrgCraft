@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Agent Team Studio API
+  title: OrgCraft Studio API
   version: "1"
   summary: The public API. The Studio, the CLI, the kit's hooks and integrations use only this.
   description: |

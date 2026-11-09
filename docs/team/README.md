@@ -1,8 +1,8 @@
-# The Agent Team Kit agent team
+# The OrgCraft agent team
 
-Agent Team Kit is built by a team of Claude Code threads, one per role. The owner talks to one door, the chief of staff, who forwards the owner's words verbatim to the executive whose lane owns the request; executives route inside their lane.
+OrgCraft is built by a team of Claude Code threads, one per role. The owner talks to one door, the chief of staff, who forwards the owner's words verbatim to the executive whose lane owns the request; executives route inside their lane.
 
-The team comes from [Agent Team Kit](https://github.com/PurpleGiragge/Agent-Team-Kit), pinned in `.agent-team/team.json`. This repository holds only what is specific to Agent Team Kit; everything else is generated.
+The team comes from [Agent Team Kit](https://github.com/PurpleGiragge/Agent-Team-Kit), pinned in `.agent-team/team.json`. This repository holds only what is specific to OrgCraft; everything else is generated.
 
 ## What is generated and what is ours
 

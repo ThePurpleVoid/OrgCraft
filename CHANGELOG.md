@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Renamed to OrgCraft** ([docs/renamed-to-orgcraft.md](docs/renamed-to-orgcraft.md)). The package is `orgcraft`, the command `orgcraft` (with `agent-team` kept as an alias), and the README, CLI messages, the Studio's pages and email, the publish trailer (`via OrgCraft Studio`) and the generated-file marker all use the new name. `.agent-team/`, `docs/team/`, `scripts/agent-team/`, the `AGENT_TEAM_*` settings, the `agent-team:start` markers and the `agent-team/…@1` schema ids keep their names on purpose. Readers accept files generated under the old name. **What existing teams see on sync:** the kit's name in generated headers, the generated README and the protocols. Nothing else.
+
 - **The kit moved to `github.com/ThePurpleVoid/OrgCraft`.** The old `PurpleGiragge/Agent-Team-Kit` account is gone. Install lines, docs, package metadata, schema `$id`s and the default pin `init` writes now say `github:ThePurpleVoid/OrgCraft#vX.Y.Z`; the release tags are the same commits. **What existing teams see on sync:** after changing their pin to `github:ThePurpleVoid/OrgCraft#v…`, the kit's links in the generated README and dashboard script. Nothing else changes: `.agent-team/` and the `AGENT_TEAM_*` names stay. The product rename to OrgCraft comes in a separate change.
 
 - **Runner resilience, before the real M3 exit test** (#28). This is an offline pass with the fake model. `tests/e2e/m3-resilience.e2e.mjs` kills the runner mid-session, takes the control plane away, cuts the runner's link, pauses at 100% of the daily budget and expires an approval while the runner is down. It runs in process and, in CI, with the runner image. What it found and fixed:

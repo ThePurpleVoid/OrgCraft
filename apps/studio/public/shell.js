@@ -3,7 +3,7 @@
 // No inline styles or scripts (embed spec 4, strict CSP).
 export const SHELL = `
 <header class="bar">
-  <div class="brand"><strong>Agent Team Studio</strong> <span id="project" class="muted"></span></div>
+  <div class="brand"><strong>OrgCraft Studio</strong> <span id="project" class="muted"></span></div>
   <nav id="pages" class="views pages" aria-label="Pages">
     <button type="button" data-page="team" aria-pressed="true">Team</button>
     <button type="button" data-page="meetings" aria-pressed="false">Meetings</button>

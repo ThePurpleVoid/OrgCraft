@@ -46,7 +46,7 @@ Streams pass through the Vercel rewrite. The deploy's smoke test proves they arr
 Thirteen steps, about 30 minutes. Values go only where a step says. Never into chat, issues, files or memory.
 
 **Supabase**
-1. Create a project at supabase.com: name `agent-team-kit`, region **East US (North Virginia)**, plan Free (or Pro, for backups). Keep the generated `postgres` password in your password manager. Nothing here uses it after step 2.
+1. Create a project at supabase.com: name `orgcraft`, region **East US (North Virginia)**, plan Free (or Pro, for backups). Keep the generated `postgres` password in your password manager. Nothing here uses it after step 2.
 2. Open SQL Editor → New query, paste [`deploy/supabase/bootstrap.sql`](../../deploy/supabase/bootstrap.sql), and replace `REPLACE_WITH_A_GENERATED_PASSWORD` with a new password from your password manager (letters and digits, 32 or more). Run it, then delete the query from the editor's snippet list. The script turns statement logging off first, so the password does not reach the Postgres logs.
 3. Click **Connect** → Session pooler and copy the URI. Change the user to `agent_team_owner.<project-ref>`, use the password from step 2, and append `?sslmode=verify-full&sslrootcert=deploy/supabase/prod-ca-2021.crt`. This is the value for **`DATABASE_URL`** (step 7).
 

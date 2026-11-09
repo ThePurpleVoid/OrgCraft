@@ -1,4 +1,4 @@
-# Agent Team Studio: delivery plan
+# OrgCraft Studio: delivery plan
 
 Owner: CTO. Status: draft 2, 2026-11-06 (online first, [ADR 0005](../adr/0005-online-first-built-to-last.md)). Each phase ends with a demo checkpoint against the [customer demo](prd.md#4-the-customer-demo-the-end-to-end-acceptance-test) and names the roles that carry it (see [how the team builds it](team.md)). Phases overlap where their owners differ.
 
