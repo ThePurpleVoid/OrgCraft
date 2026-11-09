@@ -377,6 +377,7 @@ test('L25: set quiet hours and a digest, then read the delivery log, mine and ev
   assert.equal(await log.getByRole('button', { name: 'Everyone' }).getAttribute('aria-pressed'), 'true');
   const kim = log.locator('tr', { hasText: 'per_kim' });
   await kim.getByText("Couldn't send").waitFor();
+  await kim.getByText("Slack didn't accept it.").waitFor();
   assert.doesNotMatch(await kim.textContent(), /U2|channel_not_found/, "someone else's address, and a provider's own error, are never shown");
   // A phone: the page never scrolls sideways (the log scrolls inside itself), and the toggles are 44 px.
   await page.setViewportSize({ width: 360, height: 780 });

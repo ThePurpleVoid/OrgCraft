@@ -85,10 +85,10 @@ export function logHtml(st) {
   const label = (id) => kindLabel(id, st.kinds.find((k) => k.id === id)?.label ?? id);
   const word = (key, fb) => (t(key) === key ? fb : t(key));
   // Why is always a plain sentence (CPO): held and emailed have one; a provider's own error is never shown.
-  const why = (s) => word(`notify.status.${s}.why`, '');
+  const why = (s, channel) => word(`notify.status.${s}.why`, '').replace('{channel}', t(`notify.channel.${channel}`));
   const who = lg.all;
   const head = [t('notify.log.when'), t('notify.log.what'), t('notify.log.where'), ...(who ? [t('notify.log.who')] : []), t('notify.log.status'), t('notify.log.why')];
-  const rows = (lg.items ?? []).map((r) => `<tr class="st-${esc(r.status)}"><td>${esc(when(r.at))}</td><td>${esc(label(r.kind))}</td><td>${esc(t(`notify.channel.${r.channel}`))}${r.to ? ` <span class="muted">${esc(r.to)}</span>` : ''}</td>${who ? `<td>${esc(r.principal ?? '')}</td>` : ''}<td${why(r.status) ? ` title="${esc(why(r.status))}"` : ''}>${esc(word(`notify.status.${r.status}`, r.status))}</td><td>${esc(why(r.status))}</td></tr>`).join('');
+  const rows = (lg.items ?? []).map((r) => `<tr class="st-${esc(r.status)}"><td>${esc(when(r.at))}</td><td>${esc(label(r.kind))}</td><td>${esc(t(`notify.channel.${r.channel}`))}${r.to ? ` <span class="muted">${esc(r.to)}</span>` : ''}</td>${who ? `<td>${esc(r.principal ?? '')}</td>` : ''}<td${why(r.status, r.channel) ? ` title="${esc(why(r.status, r.channel))}"` : ''}>${esc(word(`notify.status.${r.status}`, r.status))}</td><td>${esc(why(r.status, r.channel))}</td></tr>`).join('');
   return `<section class="n-section" id="log" aria-labelledby="log-title">
     <h2 id="log-title">${esc(t('notify.log.heading'))}</h2>
     <p class="muted">${esc(t('notify.log.explainer'))}</p>
