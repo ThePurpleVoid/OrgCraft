@@ -237,7 +237,13 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   if (!Buffer.isBuffer(key) || key.length !== 32) throw new Error('createHandler needs the 32-byte master key (vault.mjs masterKey)');
   const idemKey = createHmac('sha256', key).update('agent-team/idempotency/v1').digest();
   const rate = new Map();
-  const appended = (team, stored) => { if (stored.length) { live.emit(team, stored); sinks?.wake(); } };
+  const appended = (team, stored) => {
+    if (!stored.length) return;
+    live.emit(team, stored);
+    sinks?.wake();
+    // L40b: a publish applies the team's pending systems when they were bound to that commit.
+    for (const x of stored) if (x.event?.type === 'team.published') vault.published(x.event.tenant, team).catch((e) => console.error('pending systems', e?.message ?? e));
+  };
 
   /** Who is calling: the admin token, or (hosted) a signed-in person's cookie. `tenant` is null for a person who is
    *  not a member of this server's workspace: they can read /v1/me and nothing else. */
@@ -709,6 +715,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     // Hooks and triggers (N2, L21).
     // L20: the team's systems (resources.json), set only by an admin with a step-up; runs freeze them.
     if (a === 'teams' && team && b === 'systems' && !c && m === 'GET') return send(res, 200, await vault.getSystems(t, team));
+    if (a === 'teams' && team && b === 'systems' && c === 'pending' && m === 'DELETE') return send(res, 200, await vault.dropPending(t, team, me, url.searchParams.get('sha')));
     if (a === 'teams' && team && b === 'systems' && !c && m === 'PUT') return send(res, 200, await vault.putSystems(t, team, me, await readJson(req, 256 * 1024), stepUp, { ifMatch: req.headers['if-match'] ?? null }));
     if (a === 'teams' && team && b === 'hooks') {
       const d = parts[5];

@@ -15,7 +15,7 @@
 // The frozen systems come from team_systems, which only an admin sets (with a step-up); never from a run request.
 // Every release is an audit row, without the value.
 import { randomBytes } from 'node:crypto';
-import { Problem, getTeam } from './store.mjs';
+import { Problem, getTeam, publishedId } from './store.mjs';
 import { seal, unseal } from './vault.mjs';
 
 const NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -34,6 +34,9 @@ const sealName = (id) => `credential/${id}`;
 export const credentialScope = (name) => `credential:${name}`;
 /** The step-up scope for changing a team's systems: what its sessions can reach, and with which secrets. */
 export const systemsScope = (team) => `systems:${team}`;
+const SHA = /^[0-9a-f]{40}$/;
+/** How long a pending systems set waits for its pull request to merge (L40b). */
+const PENDING_DAYS = 30;
 const GRANT = /^[a-z0-9][a-z0-9-]{0,62}\/[a-z0-9][a-z0-9_-]{0,59}$/;
 
 /**
@@ -157,6 +160,56 @@ export const PROBES = {
     return res.status === 200 ? { ok: true, detail: 'the key works' } : { ok: false, detail: `HTTP ${res.status}` };
   },
 };
+
+/** What a systems change does, for its audit row and the answer: resources and bindings in and out, and commands. */
+function systemsDiff(prev, next) {
+  const was = new Map((prev?.resources ?? []).map((r) => [r.id, JSON.stringify(r)]));
+  const now = new Map(next.resources.map((r) => [r.id, JSON.stringify(r)]));
+  const key = (b) => `${b.role} → ${b.resource} (${b.permission})`;
+  const wasB = new Set((prev?.bindings ?? []).map(key));
+  const nowB = new Set(next.bindings.map(key));
+  return {
+    added: [...now.keys()].filter((k) => !was.has(k)), removed: [...was.keys()].filter((k) => !now.has(k)),
+    changed: [...now.keys()].filter((k) => was.has(k) && was.get(k) !== now.get(k)),
+    bound: [...nowB].filter((k) => !wasB.has(k)), unbound: [...wasB].filter((k) => !nowB.has(k)),
+    // Every command that will be started with secrets: what an admin agreed to run with them.
+    commands: next.resources.filter((r) => r.tools?.command && r.secrets.length).map((r) => ({ id: r.id, command: r.tools.command, args: r.tools.args, secrets: r.secrets })),
+  };
+}
+
+/** Writes a team's systems inside a transaction (prev read FOR UPDATE by the caller), with the audit row. */
+async function writeSystems(ctx, team, prev, next, who, extra = {}) {
+  const diff = systemsDiff(prev, next);
+  const version = (prev?.version ?? 0) + 1;
+  await ctx.q(`insert into team_systems(tenant, team, resources, bindings, version, updated_by, updated_at) values ($1, $2, $3, $4, $5, $6, $7)
+               on conflict (tenant, team) do update set resources = excluded.resources, bindings = excluded.bindings, version = excluded.version, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+    [ctx.tenant, team, JSON.stringify(next.resources), JSON.stringify(next.bindings), version, who, ctx.now]);
+  await ctx.audit({ team, actorKind: 'person', actorId: who, action: 'team.systems', target: team, decision: 'allowed', detail: { version, ...extra, ...diff } });
+  return { version, ...diff };
+}
+
+/**
+ * L40b: makes a team's pending systems its systems once team.published for exactly the pending commit is in the log,
+ * and only when the base it was confirmed against has not moved (else it is dropped, audited, never applied). An
+ * expired one is dropped. Runs inside a transaction; called when a publish is stored, and again at run start.
+ */
+export async function activatePending(ctx, team) {
+  const [p] = await ctx.q('select sha, pr, resources, bindings, expect, created_by, expires_at from team_systems_pending where team = $1 for update', [team]);
+  if (!p) return null;
+  const drop = async (why) => {
+    await ctx.q('delete from team_systems_pending where team = $1', [team]);
+    await ctx.audit({ team, actorKind: 'system', actorId: 'control-plane', action: 'team.systems.pending', target: team, decision: 'refused', rule: why, detail: { sha: p.sha, pr: p.pr } });
+    return null;
+  };
+  if (new Date(p.expires_at).getTime() <= ctx.now.getTime()) return drop('expired');
+  const [pub] = await ctx.q('select 1 from events where team = $1 and id = $2', [team, publishedId(p.sha)]);
+  if (!pub) return null;
+  const [prev] = await ctx.q('select resources, bindings, version from team_systems where team = $1 for update', [team]);
+  if ((prev?.version ?? 0) !== p.expect) return drop('base-moved');
+  await ctx.q('delete from team_systems_pending where team = $1', [team]);
+  // Recorded as the admin who confirmed it, with the commit it was bound to.
+  return writeSystems(ctx, team, prev, { resources: p.resources, bindings: p.bindings }, p.created_by, { sha: p.sha, pr: p.pr, via: 'published' });
+}
 
 /**
  * Test connection through the gateway (L20g): the probe is an effect keyed test:<credential>:<minute>, so a double
@@ -289,8 +342,12 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
 
   async function getSystems(tenant, team) {
     await getTeam(db, tenant, team);
-    const [row] = await db.tenant(tenant, ({ q }) => q('select resources, bindings, version, updated_by, updated_at from team_systems where team = $1', [team]));
-    return row ? { resources: row.resources, bindings: row.bindings, version: row.version, updatedBy: row.updated_by, updatedAt: new Date(row.updated_at).toISOString() } : { resources: [], bindings: [], version: 0 };
+    const [row, p] = await db.tenant(tenant, async ({ q }) => [
+      (await q('select resources, bindings, version, updated_by, updated_at from team_systems where team = $1', [team]))[0],
+      (await q('select sha, pr, resources, bindings, expect, created_by, created_at, expires_at from team_systems_pending where team = $1', [team]))[0],
+    ]);
+    const pending = p ? { sha: p.sha, pr: p.pr, resources: p.resources, bindings: p.bindings, expect: p.expect, createdBy: p.created_by, createdAt: new Date(p.created_at).toISOString(), expiresAt: new Date(p.expires_at).toISOString() } : null;
+    return row ? { resources: row.resources, bindings: row.bindings, version: row.version, updatedBy: row.updated_by, updatedAt: new Date(row.updated_at).toISOString(), pending } : { resources: [], bindings: [], version: 0, pending };
   }
 
   /**
@@ -301,6 +358,11 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
   async function putSystems(tenant, team, who, body, stepUp, { ifMatch = null } = {}) {
     await getTeam(db, tenant, team);
     const next = checkSystems(body ?? {}) ?? { resources: [], bindings: [] };
+    // L40b: in PR mode the change waits for its pull request: `pending: { sha, pr? }` binds it to the commit, and it
+    // needs the version it was confirmed against.
+    const pend = body?.pending ?? null;
+    if (pend !== null && (typeof pend !== 'object' || !SHA.test(String(pend.sha ?? '')) || (pend.pr !== undefined && pend.pr !== null && !(Number.isInteger(pend.pr) && pend.pr > 0)))) throw new Problem(400, 'pending is { sha, pr? }: the full commit SHA (40 lowercase hex) the change is published at, and its pull request');
+    if (pend && (body.expect === undefined || body.expect === null) && !ifMatch) throw new Problem(400, 'a pending change names the version it was confirmed against: expect');
     // The version the person confirmed the change against (L40, security): `expect` in the body or If-Match. When the
     // stored set moved since, 409 with the current one, so a concurrent PUT can't change the base under a confirmation.
     const tag = ifMatch ? String(ifMatch).replace(/^W\//, '').replace(/"/g, '') : null;
@@ -316,24 +378,23 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     const { result } = await m3.tx(tenant, async (ctx) => {
       const [prev] = await ctx.q('select resources, bindings, version from team_systems where team = $1 for update', [team]);
       if (expect !== null && (prev?.version ?? 0) !== expect) throw new Problem(409, 'the team\'s systems changed since you saw them; look again', { type: 'systems-changed' });
-      const was = new Map((prev?.resources ?? []).map((r) => [r.id, JSON.stringify(r)]));
-      const now = new Map(next.resources.map((r) => [r.id, JSON.stringify(r)]));
-      const key = (b) => `${b.role} → ${b.resource} (${b.permission})`;
-      const wasB = new Set((prev?.bindings ?? []).map(key));
-      const nowB = new Set(next.bindings.map(key));
-      const diff = {
-        added: [...now.keys()].filter((k) => !was.has(k)), removed: [...was.keys()].filter((k) => !now.has(k)),
-        changed: [...now.keys()].filter((k) => was.has(k) && was.get(k) !== now.get(k)),
-        bound: [...nowB].filter((k) => !wasB.has(k)), unbound: [...wasB].filter((k) => !nowB.has(k)),
-        // Every command that will be started with secrets: what an admin agreed to run with them.
-        commands: next.resources.filter((r) => r.tools?.command && r.secrets.length).map((r) => ({ id: r.id, command: r.tools.command, args: r.tools.args, secrets: r.secrets })),
-      };
-      const version = (prev?.version ?? 0) + 1;
-      await ctx.q(`insert into team_systems(tenant, team, resources, bindings, version, updated_by, updated_at) values ($1, $2, $3, $4, $5, $6, $7)
-                   on conflict (tenant, team) do update set resources = excluded.resources, bindings = excluded.bindings, version = excluded.version, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
-        [tenant, team, JSON.stringify(next.resources), JSON.stringify(next.bindings), version, who, ctx.now]);
-      await ctx.audit({ team, actorKind: 'person', actorId: who, action: 'team.systems', target: team, decision: 'allowed', detail: { version, ...diff } });
-      return { version, ...diff };
+      if (!pend) {
+        // A direct change drops any pending one: it was confirmed against a base that is gone.
+        const gone = await ctx.q('delete from team_systems_pending where team = $1 returning sha', [team]);
+        return writeSystems(ctx, team, prev, next, who, gone.length ? { droppedPending: gone[0].sha } : {});
+      }
+      // A newer pending set replaces the older one, which is never applied.
+      const [old] = await ctx.q('select sha from team_systems_pending where team = $1 for update', [team]);
+      const sha = String(pend.sha);
+      await ctx.q(`insert into team_systems_pending(tenant, team, sha, pr, resources, bindings, expect, created_by, created_at, expires_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                   on conflict (tenant, team) do update set sha = excluded.sha, pr = excluded.pr, resources = excluded.resources, bindings = excluded.bindings, expect = excluded.expect,
+                     created_by = excluded.created_by, created_at = excluded.created_at, expires_at = excluded.expires_at`,
+        [tenant, team, sha, pend.pr ?? null, JSON.stringify(next.resources), JSON.stringify(next.bindings), prev?.version ?? 0, who, ctx.now, new Date(ctx.now.getTime() + PENDING_DAYS * 86_400_000)]);
+      const diff = systemsDiff(prev, next);
+      await ctx.audit({ team, actorKind: 'person', actorId: who, action: 'team.systems.pending', target: team, decision: 'allowed', detail: { sha, pr: pend.pr ?? null, expect: prev?.version ?? 0, ...(old && old.sha !== sha ? { replaced: old.sha } : {}), ...diff } });
+      // Already published (the merge came first): it applies now.
+      const applied = await activatePending(ctx, team);
+      return applied ? { ...applied, applied: true } : { version: prev?.version ?? 0, pending: { sha, pr: pend.pr ?? null }, ...diff };
     });
     return { ...next, ...result };
   }
@@ -375,5 +436,21 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     return value ? { name, value } : null;
   }
 
-  return { list, add, test, remove, release, getSystems, putSystems };
+  /** The pull request closed without merging (or the person withdrew it): its pending systems are dropped. */
+  async function dropPending(tenant, team, who, sha = null) {
+    await getTeam(db, tenant, team);
+    const { result } = await m3.tx(tenant, async (ctx) => {
+      const gone = await ctx.q(`delete from team_systems_pending where team = $1 ${sha ? 'and sha = $2' : ''} returning sha, pr`, sha ? [team, sha] : [team]);
+      if (gone.length) await ctx.audit({ team, actorKind: 'person', actorId: who, action: 'team.systems.pending', target: team, decision: 'withdrawn', detail: { sha: gone[0].sha, pr: gone[0].pr } });
+      return { dropped: gone.length ? gone[0].sha : null };
+    });
+    return result;
+  }
+
+  /** A team.published was stored: apply the team's pending systems if they were bound to that commit. */
+  async function published(tenant, team) {
+    return (await m3.tx(tenant, (ctx) => activatePending(ctx, team))).result;
+  }
+
+  return { list, add, test, remove, release, getSystems, putSystems, dropPending, published };
 }
