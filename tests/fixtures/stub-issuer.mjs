@@ -245,7 +245,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       if (p === '/v1/me/passkeys' && req.method === 'GET') return send(200, { passkeys: mine });
       if (p === '/v1/me/passkeys/options' && req.method === 'GET') {
         return send(200, {
-          challenge: challenge('create'), rp: { id: new URL(origin).hostname, name: 'Agent Team Studio' },
+          challenge: challenge('create'), rp: { id: new URL(origin).hostname, name: 'OrgCraft Studio' },
           user: { id: b64u(who.id), name: who.login, displayName: who.name ?? who.login },
           pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], timeout: 120_000, attestation: 'none',
           excludeCredentials: mine.map((k) => ({ type: 'public-key', id: k.id })),

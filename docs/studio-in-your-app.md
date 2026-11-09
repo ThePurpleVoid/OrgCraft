@@ -32,8 +32,8 @@ Remix, Hono, Workers or plain Node.
 
 ```js
 // app/api/agent-team/studio/[...path]/route.js (Next.js App Router)
-import { createStudioHandler } from 'agent-team-kit/studio/handler';
-import { githubAppToken } from 'agent-team-kit/studio/github-app-token';
+import { createStudioHandler } from 'orgcraft/studio/handler';
+import { githubAppToken } from 'orgcraft/studio/github-app-token';
 import { currentAdmin } from '@/lib/auth'; // your own sign-in
 
 const studio = createStudioHandler({
@@ -61,7 +61,7 @@ const studio = createStudioHandler({
 export { studio as GET, studio as POST };
 ```
 
-With plain Node or Express, wrap it: `import { toNodeListener } from 'agent-team-kit/studio/handler'`, then
+With plain Node or Express, wrap it: `import { toNodeListener } from 'orgcraft/studio/handler'`, then
 `app.use('/api/agent-team/studio', toNodeListener(studio))`. It reads Express's `req.originalUrl`, so the handler
 sees the full path; with plain `node:http`, `createServer(toNodeListener(studio))`.
 
@@ -78,7 +78,7 @@ breaks, so the page can say so.
   `.gitignore`), on a new branch under `agent-team/`, from the commit the page read. If the default branch moved, the
   new branch is removed and the page is told to reload. A change to a command the team runs (gates, systems, `config.sh`, any script, anything under `scripts/agent-team/`, Claude Code's `.claude/settings*.json` hooks) needs `publish-code`, and
   the pull request lists every such command under "Commands this PR adds or changes". The commit ends with
-  `Published-by: <name> (<id>) via Agent Team Studio`.
+  `Published-by: <name> (<id>) via OrgCraft Studio`.
 - Assets: `/assets/<kit version>/<name>`, only names in the packaged manifest, cached as immutable.
 - Errors are plain sentences; unexpected ones go to `logger` with anything token-shaped removed.
 

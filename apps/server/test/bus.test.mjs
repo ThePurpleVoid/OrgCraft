@@ -223,7 +223,7 @@ test('pause checkpoints then stops live sessions; messages while paused are held
     await waitFor(async () => (await p.db.system('select checkpoint from sessions where id = $1', [s.session]))[0].checkpoint?.commit === 'c0ffee1');
     await p.call('POST', '/teams/shop/chat', { text: 'while paused' });
     await waitFor(async () => (await p.db.system("select state from deliveries order by created_at desc limit 1"))[0].state === 'held');
-    assert.equal((await p.call('POST', `/runs/${run.id}/resume`)).status, 200);
+    assert.equal((await p.call('POST', `/runs/${run.id}/resume`, undefined, await p.su(`resume:${run.id}`))).status, 200);
     const resumed = await runner.next((f) => f.op === 'session.start' && f.body.resume === true);
     assert.equal(resumed.body.session, s.session);
     assert.equal(resumed.body.checkpoint.commit, 'c0ffee1');
@@ -246,7 +246,7 @@ test('a pause with nothing said meanwhile still restarts the session on resume; 
     // First pause: the runner is slow to checkpoint (no ack yet), and the owner resumes before it answers.
     await p.call('POST', `/runs/${run.id}/pause`);
     const cp = await runner.next((f) => f.op === 'session.checkpoint');
-    await p.call('POST', `/runs/${run.id}/resume`);
+    await p.call('POST', `/runs/${run.id}/resume`, undefined, await p.su(`resume:${run.id}`));
     runner.ws.send(JSON.stringify({ op: 'ack', id: 'late', ref: cp.id, body: { commit: 'c0ffee1' } }));
     await new Promise((r) => setTimeout(r, 200));
     assert.ok(!runner.frames.some((f) => f.op === 'session.stop'), 'a resumed run keeps its session');
@@ -257,7 +257,7 @@ test('a pause with nothing said meanwhile still restarts the session on resume; 
     await p.call('POST', `/runs/${run.id}/pause`);
     await runner.next((f) => f.op === 'session.stop');
     await waitFor(async () => (await p.db.system('select state from sessions where id = $1', [s.session]))[0].state === 'stopped');
-    await p.call('POST', `/runs/${run.id}/resume`);
+    await p.call('POST', `/runs/${run.id}/resume`, undefined, await p.su(`resume:${run.id}`));
     const again = await runner.next((f) => f.op === 'session.start' && f.body.resume === true);
     assert.deepEqual([again.body.session, again.body.wake.type, again.body.checkpoint.commit], [s.session, 'run.resumed', 'c0ffee2']);
   }, { tickMs: 0 });
@@ -369,7 +369,7 @@ test('a run paused while its runner was away and resumed during the checkpoint: 
     // The checkpoint is slow: the runner holds its answer while the owner resumes.
     const back = await fakeRunner(p.base, key, { runner: runnerId, sessions: [s.session], reply: (f) => (f.op === 'session.checkpoint' ? null : {}) });
     const cp = await back.next((f) => f.op === 'session.checkpoint' && f.body.session === s.session);
-    assert.equal((await p.call('POST', `/runs/${run.id}/resume`)).status, 200);
+    assert.equal((await p.call('POST', `/runs/${run.id}/resume`, undefined, await p.su(`resume:${run.id}`))).status, 200);
     back.ws.send(JSON.stringify({ op: 'ack', id: 'late-cp', ref: cp.id, body: {} }));
     await new Promise((r) => setTimeout(r, 300));
     assert.equal(back.frames.find((f) => f.op === 'session.stop' && f.body.session === s.session && f.body.reason === 'run-paused'), undefined, 'a running run keeps its session');

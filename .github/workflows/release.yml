@@ -27,4 +27,4 @@ jobs:
             exit 0
           fi
           notes="$(awk -v v="$version" '$0 ~ "^## "v {f=1; next} f && /^## / {exit} f' CHANGELOG.md)"
-          gh release create "$tag" --target "$GITHUB_SHA" --title "Agent Team Kit $tag" --notes "${notes:-Release $tag}"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "OrgCraft $tag" --notes "${notes:-Release $tag}"
