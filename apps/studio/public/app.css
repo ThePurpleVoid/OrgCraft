@@ -707,6 +707,14 @@
 .ats label.row-target { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .ats label.row-target input { width: 20px; height: 20px; flex: none; }
 
+/* Live overrides (L18): Stop everything in More, and a banner for every live change in force until it is lifted. */
+.ats .stop-all { color: var(--error); font-weight: 600; }
+.ats .stop-all[aria-pressed="true"] { opacity: .6; }
+.ats .live-banner { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--error) 10%, var(--panel)); border-bottom: 1px solid var(--error); color: var(--ink); padding: 6px 16px; }
+.ats .live-banner .live-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0; font-size: 14px; }
+.ats .live-banner .live-text { font-weight: 600; }
+.ats .live-banner .hint { margin: 2px 0; font-size: 12.5px; }
+@media (max-width: 640px) { .ats .live-banner button, .ats #i-live-pause, .ats .stop-all { min-height: 44px; } }
 /* The Publish sheet (B5.1, L14): Widens access first, then checks, one line per change with its Undo, folded files. */
 .ats #publish-dialog { width: min(720px, calc(100vw - 32px)); }
 .ats .sheet-sec h3 { margin: 4px 0 6px; font-size: 14px; color: var(--ink); text-transform: none; letter-spacing: 0; }

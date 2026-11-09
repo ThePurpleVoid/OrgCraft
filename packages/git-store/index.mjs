@@ -25,6 +25,13 @@ const REF_DELTA = 7;
 const SHA = /^[0-9a-f]{40}$/;
 const FILE_MODES = new Set(['100644', '100755']);
 const DIR_MODE = '40000';
+/**
+ * Size caps (code review L9a sev3): one object at most 20 MB (a team's whole read set is capped at 20 MB, so no file
+ * in it is bigger), and a pack or bundle inflates to at most 100 MB in all. Checked before any buffer is allocated
+ * or inflated, and again while inflating, so a header that lies can't get past them.
+ */
+export const MAX_OBJECT = 20 * 1024 * 1024;
+export const MAX_PACK_TOTAL = 100 * 1024 * 1024;
 
 const bytes = (v) => (Buffer.isBuffer(v) ? v : v instanceof Uint8Array ? Buffer.from(v) : Buffer.from(String(v), 'utf8'));
 const frame = (type, body) => Buffer.concat([Buffer.from(`${type} ${body.length}\0`), body]);
@@ -65,6 +72,7 @@ export function memoryStore() {
 
 export async function writeObject(store, type, body) {
   const b = bytes(body);
+  if (b.length > MAX_OBJECT) fail(`an object of ${b.length} bytes is larger than ${MAX_OBJECT}`, 'too-large');
   const sha = hashObject(type, b);
   await store.put(sha, frame(type, b));
   return sha;
@@ -84,7 +92,7 @@ export async function readObject(store, sha, want) {
 
 // Trees. Names are single path segments; Git sorts entries as if a directory's name ended in "/".
 const checkName = (name) => {
-  if (typeof name !== 'string' || !name || name === '.' || name === '..' || name === '.git' || /[/\0]/.test(name)) fail(`bad tree entry name ${JSON.stringify(name)}`);
+  if (typeof name !== 'string' || !name || name === '.' || name === '..' || name.toLowerCase() === '.git' || /[/\0]/.test(name)) fail(`bad tree entry name ${JSON.stringify(name)}`);
 };
 const sortKey = (e) => Buffer.from(e.mode === DIR_MODE ? `${e.name}/` : e.name, 'utf8');
 
@@ -161,7 +169,7 @@ export function readCommit(body) {
 /** Splits and checks a repository path: no empty, ".", ".." or ".git" segments. */
 export function splitPath(path) {
   const parts = String(path).split('/');
-  if (!path || path.startsWith('/') || parts.some((p) => !p || p === '.' || p === '..' || p === '.git' || p.includes('\0'))) fail(`bad path ${JSON.stringify(path)}`);
+  if (!path || path.startsWith('/') || parts.some((p) => !p || p === '.' || p === '..' || p.toLowerCase() === '.git' || p.includes('\0'))) fail(`bad path ${JSON.stringify(path)}`);
   return parts;
 }
 
@@ -274,11 +282,12 @@ export async function writeBundle(store, refs) {
 }
 
 // Reading packs from real Git, which writes deltas.
-function applyDelta(base, delta) {
+function applyDelta(base, delta, max = MAX_OBJECT) {
   let i = 0;
   const varint = () => { let v = 0; let shift = 0; let b; do { b = delta[i++]; v += (b & 0x7f) * 2 ** shift; shift += 7; } while (b & 0x80); return v; };
   if (varint() !== base.length) fail('delta base has the wrong size', 'corrupt');
   const size = varint();
+  if (size > max) fail(`a delta result of ${size} bytes is larger than ${max}`, 'too-large');
   const out = Buffer.alloc(size);
   let o = 0;
   while (i < delta.length) {
@@ -300,7 +309,7 @@ function applyDelta(base, delta) {
 }
 
 /** Parses a version 2 pack into { objects: [{ type, body, sha }], deltas }, resolving deltas. Checks the trailing checksum. */
-export function readPack(pack) {
+export function readPack(pack, { maxObject = MAX_OBJECT, maxTotal = MAX_PACK_TOTAL } = {}) {
   if (pack.length < 32 || pack.toString('latin1', 0, 4) !== 'PACK') fail('not a pack');
   const version = pack.readUInt32BE(4);
   if (version !== 2 && version !== 3) fail(`pack version ${version} is not supported`);
@@ -311,6 +320,7 @@ export function readPack(pack) {
   const bySha = new Map();
   const pending = [];
   let deltas = 0;
+  let total = 0;
   let i = 12;
   for (let n = 0; n < count; n++) {
     const start = i;
@@ -326,7 +336,11 @@ export function readPack(pack) {
     } else if (type === REF_DELTA) { ref = { sha: pack.subarray(i, i + 20).toString('hex') }; i += 20; }
     else if (!PACK_NAME[type]) fail(`unknown pack entry type ${type}`, 'corrupt');
     if (i >= body.length) fail('truncated pack', 'corrupt');
-    const { buffer: data, engine } = inflateSync(pack.subarray(i, body.length), { info: true });
+    if (size > maxObject) fail(`a pack entry of ${size} bytes is larger than ${maxObject}`, 'too-large');
+    if ((total += size) > maxTotal) fail(`the pack holds more than ${maxTotal} bytes`, 'too-large');
+    let data, engine;
+    // Never inflate past the size the header gave: a lying header fails here, not after the memory is spent.
+    try { ({ buffer: data, engine } = inflateSync(pack.subarray(i, body.length), { info: true, maxOutputLength: Math.max(size, 1) })); } catch (e) { fail(`pack entry does not inflate to its size (${String(e?.code ?? e?.message ?? e).slice(0, 60)})`, 'corrupt'); }
     if (data.length !== size) fail('pack entry has the wrong size', 'corrupt');
     i += engine.bytesWritten;
     const entry = { start, type: PACK_NAME[type] ?? null, data, ref };
@@ -341,7 +355,9 @@ export function readPack(pack) {
       const e = pending[k];
       const base = e.ref.sha ? bySha.get(e.ref.sha) : byOffset.get(e.ref.offset);
       if (!base) continue;
-      e.type = base.type; e.body = applyDelta(base.body, e.data); e.sha = hashObject(e.type, e.body);
+      e.type = base.type; e.body = applyDelta(base.body, e.data, maxObject);
+      if ((total += e.body.length) > maxTotal) fail(`the pack holds more than ${maxTotal} bytes`, 'too-large');
+      e.sha = hashObject(e.type, e.body);
       byOffset.set(e.start, e); bySha.set(e.sha, e);
       pending.splice(k, 1); progress = true;
     }

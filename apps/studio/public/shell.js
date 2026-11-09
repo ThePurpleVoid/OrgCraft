@@ -16,7 +16,7 @@ export const SHELL = `
     <button type="button" data-page="team" aria-pressed="true" aria-current="page" data-tip="${attr(tip('team'))}">${t('nav.team')}</button>
     <button type="button" data-page="chat" aria-pressed="false">${t('nav.chat')}</button>
     <span class="more-wrap"><button type="button" id="more-btn" class="more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="more-menu">${t('nav.more')}</button>
-      <span id="more-menu" class="more-menu" hidden><button type="button" data-page="meetings" aria-pressed="false">${t('nav.meetings')}</button><button type="button" data-page="rollout" aria-pressed="false">${t('rollout.title')}</button></span></span>
+      <span id="more-menu" class="more-menu" hidden><button type="button" data-page="meetings" aria-pressed="false">${t('nav.meetings')}</button><button type="button" data-page="rollout" aria-pressed="false">${t('rollout.title')}</button><button type="button" id="stop-all" class="stop-all" aria-pressed="false" data-tip="${attr(t('stop.all.detail'))}" hidden>${t('stop.all')}</button></span></span>
   </nav>
   <div class="bar-actions team-only">
     <span id="checks" class="pill" role="status"></span>
@@ -26,6 +26,7 @@ export const SHELL = `
     <button id="publish" type="button" class="primary" data-tip="${attr(tip('publish'))}">${t('canvas.publish.none')}</button>
   </div>
 </header>
+<div id="live-banner" class="live-banner" role="status" aria-live="polite" hidden></div>
 <section id="template-bar" class="template-bar team-only" aria-label="Starting team" hidden></section>
 <main id="content" class="layout team-only" tabindex="-1">
   <aside class="palette" aria-label="Role library">
@@ -104,4 +105,15 @@ export const SHELL = `
   </form>
 </dialog>
 <dialog id="agent-dialog" aria-labelledby="agent-title"></dialog>
+<dialog id="live-stepup" aria-labelledby="live-stepup-title">
+  <form class="dialog">
+    <h2 id="live-stepup-title">${t('stepup.title')}</h2>
+    <p class="why"></p>
+    <p class="hint">${t('stepup.why')}</p>
+    <label>${t('stepup.label.interim')} <input type="password" autocomplete="current-password" aria-describedby="live-stepup-hint" required></label>
+    <p class="hint" id="live-stepup-hint">${t('stepup.label.interim.hint')}</p>
+    <p class="result error" role="status"></p>
+    <div class="dialog-actions"><button type="button" data-act="cancel">${t('stepup.cancel')}</button><button type="submit" class="primary">${t('stepup.button')}</button></div>
+  </form>
+</dialog>
 `;

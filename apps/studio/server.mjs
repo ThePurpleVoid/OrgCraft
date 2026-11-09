@@ -277,6 +277,12 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (!chat.connected) return send(res, 200, { connected: false });
         return relay(res, async () => ({ connected: true, ...(await chat.budget()) }));
       }
+      // Live overrides (L18): what is stopped or paused right now. Read from the control plane only, so a run that
+      // starts never makes the banner go away: only a lift does.
+      if (req.method === 'GET' && url.pathname === '/v1/team/live') {
+        if (!chat.connected) return send(res, 200, { connected: false, live: [] });
+        return relay(res, async () => ({ connected: true, ...(await chat.live()) }));
+      }
       if (req.method === 'GET' && url.pathname === '/v1/team/runners') {
         if (!chat.connected) return send(res, 200, { connected: false, runners: [] });
         return relay(res, async () => ({ connected: true, ...(await chat.runners()) }));
@@ -337,6 +343,19 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (url.pathname === '/v1/team/budget') {
           for (const k of ['perDay', 'perRun']) if (input[k] !== undefined && input[k] !== null && !(Number.isInteger(input[k]) && input[k] >= 0)) throw new HttpError(400, `${k} is a whole number of cents, or null`);
           return relay(res, () => chat.setBudget(input, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
+        }
+        // Live overrides: setting one never needs a step-up; lifting one spends it (the control plane asks first).
+        const key = typeof input.key === 'string' ? input.key.slice(0, 80) : undefined;
+        const reason = typeof input.reason === 'string' && input.reason.trim() ? input.reason.slice(0, 500) : undefined;
+        if (url.pathname === '/v1/team/live/stop-everything') return relay(res, () => chat.stopEverything(reason, key));
+        const member = /^\/v1\/team\/live\/members\/([^/]+)$/.exec(url.pathname);
+        if (member) {
+          if (!['paused', 'off'].includes(input.state)) throw new HttpError(400, 'state is paused or off');
+          return relay(res, () => chat.setMember(decodeURIComponent(member[1]), input.state, reason, key));
+        }
+        if (url.pathname === '/v1/team/live/lift') {
+          if (typeof input.id !== 'string' || !input.id) throw new HttpError(400, 'send the id of the live change');
+          return relay(res, () => chat.lift(input.id));
         }
         // A runner code: minted after step-up, passed to the page once, kept nowhere here.
         if (url.pathname === '/v1/team/runners/code') return relay(res, () => chat.runnerCode(input.name));

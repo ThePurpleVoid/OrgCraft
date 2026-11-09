@@ -64,6 +64,23 @@ export function pgRefs(db, tenant, team) {
       const [row] = await db.tenant(tenant, ({ q }) => q('select * from change_requests where team = $1 and number = $2', [team, number]));
       return change(row) ?? null;
     },
+    /**
+     * Accepts change `number` in one transaction (code review L9b): main moves from `from` to `to` by compare-and-swap,
+     * and the change, still open, becomes accepted. 'stale' when main moved, 'state' when the change is not open; then
+     * nothing changed.
+     */
+    async acceptChange(number, { from, to, by, at }) {
+      return db.tenant(tenant, async ({ q }) => {
+        const [c] = await q("select state from change_requests where team = $1 and number = $2 for update", [team, number]);
+        if (!c || c.state !== 'open') return { ok: false, reason: 'state' };
+        const moved = from === null
+          ? (await q('insert into managed_refs(tenant, team, name, sha) values ($1, $2, $3, $4) on conflict do nothing returning version', [tenant, team, 'main', to])).length === 1
+          : (await q("update managed_refs set sha = $3, version = version + 1, updated_at = now() where team = $1 and name = 'main' and sha = $2 returning version", [team, from, to])).length === 1;
+        if (!moved) return { ok: false, reason: 'stale' };
+        const [row] = await q("update change_requests set state = 'accepted', accepted_by = $3, accepted_sha = $4, closed_at = $5 where team = $1 and number = $2 returning *", [team, number, person(by), to, at]);
+        return { ok: true, row: change(row) };
+      });
+    },
     async updateChange(number, patch, expectState) {
       const cols = { state: 'state', acceptedBy: 'accepted_by', acceptedSha: 'accepted_sha', closedAt: 'closed_at', checks: 'checks', capability: 'capability_diff' };
       const sets = [];
