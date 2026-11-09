@@ -159,3 +159,10 @@ test('a team without members gets no new warnings or errors from 0.22', () => {
   const plain = validate(spec, kit).map((i) => i.message);
   assert.ok(!plain.some((m) => /teammate|hands to|use Pool|Nobody hands|called|Based on/.test(m)), plain.join('\n'));
 });
+
+test('setDisplayName needs the kit, and a name clashes with a teammate who is switched off', () => {
+  const spec = importLayer(layer({ 'roles/backend-dev-2.extend.md': MAYA }, { exclude: ['backend-dev-2'] }), kit);
+  assert.throws(() => setDisplayName(spec, 'backend-dev', 'Ana'), /needs the kit/);
+  assert.throws(() => setDisplayName(spec, 'backend-dev', 'Maya', kit), (e) => e.status === 409 && /already called Maya/.test(e.message));
+  assert.throws(() => setDisplayName(spec, 'backend-dev-2', 'CTO', kit), (e) => e.status === 409, 'a kit role\'s own title counts');
+});

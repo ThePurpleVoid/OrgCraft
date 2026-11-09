@@ -349,17 +349,22 @@ export function displayName(spec, kit, id) {
   return i <= 0 ? title : `${title} ${i + 1}`;
 }
 
+/** The seats on the team, on or off: switched on, a teammate of its own, listed as off, or given a name. */
+const isSeat = (spec, id) => { const r = spec.roles[id]; return r.enabled || r.source === 'member' || !!r.extension?.title || (spec.layout?.exclude ?? []).includes(id); };
+
 function checkName(spec, kit, id, name) {
   const n = normName(name);
   if (!n || n.length > 60) throw Object.assign(new Error('A name is 1 to 60 characters'), { status: 400 });
+  // Names are unique across the team, teammates switched off included, so switching one back on never clashes.
   for (const other of Object.keys(spec.roles)) {
-    if (other === id || !spec.roles[other].enabled) continue;
+    if (other === id || !isSeat(spec, other)) continue;
     if (nameKey(displayName(spec, kit, other)) === nameKey(n)) throw nameError(`Another teammate is already called ${displayName(spec, kit, other)}`);
   }
 }
 
 /** Renames a seat: its extension's "# " title only. The id, files, bindings, ownership and history stay put. */
-export function setDisplayName(spec, id, name, kit = { roles: {} }) {
+export function setDisplayName(spec, id, name, kit) {
+  if (!kit?.roles) throw new Error('setDisplayName needs the kit, to compare with the names of kit roles');
   if (!spec.roles[id]) throw new Error(`no role "${id}"`);
   checkName(spec, kit, id, name);
   ext(spec, id).title = normName(name);
