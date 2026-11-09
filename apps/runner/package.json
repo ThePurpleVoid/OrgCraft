@@ -1,6 +1,6 @@
 {
   "name": "@agent-team/runner",
-  "version": "0.1.0",
+  "version": "0.22.0",
   "private": true,
   "description": "Agent Team runner (the data plane): connects out to the control plane, runs role sessions on the Claude Agent SDK, serves the team tools.",
   "type": "module",

@@ -1,4 +1,4 @@
-# Agent Team Kit project instructions
+# OrgCraft project instructions
 
 Copy everything below the line into your Claude project's instructions (claude.ai → Project → Instructions), or into `CLAUDE.md` if you run the team from the Claude Code CLI. Edit the parts in angle brackets.
 

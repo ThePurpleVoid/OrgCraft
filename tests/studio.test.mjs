@@ -1,4 +1,4 @@
-// Agent Team Studio's server: state, preview and publish, over HTTP, against a throwaway repository.
+// OrgCraft Studio's server: state, preview and publish, over HTTP, against a throwaway repository.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -43,7 +43,7 @@ test('serves the page, the team model and the team as a TeamSpec', async () => {
   await serve(root, async (call) => {
     const page = await call('/');
     assert.equal(page.status, 200);
-    assert.match(page.body, /Agent Team Studio/);
+    assert.match(page.body, /OrgCraft Studio/);
     const model = await call('/team-model.mjs');
     assert.match(model.type, /javascript/);
     assert.match(model.body, /export function validate/);

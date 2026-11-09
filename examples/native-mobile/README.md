@@ -1,6 +1,6 @@
 # Example: a product with native Android and iOS apps
 
-The project layer a repository would keep to use Agent Team Kit with two native apps, a shared core and a web dashboard. It shows the three ways to adapt the kit without copying it:
+The project layer a repository would keep to use OrgCraft with two native apps, a shared core and a web dashboard. It shows the three ways to adapt the kit without copying it:
 
 | File | What it shows |
 | --- | --- |
@@ -15,5 +15,5 @@ Try it:
 
 ```sh
 cp -r examples/native-mobile/.agent-team /path/to/your/repo/
-cd /path/to/your/repo && AGENT_TEAM_KIT_DIR=/path/to/Agent-Team-Kit node /path/to/Agent-Team-Kit/bin/agent-team.mjs sync
+cd /path/to/your/repo && AGENT_TEAM_KIT_DIR=/path/to/OrgCraft node /path/to/OrgCraft/bin/agent-team.mjs sync
 ```

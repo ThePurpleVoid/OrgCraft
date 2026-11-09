@@ -8,7 +8,7 @@
 Turn QA walks into repeatable flows (Playwright for web, Maestro or similar for mobile). Add test ids in hook-only PRs. Keep the nightly regression suite green and own the merge gates, hardware pools and janitor settings.
 
 ## Owns (writes)
-qa/, .agent-team/config.sh (gates, pools and janitor extras); hook-only PRs in apps/. The scripts themselves come from Agent Team Kit; fixes go upstream.
+qa/, .agent-team/config.sh (gates, pools and janitor extras); hook-only PRs in apps/. The scripts themselves come from OrgCraft; fixes go upstream.
 
 ## Tools
 Playwright, Maestro, an automation device held through `with-lock.sh`

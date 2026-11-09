@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for the Agent Team Kit scripts. Sourced, never run.
+# Shared helpers for the OrgCraft scripts. Sourced, never run.
 #
 # Sets:
 #   AT_ROOT     the repository (or worktree) root

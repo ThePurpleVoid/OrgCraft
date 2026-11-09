@@ -1,4 +1,4 @@
-# Agent Team Studio: architecture
+# OrgCraft Studio: architecture
 
 Owner: architect. Status: draft 1, 2026-11-05. Reads with the [PRD](prd.md). Decisions that need an ADR have one in [docs/adr/](../adr/).
 

@@ -52,10 +52,10 @@
     "web-dev"
   ],
   "files": {
-    "docs/team/README.md": "807d5045671863a8465fe9e835e39eedfece0823c1ca8f84b2341e8404d2f1ad",
+    "docs/team/README.md": "6b8575f848aab44a680d682133a987e656bbb034f838946b86a863696c63688f",
     "docs/team/ownership.md": "96fc3c38d3c2a12420c5777aac1779f7edbd0ff9d987c38b4e1bf8f9482a5d0d",
-    "docs/team/project-instructions.md": "3595ccd138bd708465a3fb8f6ffc99ef26de388141b2302aa3d6f8e28afd3cd6",
-    "docs/team/protocols.md": "f4104991187dcba0d25fc4678f399cf4713ba47a79e3ed6156af4bc4e2bc6d8f",
+    "docs/team/project-instructions.md": "c93bf0d37a479dab7a41313dd80dc7409a69e2bfdb9e531890f273ac5fc3be6a",
+    "docs/team/protocols.md": "e57de82fea1f9f8e034a4e0388794738fedb96a349717bff90de3eea935d0b6e",
     "docs/team/role-template.md": "c8db7ce5040feb0c832cfce76e93a24d155b56255b558f0c818ffc638d118ad1",
     "docs/team/roles/ai-engineer.md": "f46d0ca577127f2caf1b83418e9b836728a1a3667e4653e42529e0ea5989a85f",
     "docs/team/roles/architect.md": "8f753b9e6746c4c7a24c5b514fa8cab1aa55020ea380c6fb30dca2aaa2c9e358",
