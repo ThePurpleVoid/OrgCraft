@@ -2,7 +2,7 @@
 // warns and records, it never stops or restarts anything (D12). Which roles are in flight comes from the board (the
 // local event log or the control plane), so every list here says how old that is (D14). A team with no board reports
 // shows none of it (D15, criterion 12).
-import { diffTeams, impact, inventoryFromBoard, meetingAttendees, ownsPaths, setOwnsPaths, versionName } from './team-model.mjs';
+import { briefSection, diffTeams, impact, inventoryFromBoard, meetingAttendees, ownsPaths, setBriefSection, setOwnsPaths, versionName } from './team-model.mjs';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const QUIET_S = 2 * 3600; // D14: a report older than this is shown with its age, in grey
@@ -124,7 +124,7 @@ export function popoverHtml({ slug, title, items, row, spec, roles, newest }) {
 }
 
 const clone = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
-const FIELD = { tier: 'Model', 'reports-to': 'Reports to', 'role-dormant': 'Status' };
+const FIELD = { tier: 'Model', 'reports-to': 'Reports to', 'role-dormant': 'Status', pool: 'Pool', 'type-changed': 'Based on' };
 const fieldRe = (name) => new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.*)$`, 'm');
 
 /** Puts one header field of a role back as published, leaving the rest of its draft alone. */
@@ -164,6 +164,33 @@ function revertOwns(spec, published, path) {
  */
 export function revert(spec, published, item) {
   const p = published.roles[item.role];
+  // A role or teammate this draft added (the Publish sheet's Undo, L14): back to off, or gone with what it was given.
+  if (item.kind === 'role-added' || item.kind === 'member-added') {
+    if (p) { spec.roles[item.role] = clone(p); return; }
+    delete spec.roles[item.role];
+    const was = new Set((published.resources?.bindings ?? []).filter((b) => b.role === item.role).map((b) => b.resource));
+    if (spec.resources?.bindings) spec.resources.bindings = spec.resources.bindings.filter((b) => b.role !== item.role || was.has(b.resource));
+    return;
+  }
+  if (item.kind === 'member-renamed') {
+    const r = spec.roles[item.role];
+    if (!r || !p) return;
+    if (r.extension) { if (p.extension?.title !== undefined) r.extension.title = p.extension.title; else delete r.extension.title; }
+    if (r.brief !== undefined && p.brief !== undefined) {
+      const was = /^#\s+.*$/m.exec(p.brief)?.[0];
+      if (was) r.brief = r.brief.replace(/^#\s+.*$/m, was);
+    }
+    return;
+  }
+  if (item.kind === 'hands-to') {
+    const r = spec.roles[item.role];
+    if (!r || !p) return;
+    if (r.brief !== undefined && !r.extension && p.brief !== undefined) { r.brief = setBriefSection(r.brief, 'Hands to', briefSection(p.brief, 'hands to')); return; }
+    const mine = (x) => (x.extension?.sections ?? []).filter((y) => /^hands to$/i.test(y.name));
+    r.extension ??= {};
+    r.extension.sections = [...(r.extension.sections ?? []).filter((y) => !/^hands to$/i.test(y.name)), ...mine(p).map(clone)];
+    return;
+  }
   if (item.kind === 'role-removed' || (item.kind === 'role-off' && !spec.roles[item.role])) { spec.roles[item.role] = clone(p); return; }
   if (item.kind === 'role-off') { spec.roles[item.role].enabled = p?.enabled ?? true; return; }
   if (FIELD[item.kind]) return revertField(spec, published, item.role, FIELD[item.kind]);
@@ -180,20 +207,41 @@ export function revert(spec, published, item) {
     }
     return;
   }
-  if (item.kind === 'path-moved' || item.kind === 'path-removed') {
-    const path = item.id.split(':').slice(2).join(':');
+  if (item.kind === 'path-moved' || item.kind === 'path-removed' || item.kind === 'path-added') {
+    const path = item.path ?? item.id.split(':').slice(2).join(':');
     const was = (published.ownership?.rows ?? []).find((r) => r.path === path);
     spec.ownership ??= { rows: [] };
     spec.ownership.rows = [...(spec.ownership.rows ?? []).filter((r) => r.path !== path), ...(was ? [clone(was)] : [])];
     revertOwns(spec, published, path);
     return;
   }
-  if (item.kind === 'binding-removed' || item.kind === 'binding-narrowed') {
-    const resource = item.id.split(':').at(-1);
+  if (/^binding-/.test(item.kind)) {
+    const resource = item.resource ?? item.id.split(':').at(-1);
     const was = (published.resources?.bindings ?? []).find((b) => b.role === item.role && b.resource === resource);
     spec.resources ??= { resources: [], bindings: [] };
     spec.resources.bindings = [...(spec.resources.bindings ?? []).filter((b) => !(b.role === item.role && b.resource === resource)), ...(was ? [clone(was)] : [])];
+    return;
   }
+  // The team's own files, piece by piece (the Publish sheet's Undo): a gate target, a meeting, the rules, the values.
+  const put = (obj, k, v) => { if (v === undefined) delete obj[k]; else obj[k] = clone(v); };
+  if (item.kind === 'gate') {
+    spec.gates ??= {};
+    if (item.target === 'all') put(spec.gates, 'all', published.gates?.all);
+    else { spec.gates.targets ??= {}; put(spec.gates.targets, item.target, published.gates?.targets?.[item.target]); }
+    return;
+  }
+  if (item.kind === 'meeting') {
+    const was = (published.meetings?.meetings ?? []).find((m) => m.id === item.meeting);
+    spec.meetings ??= { meetings: [] };
+    const list = spec.meetings.meetings ?? [];
+    const i = list.findIndex((m) => m.id === item.meeting);
+    if (was && i >= 0) list[i] = clone(was);
+    else if (was) list.push(clone(was));
+    else if (i >= 0) list.splice(i, 1);
+    spec.meetings.meetings = list;
+    return;
+  }
+  if (item.kind === 'rules' || item.kind === 'values' || item.kind === 'options') put(spec, item.kind, published[item.kind]);
 }
 
 // ------------------------------------------------------------------------------------------------ the impact step
