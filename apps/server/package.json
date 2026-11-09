@@ -1,6 +1,6 @@
 {
   "name": "@agent-team/server",
-  "version": "0.1.0",
+  "version": "0.21.1",
   "private": true,
   "description": "OrgCraft Studio control plane: the event log, the board, the public API.",
   "type": "module",

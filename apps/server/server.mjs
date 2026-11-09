@@ -28,6 +28,7 @@ import { HOST_CARD_KINDS, hostMay } from './roles.mjs';
 import { PROVIDERS, createEmail, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 import { createHostedStudio } from './studio.mjs';
+import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, describeRunner } from './deployment.mjs';
 
 /**
  * The event types POST /v1/teams/{team}/events takes (issue #135): the kit's own reports and messages (report.mjs,
@@ -119,12 +120,13 @@ export function createControlPlane(opts) {
     installationsFor: opts.installationsFor ?? (opts.identity?.installations?.enabled ? (tn, url) => opts.identity.installations.forRepo(tn, url) : null) });
   wireBus(m3, bus);
   // Runners connect here over a WebSocket (runner-protocol.md).
-  runners = attachRunners(server, { db: opts.db, ops: bus.ops, welcome: bus.welcome, onLost: bus.onLost, ...(opts.runnerOptions ?? {}) });
-  server.on('request', createHandler({ ...opts, runners, m3, bus }));
+  runners = attachRunners(server, { db: opts.db, ops: bus.ops, welcome: bus.welcome, onLost: bus.onLost, ...(opts.serverVersion ? { version: opts.serverVersion } : {}), ...(opts.runnerOptions ?? {}) });
+  const handler = createHandler({ ...opts, runners, m3, bus });
+  server.on('request', handler);
   // The tick runs in-process every 15 s; a deployment can also call POST /v1/internal/tick from a cron.
   const tickMs = opts.tickMs ?? 15_000;
   let ticking = false;
-  const timer = tickMs > 0 ? setInterval(() => { if (ticking) return; ticking = true; bus.tick().then(() => opts.identity?.sweep()).catch((e) => console.error(`tick: ${e.message}`)).finally(() => { ticking = false; }); }, tickMs) : null;
+  const timer = tickMs > 0 ? setInterval(() => { if (ticking) return; ticking = true; bus.tick().then(() => opts.identity?.sweep()).then(() => handler.recheck()).catch((e) => console.error(`tick: ${e.message}`)).finally(() => { ticking = false; }); }, tickMs) : null;
   timer?.unref?.();
   server.runners = runners;
   server.m3 = m3;
@@ -138,7 +140,7 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000 }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
@@ -152,6 +154,22 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   // The deployment's own Studio page (hosted mode, apps/server/studio.mjs): off until the M4 GitHub App is set up.
   const studioOrigin = identity?.origin ?? (publicUrl ? new URL(publicUrl).origin : null);
   const installations = identity?.installations?.enabled ? identity.installations : null;
+  // Where OrgCraft runs and outage mode (L29): what this process saw of the code host, from its own calls to it.
+  const reach = reachability ?? createReachability({ now });
+  const codeHostApi = String(studioOpts?.api ?? 'https://api.github.com').replace(/\/+$/, '');
+  const codeHostFetch = reach.wrap('code-host', studioOpts?.fetch ?? globalThis.fetch);
+  const startedAt = now().toISOString();
+  const deployMode = ['local', 'self-hosted', 'hosted'].includes(mode) ? mode : db.kind === 'pglite' ? 'local' : 'self-hosted';
+  let lastCheck = 0;
+  /** One probe of the code host unless one ran in the last CHECK_SECONDS; returns ms until the next may run (<= 0: it ran). */
+  const probeCodeHost = async () => {
+    const wait = lastCheck + CHECK_SECONDS * 1000 - now().getTime();
+    if (wait > 0) return wait;
+    lastCheck = now().getTime();
+    try { await codeHostFetch(`${codeHostApi}/rate_limit`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'agent-team-server' }, signal: AbortSignal.timeout(10_000) }); } catch { /* recorded by the wrapper */ }
+    return wait;
+  };
+  const runnerCards = async (t) => { const at = now(); return (await store.listRunners(db, t)).map((r) => describeRunner(r, runners?.get(r.id)?.hello && !runners.get(r.id).closed ? runners.get(r.id) : null, at, serverVersion)); };
   const hostedStudio = createHostedStudio(studioOpts && studioOrigin ? {
     origin: studioOrigin,
     // The installations this workspace proved (S9) and the team's repository, unless the caller brings its own.
@@ -159,6 +177,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     // Delegated publish: the person's consent on the host's current text, and the host's name for the PR line.
     ...(identity ? { hosts: { consented: (h, p) => identity.hosts.linked(h, p), nameOf: (h) => identity.hosts.nameOf(h) } } : {}),
     ...studioOpts,
+    fetch: codeHostFetch,
     audit: (row) => m3.tx(row.tenant, (ctx) => ctx.audit({ team: row.team, actorKind: row.actorId ? 'person' : 'system', actorId: row.actorId ?? 'control-plane', action: row.action, target: row.target, decision: row.decision, rule: row.rule ?? null, detail: row.detail ?? null })),
   } : null);
   let tickMisses = [];
@@ -444,6 +463,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     // The Studio (hosted mode): the kit's handler answers; a publish is idempotent like every other write.
     if (a === 'teams' && b === 'studio') {
       // Up to 5 MB, the handler's own limit (E6), read here first so idempotent() hashes the same bytes.
+      // Outage mode (O37.8): nothing goes out to a code host this process can't reach. The draft stays in the Studio.
+      if (m === 'POST' && reach.state('code-host') === 'unreachable') throw new Problem(503, "GitHub can't be reached. Publishing waits until it's back. Nothing already published is affected, and nothing is lost.", { type: 'code-host-unreachable' });
       const raw = m === 'GET' || m === 'HEAD' ? null : await readRaw(req, 5 * 1024 * 1024);
       const serve = async () => {
         const r = await hostedStudio.handle(req, who, team, raw);
@@ -615,7 +636,14 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       await store.getTeam(db, t, team);
       return send(res, 201, await identity.hosts.mintTicket(t, team, who), {}, { secrets: ['ticket', 'url'] });
     }
-    if (a === 'runners' && !team && m === 'GET') return send(res, 200, { runners: await store.listRunners(db, t) });
+    if (a === 'runners' && !team && m === 'GET') return send(res, 200, { runners: await runnerCards(t) });
+    // Where OrgCraft runs, the runner summary and outage mode (L29). Any member: the banner is for everyone.
+    if (a === 'deployment' && !team && m === 'GET') return send(res, 200, deploymentView({ mode: deployMode, codeHost: reach.get('code-host'), runners: await runnerCards(t), startedAt, region, db, version: serverVersion }));
+    // "Check again": one probe of the code host, at most once per CHECK_SECONDS per process (rate_limit costs no quota).
+    if (a === 'deployment' && team === 'check' && !b && m === 'POST') {
+      const wait = await probeCodeHost();
+      return send(res, 200, { checked: wait <= 0, ...(wait > 0 ? { retryIn: Math.ceil(wait / 1000) } : {}), ...deploymentView({ mode: deployMode, codeHost: reach.get('code-host'), runners: await runnerCards(t), startedAt, region, db, version: serverVersion }) });
+    }
     if (a === 'runners' && team && team !== 'codes' && !b && m === 'DELETE') { await store.revokeRunner(db, t, team); runners?.close(team); return send(res, 200, { ok: true }); }
     if (a === 'teams' && !team) {
       if (m === 'GET') return send(res, 200, { teams: await store.listTeams(db, t) });
@@ -730,7 +758,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     throw new Problem(404, 'not found');
   }
 
-  return (req, res) => route(req, res).catch((e) => {
+  const handler = (req, res) => route(req, res).catch((e) => {
     res.hold = false;
     if (res.headersSent) { res.end(); return; }
     if (e instanceof Problem) return send(res, e.status, problemBody(e), e.type ? PROBLEM_JSON : {});
@@ -738,4 +766,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     console.error(e);
     send(res, 500, { error: 'something went wrong on the server' });
   });
+  // Outage mode: Studio writes wait while the code host is unreachable, so nothing else would call it. The tick probes
+  // it (at most every CHECK_SECONDS) until it answers, so publishing comes back on its own.
+  handler.recheck = async () => { if (reach.state('code-host') === 'unreachable') await probeCodeHost(); };
+  return handler;
 }
