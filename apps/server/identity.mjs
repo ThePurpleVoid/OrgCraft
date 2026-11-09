@@ -7,7 +7,8 @@
 //                                                                  the issuer's own authorize, with PKCE kept here
 //   GET  /oauth/authorize?response_type=code&…                      apps and the CLI (oidc-provider), PKCE S256
 //   (no session)                                                   → /sign-in?interaction=<uid> (the Studio page)
-//   GET  /oauth/interaction/<uid>/github                           → GitHub, with our own state and PKCE
+//   GET  /oauth/authorize/<uid>/github                             → GitHub, with our own state and PKCE (this browser only; the
+//                                                                  old /oauth/interaction/<uid>/github redirects here)
 //   GET  /oauth/callback/github                                    member, invitee or the first owner? sign in : not-invited
 //   GET  /oauth/web/done                                           the web leg's code, consumed here: sets the cookie
 //   POST /oauth/token, /oauth/revoke, GET /oauth/jwks, /oauth/userinfo, /.well-known/openid-configuration (oidc-provider)
@@ -17,6 +18,7 @@
 // configures it (bin.mjs: GITHUB_APP_CLIENT_ID and an https AGENT_TEAM_PUBLIC_URL), so local mode is unchanged.
 import { createHash, createHmac, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import Provider, { interactionPolicy } from 'oidc-provider';
+import { generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { safeReturn } from '../studio/public/auth.js';
 import { seal, unseal } from './vault.mjs';
 import { Problem } from './store.mjs';
@@ -328,6 +330,8 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     provider = makeProvider(keys);
     callback = provider.callback();
   };
+  // The key the provider signs its cookies with; boundToBrowser checks the resume cookie's signature with it too.
+  const cookieKey = createHmac('sha256', key).update('agent-team/oidc-cookies/v1').digest('base64url');
   const makeProvider = (keys) => {
     const config = {
       adapter: adapterFor(db, hosts),
@@ -337,7 +341,7 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
       enabledJWA: { idTokenSigningAlgValues: SIGNING_ALGS, dPoPSigningAlgValues: ['ES256', 'EdDSA'] },
       jwks: { keys },
       cookies: {
-        keys: [createHmac('sha256', key).update('agent-team/oidc-cookies/v1').digest('base64url')],
+        keys: [cookieKey],
         long: { httpOnly: true, sameSite: 'lax', secure: true },
         short: { httpOnly: true, sameSite: 'lax', secure: true },
       },
@@ -452,8 +456,10 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     return redirect(res, u.pathname + u.search, [setCookie(LOGIN_COOKIE, state, FLOW_SECONDS)]);
   }
 
+  // Bound to the browser that started this sign-in, like the passkey legs (security review of L27): the resume cookie
+  // must name this uid, or someone who learns it could finish the victim's sign-in with their own GitHub account.
   async function upstreamStart(req, res, uid) {
-    if (!UID.test(uid)) return toSignIn(res, 'expired');
+    if (!UID.test(uid) || !boundToBrowser(req, uid)) return toSignIn(res, 'expired');
     const interaction = await provider.Interaction.find(uid);
     if (!interaction) return toSignIn(res, 'expired');
     const state = rid('', 24), verifier = randomBytes(32).toString('base64url');
@@ -552,6 +558,78 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     return redirect(res, interaction.returnTo, clear);
   }
 
+  // ---- the second way in: a passkey (L27, B15) --------------------------------------------------------------------
+  // A person who has added a passkey can sign in with it alone, so losing their GitHub account never locks them out.
+  // The sign-in page asks GET /oauth/authorize/{uid}/passkey for options (no allowCredentials: the authenticator
+  // offers its own passkeys for this site), then POSTs the assertion as JSON from this origin. The passkey must be
+  // someone's who is still a member somewhere; user verification is required.
+  //
+  // Both legs are bound to the browser that started this sign-in (security review sev 3): the issuer's signed
+  // resume cookie for this interaction (path /oauth/authorize/{uid}, which is why the routes live under it) must name
+  // the uid, so someone who learns the uid cannot finish the sign-in as themselves in another browser.
+  const rpID = issuer.hostname;
+  const cookieSig = (name, value) => createHmac('sha1', cookieKey).update(`${name}=${value}`).digest('base64').replace(/\/|\+|=/g, (c) => ({ '/': '_', '+': '-', '=': '' }[c]));
+  function boundToBrowser(req, uid) {
+    const c = cookies(req);
+    const v = c.get('_interaction_resume') ?? '', sig = c.get('_interaction_resume.sig') ?? '';
+    return !!v && !!sig && same(v, uid) && same(sig, cookieSig('_interaction_resume', v));
+  }
+  const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
+
+  async function passkeyOptions(req, res, uid) {
+    if (limited(clientIp(req), 'passkey-options', 20)) throw new Problem(429, 'too many passkey sign-ins from here; try again in a minute');
+    if (!UID.test(uid) || !boundToBrowser(req, uid) || !(await provider.Interaction.find(uid))) throw new Problem(410, 'this sign-in has expired; start again', { type: 'expired' });
+    const options = await generateAuthenticationOptions({ rpID, userVerification: 'required', timeout: 120_000 });
+    await db.system('insert into oidc_store(model, id_hash, payload, expires_at) values ($1, $2, $3, $4)', ['WebAuthn', sha(options.challenge), { kind: 'sign-in', uid }, new Date(Date.now() + 120_000)]);
+    return json(res, 200, options);
+  }
+
+  async function passkeyDone(req, res, uid) {
+    if (!csrfOk(req)) throw new Problem(403, 'cross-site request refused: send this deployment\'s Origin and content-type: application/json');
+    if (limited(clientIp(req), 'passkey-sign-in', 10)) throw new Problem(429, 'too many passkey sign-ins from here; try again in a minute');
+    if (!UID.test(uid) || !boundToBrowser(req, uid)) throw new Problem(410, 'this sign-in has expired; start again', { type: 'expired' });
+    let raw = '';
+    for await (const c of req) { raw += c; if (raw.length > 64 * 1024) throw new Problem(413, 'too large'); }
+    let assertion;
+    try { assertion = JSON.parse(raw)?.webauthn; } catch { throw new Problem(400, 'send { webauthn }: the assertion from navigator.credentials.get()'); }
+    const refuse = async (why, detail = {}) => {
+      await audit(null, 'sign-in.refused', { method: 'passkey', reason: why, ...detail });
+      throw new Problem(401, 'that passkey did not sign you in', { type: 'passkey-refused' });
+    };
+    let challenge = null;
+    try { challenge = JSON.parse(Buffer.from(String(assertion?.response?.clientDataJSON ?? ''), 'base64url').toString('utf8')).challenge; } catch { /* refused below */ }
+    if (typeof challenge !== 'string' || !challenge || challenge.length > 200) return refuse('no challenge');
+    // Single use, and only for this sign-in.
+    const [ch] = await db.system("delete from oidc_store where model = 'WebAuthn' and id_hash = $1 and expires_at > now() returning payload", [sha(challenge)]);
+    if (!ch || ch.payload.kind !== 'sign-in' || ch.payload.uid !== uid) return refuse('unknown, used or expired challenge');
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction) throw new Problem(410, 'this sign-in has expired; start again', { type: 'expired' });
+    const [k] = await db.system('select id, person, credential_id, public_key, sign_count from passkeys where credential_id = $1', [String(assertion?.id ?? '').slice(0, 512)]);
+    if (!k) return refuse('unknown passkey');
+    // A discoverable passkey names its person (the user id given at registration): it must be the same one.
+    const handle = assertion?.response?.userHandle;
+    if (handle && Buffer.from(String(handle), 'base64url').toString('utf8') !== k.person) return refuse('user handle mismatch', { passkey: k.id });
+    let out;
+    try {
+      out = await verifyAuthenticationResponse({ response: assertion, expectedChallenge: challenge, expectedOrigin: origin, expectedRPID: rpID, requireUserVerification: true,
+        credential: { id: k.credential_id, publicKey: Buffer.from(k.public_key, 'base64url'), counter: 0 } });
+    } catch (e) { return refuse(String(e.message).slice(0, 200), { passkey: k.id }); }
+    if (!out.verified) return refuse('did not verify', { passkey: k.id });
+    const counter = out.authenticationInfo.newCounter;
+    // A counter that went back on an authenticator that counts may be a cloned key: refused for sign-in (review low 1).
+    if (counter > 0 && Number(k.sign_count) > 0 && counter <= Number(k.sign_count)) {
+      await audit(k.person, 'passkey.sign-count-flagged', { passkey: k.id, stored: Number(k.sign_count), got: counter, signIn: true });
+      return refuse('sign count went back', { passkey: k.id });
+    }
+    await db.system('update passkeys set sign_count = greatest(sign_count, $2), last_used = now() where id = $1', [k.id, counter]);
+    const person = await activePerson(k.person);
+    if (!person) return refuse('not a member', { passkey: k.id });
+    await audit(person.id, 'sign-in', { method: 'passkey', passkey: k.id });
+    interaction.result = { login: { accountId: person.id, amr: ['hwk', 'user'], remember: false } };
+    await interaction.save(Math.max(1, interaction.exp - epoch()));
+    return json(res, 200, { location: interaction.returnTo });
+  }
+
   async function webDone(req, res, url) {
     const clear = [setCookie(LOGIN_COOKIE, '', 0)];
     const state = url.searchParams.get('state') ?? '', mine = cookies(req).get(LOGIN_COOKIE) ?? '';
@@ -611,8 +689,15 @@ export async function createIdentity({ db, key, publicUrl, tenant, ownerGithub =
     const authorize = p === '/oauth/authorize';
     if (limited(clientIp(req), authorize ? 'authorize' : 'oauth', authorize ? 20 : 60)) throw new Problem(429, 'too many sign-in requests from here; try again in a minute');
     if (authorize && req.method === 'GET' && url.searchParams.get('client_id') === WEB_CLIENT && !url.searchParams.has('response_type')) { await webStart(req, res, url); return true; }
-    const inter = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
+    // Continue with GitHub lives under the resume cookie's path; the old path redirects there (same browser, same
+    // cookie; another browser lands on sign-in expired).
+    const old = /^\/oauth\/interaction\/([^/]+)\/github$/.exec(p);
+    if (old && req.method === 'GET') { if (!UID.test(old[1])) { toSignIn(res, 'expired'); return true; } redirect(res, `/oauth/authorize/${old[1]}/github`); return true; }
+    const inter = /^\/oauth\/authorize\/([^/]+)\/github$/.exec(p);
     if (inter && req.method === 'GET') { await upstreamStart(req, res, inter[1]); return true; }
+    const pk = /^\/oauth\/authorize\/([^/]+)\/passkey$/.exec(p);
+    if (pk && req.method === 'GET') { await passkeyOptions(req, res, pk[1]); return true; }
+    if (pk && req.method === 'POST') { await passkeyDone(req, res, pk[1]); return true; }
     const consent = /^\/oauth\/interaction\/([^/]+)\/consent$/.exec(p);
     if (consent && (req.method === 'GET' || req.method === 'POST')) {
       if (req.method === 'POST' && !/^application\/x-www-form-urlencoded\b/i.test(req.headers['content-type'] ?? '')) throw new Problem(415, 'send the consent form');

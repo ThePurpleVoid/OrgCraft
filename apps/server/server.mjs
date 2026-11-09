@@ -24,6 +24,7 @@ import { createTriggers } from './triggers.mjs';
 import { createLive } from './live.mjs';
 import { createGateway } from './gateway.mjs';
 import { createPasskeys } from './passkeys.mjs';
+import { createRecovery } from './recovery.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
 import { appCaller } from './dpop.mjs';
@@ -33,6 +34,7 @@ import { PROVIDERS, createEmail, createNotifications, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 import { createHostedStudio } from './studio.mjs';
 import { pgObjects, pgRefs } from './managed-db.mjs';
+import { createChanges } from './changes.mjs';
 import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, describeRunner } from './deployment.mjs';
 
 /**
@@ -55,7 +57,7 @@ const { Problem } = store;
 const REPORTS_PER_MINUTE = 30;
 
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-const NOTICE_ACTIONS = ['passkey.added', 'passkey.removed', 'passkey.sign-count-flagged', 'step-up.locked', 'sessions.ended', 'member.role-changed', 'member.removed'];
+const NOTICE_ACTIONS = ['passkey.added', 'passkey.removed', 'passkey.sign-count-flagged', 'step-up.locked', 'sessions.ended', 'member.role-changed', 'member.removed', 'recovery-owner.added', 'recovery-owner.removed'];
 
 /** The JSON body for a Problem: { error }, plus RFC 9457 type, title and status when it has a type, plus any body
  *  it carries (a 409 for a changed card carries the current card itself, as api-v1.yaml says). */
@@ -156,6 +158,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const m3 = given ?? createM3({ db, now, publicUrl });
   const inspector = createInspector({ db, m3 });
   const passkeys = identity ? createPasskeys({ db, m3, origin: identity.origin, now }) : null;
+  const recovery = identity ? createRecovery({ db, requireStepUp: passkeys.requireStepUp, now }) : null;
   const members = identity ? createMembers({ db, lookup: identity.lookup, endSessions: (p) => identity.endSessions(p), requireStepUp: passkeys.requireStepUp, now }) : null;
   const emailProviders = emailOpts.providers ?? PROVIDERS;
   const email = createEmail({ db, key, publicUrl, providers: emailProviders, readSecret: store.readSecret, now, fetch: emailOpts.fetch ?? fetch });
@@ -190,6 +193,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     store: (tn, tm) => pgObjects(db, tn, tm),
     refs: (tn, tm) => pgRefs(db, tn, tm),
   };
+  const changes = createChanges({ db, m3, now });
   const hostedStudio = createHostedStudio(studioOrigin ? {
     origin: studioOrigin,
     managed: managedStore,
@@ -548,7 +552,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     const notices = await db.system(`select action, at, detail from identity_audit where person = $1 and at > now() - interval '30 days'
       and action = any($2) order by at desc, id desc limit 20`, [who.principal, NOTICE_ACTIONS]);
     return { id: who.principal, login: who.session.login, name: who.session.name ?? who.session.login, workspaces: who.workspaces.map((w) => ({ tenant: w.tenant, role: w.role })), passkeys: Number(n), authTime: who.session.authTime,
-      notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}) })) };
+      notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}), ...(r.detail?.person ? { person: r.detail.person } : {}), ...(r.detail?.effectiveAt ? { effectiveAt: r.detail.effectiveAt } : {}) })) };
   }
 
   const html = (res, status, body, headers = {}) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'", ...headers }); res.end(body); };
@@ -765,6 +769,15 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         return send(res, 200, body, { etag: tag });
       }
       // The rollout view after a publish merges (demo step 17): which roles have picked up the new team version.
+      // A managed team's change requests (ADR 0012, spec L9 section 4.5).
+      if (b === 'changes' && !c && m === 'GET') return send(res, 200, await changes.list(t, team, url.searchParams.get('state') ?? ''));
+      if (b === 'changes' && c && !parts[5] && m === 'GET') return send(res, 200, await changes.get(t, team, c));
+      if (b === 'changes' && c && parts[5] === 'accept' && !parts[6] && m === 'POST') {
+        const body = (await readJson(req, 16 * 1024)) ?? {};
+        return send(res, 200, await changes.accept(who, team, c, { stepUp, words: typeof body.words === 'string' ? body.words : '' }));
+      }
+      if (b === 'changes' && c && parts[5] === 'close' && !parts[6] && m === 'POST') { await readJson(req, 4 * 1024); return send(res, 200, await changes.close(who, team, c)); }
+      if (b === 'rollback' && !c && m === 'POST') return send(res, 201, await changes.rollback(who, team, (await readJson(req, 4 * 1024)) ?? {}));
       if (b === 'rollout' && !c && m === 'GET') return send(res, 200, await store.rollout(db, t, team, { version: url.searchParams.get('version') ?? '', publishedAt: url.searchParams.get('publishedAt') ?? '', now: now() }));
       if (b === 'report-tokens' && !c && m === 'POST') {
         const tok = await store.mintReportToken(db, t, team);
@@ -810,6 +823,12 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (!team && m === 'GET') return send(res, 200, await members.list(who));
       if (team && m === 'PATCH') return send(res, 200, await members.update(who, team, await readJson(req, 4 * 1024), stepUp));
       if (team && m === 'DELETE') return send(res, 200, await members.remove(who, team, stepUp));
+    }
+    // Recovery owners (L27): who can still get in and put things right when an owner loses their way in.
+    if (recovery && a === 'recovery' && !b) {
+      if (!team && m === 'GET') return send(res, 200, await recovery.list(who));
+      if (!team && m === 'POST') return send(res, 201, await recovery.add(who, await readJson(req, 4 * 1024), stepUp));
+      if (team && m === 'DELETE') return send(res, 200, await recovery.remove(who, team, stepUp, (await readJson(req, 4 * 1024)) ?? {}));
     }
     if (members && a === 'invitations' && !b) {
       if (!team && m === 'GET') return send(res, 200, await members.invitations(who));

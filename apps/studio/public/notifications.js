@@ -86,12 +86,20 @@ export function logHtml(st) {
   const label = (id) => kindLabel(id, st.kinds.find((k) => k.id === id)?.label ?? id);
   const word = (key, fb) => (t(key) === key ? fb : t(key));
   // Why is always a plain sentence (CPO): held and emailed have one; a provider's own error is never shown.
-  const why = (s, channel) => (s === 'failed' && channel ? word(`notify.status.failed.why.${channel}`, '') : '') || word(`notify.status.${s}.why`, '').replace('{channel}', t(`notify.channel.${channel}`));
-  // Who is hidden until the log carries a display name (code review: never a raw per_ id).
-  const who = false;
+  // The server's reason code (backend-dev 431701b) picks the sentence: retry, nochannel and removed have their own;
+  // final (or no code, from an older server) is the per-channel line.
+  const why = (r) => {
+    const ch = t(`notify.channel.${r.channel}`);
+    const own = r.reason && r.reason !== 'final' && (r.status === 'failed' || r.status === 'skipped') ? word(`notify.status.failed.why.${r.reason}`, '') : '';
+    const fin = r.status === 'failed' || (r.status === 'skipped' && r.reason === 'final') ? word(`notify.status.failed.why.${r.channel}`, '') || word('notify.status.failed.why', '') : '';
+    return (own || fin || word(`notify.status.${r.status}.why`, '')).replace('{channel}', ch);
+  };
+  // Who, on everyone's rows only: "You" for your own, a name, or the CPO's words when there is none. Never a raw id.
   const everyone = !!lg.all;
+  const who = everyone;
+  const whoWord = (r) => (r.principal && r.principal === st.me?.id ? t('notify.log.you') : r.name || t('notify.log.who.unknown'));
   const head = [t('notify.log.when'), t('notify.log.what'), t('notify.log.where'), ...(who ? [t('notify.log.who')] : []), t('notify.log.status'), t('notify.log.why')];
-  const rows = (lg.items ?? []).map((r) => `<tr class="st-${esc(r.status)}"><td>${esc(when(r.at))}</td><td>${esc(label(r.kind))}</td><td>${esc(t(`notify.channel.${r.channel}`))}${r.to && r.channel === 'email' ? ` <span class="muted">${esc(r.to)}</span>` : ''}</td>${who ? `<td>${esc(r.principal ?? '')}</td>` : ''}<td>${esc(word(`notify.status.${r.status}`, r.status))}</td><td>${esc(why(r.status, r.channel))}</td></tr>`).join('');
+  const rows = (lg.items ?? []).map((r) => `<tr class="st-${esc(r.status)}"><td>${esc(when(r.at))}</td><td>${esc(label(r.kind))}</td><td>${esc(t(`notify.channel.${r.channel}`))}${r.to && r.channel === 'email' ? ` <span class="muted">${esc(r.to)}</span>` : ''}</td>${who ? `<td>${esc(whoWord(r))}</td>` : ''}<td>${esc(word(`notify.status.${r.status}`, r.status))}</td><td>${esc(why(r))}</td></tr>`).join('');
   return `<section class="n-section" id="log" aria-labelledby="log-title">
     <h2 id="log-title" tabindex="-1">${esc(t('notify.log.heading'))}</h2>
     <p class="muted">${esc(t('notify.log.explainer'))}</p>
