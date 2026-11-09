@@ -226,11 +226,12 @@ export function stepUpDialog(why, { doc = document, scope = null } = {}) {
 }
 
 /** Calls `path`; if the issuer answers step-up-required, asks for a passkey once and sends it again with the su_ token. */
-export async function withStepUp(why, method, path, body) {
+export async function withStepUp(why, method, path, body, { scope = null } = {}) {
   const r = await call(method, path, body);
   if (!needsStepUp(r)) return r;
   // The control plane names what the step-up must be bound to (ADR 0013), e.g. resume:<run>.
-  const header = await stepUpDialog(why, { scope: r.data?.scope ?? null });
+  // The 401 names the scope when the server says it; else the caller's, for a change whose scope is known (L27 recovery).
+  const header = await stepUpDialog(why, { scope: r.data?.scope ?? scope });
   if (!header) return { ok: false, status: 0, cancelled: true, data: { error: 'Cancelled: nothing was changed.' } };
   return call(method, path, body, header);
 }

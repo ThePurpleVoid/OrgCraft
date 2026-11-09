@@ -142,7 +142,8 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       if (!session) return problem(401, 'unauthenticated', 'sign in first');
       const who = session.person;
       const mine = passkeys.get(who.id) ?? [];
-      const stepped = () => { const t = req.headers['x-step-up']; const s = t && stepUps.get(t); if (!s || s.person !== who.id || s.expires < Date.now()) return false; stepUps.delete(t); return true; };
+      // A scoped step-up (ADR 0013) counts only for the change it names; an unscoped one for anything not scoped.
+      const stepped = (scope = null) => { const t = req.headers['x-step-up']; const s = t && stepUps.get(t); if (!s || s.person !== who.id || s.expires < Date.now() || (s.scope ?? null) !== scope) return false; stepUps.delete(t); return true; };
       const challenge = (kind) => { const c = b64u(randomBytes(32)); challenges.set(c, { kind, person: who.id, expires: Date.now() + 2 * 60_000 }); return c; };
       /** The client data a browser signed: its type, a live single-use challenge of this kind, and exactly this origin. */
       const clientData = (cred, kind, type) => {
@@ -369,9 +370,19 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
           return send(200, { owners, wanted: 2, warnings });
         }
         if (role !== 'owner') return problem(403, 'forbidden', 'only an owner names or removes recovery owners');
-        if (!stepped()) return problem(401, 'step-up-required', 'Naming or removing a recovery owner needs a fresh step-up');
+        // The last recovery owner in effect (apps/server/recovery.mjs remove): 409 last-owner unless confirmed, and
+        // then a step-up scoped remove-last-recovery-owner:<person>.
+        const counts = (r) => !r.removed && r.effectiveAt <= Date.now();
+        const lastOne = rc[1] && req.method === 'DELETE' && (() => { const p = decodeURIComponent(rc[1]); const c = recovery.filter(counts); return c.length === 1 && c[0].person === p; })();
+        const rb = await read().catch(() => ({}));
+        const target = rc[1] ? decodeURIComponent(rc[1]) : String(rb?.person ?? '');
+        const tenant = who.workspaces?.[0]?.tenant ?? 'acme';
+        if (lastOne && rb?.confirm !== 'no-recovery') return problem(409, 'last-owner', 'this is the last recovery owner');
+        if (lastOne) {
+          if (!stepped(`remove-last-recovery-owner:${decodeURIComponent(rc[1])}`)) return send(401, { type: 'step-up-required', title: 'Removing the last recovery owner needs a fresh step-up', status: 401, scope: `remove-last-recovery-owner:${decodeURIComponent(rc[1])}` });
+        } else if (!stepped(`recovery:${tenant}_${target}`)) return problem(401, 'step-up-required', 'Naming or removing a recovery owner needs a fresh step-up');
         if (!rc[1] && req.method === 'POST') {
-          const person = String((await read()).person ?? '');
+          const person = target;
           const [, m] = byId(person) ?? [];
           if (!m) return problem(404, 'not-found', 'no such member');
           if (roleOf(m) !== 'owner') return problem(409, 'not-owner', 'make them an owner first');
@@ -386,7 +397,8 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
           const r = live().find((x) => x.person === decodeURIComponent(rc[1]));
           if (!r) return problem(404, 'not-found', 'not a recovery owner');
           r.removed = true;
-          return send(200, { ok: true });
+          if (lastOne) log.push({ method: 'RECOVERY', path: 'removed-last', status: 200, person: r.person });
+          return send(200, { ok: true, ...(lastOne ? { last: true } : {}) });
         }
       }
       if (p === '/v1/auth/step-up/challenge' && req.method === 'GET') {
@@ -409,7 +421,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
         if (!verified(auth)) return fail('the passkey did not verify the person');
         key.lastUsed = new Date().toISOString();
         const token = rid('su_');
-        stepUps.set(token, { person: who.id, expires: Date.now() + 5 * 60_000 });
+        stepUps.set(token, { person: who.id, expires: Date.now() + 5 * 60_000, scope: typeof body.scope === 'string' ? body.scope : null });
         return send(201, { token, expires: new Date(Date.now() + 5 * 60_000).toISOString() });
       }
       return problem(404, 'not-found', `stub issuer: no ${req.method} ${p}`);

@@ -68,6 +68,9 @@ export function recoveryHtml(r = rec, list = owners, self = me, n = recNote) {
   </section>`;
 }
 
+/** The step-up scope for naming or removing one recovery owner (apps/server/recovery.mjs recoveryScope). */
+const recScope = (person) => { const ten = (me?.workspaces ?? []).find((w) => w.role === 'owner')?.tenant; return ten ? `recovery:${ten}_${person}` : null; };
+
 /** True when `person` is the only recovery owner who counts or is on the way: removing them leaves nobody. */
 export function lastOwner(r, person) {
   const live = (r?.owners ?? []).filter((o) => o.why !== 'pending');
@@ -164,7 +167,7 @@ root.addEventListener('submit', async (e) => {
   e.preventDefault();
   const sel = e.target.person;
   const name = sel.selectedOptions[0]?.textContent ?? '';
-  const r = await withStepUp(t('stepup.action.recovery.add', { person: name }), 'POST', '/v1/recovery', { person: sel.value });
+  const r = await withStepUp(t('stepup.action.recovery.add', { person: name }), 'POST', '/v1/recovery', { person: sel.value }, { scope: recScope(sel.value) });
   if (r.cancelled) return;
   recNote = r.ok ? (r.data.pending ? { kind: 'ok', text: t('recovery.pending', { person: name, time: new Date(r.data.effectiveAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) }) } : null) : { kind: 'error', text: recoveryRefusal(r, name) };
   await load();
@@ -176,8 +179,12 @@ root.addEventListener('click', async (e) => {
   if (b.dataset.recRemove) {
     const name = b.dataset.name;
     const pending = !!b.dataset.pending;
-    if (!pending && lastOwner(rec, b.dataset.recRemove) && !(await confirmLast(name))) return b.focus();
-    const r = await withStepUp(t(pending ? 'stepup.action.recovery.cancel' : 'stepup.action.recovery.remove', { person: name }), 'DELETE', `/v1/recovery/${encodeURIComponent(b.dataset.recRemove)}`);
+    const last = !pending && lastOwner(rec, b.dataset.recRemove);
+    if (last && !(await confirmLast(name))) return b.focus();
+    // Remove anyway (CTO ruling): the server needs { confirm: 'no-recovery' } and a step-up scoped
+    // remove-last-recovery-owner:<person>, which its 401 names and withStepUp passes to the passkey.
+    const r = await withStepUp(t(pending ? 'stepup.action.recovery.cancel' : 'stepup.action.recovery.remove', { person: name }), 'DELETE', `/v1/recovery/${encodeURIComponent(b.dataset.recRemove)}`, last ? { confirm: 'no-recovery' } : undefined,
+      { scope: last ? `remove-last-recovery-owner:${b.dataset.recRemove}` : recScope(b.dataset.recRemove) });
     if (r.cancelled) return;
     recNote = r.ok ? null : { kind: 'error', text: removeRefusal(r) };
     return load();

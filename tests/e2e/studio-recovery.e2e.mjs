@@ -177,6 +177,9 @@ test('Security › Recovery owners: the banner while fewer than two count, namin
   await lastRow.getByRole('button', { name: 'Remove' }).click();
   await warn.getByRole('button', { name: 'Remove anyway' }).click();
   await stepUp(page, 'Remove Octo Cat as a recovery owner');
+  // The server's floor (CTO ruling): confirm "no-recovery" and a step-up scoped to removing exactly this last owner.
+  await page.locator('#recovery tbody tr', { hasText: 'Octo Cat' }).waitFor({ state: 'detached' });
+  assert.ok(iss.log.some((l) => l.method === 'RECOVERY' && l.path === 'removed-last' && l.person === 'per_octo'), 'removed as the last one, confirmed and scoped');
   await page.locator('.recovery-banner').getByText('Nobody can recover Acme. If its owners lose their sign-in, nobody can let them back in. Add two recovery owners.').waitFor();
   assert.deepEqual(errors, []);
   await ctx.close();
