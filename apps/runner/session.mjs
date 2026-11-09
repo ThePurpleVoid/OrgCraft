@@ -330,8 +330,10 @@ export class Session {
   /**
    * Asks the control plane for a spend lease before a turn (R4, L24s): twice the session's biggest turn so far, and at
    * least a quarter of what it could spend when its first turn started, never more than it may still spend. Answers
-   * the amount granted, 0 when nothing is left, or null when the control plane gives no leases (it spends as before).
-   * While other sessions hold what is left, it waits for them for up to a minute before it stops for the budget.
+   * the amount granted, 0 when nothing is left, or null when the control plane gives no leases at all (it is older
+   * than leases: it nacks spend.lease as not supported, or acks without an amount), and only then does it spend as
+   * before. While other sessions hold what is left, or the control plane is slow, unreachable or fails, it asks again
+   * for up to a minute (by the clock, calls included) and then stops for the budget: no lease, no turn.
    */
   async leaseFor(remaining) {
     if (!this.deps.lease) return null;
@@ -339,13 +341,18 @@ export class Session {
     let ask = remaining === null ? undefined : Math.max(1, Math.ceil((this.biggestTurn ?? 0) * 2), Math.ceil((this.leaseBase ?? 0) / 4));
     if (ask !== undefined && remaining !== null) ask = Math.min(ask, remaining);
     const every = this.deps.leaseWaitMs ?? 5000;
-    for (let waited = 0; ; waited += every) {
+    const window = this.deps.leaseWindowMs ?? 60_000;
+    const started = Date.now();
+    for (;;) {
       const g = await this.deps.lease({ session: this.id, ...(ask === undefined ? {} : { amount: ask }) });
-      if (!g || g.nack || !Number.isFinite(g.amount)) return null;
-      if (g.amount > 0) return g.amount;
+      if (g && !g.nack && !Number.isFinite(g.amount)) return null;
+      if (g?.nack && /is not supported by this control plane/.test(String(g.nack))) return null;
+      if (g && !g.nack && g.amount > 0) return g.amount;
       // The run is paused: the control plane stops this session itself; nothing is spent meanwhile.
-      if (g.reason === 'paused') { this.leaseRefused = 'paused'; return 0; }
-      if (!(g.held > 0) || waited >= 60_000 || this.state === 'stopping' || this.state === 'ended') return 0;
+      if (g && !g.nack && g.reason === 'paused') { this.leaseRefused = 'paused'; return 0; }
+      // Ask again only while it may still come: others hold the rest, or no answer came (a nack, a timeout).
+      const worthWaiting = !g || g.nack || g.held > 0;
+      if (!worthWaiting || Date.now() - started >= window || this.state === 'stopping' || this.state === 'ended') return 0;
       await new Promise((r) => { const t = setTimeout(r, every); t.unref?.(); });
     }
   }

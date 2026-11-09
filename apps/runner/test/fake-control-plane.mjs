@@ -98,7 +98,8 @@ export async function fakeControlPlane({ secrets = {}, key = 'rk_test', tenant =
         } else if (f.op === 'spend.lease' && plane.lease) {
           // L24s: a test's lease rule; without one, the ack below carries no amount, as from a server without leases.
           plane.leaseAsks.push(f.body);
-          send('ack', plane.lease(f.body), f.id);
+          const r = plane.lease(f.body);
+          if (r?.nack) send('nack', { ref: f.id, problem: r.nack }, f.id); else send('ack', r, f.id);
         } else if (f.op === 'session.renew') {
           send('ack', {}, f.id);
           const s = sessionOf[f.body.session];

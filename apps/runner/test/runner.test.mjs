@@ -529,3 +529,33 @@ test('spend leases: a control plane without them (no amount in the ack) leaves t
     await cp.close();
   }
 });
+
+test('spend leases: a failing or silent control plane is asked again, then the session stops for budget; only "not supported" spends as before', async () => {
+  const { bare, root } = origin();
+  const cp = await fakeControlPlane();
+  const budgets = [];
+  const adapter = stubAdapter({ 'qa-web': async (t) => { budgets.push(t.maxBudgetUsd); return { usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.01 } }; } });
+  const answers = [{ nack: 'something went wrong; try again' }, { nack: 'something went wrong; try again' }, { amount: 20 }];
+  cp.lease = () => answers.shift() ?? { nack: 'something went wrong; try again' };
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter, leaseWaitMs: 20, leaseWindowMs: 300 });
+  try {
+    await runner.ready;
+    const f = cp.start({ role: 'qa-web', run: 'run_n', repo: { url: bare }, caps: { remainingToday: 100 } });
+    await cp.until(() => budgets.length === 1);
+    assert.equal(cp.leaseAsks.length, 3, 'asked again after each failure');
+    assert.ok(Math.abs(budgets[0] - 0.2) < 1e-9, 'and spent only the lease, never the whole day');
+    await cp.until(() => cp.events.some((e) => e.type === 'session.idle'));
+    cp.send('session.message', { session: f.body.session, message: 'again' });
+    await cp.until(() => cp.events.some((e) => e.type === 'session.ended'), 15_000);
+    assert.equal(cp.events.find((e) => e.type === 'session.ended').data.reason, 'budget', 'a control plane that keeps failing stops the session for budget');
+    assert.equal(budgets.length, 1, 'no turn without a lease');
+    cp.lease = () => ({ nack: 'spend.lease is not supported by this control plane' });
+    const g = cp.start({ role: 'qa-web', run: 'run_m', repo: { url: bare }, caps: { remainingToday: 40 } });
+    await cp.until(() => budgets.length === 2);
+    assert.ok(Math.abs(budgets[1] - 0.4) < 1e-9, 'an older control plane: the session spends as before');
+    assert.ok(g);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
