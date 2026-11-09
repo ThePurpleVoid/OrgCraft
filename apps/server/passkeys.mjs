@@ -13,6 +13,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
 import { Problem } from './store.mjs';
+import { STEP_UP_SCOPE } from './m3.mjs';
 
 const CHALLENGE_SECONDS = 120;
 const FIRST_PASSKEY_MS = 5 * 60_000;
@@ -117,8 +118,9 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
    * Trades a passkey assertion for a su_ token. Five failed tries in 15 minutes lock the person out (429); the
    * attempt is counted before it is checked, under a per-person lock, so parallel guesses cannot all slip through.
    */
-  async function stepUp(who, assertion) {
+  async function stepUp(who, assertion, scope = null) {
     if (!who.tenant) throw new Problem(404, 'not found');
+    if (scope !== null && (typeof scope !== 'string' || !STEP_UP_SCOPE.test(scope))) throw new Problem(400, 'scope names one change, like resume:<run id>');
     const attempt = await db.systemTx(async ({ q }) => {
       await q('select pg_advisory_xact_lock(4853, hashtext($1))', [who.principal]);
       const [{ n }] = await q("select count(*)::int as n from identity_audit where person = $1 and action = 'step-up.failed' and at > now() - make_interval(mins => $2)", [who.principal, LOCKOUT.minutes]);
@@ -152,7 +154,7 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
     await db.system('update passkeys set sign_count = greatest(sign_count, $2), last_used = now() where id = $1', [key.id, counter]);
     await db.system('delete from identity_audit where id = $1', [attempt]);
     if (who.session.session) await db.system('update person_sessions set last_step_up = now(), amr = array(select distinct unnest(amr || $2::text[])) where id_hash = $1', [who.session.session, ['hwk', 'user']]);
-    return m3.mintStepUp(who.tenant, who.principal, { method: 'passkey', passkey: key.id });
+    return m3.mintStepUp(who.tenant, who.principal, { method: 'passkey', passkey: key.id }, scope);
   }
 
   /** A su_ token for this person in this tenant, used up here. */

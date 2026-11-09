@@ -112,7 +112,13 @@ test('run state, today\'s cost against the cap, pause, resume and stop', async (
       assert.equal(r.summary.cost.capPerDay, 5000);
       assert.equal((await call('/v1/team/run/pause', { key: 'p1' })).status, 200);
       assert.equal((await call('/v1/team/run')).body.run.state, 'paused');
-      assert.equal((await call('/v1/team/run/resume', { key: 'r1' })).status, 200);
+      // Resuming needs a step-up bound to this run, whoever paused it (ADR 0013); the answer names the scope.
+      const ask = await call('/v1/team/run/resume', { key: 'r1' });
+      assert.deepEqual([ask.status, ask.body.type, ask.body.scope], [401, 'step-up-required', 'resume:run_1']);
+      assert.equal((await call('/v1/team/step-up', { secret: cp.stepUpSecret })).status, 200);
+      assert.equal((await call('/v1/team/run/resume', { key: 'r1b' })).status, 401, 'a step-up not bound to this run does not resume it');
+      assert.equal((await call('/v1/team/step-up', { secret: cp.stepUpSecret, scope: ask.body.scope })).status, 200);
+      assert.equal((await call('/v1/team/run/resume', { key: 'r1c' })).status, 200);
       assert.equal((await call('/v1/team/run/stop', { key: 's1' })).status, 200);
       assert.equal((await call('/v1/team/run')).body.run, null);
       assert.equal((await call('/v1/team/run/pause', { key: 'p2' })).status, 409);
@@ -227,7 +233,7 @@ test('resuming a run today\'s cap paused needs step-up, and is refused while the
       const ask = await call('/v1/team/run/resume', { key: 'r2' });
       assert.equal(ask.status, 401);
       assert.equal(ask.body.type, 'step-up-required');
-      await call('/v1/team/step-up', { secret: cp.stepUpSecret });
+      await call('/v1/team/step-up', { secret: cp.stepUpSecret, scope: ask.body.scope });
       assert.equal((await call('/v1/team/run/resume', { key: 'r3' })).status, 200);
       assert.equal((await call('/v1/team/run')).body.run.state, 'running');
     });

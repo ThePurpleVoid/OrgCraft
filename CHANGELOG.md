@@ -7,6 +7,7 @@
   - A `request_approval` that names its call as JSON lets through exactly that call, once, within 15 minutes, in that session. Any other call is held and asked for again, and a grant never overrides a refusal.
   - A `request_approval` in words approves a decision, never a call: the step is still held and asked for with its exact input.
   - Contracts additive (`calls`, `callsHash`). The server's half (the step-up challenge over the hash, refusing other calls at the gateway, server-rendered facts) is backend-dev's. **What existing teams see:** nothing in their files. An agent that asks in words gets its step asked for again when it makes the call.
+- **Control plane: resuming a paused run needs step-up, whoever paused it** (ADR 0013, local PR L7). Before, only a run the budget paused asked for a passkey, so anyone holding a session could restart a run the owner had stopped to think. The step-up is bound to that run: `POST /v1/auth/step-up` takes an optional `scope` (here `resume:<run id>`, named in the `step-up-required` answer), and a resume refuses a step-up made for anything else, which stays unspent (migration `014_step_up_scope.sql`). A host may still pause or stop a run but never resume one. Stopping and pausing stay one tap with no step-up, and a person's pause is never lifted by the day rolling over. The audit row for a resume says who paused the run (`pausedBy`). The Studio (local and hosted) passes the scope through when it asks for the passkey or secret.
 
 ## 0.21.1
 

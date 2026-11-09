@@ -224,7 +224,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
   const relay = async (res, fn) => {
     if (!chat.connected) return send(res, 503, { connected: false, error: 'connect a control plane: set AGENT_TEAM_SERVER, AGENT_TEAM_SERVER_TOKEN and AGENT_TEAM_SERVER_TEAM' });
     try { return send(res, 200, await fn()); } catch (e) {
-      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(e.status === 409 && e.body?.id ? { card: e.body } : {}) });
+      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(typeof e.body?.scope === 'string' ? { scope: e.body.scope } : {}), ...(e.status === 409 && e.body?.id ? { card: e.body } : {}) });
       if (e instanceof RunRefused) return send(res, 409, { error: e.message, type: 'not-published' });
       return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
     }
@@ -335,7 +335,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (url.pathname === '/v1/team/runners/code') return relay(res, () => chat.runnerCode(input.name));
         if (url.pathname === '/v1/team/step-up') {
           if (typeof input.secret !== 'string' || !input.secret) throw new HttpError(400, 'send the secret');
-          return relay(res, () => chat.stepUp(input.secret));
+          return relay(res, () => chat.stepUp(input.secret, typeof input.scope === 'string' ? input.scope.slice(0, 200) : undefined));
         }
         throw new HttpError(404, 'no such endpoint');
       }
