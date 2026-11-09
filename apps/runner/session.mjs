@@ -232,7 +232,12 @@ export class Session {
     return n ? `${n}\n\n${prompt}` : prompt;
   }
 
-  async turn({ message, resume }) {
+  async turn(wake) {
+    // The wake is the cause of every event in its turn, and of none after it.
+    try { return await this.runTurn(wake); } finally { this.cause = null; }
+  }
+
+  async runTurn({ message, resume }) {
     // No model turn while the control plane is away: it keeps the budget, so nothing is spent it cannot see.
     if (this.deps.online) {
       await this.untilStopped(this.deps.online());
@@ -282,7 +287,7 @@ export class Session {
     this.spent += cost;
     const whole = last ? Math.ceil(this.spent - 1e-9) : Math.floor(this.spent + 1e-9);
     const due = whole - this.reported;
-    if (!(u.inputTokens || u.outputTokens || due > 0)) return;
+    if (!(u.inputTokens || u.outputTokens || due > 0)) { this.steps.forgetText(); return; } // nothing to report; the turn's text is not carried into the next one
     this.reported += Math.max(due, 0);
     // A meeting turn's spend is tagged with the meeting; the server checks the tag before it counts toward the cap.
     const io = this.steps.turnText();
@@ -355,7 +360,7 @@ export class Session {
 
   /** Secret values the session knows by name, for `[secret: NAME]` in step I/O. */
   namedSecrets() {
-    return [['session-token', this.proxyToken], ['model-key', process.env.ANTHROPIC_API_KEY], ['runner-key', this.deps.runnerKey], ...(this.deps.proposals?.secrets?.() ?? []).map((v) => ['merger', v])]
+    return [['model-proxy-token', this.proxyToken], ['session-token', this.token], ['model-key', process.env.ANTHROPIC_API_KEY], ['runner-key', this.deps.runnerKey], ...(this.deps.proposals?.secrets?.() ?? []).map((v) => ['merger', v])]
       .filter(([, v]) => typeof v === 'string' && v).map(([name, value]) => ({ name, value }));
   }
 

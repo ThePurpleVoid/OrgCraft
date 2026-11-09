@@ -128,3 +128,40 @@ test('without capture: no step.io and no cause, but call ids and results still g
     await cp.close();
   }
 });
+
+test('step I/O redaction: credential patterns, the JSON-escaped form of a value, and the session token (review F1)', () => {
+  const gh = `ghp_${'a'.repeat(36)}`, aws = 'AKIAABCDEFGHIJKLMNOP';
+  const odd = 'pa"ss\\word\nline2';
+  const r = redactNamed(JSON.stringify({ stdout: `token ${gh} and ${aws}`, cfg: odd }), [{ name: 'merger', value: odd }]);
+  assert.ok(!r.text.includes(gh) && !r.text.includes(aws) && !r.text.includes('pa\\"ss'), r.text);
+  assert.deepEqual(r.names.sort(), ['aws access key', 'github token', 'merger']);
+  const frames = [];
+  const steps = new Steps({ capture: 'tools', send: (f) => frames.push(f), secrets: () => [{ name: 'session-token', value: 'st_0123456789abcdef' }], session: 'ses_1' });
+  const step = steps.begin('Bash', { command: 'env' });
+  steps.decided(step, true);
+  const res = steps.end('Bash', { command: 'env' }, { stdout: `TOKEN=st_0123456789abcdef GH=${gh}` });
+  const out = frames.find((f) => f.part === 'output');
+  assert.ok(!out.body.includes('st_0123456789abcdef') && !out.body.includes(gh), out.body);
+  assert.deepEqual(out.redactions.sort(), ['github token', 'session-token']);
+  assert.ok(!res.summary.includes(gh), 'the summary too');
+});
+
+test('cause is cleared when the turn ends, and a turn with nothing to report carries no text into the next (review F3)', async () => {
+  const { bare, root } = origin();
+  const cp = await fakeControlPlane();
+  const adapter = stubAdapter({ 'docs-keeper': async (t) => { await t.say('first turn text'); return { usage: {} }; } });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  try {
+    await runner.ready;
+    cp.start({ role: 'docs-keeper', run: 'run_1', repo: { url: bare }, areas: ['docs/'], caps: { capture: 'all' }, wake: { id: 'ev_w', type: 'chat.message', data: { text: 'go' } } });
+    await cp.until(() => cp.events.some((e) => e.type === 'session.idle'));
+    const s = [...runner.sessions.values()][0];
+    assert.ok(s, 'the session is reachable');
+    assert.equal(s.cause, null);
+    assert.deepEqual(s.steps.text, []);
+    noFailedTurns(cp);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
