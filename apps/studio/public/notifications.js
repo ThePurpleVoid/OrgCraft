@@ -8,6 +8,7 @@
 // PATCH …/emails/{id} { kinds }, DELETE …/emails/{id}. The page only calls its own origin, with the session cookie.
 import { call, dismissNotices, ensureSignedIn, esc, noticesBanner } from './auth.js';
 import { t } from './i18n.js';
+import { infoButton, installTips } from './tooltip.js';
 
 // ---- quiet hours and the daily digest (L25; GET/PUT /v1/me/notifications)
 
@@ -38,7 +39,7 @@ export function prefsHtml(st) {
       ${st.device && st.device !== p.timezone ? `<p><button type="button" class="link" id="zone-device">${esc(t('notify.zone.device', { zone: st.device }))}</button></p>` : ''}
       <label class="switch"><input type="checkbox" name="quiet"${qh ? '' : ' checked'}> ${esc(t('notify.quiet.none'))}</label>
       <div class="row"${qh ? '' : ' hidden'} id="quiet-times"><label>${esc(t('notify.quiet.from'))} <input type="time" name="from" value="${esc(qh?.from ?? '21:00')}"></label><label>${esc(t('notify.quiet.to'))} <input type="time" name="to" value="${esc(qh?.to ?? '07:00')}"></label></div>
-      <p class="hint"><span title="${esc(t('notify.tip.breakthrough'))}">${esc(t('notify.breakthrough'))}</span></p>
+      <p class="hint">${esc(t('notify.breakthrough'))} ${infoButton(t('notify.tip.breakthrough'), esc, t('notify.breakthrough'))}</p>
       <label class="switch"><input type="checkbox" name="digest"${dg ? '' : ' checked'}> ${esc(t('notify.digest.off'))}</label>
       <div class="stack"${dg ? '' : ' hidden'} id="digest-opts">
         <label>${esc(t('notify.digest.at'))} <input type="time" name="at" value="${esc(dg?.at ?? '08:00')}"></label>
@@ -85,12 +86,12 @@ export function logHtml(st) {
   const label = (id) => kindLabel(id, st.kinds.find((k) => k.id === id)?.label ?? id);
   const word = (key, fb) => (t(key) === key ? fb : t(key));
   // Why is always a plain sentence (CPO): held and emailed have one; a provider's own error is never shown.
-  const why = (s, channel) => word(`notify.status.${s}.why`, '').replace('{channel}', t(`notify.channel.${channel}`));
+  const why = (s, channel) => (s === 'failed' && channel ? word(`notify.status.failed.why.${channel}`, '') : '') || word(`notify.status.${s}.why`, '').replace('{channel}', t(`notify.channel.${channel}`));
   // Who is hidden until the log carries a display name (code review: never a raw per_ id).
   const who = false;
   const everyone = !!lg.all;
   const head = [t('notify.log.when'), t('notify.log.what'), t('notify.log.where'), ...(who ? [t('notify.log.who')] : []), t('notify.log.status'), t('notify.log.why')];
-  const rows = (lg.items ?? []).map((r) => `<tr class="st-${esc(r.status)}"><td>${esc(when(r.at))}</td><td>${esc(label(r.kind))}</td><td>${esc(t(`notify.channel.${r.channel}`))}${r.to ? ` <span class="muted">${esc(r.to)}</span>` : ''}</td>${who ? `<td>${esc(r.principal ?? '')}</td>` : ''}<td${why(r.status, r.channel) ? ` title="${esc(why(r.status, r.channel))}"` : ''}>${esc(word(`notify.status.${r.status}`, r.status))}</td><td>${esc(why(r.status, r.channel))}</td></tr>`).join('');
+  const rows = (lg.items ?? []).map((r) => `<tr class="st-${esc(r.status)}"><td>${esc(when(r.at))}</td><td>${esc(label(r.kind))}</td><td>${esc(t(`notify.channel.${r.channel}`))}${r.to && r.channel === 'email' ? ` <span class="muted">${esc(r.to)}</span>` : ''}</td>${who ? `<td>${esc(r.principal ?? '')}</td>` : ''}<td>${esc(word(`notify.status.${r.status}`, r.status))}${r.status === 'held' ? ` ${infoButton(why(r.status, r.channel), esc, word('notify.status.held', 'held'))}` : ''}</td><td>${esc(why(r.status, r.channel))}</td></tr>`).join('');
   return `<section class="n-section" id="log" aria-labelledby="log-title">
     <h2 id="log-title" tabindex="-1">${esc(t('notify.log.heading'))}</h2>
     <p class="muted">${esc(t('notify.log.explainer'))}</p>
@@ -327,7 +328,9 @@ function start() {
     const button = form.querySelector('button[type="submit"]');
     button.disabled = true;
     if (form.id === 'prefs-form') {
-      const r = await call('PUT', '/v1/me/notifications', prefsBody(form));
+      const body = prefsBody(form);
+      if (body.quietHours && body.quietHours.from === body.quietHours.to) { button.disabled = false; say('prefs', 'error', t('notify.quiet.same')); render(); return root.querySelector('#prefs .result')?.focus?.(); }
+      const r = await call('PUT', '/v1/me/notifications', body);
       button.disabled = false;
       if (!r.ok) { say('prefs', 'error', t('notify.failed')); return render(); }
       st.prefs = r.data;
@@ -488,6 +491,7 @@ function start() {
     render();
   }
 
+  installTips(document.body);
   (async () => {
     if (!team) { root.innerHTML = '<p class="result error" role="alert">This page needs a team: open it from a team email or from the Studio.</p>'; return; }
     st.me = await ensureSignedIn();

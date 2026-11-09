@@ -349,8 +349,17 @@ test('L25: set quiet hours and a digest, then read the delivery log, mine and ev
   const prefs = page.locator('#prefs');
   await prefs.getByRole('heading', { name: 'Quiet hours and the daily digest' }).waitFor();
   // Approvals and budget stops always break through, and say why on hover.
-  const through = prefs.getByText('Approvals and budget stops always reach you, even in quiet hours, because the team is waiting on you.');
-  assert.match(await through.getAttribute('title'), /^These are a decision only you can make/);
+  await prefs.getByText('Approvals and budget stops always reach you, even in quiet hours, because the team is waiting on you.').waitFor();
+  assert.match(await prefs.locator('button.info').getAttribute('data-tip'), /^These are a decision only you can make/);
+  await prefs.locator('button.info').focus();
+  await page.getByRole('tooltip').getByText(/^These are a decision only you can make/).waitFor();
+  // The same start and end is said in words, and nothing is sent.
+  await prefs.getByLabel('No quiet hours').uncheck();
+  await prefs.getByLabel('Quiet from').fill('22:00');
+  await prefs.getByLabel('to', { exact: true }).fill('22:00');
+  await prefs.getByRole('button', { name: 'Save' }).click();
+  await prefs.getByRole('alert').getByText('Quiet hours need two different times.').waitFor();
+  await prefs.getByLabel('No quiet hours').check();
   await prefs.getByRole('button', { name: "Use this device's time zone (Europe/Paris)" }).click();
   await prefs.getByLabel('No quiet hours').uncheck();
   await prefs.getByLabel('Quiet from').fill('22:00');
@@ -372,19 +381,19 @@ test('L25: set quiet hours and a digest, then read the delivery log, mine and ev
   const log = page.locator('#log');
   await log.getByRole('heading', { name: 'Delivery log' }).waitFor();
   assert.equal(await log.locator('tbody tr').count(), 2);
-  assert.equal(await log.locator('tr.st-held td', { hasText: 'Held for the digest' }).getAttribute('title'), 'It came in during quiet hours.');
+  assert.equal(await log.locator('tr.st-held button.info').getAttribute('data-tip'), 'It came in during quiet hours.');
   await log.getByRole('button', { name: 'Everyone' }).click();
   await log.locator('tbody tr').nth(2).waitFor();
   assert.equal(await log.getByRole('button', { name: 'Everyone' }).getAttribute('aria-pressed'), 'true');
   const kim = log.locator('tr', { hasText: 'A teammate is stuck' });
   assert.doesNotMatch(await log.textContent(), /per_kim|per_octo/, 'no raw person ids');
   await kim.getByText("Couldn't send").waitFor();
-  await kim.getByText("Slack didn't accept it.").waitFor();
+  await kim.getByText("Slack didn't accept the message. Check the channel, or reconnect Slack in Channels.").waitFor();
   assert.doesNotMatch(await kim.textContent(), /U2|channel_not_found/, "someone else's address, and a provider's own error, are never shown");
   // A phone: the page never scrolls sideways (the log scrolls inside itself), and the toggles are 44 px.
   await page.setViewportSize({ width: 360, height: 780 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 360), 'no sideways scroll at 360px');
-  assert.ok((await log.getByRole('button', { name: 'Everyone' }).boundingBox()).height >= 44);
+  for (const el of [log.getByRole('button', { name: 'Everyone' }), page.locator('#prefs select'), page.getByLabel('Daily digest at'), page.getByRole('link', { name: 'Back to the team' })]) assert.ok((await el.boundingBox()).height >= 44, 'a 44 px target at 360px');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'delivery-log-phone-light.png'), fullPage: true });
   assert.deepEqual(errors, []);
   await ctx.close();

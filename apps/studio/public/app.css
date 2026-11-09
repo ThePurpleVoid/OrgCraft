@@ -715,6 +715,11 @@
 .ats #log table.log th, .ats #log table.log td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .ats #log table.log .hint { margin: 2px 0 0; }
 .ats #log tr.st-failed td:last-child { color: var(--error); }
-.ats #log [data-log-all] { min-height: 36px; }
+.ats #log [data-log-all] { min-height: 36px; color: var(--ink); background: var(--panel); }
 .ats #log [data-log-all][aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
 @media (max-width: 640px) { .ats #log [data-log-all], .ats #log-older, .ats #prefs button { min-height: 44px; } }
+/* qa-web L25w: 44 px targets on the hosted Notifications page at phone width. */
+@media (max-width: 640px) {
+  .ats #notifications input:not([type="checkbox"]), .ats #notifications select, .ats #notifications button:not(.info) { min-height: 44px; }
+  .ats .auth-brand a { display: inline-flex; align-items: center; min-height: 44px; }
+}

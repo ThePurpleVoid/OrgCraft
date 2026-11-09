@@ -6,6 +6,8 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
+  // qa-web L25w: quiet hours with the same start and end (asked of the CPO).
+  'notify.quiet.same': 'Quiet hours need two different times.',
 };
 
 export function t(key, vars = {}) {
