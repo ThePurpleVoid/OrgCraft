@@ -1,6 +1,6 @@
 {
   "name": "@agent-team/server",
-  "version": "0.1.0",
+  "version": "0.21.0",
   "private": true,
   "description": "Agent Team Studio control plane: the event log, the board, the public API.",
   "type": "module",

@@ -121,11 +121,12 @@ export function createControlPlane(opts) {
   wireBus(m3, bus);
   // Runners connect here over a WebSocket (runner-protocol.md).
   runners = attachRunners(server, { db: opts.db, ops: bus.ops, welcome: bus.welcome, onLost: bus.onLost, ...(opts.serverVersion ? { version: opts.serverVersion } : {}), ...(opts.runnerOptions ?? {}) });
-  server.on('request', createHandler({ ...opts, runners, m3, bus }));
+  const handler = createHandler({ ...opts, runners, m3, bus });
+  server.on('request', handler);
   // The tick runs in-process every 15 s; a deployment can also call POST /v1/internal/tick from a cron.
   const tickMs = opts.tickMs ?? 15_000;
   let ticking = false;
-  const timer = tickMs > 0 ? setInterval(() => { if (ticking) return; ticking = true; bus.tick().then(() => opts.identity?.sweep()).catch((e) => console.error(`tick: ${e.message}`)).finally(() => { ticking = false; }); }, tickMs) : null;
+  const timer = tickMs > 0 ? setInterval(() => { if (ticking) return; ticking = true; bus.tick().then(() => opts.identity?.sweep()).then(() => handler.recheck()).catch((e) => console.error(`tick: ${e.message}`)).finally(() => { ticking = false; }); }, tickMs) : null;
   timer?.unref?.();
   server.runners = runners;
   server.m3 = m3;
@@ -160,6 +161,14 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const startedAt = now().toISOString();
   const deployMode = ['local', 'self-hosted', 'hosted'].includes(mode) ? mode : db.kind === 'pglite' ? 'local' : 'self-hosted';
   let lastCheck = 0;
+  /** One probe of the code host unless one ran in the last CHECK_SECONDS; returns ms until the next may run (<= 0: it ran). */
+  const probeCodeHost = async () => {
+    const wait = lastCheck + CHECK_SECONDS * 1000 - now().getTime();
+    if (wait > 0) return wait;
+    lastCheck = now().getTime();
+    try { await codeHostFetch(`${codeHostApi}/rate_limit`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'agent-team-server' }, signal: AbortSignal.timeout(10_000) }); } catch { /* recorded by the wrapper */ }
+    return wait;
+  };
   const runnerCards = async (t) => { const at = now(); return (await store.listRunners(db, t)).map((r) => describeRunner(r, runners?.get(r.id)?.hello && !runners.get(r.id).closed ? runners.get(r.id) : null, at, serverVersion)); };
   const hostedStudio = createHostedStudio(studioOpts && studioOrigin ? {
     origin: studioOrigin,
@@ -628,8 +637,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (a === 'deployment' && !team && m === 'GET') return send(res, 200, deploymentView({ mode: deployMode, codeHost: reach.get('code-host'), runners: await runnerCards(t), startedAt, region, db, version: serverVersion }));
     // "Check again": one probe of the code host, at most once per CHECK_SECONDS per process (rate_limit costs no quota).
     if (a === 'deployment' && team === 'check' && !b && m === 'POST') {
-      const wait = lastCheck + CHECK_SECONDS * 1000 - now().getTime();
-      if (wait <= 0) { lastCheck = now().getTime(); try { await codeHostFetch(`${codeHostApi}/rate_limit`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'agent-team-server' }, signal: AbortSignal.timeout(10_000) }); } catch { /* recorded by the wrapper */ } }
+      const wait = await probeCodeHost();
       return send(res, 200, { checked: wait <= 0, ...(wait > 0 ? { retryIn: Math.ceil(wait / 1000) } : {}), ...deploymentView({ mode: deployMode, codeHost: reach.get('code-host'), runners: await runnerCards(t), startedAt, region, db, version: serverVersion }) });
     }
     if (a === 'runners' && team && team !== 'codes' && !b && m === 'DELETE') { await store.revokeRunner(db, t, team); runners?.close(team); return send(res, 200, { ok: true }); }
@@ -746,7 +754,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     throw new Problem(404, 'not found');
   }
 
-  return (req, res) => route(req, res).catch((e) => {
+  const handler = (req, res) => route(req, res).catch((e) => {
     res.hold = false;
     if (res.headersSent) { res.end(); return; }
     if (e instanceof Problem) return send(res, e.status, problemBody(e), e.type ? PROBLEM_JSON : {});
@@ -754,4 +762,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     console.error(e);
     send(res, 500, { error: 'something went wrong on the server' });
   });
+  // Outage mode: Studio writes wait while the code host is unreachable, so nothing else would call it. The tick probes
+  // it (at most every CHECK_SECONDS) until it answers, so publishing comes back on its own.
+  handler.recheck = async () => { if (reach.state('code-host') === 'unreachable') await probeCodeHost(); };
+  return handler;
 }

@@ -80,7 +80,7 @@ export function startModelProxy({ upstream = process.env.ANTHROPIC_BASE_URL || '
     unregister(session) { tokens.delete(session); },
     /** The model provider's state as this runner last saw it: { state: ok | unreachable | unknown, since, provider, error }. */
     health: () => ({ ...health }),
-    /** Probes the provider now (also used at start, so the first hello already says whether it answers). */
+    /** Probes the provider now; the runner calls it once at start. */
     check,
     close() { if (probe) clearInterval(probe); return new Promise((r) => server.close(r)); },
   };

@@ -2,6 +2,7 @@
 // docs/contracts/runner-protocol.md is the contract, and docs/product/m3-design.md section 4 the subset M3 builds:
 // hello/welcome (with sessions to resume), session.start/message/stop/checkpoint, events, approval.wait/result,
 // session.renew/token, ping/pong, ack/nack.
+import { readFileSync } from 'node:fs';
 import { checkEvent, SPEC, VERSION } from '../../packages/events/index.mjs';
 import { connect, ulid } from './link.mjs';
 import { Session } from './session.mjs';
@@ -10,7 +11,9 @@ import { startModelProxy } from './modelproxy.mjs';
 import { sandboxPool } from './sandbox.mjs';
 
 export const PROTOCOL = 'runner/1';
-const RUNNER_VERSION = '0.1.0';
+// The kit's version: apps/runner/package.json is kept equal to the root's (tests/versions.test.mjs), so the control
+// plane can place this runner in its supported window (R13).
+const RUNNER_VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 /** What the runner key may send as events (runner-protocol.md, "What each credential may send"). */
 const MAY_EMIT = (type, frontDoor) => /^session\./.test(type) || type === 'usage.recorded' || type === 'report.heartbeat' || /^proposal\.(opened|updated|accepted|failed|previewed)$/.test(type) || (type === 'chat.message' && frontDoor);
 const RENEW_BEFORE_MS = 2 * 60_000;
@@ -26,6 +29,10 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
   // Outage mode (L29): the control plane hears when the model provider stops or starts answering, and starts no new
   // work here while it doesn't. The hello carries the same state after every reconnect.
   function reportHealth(h) { if (up) link.send('runner.health', { model: h }).catch(() => {}); }
+  // One probe at start, so the control plane hears early whether the model answers. If it lands after the hello went
+  // out, the welcome handler below sends the change.
+  let helloHealth = null;
+  if (modelProxy === undefined) proxy.check?.();
   // The agent users (#28): one per live session from a pool, or one shared user for a runner of a single customer.
   const pool = sandboxPool(sandbox);
   let customer = null; // with one shared agent user: the only team this runner serves
@@ -43,7 +50,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
 
   const link = makeLink({
     server, key, log,
-    hello: () => ({ runner: id, version: RUNNER_VERSION, protocol: PROTOCOL, capabilities: { sandboxes: ['process'], runtimes: [adapter.runtime ?? 'agent-sdk'], maxSessions, slots: {} }, sessions: [...sessions.values()].filter((s) => s.state !== 'ended').map((s) => s.id), ...(proxy?.health ? { health: { model: proxy.health() } } : {}) }),
+    hello: () => ({ runner: id, version: RUNNER_VERSION, protocol: PROTOCOL, capabilities: { sandboxes: ['process'], runtimes: [adapter.runtime ?? 'agent-sdk'], maxSessions, slots: {} }, sessions: [...sessions.values()].filter((s) => s.state !== 'ended').map((s) => s.id), ...(proxy?.health ? { health: { model: (helloHealth = proxy.health()) } } : {}) }),
   });
 
   /** Values that must never leave the runner in an event: the model key and the session's tool token. */
@@ -155,6 +162,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     tenant = w.tenant ?? tenant ?? 'local';
     if (welcomed) for (const [, a] of approvals) if (a.resolve && sessions.get(a.session)?.state !== 'ended') link.send('approval.wait', { session: a.session, approval: a.approval, resend: true });
     welcomed = true;
+    if (proxy?.health && helloHealth && proxy.health().state !== helloHealth.state) reportHealth(proxy.health());
     // Behind the supported window (R13): still served, but told to upgrade by a date. The Studio shows it too.
     if (w.upgrade?.required) log(`this runner is ${w.upgrade.behind ?? 'too many'} versions behind the control plane (${w.upgrade.current}); upgrade by ${w.upgrade.by}`);
     // Sessions to resume after a reconnect: ids this runner still runs are kept; full bodies are (re)started.

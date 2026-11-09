@@ -143,3 +143,18 @@ test('outage mode for the code host: Studio writes wait with the honest reason, 
     assert.equal((await call('GET', '/deployment')).body.outage.publish, 'ok');
   }, { reachability, studio: { fetch: fakeFetch, api: 'https://gh.example' } });
 });
+
+test('the tick re-probes an unreachable code host on its own, so publishing comes back with no one pressing a button', async () => {
+  const seen = [];
+  const reachability = createReachability({ downAfter: 1 });
+  reachability.fail('code-host', 'ECONNRESET');
+  await plane(async ({ call }) => {
+    assert.equal((await call('GET', '/deployment')).body.outage.publish, 'waiting');
+    for (let i = 0; i < 100 && reachability.state('code-host') !== 'ok'; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(reachability.state('code-host'), 'ok');
+    assert.match(seen[0], /^https:\/\/gh\.example\/rate_limit$/);
+    assert.equal((await call('GET', '/deployment')).body.outage.publish, 'ok');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(seen.length, 1, 'no probing while it answers');
+  }, { reachability, tickMs: 50, studio: { fetch: async (u) => { seen.push(String(u)); return new Response('{}', { status: 200 }); }, api: 'https://gh.example' } });
+});
