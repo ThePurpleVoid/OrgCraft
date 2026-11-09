@@ -159,6 +159,33 @@ test('rollback opens a change against the current main, so the access it puts ba
   }, { publicUrl: ORIGIN });
 });
 
+test('rollback to a version an older kit generated: the old team, synced with today\'s kit, so accept passes (code review L9c)', async () => {
+  await plane(async (ctx) => {
+    const { call, su } = ctx;
+    const { backend, publish } = await managedTeam(ctx);
+    // A version whose generated files are not what today's sync writes (as if a 0.21 kit had written them), put on
+    // main directly, the way history from before an upgrade is.
+    const main1 = (await backend.info()).head.sha;
+    const path = 'docs/team/protocols.md';
+    const before = (await backend.diff(null, main1)).find((f) => f.path === path).after;
+    assert.ok(before.length > 100);
+    const old = await backend.publish({ base: main1, message: 'Written by an older kit', changes: [{ path, mode: '100644', content: `${before}\nA line an older kit wrote.\n` }] });
+    await backend.accept(old.pr.number, {});
+    const { spec } = (await call('GET', '/teams/shop/studio/v1/team', undefined, studio())).body;
+    const who = Object.keys(spec.roles).find((x) => spec.roles[x].enabled);
+    const m = await publish((x) => setField(x, who, 'Model', 'light'), 'lighter', 'lighter');
+    assert.equal((await call('POST', `/teams/shop/changes/${m}/accept`, {}, await su(`accept-change:shop_${m}`))).status, 200);
+    const rb = await call('POST', '/teams/shop/rollback', { to: old.commit });
+    assert.equal(rb.status, 201, JSON.stringify(rb.body));
+    assert.ok(!rb.body.files?.some((f) => f.path === path), 'the old generated text is not brought back');
+    const ok = await call('POST', `/teams/shop/changes/${rb.body.number}/accept`, {}, await su(`accept-change:shop_${rb.body.number}`));
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    // Rolling back to where the team already is changes nothing.
+    const head = (await backend.info()).head.sha;
+    assert.deepEqual([(await call('POST', '/teams/shop/rollback', { to: head })).status], [409]);
+  }, { publicUrl: ORIGIN });
+});
+
 test('a team in a code host has no change requests here, and a host never reaches accept', async () => {
   await plane(async ({ call }) => {
     await call('POST', '/teams', { id: 'blog' });

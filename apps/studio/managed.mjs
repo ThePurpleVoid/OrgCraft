@@ -151,12 +151,18 @@ export function managedBackend({ store, refs, now = () => new Date(), author = (
      * Rollback (spec 4.5, S2-19): a new commit on main whose tree is version `to`'s, opened as a change request like any
      * other; never a move of main backwards. `to` must be a version this team published.
      */
-    async rollback({ to, message, pr, by = null, checks = null, capability = [], authorMember = null, needsCode = false }) {
+    // `changes` turn main into `to` (core.plan of to's .agent-team/ against main with the current kit): never to's whole
+    // tree, whose generated files may be an older kit's, which the checks would then refuse forever (code review L9c).
+    // Never auto-accepted: a rollback can put access back, so it waits for a person.
+    async rollback({ to, changes, message, pr, by = null, checks = null, capability = [], authorMember = null, needsCode = false }) {
       if (!SHA.test(to ?? '')) throw new CoreError(400, 'to is a commit id');
+      if (!Array.isArray(changes) || !changes.length) throw new CoreError(409, 'the team is already at that version', { type: 'no-change' });
       const main = await refs.getRef('main');
       if (!main) throw new CoreError(409, 'the team has no published version yet');
       if (!(await api.published(to))) throw new CoreError(404, 'that is not a version this team published');
-      const { tree } = await commitOf(to);
+      for (const c of changes) if (!inReadSet(c.path)) throw new CoreError(400, `${c.path} is outside the team's files`);
+      let tree;
+      try { tree = await applyChanges(store, (await commitOf(main.sha)).tree, changes.map((c) => ({ path: c.path, mode: c.mode ?? '100644', content: c.content }))); } catch (e) { throw new CoreError(400, `the rollback could not be written: ${clean(e.message, 160)}`); }
       const a = author(by);
       const who = { name: clean(a?.name, 100) || 'OrgCraft Studio', email: clean(a?.email, 100) || 'studio@orgcraft.invalid', time: Math.floor(now().getTime() / 1000), tz: '+0000' };
       const commit = await writeObject(store, 'commit', writeCommit({ tree, parents: [main.sha], author: who, message: message || `Roll back to ${to.slice(0, 12)}` }));

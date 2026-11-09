@@ -152,10 +152,15 @@ export function createChanges({ db, m3, now = () => new Date(), backendFor = nul
       const main = (await refsOf(tenant, team).getRef('main'))?.sha ?? null;
       if (!main) throw new Problem(409, 'the team has no published version yet');
       if (!(await b.published(String(to ?? '')).catch(() => false))) throw new Problem(404, 'that is not a version this team published');
-      const { checks, capability } = await assess(b, to, main);
-      const files = await b.diff(main, to);
-      const needsCode = files.some((f) => core.isCodePath({ path: f.path, mode: '100644' }));
-      const out = await b.rollback({ to, by: { id: String(who.principal) }, checks, capability, needsCode, pr: { title: `Roll back to ${String(to).slice(0, 12)}`, body: '' } });
+      // The old version's team (.agent-team/), synced with today's kit against main: the generated files are what sync
+      // writes now, so the checks at accept pass even when the kit changed since `to` was published.
+      const spec = core.state(await b.readTeam(to)).spec;
+      if (!spec) throw new Problem(409, 'that version has no team to roll back to');
+      let p;
+      try { p = core.plan(await b.readTeam(main), spec, { strict: true }); } catch (e) { throw new Problem(e.status ?? 422, `that version can't be rolled back to with this kit: ${String(e.message).slice(0, 200)}`); }
+      const checks = { ok: !p.issues.some((i) => i.level === 'error'), errors: p.issues.filter((i) => i.level === 'error').map((i) => `${i.where}: ${i.message}`), drift: [] };
+      const out = await b.rollback({ to, changes: p.changes, by: { id: String(who.principal) }, checks, capability: p.capability, needsCode: p.needsCode, pr: { title: `Roll back to ${String(to).slice(0, 12)}`, body: '' } })
+        .catch((e) => { throw e?.status ? new Problem(e.status, e.message, e.type ? { type: e.type } : undefined) : e; });
       await emit(tenant, team, 'proposal.opened', { connector: 'managed', ref: out.number, url: out.url, branch: out.branch, headSha: out.commit }, who);
       return this.get(tenant, team, out.number);
     },
