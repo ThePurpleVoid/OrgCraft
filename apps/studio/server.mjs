@@ -224,7 +224,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
   const relay = async (res, fn) => {
     if (!chat.connected) return send(res, 503, { connected: false, error: 'connect a control plane: set AGENT_TEAM_SERVER, AGENT_TEAM_SERVER_TOKEN and AGENT_TEAM_SERVER_TEAM' });
     try { return send(res, 200, await fn()); } catch (e) {
-      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(typeof e.body?.scope === 'string' ? { scope: e.body.scope } : {}), ...(e.status === 409 && e.body?.id ? { card: e.body } : {}) });
+      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(typeof e.body?.scope === 'string' ? { scope: e.body.scope } : {}), ...(e.status === 409 && e.body?.id ? { card: e.body } : {}), ...(e.status === 409 && Array.isArray(e.body?.cards) ? { cards: e.body.cards } : {}) });
       if (e instanceof RunRefused) return send(res, 409, { error: e.message, type: 'not-published' });
       return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
     }
@@ -363,6 +363,12 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (member) {
           if (!['paused', 'off'].includes(input.state)) throw new HttpError(400, 'state is paused or off');
           return relay(res, () => chat.setMember(decodeURIComponent(member[1]), input.state, reason, key));
+        }
+        // L39 "Do it": up to five lettered asks, each with the card version the person saw.
+        if (url.pathname === '/v1/team/do-it') {
+          const asks = input.asks;
+          if (!Array.isArray(asks) || !asks.length || asks.length > 5 || asks.some((x) => !x || typeof x.approval !== 'string' || x.approval.length > 100 || !Number.isInteger(x.version))) throw new HttpError(400, 'asks is 1 to 5 of { approval, version }');
+          return relay(res, () => chat.doIt({ asks: asks.map((x) => ({ approval: x.approval, version: x.version })), key: typeof input.key === 'string' ? input.key.slice(0, 80) : undefined }));
         }
         const withdraw = /^\/v1\/team\/standing-rules\/([^/]+)\/withdraw$/.exec(url.pathname);
         if (withdraw) return relay(res, () => chat.withdrawRule(decodeURIComponent(withdraw[1])));

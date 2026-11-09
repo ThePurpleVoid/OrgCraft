@@ -210,6 +210,10 @@
 .ats .card-msg .links { font-size: 12.5px; margin: 4px 0; }
 .ats .card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .ats .card-actions button { min-height: 36px; padding: 6px 16px; }
+.ats .card-msg h3 .letter { font-variant-numeric: tabular-nums; }
+.ats .doit { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.ats .doit button.big { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 44px; padding: 8px 18px; text-align: left; max-width: 100%; }
+.ats .doit .doitcov { font-size: 0.85em; font-weight: normal; opacity: 0.9; white-space: normal; }
 .ats .card-msg .answer { margin: 6px 0 0; font-weight: 600; color: var(--ok); }
 .ats .card-note { margin: 6px 0; padding: 6px 10px; border-radius: 6px; font-size: 12.5px; background: var(--off); }
 .ats .card-note.changed { border-left: 3px solid var(--accent); }

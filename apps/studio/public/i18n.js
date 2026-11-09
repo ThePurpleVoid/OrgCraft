@@ -6,6 +6,8 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
+  // L39 (asked of the CPO).
+  'tip.control.doit': 'Takes the recommended answer on every ask it lists, with one passkey. An ask that needs you first stays open.',
 };
 
 export function t(key, vars = {}) {

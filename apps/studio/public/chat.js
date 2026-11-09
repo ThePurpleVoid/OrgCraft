@@ -266,6 +266,50 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     return `<div class="facts"><p><strong>It will do exactly this${facts.length > 1 ? `, ${facts.length} steps` : ''}:</strong></p>${facts.map((f) => `<pre><code>${esc(f.text)}</code></pre>`).join('')}${facts.some((f) => f.redacted) ? '<p class="muted">Values that look like passwords or keys are hidden here as [redacted]. Approving still covers the exact steps, hidden values included.</p>' : ''}<p class="muted">Approving signs these exact steps. Anything different is asked for again.</p></div>`;
   }
 
+  // ---- "Do it" (L39; governance G3): the team's open asks are lettered A to E. One tap takes the recommendation on
+  // every ask it can cover, each bound to the card version shown; an ask that needs the person first stays open.
+  const LETTER = /^[A-E]$/;
+  const approvalOf = (card) => card.approval ?? /^approval\/(.+)$/.exec(card.subject ?? '')?.[1] ?? card.id;
+  // A merge held by a missing or stale sign-off needs the person (or the team) to do something before it can go.
+  const needsYou = (card) => !!card.data?.blocked || (Array.isArray(card.data?.signoffs) && card.data.signoffs.some((x) => x?.fresh === false));
+  const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+  /** The open lettered asks, the ones Do it covers, and the card it shows on (the newest of them). */
+  function doItPlan(isAnswered) {
+    const open = [...st.cards.values()].filter((c) => c.kind === 'approval' && LETTER.test(c.data?.letter ?? '') && (!c.state || c.state === 'open') && !isAnswered(c));
+    if (!open.length) return null;
+    const order = new Map(st.events.map((e, i) => [/\.requested$|^card\.updated$/.test(e.type) ? cardFrom(e)?.id : null, i]));
+    const host = [...open].sort((a, b) => (order.get(b.id) ?? -1) - (order.get(a.id) ?? -1))[0].id;
+    const byLetter = (a, b) => (a.data.letter < b.data.letter ? -1 : 1);
+    return { host, covered: open.filter((c) => !needsYou(c)).sort(byLetter).slice(0, 5), held: open.filter(needsYou).sort(byLetter), all: open.length };
+  }
+  function doItHtml(p) {
+    if (!p.covered.length) return `<p class="muted doit-none">${esc(t('card.doit.none'))}</p>`;
+    const letters = p.covered.map((c) => c.data.letter);
+    const covers = p.all === 1 ? t('card.doit.single') : p.held.length ? t('card.doit.covers', { list: andList(letters), other: andList(p.held.map((c) => c.data.letter)) }) : t('card.doit.covers', { list: andList(letters), other: '' }).split(/(?<=\.)\s+/)[0];
+    const acts = p.covered.some((c) => Array.isArray(c.data?.facts) && c.data.facts.length) ? ` ${t('card.doit.acts')}` : '';
+    return `<div class="doit"><button type="button" class="primary big" id="doit" data-tip="${esc(t('tip.control.doit'))}" ${st.busy ? 'disabled' : ''}>${esc(t('card.doit'))}<small class="doitcov">${esc(covers + acts)}</small></button></div>`;
+  }
+  async function doIt() {
+    const p = st.doit;
+    if (!p?.covered.length) return;
+    const asks = p.covered.map((c) => ({ approval: approvalOf(c), version: c.version }));
+    const list = andList(p.covered.map((c) => c.data.letter));
+    st.busy = true; render();
+    let r = await api('/v1/team/do-it', { asks, key: newId() });
+    // One step-up for the set, bound to exactly these asks as shown (the control plane names the scope).
+    if (needsStepUp(r) && await stepUp(t('stepup.action.approve', { 'card summary': list }), r.data.scope)) r = await api('/v1/team/do-it', { asks, key: newId() });
+    st.busy = false;
+    if (r.status === 409 && Array.isArray(r.data.cards)) {
+      // Something changed since it was shown: nothing was approved. The cards are redrawn as they are now.
+      takeCards(r.data.cards);
+      render();
+      return flashNote(t('card.changed'));
+    }
+    if (!r.ok && !needsStepUp(r)) { render(); return flashNote(r.data.error ?? `HTTP ${r.status}`); }
+    for (const d of r.ok ? r.data.decided ?? [] : []) if (d.card?.id) takeCards([d.card]);
+    await load();
+  }
+
   function cardHtml(card, answered) {
     answered = answered || (card.state && card.state !== 'open' ? closedText(card) ?? human(card.state) : answered);
     const note = st.notes.get(card.id);
@@ -282,7 +326,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtWhen(card.expires))}` : ''}</div>
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
       ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="${esc(t('stepup.label.interim'))}" placeholder="${esc(t('stepup.label.interim'))}" required><button type="submit" class="primary">${esc(t('stepup.button'))}</button></form>` : ''}
-      <h3>${esc(card.title)}</h3>
+      <h3>${card.kind === 'approval' && LETTER.test(card.data?.letter ?? '') && !answered ? `<span class="letter">${card.data.letter}.</span> ` : ''}${esc(card.title)}</h3>
       ${card.kind === 'approval' ? declineHtml(card, me(), organization()) : ''}
       ${boundHtml(card)}
       ${factsHtml(card)}
@@ -290,6 +334,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       ${card.recommendation?.why && !answered ? `<p class="muted why">${esc(card.recommendation.why)}</p>` : ''}
       ${links ? `<p class="links">${links}</p>` : ''}
       ${answered ? `<p class="answer">${esc(answered)}</p>` : `<div class="card-actions">${buttons}</div>`}
+      ${!answered && st.doit?.host === card.id ? doItHtml(st.doit) : ''}
     </article>`;
   }
 
@@ -343,6 +388,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     // card.updated is (a budget card, or a decision from a source that sends no decision.requested).
     const anchored = new Set(st.events.filter((e) => /\.requested$|^budget\.exhausted$/.test(e.type)).map((e) => (e.type === 'budget.exhausted' ? e.data?.cardId : cardFrom(e).id)).filter(Boolean));
     const drawn = new Set();
+    st.doit = doItPlan((c) => answered.has(c.id) || answered.has(c.subject) || st.answers.has(c.id));
     const cardMsg = (card, e) => {
       drawn.add(card.id);
       const a = answered.get(card.id) ?? answered.get(e.subject ?? card.subject);
@@ -751,6 +797,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       return raiseCap();
     }
     if (b.dataset.retry) { const p = st.pending.find((x) => x.clientId === b.dataset.retry); if (p) send(p); return; }
+    if (b.id === 'doit') return doIt();
     if (b.dataset.card) answer(b.dataset.card, b.dataset.option);
   });
   $('#run-pause', root).onclick = () => control(st.run?.state === 'paused' || st.summary?.run === 'paused' ? 'resume' : 'pause');

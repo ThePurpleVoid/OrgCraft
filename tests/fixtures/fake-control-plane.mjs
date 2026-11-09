@@ -54,6 +54,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     exhaust() { cost.state = 'exhausted'; for (const r of runs) if (r.state === 'running') { r.state = 'paused'; r.reason = 'budget'; append('run.paused', { kind: 'system', id: 'budget' }, { reason: 'budget' }, `run/${r.id}`); } },
     events, cards, runs, cost, budget, started, live, rules, ledger,
   };
+  const doIts = [];
   const scopes = new Map(); // su -> scope it was bound to (ADR 0013)
   const stepped = (req, scope = null) => { const su = req.headers['x-step-up']; if (!su || !(stepUps.get(su) > Date.now()) || (scopes.get(su) ?? null) !== scope) return false; stepUps.delete(su); scopes.delete(su); return true; };
   const needStepUp = (res, what) => send(res, 401, { type: 'step-up-required', title: `${what} needs a recent sign-in`, status: 401 });
@@ -90,6 +91,27 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       const e = append('chat.message', { kind: 'person', id: 'owner', via: 'studio' }, { from: { kind: 'person', id: 'owner' }, text: body.text, clientId: body.clientId });
       setTimeout(() => runner(api, body.text), 30);
       return done(201, e);
+    }
+    // L39 "Do it": the lettered asks as shown, all or nothing; one step-up for the set when any ask is bound (facts).
+    if (p === '/v1/approvals/do-it' && req.method === 'POST') {
+      const body = await read(req);
+      const found = (body.asks ?? []).map((x) => ({ x, c: [...cards.values()].find((c) => c.subject === `approval/${x.approval}`) }));
+      if (found.some(({ c }) => !c)) return send(res, 404, { error: 'no such approval' });
+      const stale = found.filter(({ x, c }) => c.version !== x.version || c.answered || !c.data?.letter).map(({ c }) => c);
+      if (stale.length) return send(res, 409, { type: 'asks-changed', title: 'these asks changed since you saw them; nothing was approved', status: 409, cards: stale });
+      if (found.some(({ c }) => c.data?.facts)) {
+        const scope = `do-it:${found.map(({ x }) => `${x.approval}@${x.version}`).sort().join(',')}`;
+        if (!stepped(req, scope)) return send(res, 401, { type: 'step-up-required', title: 'Do it needs a recent sign-in', status: 401, scope });
+      }
+      doIts.push(body);
+      const decided = found.sort((a, b) => (a.c.data.letter < b.c.data.letter ? -1 : 1)).map(({ x, c }) => {
+        const event = append('approval.decided', { kind: 'person', id: 'owner', via: 'studio' }, { approval: x.approval, cardId: c.id, decision: 'approved', by: 'owner', words: `Tapped "Do it" (${c.data.letter})` }, c.subject);
+        const done = { ...c, version: c.version + 1, state: 'answered', answered: { option: 'approve', by: 'owner' } };
+        cards.set(c.id, done);
+        append('card.updated', { kind: 'system', id: 'cards' }, { card: done }, `card/${c.id}`);
+        return { letter: c.data.letter, approval: x.approval, decision: 'approved', card: done, event };
+      });
+      return send(res, 200, { decided });
     }
     const card = /^\/v1\/cards\/([^/]+)$/.exec(p) ?? /^\/v1\/approvals\/([^/]+)$/.exec(p);
     if (card && req.method === 'POST') {
@@ -231,7 +253,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}`;
   return {
-    url, token, stepUpSecret, team, ...api,
+    url, token, stepUpSecret, team, ...api, doIts,
     env: { AGENT_TEAM_SERVER: url, AGENT_TEAM_SERVER_TOKEN: token, AGENT_TEAM_SERVER_TEAM: team },
     close: () => { for (const s of streams) s.end(); server.closeAllConnections?.(); server.close(); },
   };

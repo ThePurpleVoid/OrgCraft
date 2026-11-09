@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Studio: "Do it" on lettered asks** (L39 web half; governance G3). In Chat, an open approval shows its letter (A to E). The newest one carries **Do it**, which takes the recommendation on every ask it can cover in one tap, each sent with the card version shown (POST `/v1/team/do-it` → `/v1/approvals/do-it`). Its note says what it covers ("Covers A and B. C needs you to do something first.", or "Takes option 1…" for one ask). A merge held by a missing or stale sign-off stays open for its own answer; when nothing can be covered, the button is replaced by "Each ask on this card needs its own answer." One passkey covers a set with bound asks, scoped as the control plane names. A set that changed since it was shown approves nothing: the cards are redrawn and the page says so.
+
 - **What a systems change widens: `systemsCapability(before, after)`** (L40, kit half; ADR 0013 rule 2). It takes two resources.json shapes, as GET and PUT `/v1/teams/{team}/systems` carry them, and lists what the change widens:
   - `system-added`: a new system, whether or not a seat is bound to it yet;
   - `binding-added`: a seat gets a system;

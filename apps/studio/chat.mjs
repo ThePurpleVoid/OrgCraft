@@ -66,6 +66,11 @@ export function chatSource(env = process.env) {
         ? call('POST', `/approvals/${encodeURIComponent(approval)}`, { decision: option === 'deny' ? 'denied' : option === 'approve' ? 'approved' : option, version }, headers)
         : call('POST', `/cards/${encodeURIComponent(card)}`, { option, version }, headers);
     },
+    /**
+     * "Do it" (L39): approves the lettered asks the person saw, each with its card version, in one call. One step-up
+     * covers the set when any ask is bound; the control plane names its scope when it asks.
+     */
+    doIt: ({ asks, key }) => call('POST', '/approvals/do-it', { asks, via: 'chat' }, { ...(key ? { 'idempotency-key': key } : {}), ...spendStepUp() }),
     /** This team's line from /me/summary (cost today against the cap, run state) and the run itself. */
     async run() {
       const [summary, run] = await Promise.all([call('GET', '/me/summary'), currentRun().catch(() => null)]);
