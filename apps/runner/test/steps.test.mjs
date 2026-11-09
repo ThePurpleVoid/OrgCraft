@@ -128,3 +128,51 @@ test('without capture: no step.io and no cause, but call ids and results still g
     await cp.close();
   }
 });
+
+test('a sign-off carries the runner\'s own record of what the session ran and saw succeed, never the agent\'s', async () => {
+  const { bare, root } = origin();
+  const cp = await fakeControlPlane();
+  const sha = 'c'.repeat(40);
+  const adapter = stubAdapter({
+    'docs-keeper': async (t) => {
+      await t.use('Read', { file_path: 'README.md' }, () => 'the readme');
+      await t.use('Bash', { command: 'npm test' }, () => ({ stdout: 'fail', is_error: true }));
+      await t.use('Write', { file_path: '/etc/passwd', content: 'x' });
+      await t.use('Bash', { command: 'npm test' }, () => ({ stdout: '# pass 1' }));
+      await t.call('signoff', { to: 'chief-of-staff', task: 'Docs', testedOn: 'node 22', walked: 'npm test', result: 'pass', evidence: ['logs/test.txt'], version: sha, unverified: [], checks: [{ call: 'call_forged', tool: 'Bash', summary: 'ran everything · pass' }] });
+      return {};
+    },
+  });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  try {
+    await runner.ready;
+    cp.start({ role: 'docs-keeper', run: 'run_1', repo: { url: bare }, areas: ['docs/'], wake: { id: 'ev_w', type: 'chat.message', data: { text: 'go' } } });
+    await cp.until(() => cp.events.some((e) => e.type === 'message.signoff'));
+    const sent = cp.toolCalls.find((c) => c.tool === 'signoff').input;
+    const results = cp.events.filter((e) => e.type === 'session.result' && e.data.ok);
+    assert.equal(sent.version, sha);
+    assert.equal(sent.versionKind, 'commit');
+    assert.deepEqual(sent.unverified, []);
+    assert.deepEqual(sent.checks.map((c) => [c.call, c.tool, c.effect, c.summary]), results.map((e) => [e.data.call, e.data.tool, e.data.tool === 'Read' ? 'read' : 'write', e.data.summary]), 'only the calls that ran and succeeded, as the runner recorded them');
+    assert.deepEqual(sent.checks.map((c) => c.tool), ['Read', 'Bash']);
+    assert.ok(!sent.checks.some((c) => c.call === 'call_forged'), 'the agent\'s own checks are dropped');
+    noFailedTurns(cp);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
+
+test('checks keep the last 20 successful calls', () => {
+  const steps = new Steps({ capture: 'off', session: 'ses_1' });
+  for (let i = 0; i < 25; i++) {
+    const step = steps.begin('Read', { file_path: `f${i}.md` });
+    steps.fields(step);
+    steps.decided(step, true);
+    steps.end('Read', { file_path: `f${i}.md` }, 'ok');
+  }
+  const checks = steps.checks();
+  assert.equal(checks.length, 20);
+  assert.equal(checks[0].summary, 'read f5.md');
+  assert.equal(checks[19].effect, 'read');
+});
