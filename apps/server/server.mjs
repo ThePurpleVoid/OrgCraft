@@ -798,7 +798,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (recovery && a === 'recovery' && !b) {
       if (!team && m === 'GET') return send(res, 200, await recovery.list(who));
       if (!team && m === 'POST') return send(res, 201, await recovery.add(who, await readJson(req, 4 * 1024), stepUp));
-      if (team && m === 'DELETE') return send(res, 200, await recovery.remove(who, team, stepUp));
+      if (team && m === 'DELETE') return send(res, 200, await recovery.remove(who, team, stepUp, (await readJson(req, 4 * 1024)) ?? {}));
     }
     if (members && a === 'invitations' && !b) {
       if (!team && m === 'GET') return send(res, 200, await members.invitations(who));

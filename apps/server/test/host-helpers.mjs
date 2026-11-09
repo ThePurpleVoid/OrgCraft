@@ -41,7 +41,7 @@ export async function hostAuthorize(b, host, { decision = 'allow', prompt, chall
     const loc = res.headers.get('location');
     const abs = loc.startsWith('/') ? ORIGIN + loc : loc;
     if (abs.startsWith(CALLBACK)) return { callback: new URL(abs), ...seen };
-    if (abs.startsWith(`${ORIGIN}/sign-in?interaction=`)) res = await b.fetch(`${ORIGIN}/oauth/interaction/${new URL(abs).searchParams.get('interaction')}/github`);
+    if (abs.startsWith(`${ORIGIN}/sign-in?interaction=`)) res = await b.fetch(`${ORIGIN}/oauth/authorize/${new URL(abs).searchParams.get('interaction')}/github`);
     else if (/\/oauth\/interaction\/[^/]+\/consent$/.test(abs)) {
       const page = await b.fetch(abs);
       seen.consent = { status: page.status, html: await page.text(), url: abs };

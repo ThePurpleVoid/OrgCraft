@@ -720,8 +720,8 @@ paths:
       x-min-role: owner
       tags: [people]
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
-      summary: "End someone's recovery ownership at once (also undoes a pending one); every owner is told. The step-up is scoped: recovery:<tenant>_<person>"
-      responses: { "200": { description: Removed }, "401": { description: Step-up required }, "404": { description: Not a recovery owner } }
+      summary: "End someone's recovery ownership at once (also undoes a pending one); every owner is told. The step-up is scoped: recovery:<tenant>_<person>. Removing the last one who counts is refused (409 last-owner) unless the body is { confirm: no-recovery, words } and the step-up is scoped remove-last-recovery-owner:<person>; that is audited as recovery-owner.removed-last with the words, and answers { ok, last: true }"
+      responses: { "200": { description: Removed }, "401": { description: Step-up required }, "404": { description: Not a recovery owner }, "409": { description: "last-owner: the last recovery owner who counts" } }
   /members:
     get:
       x-min-role: viewer

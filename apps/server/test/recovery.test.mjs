@@ -136,6 +136,25 @@ test('recovery owners: owners with a passkey, 24 hours before a new one counts, 
   assert.equal((await octo.b.call('DELETE', `/recovery/${d.me}`, {}, { 'x-step-up': await octo.su(`recovery:acme_${d.me}`) })).status, 200);
   assert.deepEqual((await list()).owners.map((o) => o.login), ['octo']);
   assert.equal((await octo.b.call('DELETE', `/recovery/${d.me}`, {}, { 'x-step-up': await octo.su(`recovery:acme_${d.me}`) })).status, 404);
+
+  // The last one who counts: refused, unless confirmed with a step-up scoped to exactly this (CTO ruling on L27).
+  const last = (body, scope) => octo.b.call('DELETE', `/recovery/${octo.me}`, body, scope === undefined ? {} : { 'x-step-up': scope });
+  const refused = await last({}, await octo.su(`recovery:acme_${octo.me}`));
+  assert.deepEqual([refused.status, refused.body.type], [409, 'last-owner']);
+  assert.equal((await last({ confirm: 'no-recovery' })).status, 401, 'step-up first');
+  const unscoped = await octo.su();
+  assert.equal((await last({ confirm: 'no-recovery' }, unscoped)).status, 401, 'an unscoped step-up is refused');
+  const wrong = await octo.su(`recovery:acme_${octo.me}`);
+  assert.equal((await last({ confirm: 'no-recovery' }, wrong)).status, 401, 'the ordinary recovery scope is refused');
+  assert.equal((await last({ confirm: 'no-recovery' }, await octo.su(`remove-last-recovery-owner:${d.me}`))).status, 401, 'another person\'s scope is refused');
+  const spent = await db.system('select count(*)::int as n from step_up_tokens where id = any($1) and used_at is not null', [[unscoped, wrong].map((t) => t.split('.')[0])]);
+  assert.equal(spent[0].n, 0, 'refused tokens are not spent');
+  assert.equal((await octo.b.call('GET', '/recovery')).body.owners.length, 1, 'still there');
+  const ok = await last({ confirm: 'no-recovery', words: 'Moving the workspace to a new account tonight.' }, await octo.su(`remove-last-recovery-owner:${octo.me}`));
+  assert.deepEqual([ok.status, ok.body.last], [200, true]);
+  assert.deepEqual((await list()).owners, []);
+  const [row] = await db.system("select actor_id, target, detail from audit where tenant = 'acme' and action = 'recovery-owner.removed-last'");
+  assert.deepEqual([row.actor_id, row.target, row.detail.words], [octo.me, octo.me, 'Moving the workspace to a new account tonight.']);
 }));
 
 test('acceptance: the owner\'s GitHub sign-in is gone, and the second recovery owner gets them back in', () => issuer(async ({ db, gh, browser }) => {
