@@ -22,8 +22,23 @@ test('the guard flags data-losing statements and nothing in the shipped migratio
     "create table a (b text default 'drop table x');",
     'create table c (d text references teams(id) on delete cascade);',
     "do $$ begin perform 1; end $$;",
+    'drop index deliveries_once;',
+    'drop index if exists a_idx;',
+    'alter table t drop constraint t_pkey;',
+    'alter table t alter column c drop default;',
+    'alter table t alter column c drop not null;',
+    'drop trigger tr on t;',
+    'drop policy p on t;',
+    'drop view v;',
+    'drop materialized view mv;',
+    'drop schema s cascade;',
+    'drop type mood;',
+    'drop sequence s;',
   ].join('\n'));
-  assert.equal(flagged.length, 6);
+  assert.deepEqual(flagged.map((x) => x.trim().split(/\s+/).slice(0, 3).join(' ')), [
+    'alter table events', 'drop table sinks;', 'truncate events;', 'delete from secrets', 'alter table teams', 'alter table events',
+    'drop materialized view', 'drop schema s', 'drop type mood;', 'drop sequence s;',
+  ]);
   for (const f of readdirSync('apps/server/migrations').filter((n) => n.endsWith('.sql'))) {
     assert.deepEqual(destructiveStatements(readFileSync(`apps/server/migrations/${f}`, 'utf8')), [], f);
   }
