@@ -137,9 +137,9 @@ test('at 360px the chat fits, the cards answer, and the team is read-only', { sk
       assert.equal((await bound.locator('.facts pre').textContent()).trim(), 'Run: rm -rf build/');
       await bound.getByText("Why, in the teammate's words:").waitFor();
       await page.getByRole('button', { name: 'Team' }).click();
-      await page.getByText('On a small screen the team is read-only').waitFor();
+      await page.getByText('Read-only on a phone. Open on a larger screen to rearrange.').waitFor();
       assert.equal(await page.locator('#publish').isVisible(), false);
-      assert.equal(await page.locator('#library input').first().isDisabled(), true);
+      assert.equal(await page.locator('#library').isVisible(), false, 'no catalog to add from on a phone');
       // No drag or edit hints that contradict the read-only note.
       assert.equal(await page.getByText('Switch roles on and off').isVisible(), false);
       assert.equal(await page.getByText('Drag a card onto another').isVisible(), false);
