@@ -395,7 +395,8 @@ export async function deliver(db, key, sink, row, { providers = PROVIDERS, readS
     from email_subscriptions s left join notification_prefs p on p.tenant = s.tenant and p.principal = s.principal
     where s.team = $1 and s.verified_at is not null and $2 = any(s.kinds)
       and ${stillIn('s')}`, [team, kind, event.id]));
-  // Quiet hours (L25): a kind that does not break through waits for the person's digest, logged as held.
+  // Quiet hours (L25): a kind that does not break through waits, logged as held. It goes in the person's digest, or,
+  // for an address without one, out on its own when quiet hours end (flushHeld; review sev 2).
   const quiet = KINDS[kind].breakthrough ? [] : subs.filter((s) => !s.done && inQuiet(s, now));
   for (const s of quiet) await db.tenant(tenant, ({ q }) => q("insert into email_deliveries(tenant, team, subscription, event, kind, status, held, error) values ($1, $2, $3, $4, $5, 'skipped', true, 'quiet hours: kept for the digest')", [tenant, team, s.id, event.id, kind]));
   const todo = subs.filter((s) => !s.done && !quiet.includes(s));
@@ -518,9 +519,37 @@ export async function digests(db, key, { providers = PROVIDERS, readSecret, publ
       select e.envelope from events e, since where e.team = $2 and e.received_at > since.at and e.received_at <= $3 and (
         e.type = any($4) or exists(select 1 from email_deliveries d where d.subscription = $1 and d.held and d.event = e.id))
       order by e.seq`, [s.id, s.team, now, types]));
+    // Nothing new: no email (the window carries on from the last digest that went out).
+    if (!events.length) continue;
     const mail = composeDigest(events.map((r) => r.envelope), { team: s.team, teamName: s.team_name, date: event.slice(7) });
     const r = await sendMail(db, key, sink, { id: event }, mail, s, { providers, readSecret, publicUrl, now, fetch: send });
     sent += r;
+  }
+  return sent;
+}
+
+/**
+ * When quiet hours end (run with the digests, once a minute): held mail for an address without a digest goes out as
+ * usual, each event once. An address with the digest on keeps its held mail for the digest.
+ */
+export async function flushHeld(db, key, { providers = PROVIDERS, readSecret, publicUrl = '', now = new Date(), fetch: send = fetch } = {}) {
+  const held = await db.system(`select s.id, s.tenant, s.team, s.email, t.name as team_name, p.timezone, p.quiet_start, p.quiet_end, d.kind, e.envelope
+    from email_deliveries d join email_subscriptions s on s.id = d.subscription join teams t on t.id = s.team
+    join events e on e.team = d.team and e.id = d.event
+    left join notification_prefs p on p.tenant = s.tenant and p.principal = s.principal
+    where d.held and d.at > $1::timestamptz - interval '7 days' and s.verified_at is not null and d.kind = any(s.kinds)
+      and not ('digest' = any(s.kinds) and p.digest_at is not null)
+      and not exists(select 1 from email_deliveries x where x.subscription = d.subscription and x.event = d.event and x.status = 'sent')
+      -- What a digest already carried is not sent again (the digest was on when it was held).
+      and not exists(select 1 from email_deliveries g where g.subscription = d.subscription and g.kind = 'digest' and g.status = 'sent' and g.at >= d.at)
+      and ${stillIn('s')}
+    order by e.seq limit 200`, [now]);
+  let sent = 0;
+  for (const h of held) {
+    if (inQuiet(h, now)) continue;
+    const [sink] = await db.tenant(h.tenant, ({ q }) => q('select id, tenant, team, provider, sender, secret from email_sinks where team = $1 order by created_at limit 1', [h.team]));
+    if (!sink) continue;
+    sent += (await sendTo(db, key, sink, h.envelope, h.kind, [h], { providers, readSecret, publicUrl, now, fetch: send })).sent;
   }
   return sent;
 }
@@ -605,7 +634,8 @@ export function createNotifications({ db }) {
 
     /**
      * The team's delivery log, newest first: email and Slack, one row per try. A member sees only their own rows; an
-     * admin (or owner) sees everyone's. Addresses are shown masked.
+     * admin (or owner) sees everyone's with all, including Slack channel posts (nobody's own). `to` (masked) is only
+     * on the caller's own rows.
      */
     async log(tenant, team, principal, { all = false, limit = 50, before = null } = {}) {
       const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
@@ -621,7 +651,8 @@ export function createNotifications({ db }) {
           ) x where ($2::boolean or x.principal = $3) and ($4::bigint is null or x.at < to_timestamp($4::bigint / 1000.0))
           order by x.at desc limit $5`, [team, all, principal, cursor, n]);
         const items = rows.map((r) => ({ channel: r.channel, at: r.at, event: r.event, kind: r.kind, status: r.status, why: r.error ?? null,
-          to: r.channel === 'email' ? maskEmail(r.target) : r.target, ...(all ? { principal: r.principal } : {}) }));
+          // Only your own rows say where they went: an admin's all=1 never shows someone else's address, even masked.
+          ...(r.principal === principal ? { to: r.channel === 'email' ? maskEmail(r.target) : r.target } : {}), ...(all ? { principal: r.principal } : {}) }));
         const last = rows.at(-1);
         return { items, next: rows.length === n && last ? String(new Date(last.at).getTime()) : null };
       });

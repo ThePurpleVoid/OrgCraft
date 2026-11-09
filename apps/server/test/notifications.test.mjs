@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { key, plane } from './helpers.mjs';
 import { drain } from '../sinks.mjs';
-import { composeDigest, createNotifications, digests, inQuiet, localDate, maskEmail, minuteOfDay } from '../email.mjs';
+import { composeDigest, createNotifications, digests, flushHeld, inQuiet, localDate, maskEmail, minuteOfDay } from '../email.mjs';
 import { readSecret } from '../store.mjs';
 
 const PUBLIC = 'https://cp.example';
@@ -33,7 +33,7 @@ test('the digest lists at most 20 updates and says how many more', () => {
   assert.equal(d.subject, '[Shop] Daily digest: 25 updates (2026-11-09)');
   assert.equal(d.lines.filter((l) => l.startsWith('- ')).length, 20);
   assert.equal(d.lines.at(-1), 'And 5 more in the Studio.');
-  assert.equal(composeDigest([], { team: 'shop', teamName: 'Shop', date: 'x' }).lines[0], 'Nothing new since your last digest.');
+
   assert.equal(maskEmail('owner@shop.example'), 'o****@shop.example');
 });
 
@@ -69,6 +69,7 @@ test('quiet hours hold what does not break through, the digest sends it once a d
     assert.equal((await call('PATCH', `/teams/shop/emails/${add.body.id}`, { kinds: ['approval', 'blocked', 'digest'] })).status, 200);
     assert.equal((await call('PUT', '/me/notifications', { timezone: zone, quietHours: { from: hm(m - 60), to: hm(m + 60) }, digest: { at: hm(m - 1), kinds: ['minutes'] } })).status, 200);
     const sentBefore = provider.sent.length;
+    assert.equal(await digests(db, key, { providers: { fake: provider }, readSecret, publicUrl: PUBLIC, now: new Date() }), 0, 'an empty digest is not sent');
 
     const blocked = ev('message.blocked', { question: 'Which footer name?' });
     const approval = ev('approval.requested', { approval: 'apr_1', action: 'deploy', why: 'ship it', cardId: 'card_1' });
@@ -88,6 +89,7 @@ test('quiet hours hold what does not break through, the digest sends it once a d
     assert.match(digest.text, /You get this because you turned on "Daily digest" emails for Shop\./);
     assert.equal(await digests(db, key, opts), 0, 'once a day');
 
+
     const log = (await call('GET', '/teams/shop/notifications/log')).body;
     assert.deepEqual(log.items.map((r) => [r.channel, r.kind, r.status, r.to]).slice(0, 3), [
       ['email', 'digest', 'sent', 'o****@shop.example'],
@@ -95,10 +97,32 @@ test('quiet hours hold what does not break through, the digest sends it once a d
       ['email', 'blocked', 'held', 'o****@shop.example'],
     ]);
     assert.equal(log.items.find((r) => r.status === 'held').why, 'quiet hours: kept for the digest');
-    assert.equal((await call('GET', '/teams/shop/notifications/log?all=1')).status, 200, 'the admin token may see everyone');
+    const all = await call('GET', '/teams/shop/notifications/log?all=1');
+    assert.equal(all.status, 200, 'the admin token may see everyone');
+    // Someone else's rows never say where they went, even masked (review sev 3).
+    await db.tenant('acme', ({ q }) => q("insert into email_subscriptions(id, tenant, team, principal, email, kinds, verified_at) values ('es_other1', 'acme', 'shop', 'per_otherperson1', 'dana@else.example', '{blocked}', now())"));
+    await db.tenant('acme', ({ q }) => q("insert into email_deliveries(tenant, team, subscription, event, kind, status) values ('acme', 'shop', 'es_other1', 'ev_x', 'blocked', 'sent')"));
+    const theirs = (await call('GET', '/teams/shop/notifications/log?all=1')).body.items.find((r) => r.principal === 'per_otherperson1');
+    assert.equal(theirs.to, undefined);
+    assert.ok((await call('GET', '/teams/shop/notifications/log?all=1')).body.items.filter((r) => r.principal === 'admin').every((r) => r.to === 'o****@shop.example'));
     // Someone else sees none of these rows.
     const other = await createNotifications({ db }).log('acme', 'shop', 'someone-else');
     assert.deepEqual(other.items, []);
     assert.equal((await call('GET', '/teams/shop/notifications/log?before=abc')).status, 400);
+
+    // Without the digest, held mail goes out on its own when quiet hours end, once; what a digest carried is not
+    // sent again (review sev 2).
+    assert.equal((await call('PUT', '/me/notifications', { digest: null })).status, 200);
+    const night = ev('message.blocked', { question: 'Still there?' });
+    const before = provider.sent.length;
+    await inject('shop', [night]);
+    await drain(db, key, { email: { providers: { fake: provider }, publicUrl: PUBLIC, now: () => real } });
+    assert.equal(provider.sent.length, before, 'held during quiet hours');
+    const flush = (at) => flushHeld(db, key, { providers: { fake: provider }, readSecret, publicUrl: PUBLIC, now: at });
+    assert.equal(await flush(new Date()), 0, 'still quiet');
+    const after = new Date(Date.now() + 2 * 3600_000);
+    assert.equal(await flush(after), 1, 'quiet hours are over');
+    assert.match(provider.sent.at(-1).text, /Still there\?/);
+    assert.equal(await flush(after), 0, 'once');
   }, { publicUrl: PUBLIC, email: { providers: { fake: provider } } });
 });

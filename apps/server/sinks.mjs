@@ -3,7 +3,7 @@
 // team already runs accepts, so connecting a team to the product never takes its own board away.
 import { toKitRow } from '../../packages/events/index.mjs';
 import { readSecret } from './store.mjs';
-import { deliver, digests } from './email.mjs';
+import { deliver, digests, flushHeld } from './email.mjs';
 import { deliverSlack } from './slack.mjs';
 
 const BATCH = 50;
@@ -97,10 +97,11 @@ export function startSinks(db, key, { everyMs = 2000, digestEveryMs = 60_000, ..
     if (running) { again = true; return; }
     running = true;
     try { while (!stopped && (await drain(db, key, opts)) > 0); } catch (e) { if (!stopped) console.error(`sinks: ${e.message}`); }
-    // L25: the daily digests, at most once a minute (each goes out once per local day).
+    // L25: the daily digests (each once per local day) and held mail whose quiet hours are over, once a minute.
     if (!stopped && Date.now() - lastDigest >= digestEveryMs) {
       lastDigest = Date.now();
-      try { await digests(db, key, { readSecret, fetch: opts.fetch ?? fetch, ...opts.email, now: typeof opts.email?.now === 'function' ? opts.email.now() : new Date() }); } catch (e) { if (!stopped) console.error(`digests: ${e.message}`); }
+      const o = { readSecret, fetch: opts.fetch ?? fetch, ...opts.email, now: typeof opts.email?.now === 'function' ? opts.email.now() : new Date() };
+      try { await digests(db, key, o); await flushHeld(db, key, o); } catch (e) { if (!stopped) console.error(`digests: ${e.message}`); }
     }
     running = false;
     if (again) { again = false; setImmediate(tick); }

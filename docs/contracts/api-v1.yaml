@@ -268,7 +268,7 @@ paths:
     get:
       x-min-role: viewer
       tags: [notifications]
-      summary: "The delivery log (PRD O6), newest first: one row per email or Slack try, with status sent, held (quiet hours, kept for the digest), skipped, failed or emailed (Slack fell back to email) and why. Addresses are masked. You see your own rows; all=1 (everyone's, with principal) needs admin"
+      summary: "The delivery log (PRD O6), newest first: one row per email or Slack try, with status sent, held (quiet hours, kept for the digest), skipped, failed or emailed (Slack fell back to email) and why. Addresses are masked and appear only on your own rows. You see your own rows; all=1 (everyone's, with principal, plus Slack channel posts, which are nobody's own) needs admin"
       parameters:
         - { name: all, in: query, schema: { enum: ["1"] } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
@@ -568,7 +568,7 @@ paths:
     put:
       x-min-role: viewer
       tags: [me, notifications]
-      summary: "Change them. Times are local HH:MM in timezone (IANA); quiet hours may wrap past midnight; null turns one off; a field left out keeps its value. During quiet hours an email that does not break through is logged held and goes in the next digest. The digest goes once a day at digest.at to each address with the digest kind on, with what was held plus digest.kinds (not digest itself)"
+      summary: "Change them. Times are local HH:MM in timezone (IANA); quiet hours may wrap past midnight; null turns one off; a field left out keeps its value. During quiet hours an email that does not break through, is logged held and goes in the next digest; without a digest it goes out on its own when quiet hours end. The digest goes once a day at digest.at to each address with the digest kind on, with what was held plus digest.kinds (not digest itself)"
       requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { timezone: { type: string }, quietHours: { type: [object, "null"], properties: { from: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }, to: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" } } }, digest: { type: [object, "null"], properties: { at: { type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }, kinds: { type: array, items: { enum: [approval, budget80, budget100, blocked, minutes, ready] } } } } } } } } }
       responses: { "200": { description: Settings }, "400": { description: A bad time, zone or kind } }
   /me/summary:
