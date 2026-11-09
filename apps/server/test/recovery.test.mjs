@@ -109,7 +109,8 @@ test('recovery owners: owners with a passkey, 24 hours before a new one counts, 
   assert.deepEqual((await list()).warnings.map((w) => w.code), ['fewer-than-two']);
   assert.equal((await e.b.call('GET', '/recovery')).status, 200, 'an admin can see them');
   assert.equal((await e.b.call('POST', '/recovery', { person: e.me }, { 'x-step-up': await e.su(`recovery:acme_${e.me}`) })).status, 403, 'only an owner names one');
-  assert.equal((await octo.b.call('POST', '/recovery', { person: octo.me })).status, 401, 'step-up first');
+  const first = await octo.b.call('POST', '/recovery', { person: octo.me });
+  assert.deepEqual([first.status, first.body.scope], [401, `recovery:acme_${octo.me}`], 'step-up first, and the 401 names the scope');
   assert.equal((await octo.b.call('POST', '/recovery', { person: octo.me }, { 'x-step-up': await octo.su() })).status, 401, 'the step-up names the change (recovery:<tenant>_<person>)');
   assert.equal((await octo.b.call('POST', '/recovery', { person: e.me }, { 'x-step-up': await octo.su(`recovery:acme_${e.me}`) })).body.type, 'not-owner');
   // The first one, an owner naming themselves, counts at once.
@@ -141,7 +142,8 @@ test('recovery owners: owners with a passkey, 24 hours before a new one counts, 
   const last = (body, scope) => octo.b.call('DELETE', `/recovery/${octo.me}`, body, scope === undefined ? {} : { 'x-step-up': scope });
   const refused = await last({}, await octo.su(`recovery:acme_${octo.me}`));
   assert.deepEqual([refused.status, refused.body.type], [409, 'last-owner']);
-  assert.equal((await last({ confirm: 'no-recovery' })).status, 401, 'step-up first');
+  const bare = await last({ confirm: 'no-recovery' });
+  assert.deepEqual([bare.status, bare.body.scope], [401, `remove-last-recovery-owner:${octo.me}`], 'step-up first, and the 401 names the last-owner scope');
   const unscoped = await octo.su();
   assert.equal((await last({ confirm: 'no-recovery' }, unscoped)).status, 401, 'an unscoped step-up is refused');
   const wrong = await octo.su(`recovery:acme_${octo.me}`);

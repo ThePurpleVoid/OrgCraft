@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **A passkey step-up refusal names its scope.** `POST` and `DELETE /v1/recovery` (and every route that asks for a passkey step-up bound to one change) now answer 401 `step-up-required` with `scope` in the body, as the other step-up refusals do, so a client can ask for `recovery:<tenant>_<person>` or `remove-last-recovery-owner:<person>` without knowing the rule (web-dev finding on L27).
 - **Managed teams: change requests are accepted, closed and rolled back from the control plane** (no-repository start, step L9c; ADR 0012 and 0013, spec L9 sections 4.4 and 4.5). New routes: `GET /v1/teams/{team}/changes` and `/changes/{n}` (viewer), `POST …/changes/{n}/accept` (admin), `…/close` (editor) and `POST …/rollback` (admin). Accept runs the checks and the capability diff again at the change's head against the current `main`, then refuses, in order:
   - a stale base (409 `stale`, with `proposal.failed` head-moved);
   - red checks, or files that are not what sync writes (409 `checks`);
