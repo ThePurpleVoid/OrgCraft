@@ -332,7 +332,7 @@ export function createStudioHandler(opts = {}) {
     const out = await backend.publish({
       base, into: info.defaultBranch, branch, message: core.commitMessage(message, user),
       changes: p.changes.map(({ path, content, mode }) => ({ path, content, mode })),
-      pr: core.pullRequestBody(message, { commands: p.commands, kitUpgrade, via: user.via ?? null }),
+      pr: core.pullRequestBody(message, { commands: p.commands, kitUpgrade, via: user.via ?? null, capability: p.capability }),
       // The managed backend keeps these on the change request (spec 4.3); the GitHub one ignores them.
       by: { id: user.id, name: user.name }, needsCode: p.needsCode, checks: { issues: p.issues.length }, capability: p.capability ?? [],
     });

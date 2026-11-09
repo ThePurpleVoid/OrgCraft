@@ -171,7 +171,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     return wait;
   };
   const runnerCards = async (t) => { const at = now(); return (await store.listRunners(db, t)).map((r) => describeRunner(r, runners?.get(r.id)?.hello && !runners.get(r.id).closed ? runners.get(r.id) : null, at, serverVersion)); };
-  // A managed team (ADR 0012, migration 015) needs no GitHub App: its files are in this database's Git store.
+  // A managed team (ADR 0012, migration 022) needs no GitHub App: its files are in this database's Git store.
   const managedStore = {
     teamBackend: async (tn, tm) => (await db.tenant(tn, ({ q }) => q('select backend from teams where id = $1', [tm])))[0]?.backend ?? 'github',
     store: (tn, tm) => pgObjects(db, tn, tm),

@@ -194,3 +194,28 @@ test('N1: a call the SDK reports as failed (PostToolUseFailure) ends its step as
   await a.turn(turnOpts({ preToolUse: async () => ({ allow: true }), postToolUse: async (tool, input, response, meta) => post.push([tool, response, meta.id]) }));
   assert.deepEqual(post, [['Bash', { is_error: true, error: 'exit 1', interrupted: false }, 'tu_9'], ['Bash', { is_error: true, error: 'interrupted', interrupted: true }, 'tu_10']]);
 });
+
+test('ADR 0013: an approved call runs as signed: the PreToolUse hook and canUseTool hand the policy\'s input to the SDK', async () => {
+  const signed = { command: 'deploy.sh --production' };
+  const seen = {};
+  const sdk = {
+    tool, createSdkMcpServer,
+    query: ({ options }) => (async function* () {
+      const [guard] = options.hooks.PreToolUse[0].hooks;
+      seen.hook = await guard({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'deploy.sh --production', description: 'mine' } });
+      seen.denied = await guard({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } });
+      seen.can = await options.canUseTool('Bash', { command: 'deploy.sh --production', description: 'mine' });
+      seen.plain = await options.canUseTool('Read', { file_path: 'x' });
+      yield { type: 'result', session_id: 'sdk-1', usage: {}, total_cost_usd: 0 };
+    })(),
+  };
+  await agentSdkAdapter({ sdk }).turn({
+    env: { ANTHROPIC_API_KEY: 'k', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1/s/x' }, signal: new AbortController().signal, tools: [], callTool: async () => ({ text: '' }), prompt: 'go', systemPrompt: '',
+    preToolUse: async (name, input) => (name === 'Read' ? { allow: true } : input.command === signed.command ? { allow: true, input: { ...signed } } : { allow: false, reason: 'no' }),
+  });
+  assert.deepEqual(seen.hook.hookSpecificOutput.updatedInput, signed, 'the hook replaces the model\'s input with the signed one');
+  assert.equal(seen.hook.hookSpecificOutput.permissionDecision, 'allow');
+  assert.equal(seen.denied.hookSpecificOutput.updatedInput, undefined, 'a refusal carries no input');
+  assert.deepEqual(seen.can, { behavior: 'allow', updatedInput: signed });
+  assert.deepEqual(seen.plain, { behavior: 'allow', updatedInput: { file_path: 'x' } }, 'a call with no signed record runs as given');
+});

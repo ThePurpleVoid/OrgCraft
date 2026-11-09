@@ -18,6 +18,7 @@ RUN npm ci --omit=dev --ignore-scripts --prefix apps/server && npm cache clean -
 COPY package.json package.json
 COPY apps/studio/ apps/studio/
 COPY bin/ bin/
+COPY packages/calls/ packages/calls/
 COPY packages/events/ packages/events/
 COPY packages/git-store/ packages/git-store/
 COPY packages/github-app/ packages/github-app/

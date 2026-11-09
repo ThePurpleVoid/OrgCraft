@@ -18,15 +18,17 @@ Strategy skills, the pricing doc, a CRM connector later
 A new lead from the owner or the waitlist; the weekly pipeline review
 
 ## Hands to
-Owner (every outbound message is drafted, never sent by the agent), customer success lead (signed customers), product manager (what prospects ask for)
+- owner: every outbound message is drafted, never sent by the agent
+- customer-success-lead: signed customers
+- product-manager: what prospects ask for
 
 ## Rules
 - The agent drafts; the owner sends. No outbound email, DM or call is made by a thread.
 - Every objection heard twice becomes a product manager story or a pricing doc note.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh sales-lead status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/sales-lead.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.
