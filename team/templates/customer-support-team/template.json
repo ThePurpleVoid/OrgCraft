@@ -2,7 +2,7 @@
   "schema": "agent-team/team-template@1",
   "id": "customer-support-team",
   "title": "Customer support team",
-  "summary": "Answer customers well: a support lead, a customer success lead, a problem-report triager, and two agents that draft replies and keep the help articles up to date.",
+  "summary": "Answer customers well: a support lead, a customer success lead, a problem-report triager, and two AI teammates that draft replies and keep the help articles up to date.",
   "group": "business-function",
   "preset": "minimal",
   "packs": [],

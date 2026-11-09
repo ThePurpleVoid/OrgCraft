@@ -764,7 +764,7 @@ function teamHtml() {
   return `<h2>Team</h2><dl class="team-facts">${rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('')}</dl>
     <h2>${esc(t('settings.agentsmd.heading'))}</h2>
     <label class="switch row-target"><input type="checkbox" id="t-agents-md"${teamTargets(spec.options).includes('agents-md') ? ' checked' : ''}> ${esc(t('settings.agentsmd'))}</label>
-    <p class="hint">Publish puts the team's instructions into AGENTS.md at the top of the repository. Text you added to that file yourself stays. Teammates working through those tools show "self-reported" on the board: without hooks, a card changes only when the role reports.</p>
+    <p class="hint">${esc(t('settings.agentsmd.hint'))}</p>
     <p class="hint">Every team gets the core rules: one door for the owner's requests, the owner's words passed on unchanged, one owner per area, the four message kinds and the board. A team's template or preset adds the rest.</p>
     <p class="muted">Pick a role on the canvas or in the library.</p>`;
 }

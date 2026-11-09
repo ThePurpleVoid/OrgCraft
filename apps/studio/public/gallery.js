@@ -65,7 +65,7 @@ export function createGallery({ root, ctx }) {
       <div id="g-list">${listHtml()}</div>
       <section class="g-group g-other"><h2>Or</h2>
         <p><button type="button" id="g-empty">Start almost empty</button> <span class="hint">A chief of staff only. Add roles from the library.</span></p>
-        <p class="hint">To open a team that already exists, start the Studio in that repository: <code>npx agent-team studio</code>.</p>
+        <p class="hint local-only">To open a team that already exists, start the Studio in that repository: <code>npx agent-team studio</code>.</p>
       </section>
     </div>`;
   }

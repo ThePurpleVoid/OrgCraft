@@ -173,6 +173,7 @@ export const EN = {
   "search.placeholder": "Search teammates, tasks, settings…",
   "settings.agentsmd": "Also keep an AGENTS.md file, for AI coding tools other than Claude Code",
   "settings.agentsmd.heading": "Other AI coding tools",
+  "settings.agentsmd.hint": "Some AI coding tools read their instructions from a file called AGENTS.md. OrgCraft keeps it in step with your team when you publish.",
   "stop.all": "Stop everything",
   "stop.all.detail": "All tasks pause, no tool calls run, and triggers queue. Nothing is deleted.",
   "stop.all.done": "Everything is stopped. Resume when you're ready.",
