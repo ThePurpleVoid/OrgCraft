@@ -105,6 +105,14 @@ export function chatSource(env = process.env) {
     },
     /** The workspace's runners: name, last seen, revoked. Never their keys (the control plane keeps only hashes). */
     runners: () => call('GET', '/runners'),
+    // Live overrides (L18, apps/server/live.mjs): Stop everything and a teammate paused or off, set at once with no
+    // step-up and no code host or Git involved (SH-10). Only lifting one needs a step-up, bound to lift:<id>.
+    /** The live changes in force: { live: [{ id, kind, member, state, reason, by, at, text, liveChange }] }. */
+    live: () => call('GET', `/teams/${t}/live`),
+    stopEverything: (reason, key) => call('POST', `/teams/${t}/live/stop-everything`, reason ? { reason } : {}, key ? { 'idempotency-key': key } : {}),
+    setMember: (member, state, reason, key) => call('PUT', `/teams/${t}/live/members/${encodeURIComponent(member)}`, { state, ...(reason ? { reason } : {}) }, key ? { 'idempotency-key': key } : {}),
+    /** Lifts one change: it spends the step-up this server holds, if any; without one the control plane asks (401). */
+    lift: (id) => call('DELETE', `/teams/${t}/live/${encodeURIComponent(id)}`, undefined, spendStepUp()),
     /** Starts a run on the published team (runs.mjs builds the body). One run per team: a second one is a 409. */
     start: (body, key) => call('POST', `/teams/${t}/runs`, body, key ? { 'idempotency-key': key } : {}),
   };

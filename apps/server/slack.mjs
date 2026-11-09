@@ -176,7 +176,8 @@ export const welcomeChannel = (adminName, teamName, kinds) => {
 const kindsOf = (body, fallback) => {
   if (body?.kinds === undefined && fallback) return fallback;
   const kinds = Array.isArray(body?.kinds) ? [...new Set(body.kinds.map(String))] : null;
-  if (!kinds || kinds.some((k) => !KINDS[k])) throw new Problem(400, `send { kinds: [...] } from ${Object.keys(KINDS).join(', ')}`);
+  // The digest is email only (L25).
+  if (!kinds || kinds.some((k) => !KINDS[k]?.type)) throw new Problem(400, `send { kinds: [...] } from ${Object.keys(KINDS).filter((k) => KINDS[k].type).join(', ')}`);
   return kinds;
 };
 const CHANNEL = /^[CG][A-Z0-9]{2,20}$/;
@@ -219,7 +220,7 @@ export function createSlack({ db, key, publicUrl = '', redirectUri = '', provide
         connected: !!sink, ready, canLink: !!(ready && sink.client_id && sink.client_secret),
         health: !sink ? null : sink.failing_since ? { status: 'failing', since: new Date(sink.failing_since).toISOString(), error: sink.last_error } : { status: ready ? 'working' : 'waiting for its token' },
         // suggested: ticked (not saved) the first time a person's DM switches show, as for email (D49).
-        kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label, suggested: SUGGESTED.includes(id), channelDefault: CHANNEL_DEFAULT_KINDS.includes(id) })),
+        kinds: Object.entries(KINDS).filter(([, k]) => k.type).map(([id, k]) => ({ id, label: k.label, suggested: SUGGESTED.includes(id), channelDefault: CHANNEL_DEFAULT_KINDS.includes(id) })),
         me: linkView(mine),
       };
     },

@@ -37,12 +37,20 @@
       "path": "apps/studio/public/gallery.js",
       "type": "text/javascript; charset=utf-8"
     },
+    "i18n.js": {
+      "path": "apps/studio/public/i18n.js",
+      "type": "text/javascript; charset=utf-8"
+    },
     "link.js": {
       "path": "apps/studio/public/link.js",
       "type": "text/javascript; charset=utf-8"
     },
     "links.js": {
       "path": "apps/studio/public/links.js",
+      "type": "text/javascript; charset=utf-8"
+    },
+    "live.js": {
+      "path": "apps/studio/public/live.js",
       "type": "text/javascript; charset=utf-8"
     },
     "meetings.js": {
@@ -55,6 +63,10 @@
     },
     "panels.js": {
       "path": "apps/studio/public/panels.js",
+      "type": "text/javascript; charset=utf-8"
+    },
+    "publish-sheet.js": {
+      "path": "apps/studio/public/publish-sheet.js",
       "type": "text/javascript; charset=utf-8"
     },
     "rollout.js": {
@@ -73,8 +85,20 @@
       "path": "apps/studio/public/slack-callback.js",
       "type": "text/javascript; charset=utf-8"
     },
+    "strings.js": {
+      "path": "apps/studio/public/strings.js",
+      "type": "text/javascript; charset=utf-8"
+    },
     "studio.js": {
       "path": "apps/studio/public/studio.js",
+      "type": "text/javascript; charset=utf-8"
+    },
+    "tooltip.js": {
+      "path": "apps/studio/public/tooltip.js",
+      "type": "text/javascript; charset=utf-8"
+    },
+    "wiring.js": {
+      "path": "apps/studio/public/wiring.js",
       "type": "text/javascript; charset=utf-8"
     },
     "team-model.mjs": {

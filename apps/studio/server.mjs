@@ -39,7 +39,7 @@ const PUBLISHED = ['.agent-team', 'docs/team', 'scripts/agent-team', '.claude', 
 const git = (root, ...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const tryGit = (root, ...args) => { try { return git(root, ...args); } catch { return ''; } };
 
-class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+class HttpError extends Error { constructor(status, message, extra = {}) { super(message); this.status = status; Object.assign(this, extra); } }
 
 /** Whether the team on disk writes AGENTS.md (team.json "targets"). */
 function writesAgentsMd(root) {
@@ -277,6 +277,12 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (!chat.connected) return send(res, 200, { connected: false });
         return relay(res, async () => ({ connected: true, ...(await chat.budget()) }));
       }
+      // Live overrides (L18): what is stopped or paused right now. Read from the control plane only, so a run that
+      // starts never makes the banner go away: only a lift does.
+      if (req.method === 'GET' && url.pathname === '/v1/team/live') {
+        if (!chat.connected) return send(res, 200, { connected: false, live: [] });
+        return relay(res, async () => ({ connected: true, ...(await chat.live()) }));
+      }
       if (req.method === 'GET' && url.pathname === '/v1/team/runners') {
         if (!chat.connected) return send(res, 200, { connected: false, runners: [] });
         return relay(res, async () => ({ connected: true, ...(await chat.runners()) }));
@@ -311,7 +317,14 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (url.pathname === '/v1/team/preview') return send(res, 200, preview(root, input.spec));
         if (url.pathname === '/v1/team/from-template') return send(res, 200, fromTemplate(root, input));
         // Only spec, branch, message and pr are read: credentials are the machine's own, never the page's.
-        if (url.pathname === '/v1/team/publish') return send(res, 200, publish(root, input.spec, { branch: input.branch, message: input.message, pr: input.pr === true }, env));
+        if (url.pathname === '/v1/team/publish') {
+          // The team as the page read it (embed spec 4, like the hosted handler): if someone published since, from
+          // another window or the command line, this would silently undo their change. The page says reload.
+          const head = gitState(root).head?.sha ?? null;
+          // base null: the page read a team with no history yet; someone publishing first is stale too (code-reviewer nit).
+          if ((typeof input.base === 'string' || input.base === null) && input.base !== head) throw new HttpError(409, 'the team changed since this page read it; reload', { type: 'stale' });
+          return send(res, 200, publish(root, input.spec, { branch: input.branch, message: input.message, pr: input.pr === true }, env));
+        }
         if (url.pathname === '/v1/team/graph') return send(res, 200, graph(input.spec));
         if (url.pathname === '/v1/team/suggestions') return send(res, 200, suggestions(root, input.spec));
         if (url.pathname === '/v1/team/chat') {
@@ -330,6 +343,19 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (url.pathname === '/v1/team/budget') {
           for (const k of ['perDay', 'perRun']) if (input[k] !== undefined && input[k] !== null && !(Number.isInteger(input[k]) && input[k] >= 0)) throw new HttpError(400, `${k} is a whole number of cents, or null`);
           return relay(res, () => chat.setBudget(input, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
+        }
+        // Live overrides: setting one never needs a step-up; lifting one spends it (the control plane asks first).
+        const key = typeof input.key === 'string' ? input.key.slice(0, 80) : undefined;
+        const reason = typeof input.reason === 'string' && input.reason.trim() ? input.reason.slice(0, 500) : undefined;
+        if (url.pathname === '/v1/team/live/stop-everything') return relay(res, () => chat.stopEverything(reason, key));
+        const member = /^\/v1\/team\/live\/members\/([^/]+)$/.exec(url.pathname);
+        if (member) {
+          if (!['paused', 'off'].includes(input.state)) throw new HttpError(400, 'state is paused or off');
+          return relay(res, () => chat.setMember(decodeURIComponent(member[1]), input.state, reason, key));
+        }
+        if (url.pathname === '/v1/team/live/lift') {
+          if (typeof input.id !== 'string' || !input.id) throw new HttpError(400, 'send the id of the live change');
+          return relay(res, () => chat.lift(input.id));
         }
         // A runner code: minted after step-up, passed to the page once, kept nowhere here.
         if (url.pathname === '/v1/team/runners/code') return relay(res, () => chat.runnerCode(input.name));
@@ -358,7 +384,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       throw new HttpError(405, 'method not allowed');
     } catch (e) {
       const status = e instanceof HttpError || e instanceof core.CoreError ? e.status : e instanceof SyntaxError ? 400 : 500;
-      return send(res, status, { error: e.message });
+      return send(res, status, { error: e.message, ...(typeof e.type === 'string' ? { type: e.type } : {}) });
     }
   });
   const allowed = hostGuard(server, env.STUDIO_ALLOWED_HOSTS ?? '');

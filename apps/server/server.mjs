@@ -20,13 +20,14 @@ import { attachRunners } from './runners.mjs';
 import { createM3 } from './m3.mjs';
 import { createBus } from './bus.mjs';
 import { createTriggers } from './triggers.mjs';
+import { createLive } from './live.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
 import { appCaller } from './dpop.mjs';
 import { HOST_ID } from './hosts.mjs';
 import { HOST_CARD_KINDS, hostMay } from './roles.mjs';
-import { PROVIDERS, createEmail, page } from './email.mjs';
+import { PROVIDERS, createEmail, createNotifications, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 import { createHostedStudio } from './studio.mjs';
 import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, describeRunner } from './deployment.mjs';
@@ -44,6 +45,7 @@ function wireBus(m3, bus) {
   m3.hooks.project = bus.project;
   m3.hooks.runChanged = bus.runChanged;
   m3.hooks.approvalDecided = bus.approvalDecided;
+  m3.hooks.memberChanged = bus.memberChanged;
 }
 
 const { Problem } = store;
@@ -151,6 +153,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const members = identity ? createMembers({ db, lookup: identity.lookup, endSessions: (p) => identity.endSessions(p), requireStepUp: passkeys.requireStepUp, now }) : null;
   const emailProviders = emailOpts.providers ?? PROVIDERS;
   const email = createEmail({ db, key, publicUrl, providers: emailProviders, readSecret: store.readSecret, now, fetch: emailOpts.fetch ?? fetch });
+  const notifications = createNotifications({ db });
   const studioUrl = String(emailOpts.studioUrl ?? publicUrl ?? '').replace(/\/+$/, '');
   // "Connect Slack" sends a person back to this Studio page, which posts { code, state } with their session.
   const slack = createSlack({ db, key, publicUrl, redirectUri: studioUrl ? `${studioUrl}/slack/callback` : '', providers: slackOpts.providers ?? SLACK_PROVIDERS, readSecret: store.readSecret, now, fetch: slackOpts.fetch ?? fetch });
@@ -188,6 +191,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl, triggers, installationsFor: installations ? (tn, url) => installations.forRepo(tn, url) : null });
   if (!givenBus) wireBus(m3, bus);
   m3.hooks.drainTriggers = (tn, tm) => triggers.drain(tn, tm);
+  const overrides = createLive({ db, m3 });
   // Every write of the m3 module and the bus reaches the live streams and the sinks once it commits.
   m3.onStored((stored) => { const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); });
   /** Runs an m3 write and tells the hub and sinks about what it stored. */
@@ -594,6 +598,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       return send(res, 200, body, { etag: tag });
     }
     if (a === 'me' && team === 'stream' && !b && m === 'GET') return stream(req, res, t, null, url);
+    if (a === 'me' && team === 'notifications' && !b && m === 'GET') return send(res, 200, await notifications.get(t, me));
+    if (a === 'me' && team === 'notifications' && !b && m === 'PUT') return send(res, 200, await notifications.put(t, me, await readJson(req, 4 * 1024)));
     if (a === 'me' && team === 'inbox' && !b && m === 'GET') {
       const q = Object.fromEntries(url.searchParams);
       const { seq, ...body } = await m3.inbox(t, q);
@@ -676,6 +682,17 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (c && d === 'history' && !parts[6] && m === 'GET') return send(res, 200, await triggers.history(t, team, c, Object.fromEntries(url.searchParams)));
       throw new Problem(404, 'not found');
     }
+    // Live overrides (L18): emergency controls as control-plane state, never Git. Stopping is one tap; lifting needs
+    // a step-up scoped to the one change (a host never sends one, so a host can stop but never lift).
+    if (a === 'live' && team === 'stop-everything' && !b && m === 'POST') return send(res, 200, await overrides.stopEverywhere(t, me, { reason: ((await readJson(req, 4 * 1024)) ?? {}).reason ?? null }));
+    if (a === 'teams' && team && b === 'live') {
+      const d = parts[5];
+      if (!c && m === 'GET') return send(res, 200, await overrides.list(t, team));
+      if (c === 'stop-everything' && !d && m === 'POST') return send(res, 200, await overrides.stopEverything(t, team, me, { reason: ((await readJson(req, 4 * 1024)) ?? {}).reason ?? null }));
+      if (c === 'members' && d && !parts[6] && m === 'PUT') return send(res, 200, await overrides.setMember(t, team, d, (await readJson(req, 4 * 1024)) ?? {}, me));
+      if (c && c !== 'members' && c !== 'stop-everything' && !d && m === 'DELETE') return send(res, 200, await overrides.lift(t, team, c, me, { stepUp }));
+      throw new Problem(404, 'not found');
+    }
     if (a === 'teams' && team) {
       if (!b && m === 'GET') return send(res, 200, await store.getTeam(db, t, team));
       if (!b && m === 'PUT') return send(res, 200, await store.putTeam(db, t, team, (await readJson(req, 16 * 1024)) ?? {}));
@@ -738,6 +755,11 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'report-tokens' && c && m === 'DELETE') { await store.revokeReportToken(db, t, team, c); return send(res, 200, { ok: true }); }
       if (b === 'sinks' && !c && m === 'GET') return send(res, 200, { sinks: await store.listSinks(db, t, team) });
       if (b === 'sinks' && !c && m === 'POST') { const s = await store.addSink(db, t, team, (await readJson(req, 16 * 1024)) ?? {}, { providers: Object.keys(emailProviders) }); sinks?.wake(); return send(res, 201, s); }
+      if (b === 'notifications' && c === 'log' && !parts[5] && m === 'GET') {
+        const all = url.searchParams.get('all') === '1';
+        if (all && !atLeast(who.role, 'admin')) throw new Problem(403, "everyone's deliveries need the admin role or above", { type: 'forbidden' });
+        return send(res, 200, await notifications.log(t, team, me, { all, limit: url.searchParams.get('limit'), before: url.searchParams.get('before') }));
+      }
       // A person's own email addresses for this team (PRD 6.8 O7): add, verify with a code, choose kinds, remove.
       if (b === 'emails') {
         const d = parts[5];

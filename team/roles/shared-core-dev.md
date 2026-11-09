@@ -17,15 +17,18 @@ Your language server, the build tool, the spec
 A spec naming shared-code work; a request from a platform dev routed through the architect
 
 ## Hands to
-Platform devs (new API), backend tester, code reviewer
+- web-dev: new API
+- mobile-dev: new API
+- backend-tester
+- code-reviewer
 
 ## Rules
 - The core has no I/O and no platform APIs; the data layer depends on core; apps depend only on the data layer.
 - Run `scripts/agent-team/merge-gate.sh shared` before review.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh shared-core-dev status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/shared-core-dev.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.

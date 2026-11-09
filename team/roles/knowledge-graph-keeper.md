@@ -17,15 +17,17 @@ A code graph tool (for example code-review-graph), screenshots from QA sign-offs
 Every merge; the nightly routine; any lookup question
 
 ## Hands to
-Whoever asked; the design director and product manager when screens change
+- design-director: when screens change
+- product-manager: when screens change
+Whoever asked
 
 ## Rules
 - Answers are file paths and symbol names, never opinions about quality.
 - A screen with no screenshot in the last 14 days is listed as stale at the top of `docs/screens.md`.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh knowledge-graph-keeper status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/knowledge-graph-keeper.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.
