@@ -322,11 +322,20 @@ test('quiet hours and the digest render what is saved, and the log never shows a
   assert.match(html, /name="dkind" value="minutes" checked/);
   assert.doesNotMatch(html, /name="dkind" value="(approval|budget100|digest)"/, 'breakthrough kinds and the digest itself are not digest choices');
   assert.match(html, /Use this device&#39;s time zone \(Europe\/Paris\)/);
-  const log = logHtml({ kinds, owner: true, log: { all: true, next: '1', items: [{ channel: 'email', at: new Date().toISOString(), kind: 'minutes', status: 'held', why: 'quiet hours', principal: 'per_kim' }, { channel: 'slack', at: new Date().toISOString(), kind: 'approval', status: 'failed', why: 'channel_not_found', to: '<U1>', principal: 'per_octo' }] } });
+  const log = logHtml({ kinds, owner: true, log: { all: true, next: '1', items: [{ channel: 'email', at: new Date().toISOString(), kind: 'minutes', status: 'held', why: 'quiet hours', principal: 'per_kim', name: 'Kim Lo' }, { channel: 'slack', at: new Date().toISOString(), kind: 'approval', status: 'failed', reason: 'final', why: 'channel_not_found', to: '<U1>', principal: 'per_octo', name: 'Octo Cat' }, { channel: 'email', at: new Date().toISOString(), kind: 'approval', status: 'failed', reason: 'retry', principal: 'per_gone', name: null }, { channel: 'slack', at: new Date().toISOString(), kind: 'approval', status: 'skipped', reason: 'removed', principal: 'per_kim', name: 'Kim Lo' }, { channel: 'email', at: new Date().toISOString(), kind: 'approval', status: 'skipped', reason: 'nochannel', principal: 'per_kim', name: 'Kim Lo' }] }, me: { id: 'per_octo' } });
   assert.match(log, /Held for the digest<\/td><td>It came in during quiet hours\./);
   assert.doesNotMatch(log, /channel_not_found|quiet hours<\/p>/, 'never a provider\'s own error');
   assert.doesNotMatch(log, /U1/, 'a Slack row never shows its raw user id (qa-web)');
-  assert.doesNotMatch(log, /<th scope="col">Who<\/th>|per_kim|per_octo/, 'no raw person ids');
+  assert.doesNotMatch(log, /per_kim|per_octo|per_gone/, 'no raw person ids');
+  // Who is back with names (backend-dev 431701b): You for your own, a name, or the CPO's words when there is none.
+  assert.match(log, /<th scope="col">Who<\/th>/);
+  assert.match(log, /<td>Kim Lo<\/td>/);
+  assert.match(log, /<td>You<\/td><td>Couldn&#39;t send<\/td><td>Slack didn&#39;t accept the message/);
+  assert.match(log, /<td>Someone who no longer has access<\/td><td>Couldn&#39;t send<\/td><td>Couldn&#39;t send yet\. We&#39;ll try again shortly\./);
+  assert.match(log, /Slack says that channel or person no longer exists\. Pick another one in Channels\./);
+  assert.match(log, /Email isn&#39;t set up for this team yet\. An owner can fix it in Channels\./);
+  // Just me: no Who column at all.
+  assert.doesNotMatch(logHtml({ kinds, owner: true, me: { id: 'per_octo' }, log: { all: false, next: null, items: [{ channel: 'email', at: new Date().toISOString(), kind: 'minutes', status: 'sent' }] } }), /<th scope="col">Who<\/th>/);
   assert.match(log, /aria-pressed="true">Everyone/);
   assert.match(log, /id="log-older"/);
   assert.match(logHtml({ kinds, owner: false, log: { items: [], next: null, all: false, error: "The delivery log couldn't load. Try again in a moment." } }), /couldn&#39;t load\. Try again in a moment\. <button type="button" id="log-retry">Retry<\/button>/);
@@ -389,6 +398,8 @@ test('L25: set quiet hours and a digest, then read the delivery log, mine and ev
   assert.equal(await log.getByRole('button', { name: 'Everyone' }).getAttribute('aria-pressed'), 'true');
   const kim = log.locator('tr', { hasText: 'A teammate is stuck' });
   assert.doesNotMatch(await log.textContent(), /per_kim|per_octo/, 'no raw person ids');
+  await kim.getByRole('cell', { name: 'Someone who no longer has access' }).waitFor(); // per_kim was never a member here
+  await log.locator('tr', { hasText: 'Meeting minutes' }).getByRole('cell', { name: 'You', exact: true }).waitFor();
   await kim.getByText("Couldn't send").waitFor();
   await kim.getByText("Slack didn't accept the message. Check the channel, or reconnect Slack in Channels.").waitFor();
   assert.doesNotMatch(await kim.textContent(), /U2|channel_not_found/, "someone else's address, and a provider's own error, are never shown");

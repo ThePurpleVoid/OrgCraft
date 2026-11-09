@@ -160,7 +160,9 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
         const n = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
         const before = url.searchParams.get('before');
         const rows = deliveries.filter((d) => d.team === team && (all || d.person === who.id) && (!before || +new Date(d.at) < +before)).sort((a, b) => +new Date(b.at) - +new Date(a.at)).slice(0, n);
-        const items = rows.map((d) => ({ channel: d.channel, at: d.at, event: d.event, kind: d.kind, status: d.status, why: d.why ?? null, ...(d.person === who.id ? { to: d.to } : {}), ...(all ? { principal: d.person } : {}) }));
+        const items = rows.map((d) => ({ channel: d.channel, at: d.at, event: d.event, kind: d.kind, status: d.status, reason: d.reason ?? null, why: d.why ?? null, ...(d.person === who.id ? { to: d.to } : {}),
+          // backend-dev 431701b: everyone's view names each person (name, else login), null if never a member here.
+          ...(all ? { principal: d.person, name: (([l, m]) => (m ? m.name || l : null))(Object.entries(members).find(([, m]) => m.id === d.person) ?? []) } : {}) }));
         return send(200, { items, next: rows.length === n ? String(+new Date(rows.at(-1).at)) : null });
       }
 
