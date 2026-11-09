@@ -6,14 +6,6 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
-  // L14 round 1: the sheet's remaining states, asked of the CPO.
-  'publish.working': 'Working out what changes…',
-  'publish.sending': 'Publishing…',
-  'publish.errors': 'Fix {n} errors before publishing.',
-  'publish.errors.one': 'Fix 1 error before publishing.',
-  'publish.elsewhere': "This change adds or changes commands the team runs, so it is published from the team's own Studio, not from this site.",
-  'publish.elsewhere.link': "Use the team's own Studio",
-  'publish.stale': 'The team changed since this page read it. Reload the page to get the latest, then publish again. Your changes here are not kept.',
 };
 
 export function t(key, vars = {}) {

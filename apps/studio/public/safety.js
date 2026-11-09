@@ -255,6 +255,27 @@ function revertOne(spec, published, item) {
   else if (item.kind === 'other' && item.key) put(spec, item.key, published[item.key]);
 }
 
+/**
+ * A kept draft made on an older published team (someone published since): the draft's own changes, put on top of the
+ * team as it is now (CPO ruling on publish.stale; B1.1-10, a reload never loses the draft). Each role, and each other
+ * part of the spec, that the draft changed comes from the draft; everything else from the newer team. Where both
+ * changed the same role the draft's wins, and the Publish sheet lists it, so the owner checks it before publishing.
+ */
+export function rebaseDraft(from, mine, now) {
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  const out = clone(now);
+  out.roles ??= {};
+  for (const slug of new Set([...Object.keys(from.roles ?? {}), ...Object.keys(mine.roles ?? {})])) {
+    if (same(mine.roles?.[slug], from.roles?.[slug])) continue;
+    if (mine.roles?.[slug] === undefined) delete out.roles[slug]; else out.roles[slug] = clone(mine.roles[slug]);
+  }
+  for (const k of new Set([...Object.keys(from), ...Object.keys(mine)])) {
+    if (k === 'roles' || same(mine[k], from[k])) continue;
+    if (mine[k] === undefined) delete out[k]; else out[k] = clone(mine[k]);
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------------------------------------ the impact step
 // Criteria 8 to 11: in Publish, between the checks and the file review. Every item has a recommended choice, nothing
 // here blocks Publish (D15), and the chosen plan goes into the commit message only (D12), never a file.

@@ -9,7 +9,7 @@ import { createRollout } from './rollout.js';
 import { createGallery, rolesLine, rulesLine } from './gallery.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
-import { QUIET_S, assess, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
+import { QUIET_S, assess, rebaseDraft, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
 import { $, $$, apiUrl, ask, configure, env, feature, paint, request, requestJson, stateEl } from './env.js';
 import { SHELL } from './shell.js';
 import { changesHtml, checksHtml, sheetLines, widensHtml } from './publish-sheet.js';
@@ -1521,7 +1521,7 @@ function saveDraft() {
       // A new team, not published yet: all of it is the draft, with the template it came from.
       if (S.noTeam) localStorage.setItem(draftKey(), JSON.stringify({ base: 'new', template: made?.id ?? 'almost-empty', from: published, spec, at: Date.now() }));
       else if (JSON.stringify(spec) === JSON.stringify(published)) localStorage.removeItem(draftKey());
-      else localStorage.setItem(draftKey(), JSON.stringify({ base: fingerprint(published), spec, at: Date.now() }));
+      else localStorage.setItem(draftKey(), JSON.stringify({ base: fingerprint(published), from: published, spec, at: Date.now() }));
     } catch { /* private mode or full: this session only */ }
   }
 }
@@ -1547,9 +1547,12 @@ function restoreDraft() {
   if (S.noTeam || previewing) return false;
   const kept = readDraft();
   if (!kept?.spec || kept.base === 'new') return false;
-  // Made on another published team (someone published since): it would undo their work, so it is not brought back.
-  if (kept.base !== fingerprint(published)) { try { localStorage.removeItem(draftKey()); } catch { /* ignore */ } return false; }
-  spec = kept.spec;
+  // Made on another published team (someone published since): its own changes come back on top of their version,
+  // never undoing it. A draft kept before the published team was stored with it cannot be replayed, so it goes.
+  if (kept.base !== fingerprint(published)) {
+    if (!kept.from) { try { localStorage.removeItem(draftKey()); } catch { /* ignore */ } return false; }
+    spec = rebaseDraft(kept.from, kept.spec, published);
+  } else spec = kept.spec;
   restoredNote(kept);
   return true;
 }
