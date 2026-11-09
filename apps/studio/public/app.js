@@ -1,6 +1,6 @@
 // OrgCraft Studio, the editor. Plain ES modules, no build step. The team is one TeamSpec (packages/team-model),
 // edited here and checked live with the kit's own rules; the server only reads, previews and publishes.
-import { addMember, applyExtension, checkUpgrade, DEFAULT_TARGETS, displayName, membersOf, poolOf, resolveSpec, setDisplayName, setEnabled, setField, splitBrief, TARGETS, teamPacks, teamTargets, typeOf, validate } from './team-model.mjs';
+import { addMember, applyExtension, checkUpgrade, DEFAULT_TARGETS, diffTeams, displayName, membersOf, poolOf, resolveSpec, setDisplayName, setEnabled, setField, splitBrief, TARGETS, teamPacks, teamTargets, typeOf, validate } from './team-model.mjs';
 import { t, tip } from './i18n.js';
 import { drawLines, renderWiring, wireWiring } from './wiring.js';
 import { createChat } from './chat.js';
@@ -9,9 +9,11 @@ import { createRollout } from './rollout.js';
 import { createGallery, rolesLine, rulesLine } from './gallery.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
-import { QUIET_S, assess, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
+import { QUIET_S, assess, rebaseDraft, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
 import { $, $$, apiUrl, ask, configure, env, feature, paint, request, requestJson, stateEl } from './env.js';
 import { SHELL } from './shell.js';
+import { createLive } from './live.js';
+import { changesHtml, checksHtml, sheetLines, widensHtml } from './publish-sheet.js';
 import { infoButton, installTips } from './tooltip.js';
 
 /** The glossary tooltip (a function named `tip` is shadowed where the card builds its own hover text). */
@@ -104,7 +106,19 @@ function derive() {
   const all = Object.keys(spec.roles).sort().map(info);
   const safety = assess({ published, draft: spec, kit: S.kit, board, head: S.git?.head });
   const team = all.filter((r) => r.enabled && bySlug.has(r.slug));
-  return { all, bySlug: new Map(all.map((r) => [r.slug, r])), team, issues: checksOf(spec), safety, draft: draftChanges(), looks: thingsToLook(team, bySlug) };
+  const byAll = new Map(all.map((r) => [r.slug, r]));
+  const draft = draftChanges();
+  // B5.1-1: the Publish sheet's lines, one per change; "Publish {n} changes" counts the same lines.
+  if (published && !S.noTeam) {
+    try {
+      draft.lines = sheetLines(diffTeams(published, spec, S.kit), { name: (id) => byAll.get(id)?.title ?? roleName(id), system: systemName, changedRoles: [...draft.changed], changedData: draft.data });
+      draft.count = draft.lines.length;
+    } catch {
+      draft.lines = sheetLines([], { name: (id) => byAll.get(id)?.title ?? roleName(id), changedRoles: [...draft.changed], changedData: draft.data });
+      draft.count = draft.lines.length;
+    }
+  } else draft.lines = [];
+  return { all, bySlug: byAll, team, issues: checksOf(spec), safety, draft, looks: thingsToLook(team, bySlug) };
 }
 
 /**
@@ -122,8 +136,11 @@ function draftChanges() {
   const slugs = new Set([...Object.keys(spec.roles), ...Object.keys(published?.roles ?? {})]);
   const changed = new Set([...slugs].filter((s) => seat(published, s) !== seat(spec, s)));
   const data = ['ownership', 'gates', 'resources', 'meetings', 'values', 'options', 'rules'].filter((k) => JSON.stringify(published?.[k] ?? null) !== JSON.stringify(spec[k] ?? null));
-  return { changed, count: changed.size + data.length };
+  return { changed, data, count: changed.size + data.length };
 }
+
+/** A system's name, from the draft or the published team. */
+const systemName = (id) => [...(spec.resources?.resources ?? []), ...(published?.resources?.resources ?? [])].find((x) => x.id === id)?.name ?? id;
 
 /**
  * B1.1-7: the live checks shown on the cards and under "Things to look at before you publish": a teammate whose
@@ -184,7 +201,7 @@ function syncUndo() {
   // first publish counts each teammate.
   const n = pendingCount();
   const pub = $('#publish');
-  if (pub) { pub.textContent = n ? t('canvas.publish', { n }) : t('canvas.publish.none'); pub.disabled = !n; }
+  if (pub) { pub.textContent = n ? t('publish.button', { n }) : t('canvas.publish.none'); pub.disabled = !n; }
 }
 const pendingCount = () => (S?.noTeam ? view?.team.length ?? 0 : view?.draft.count ?? 0);
 function step(from, to) {
@@ -382,7 +399,7 @@ function nodeSvg(r, p, extra = '') {
   else if (live?.on && mode !== 'systems') extra += l ? ` live s-${l.status}${l.stale ? ' stale' : ''}` : ' live none';
   // The reason replaces the tier on an amber card: it is what the owner needs to read there (criterion 3).
   // A role that reports for itself, with no hook events (another coding agent): its card says so (D46).
-  const subtitle = r.off || !r.enabled ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle });
+  const subtitle = r.off || !r.enabled ? t('canvas.off') : liveCtl?.isPaused(r.slug) ? t('badge.paused') : t('teammate.subtitle.ai', { role: r.typeTitle });
   const tier = r.off ? subtitle : three ? (hot ? reasonOf(hot[0]) : [r.tier, r.dormant ? 'dormant' : replaces ? 'replaces kit' : own?.self_reported ? 'self-reported' : ''].filter(Boolean).join(' · '))
     : l !== undefined ? liveLine(l) : mode === 'systems' ? systemsLine(r.slug) : subtitle;
   const state = three ? (own ? [stateWord(own), taskOf(own)].filter(Boolean).join(' · ') : '') : '';
@@ -505,7 +522,7 @@ function renderList() {
     const off = !r.enabled;
     return `<li class="tree-item${off ? ' off' : ''}${view.draft.changed.has(r.slug) ? ' draft' : ''}" data-depth="${Math.min(depth, 6)}">
       <button type="button" class="tree-btn${r.slug === selected ? ' selected' : ''}" data-node="${esc(r.slug)}" data-slug="${esc(r.slug)}">
-        <span class="name">${esc(r.title)}</span><span class="muted sub">${esc(off ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle }))}</span>
+        <span class="name">${esc(r.title)}</span><span class="muted sub">${esc(off ? t('canvas.off') : liveCtl?.isPaused(r.slug) ? t('badge.paused') : t('teammate.subtitle.ai', { role: r.typeTitle }))}</span>
         ${look ? `<span class="badge-dot" title="${esc(look.text)}" aria-label="${esc(look.text)}">!</span>` : ''}</button></li>`
       + kids.get(r.slug).sort((a, b) => a.title.localeCompare(b.title)).map((c) => item(c, depth + 1)).join('');
   };
@@ -803,7 +820,7 @@ function renderInspector() {
       ${managers.map((m) => `<option value="${m.slug}" ${m.slug === r.reportsTo ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select></div>
     <div class="field"><label for="i-tier">${esc(t('inspector.model'))} ${mark('Model')}</label><select id="i-tier">${TIERS.map((x) => `<option ${x === r.tier ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
     <div class="field"><label for="i-pool">${esc(t('inspector.hands'))} ${infoButton(tip('control.same.job.more.hands'), esc, t('inspector.hands'))} ${mark('Pool')}</label><input id="i-pool" type="number" min="1" max="10" step="1" value="${Number.isInteger(r.pool) ? r.pool : 1}" inputmode="numeric"></div>
-    <p class="row"><button type="button" id="i-wiring" class="primary">${esc(t('teammate.openwiring'))}</button></p>
+    <p class="row"><button type="button" id="i-wiring" class="primary">${esc(t('teammate.openwiring'))}</button>${liveCtl?.connected && r.enabled && !liveCtl.isPaused(r.slug) ? ` <button type="button" id="i-live-pause" data-tip="${esc(t('tip.control.pause'))}">${esc(t('stop.pause'))}</button>` : ''}</p>
     <p class="row"><button type="button" id="i-another" data-tip="${esc(tip('control.add.another.set.up.differently'))}">${esc(t('inspector.another'))}</button>${ownProject || (spec.roles[r.type]?.brief !== undefined) ? `<button type="button" id="i-editjob" data-type="${esc(r.type)}" data-tip="${esc(tip('control.edit.the.job.description'))}">${esc(t('inspector.editjob'))}</button>` : ''}</p>
     <p id="i-editjob-warn" class="notice warn" role="alert" hidden>${esc(t('inspector.editjob.warn', { n: seats }))} <button type="button" class="link" id="i-editjob-go">${esc(t('inspector.editjob'))}</button></p>
     <label class="row"><input type="checkbox" id="i-dormant" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>
@@ -839,7 +856,9 @@ function renderInspector() {
   name.onchange = () => {
     const v = name.value;
     try { const probe = JSON.parse(JSON.stringify(spec)); setDisplayName(probe, r.slug, v, S.kit); } catch (err) {
-      $('#i-name-msg').textContent = err.status === 409 ? t('teammate.dupname', { name: err.message.replace(/^Another teammate is already called /, '') }) : err.message;
+      const dup = /^Another teammate is already called (.+)$/.exec(err.message);
+      const address = /^(.+) is already a teammate's id, a role or "owner"/.exec(err.message);
+      $('#i-name-msg').textContent = dup ? t('teammate.dupname', { name: dup[1] }) : address ? t('teammate.name.address', { name: address[1] }) : err.message;
       name.setAttribute('aria-invalid', 'true'); return;
     }
     name.removeAttribute('aria-invalid');
@@ -848,6 +867,8 @@ function renderInspector() {
   $('#i-pool').onchange = (e) => { const n = Math.max(1, Math.min(10, Math.round(+e.target.value || 1))); change(() => setExtField(r.slug, 'Pool', n === 1 ? '' : String(n))); };
   $('#i-another').onclick = () => addTeammate(r.type, r.reportsTo);
   $('#i-wiring').onclick = () => openWiring(r.slug);
+  // SH-10: Pause works from any screen, a phone too, and needs no publish: it goes to the control plane at once.
+  if ($('#i-live-pause')) $('#i-live-pause').onclick = () => liveCtl.pause(r.slug);
   const job = $('#i-editjob');
   // B1.3-5: the job description is the role's, shared by every teammate based on it, so say so before opening it.
   if (job) job.onclick = () => { if (seats > 1) { $('#i-editjob-warn').hidden = false; $('#i-editjob-go').focus(); } else openEditor(r.type); };
@@ -920,7 +941,13 @@ function renderIssues() {
   $('#issues').innerHTML = looks + (list.length ? list.map((i) => `<li class="${i.level}" data-where="${esc(i.where)}"><strong>${i.level}</strong> · ${esc(i.where)}: ${esc(i.message)}</li>`).join('') : looks ? '' : '<li class="none">No problems.</li>');
 }
 
+/** Read-only: nothing that changes the team works, but looking does (the wiring view, the info buttons) and so does Pause. */
+function lockInspector() {
+  if (locked()) for (const el of $$('#inspector :is(input, select, textarea, button):not(#i-wiring, #i-live-pause, .info), #library input')) el.disabled = true;
+}
+
 let flashTimer = null;
+let liveCtl = null; // the live overrides (L18): Stop everything, Pause, the banner
 function flash(text) {
   const pill = $('#checks');
   pill.className = 'pill error';
@@ -980,8 +1007,7 @@ function render() {
   renderInspector();
   renderIssues();
   syncUndo();
-  // Read-only: nothing that changes the team works, but looking does (the wiring view, the info buttons).
-  if (locked()) for (const el of $$('#inspector :is(input, select, textarea, button):not(#i-wiring, .info), #library input')) el.disabled = true;
+  lockInspector();
   renderTemplateBar();
 }
 
@@ -1015,6 +1041,8 @@ function diff(a, b) {
 async function api(path, body) {
   // The handler reads the team at the commit the page read (embed spec 4): preview, suggestions and publish send it.
   if (body && S?.git?.head?.sha && /^\/v1\/team\/(preview|suggestions|publish)$/.test(path)) body = { base: S.git.head.sha, ...body };
+  // Locally, a team with no history yet publishes against "nothing", so a first publish elsewhere is caught.
+  else if (body && S?.git && !env.embedded && path === '/v1/team/publish') body = { base: null, ...body };
   const { res, data } = await ours(async () => {
     const res = await requestJson(path, body);
     let data = {};
@@ -1084,45 +1112,89 @@ function wireImpact() {
 }
 
 /** The file review, of what will be published: a deferred move keeps its writer in these files (criterion 11). */
+/** B5.1-2: the files the owner's changes touch first, then what OrgCraft regenerates, folded and not counted. */
+const generated = (path) => !/^\.agent-team\//.test(path) || /^\.agent-team\/(kit\.lock\.json|roles\/README\.md)$/.test(path);
+function filesHtml(changes) {
+  const row = (c) => `<details><summary><span class="st ${c.status}">${c.status}</span>${esc(c.path)}</summary><pre class="diff">${diff(c.before, c.after)}</pre></details>`;
+  const mine = changes.filter((c) => !generated(c.path));
+  const auto = changes.filter((c) => generated(c.path));
+  return mine.map(row).join('') + (auto.length ? `<details class="generated"><summary data-tip="${esc(t('publish.files.generated.tip'))}">${esc(t('publish.files.generated', { n: auto.length }))}</summary>${auto.map(row).join('')}</details>` : '');
+}
+
+let previewSeq = 0;
 async function previewPublish() {
+  const seq = ++previewSeq;
   try {
     const { spec: out } = publishable(spec, published, view.safety.on ? view.safety.items : [], picks);
-    const { changes, issues, needsCode } = await api('/v1/team/preview', { spec: out });
+    const { changes, issues, needsCode, capability } = await api('/v1/team/preview', { spec: out });
+    if (seq !== previewSeq) return; // a newer preview is on its way
+    // Widens access, first (ADR 0013 rule 2): what the server computed for this draft, whoever wrote it.
+    const name = (id) => view.bySlug.get(id)?.title ?? roleName(id);
+    $('#widens').innerHTML = widensHtml(capability ?? [], name, systemName);
+    $('#widens').hidden = !capability?.length;
+    $('#files-title').textContent = t('publish.files', { n: changes.length });
     const errors = issues.filter((i) => i.level === 'error');
     // Mounted in a host that publishes through the team's deployment: a change to the commands the team runs is
     // published from the deployment's own Studio, never through the host (embed spec section 6).
     const elsewhere = needsCode && S.features?.publishCode === false;
     $('#confirm').disabled = !changes.length || errors.length > 0 || elsewhere;
-    $('#changes').innerHTML = errors.length ? `<p class="result error pad">Fix ${errors.length} error${errors.length > 1 ? 's' : ''} before publishing.</p>` :
-      changes.length ? changes.map((c) => `<details><summary><span class="st ${c.status}">${c.status}</span>${esc(c.path)}</summary><pre class="diff">${diff(c.before, c.after)}</pre></details>`).join('')
-        : '<p class="muted pad">Nothing to publish: the repository already has this team.</p>';
+    $('#changes').innerHTML = errors.length ? `<p class="result error pad">${esc(t('publish.errors', { n: errors.length }))}</p>` :
+      changes.length ? filesHtml(changes) : `<p class="muted pad">${esc(t('canvas.publish.none'))}</p>`;
     if (elsewhere && !errors.length) {
       const note = document.createElement('p');
       note.className = 'result pad';
-      note.textContent = 'This change adds or changes commands the team runs, so it is published from the team\'s own Studio, not from this site. ';
+      note.textContent = `${t('publish.elsewhere')} `;
       if (/^https:\/\//.test(S.features.studio ?? '')) {
         const a = document.createElement('a');
         a.href = S.features.studio; a.target = '_blank'; a.rel = 'noopener noreferrer';
-        a.textContent = 'Use the deployment\'s Studio';
+        a.textContent = t('publish.elsewhere.link');
         note.append(a, '.');
       }
       $('#changes').prepend(note);
     }
   } catch (e) {
+    if (seq !== previewSeq) return;
     $('#changes').innerHTML = `<p class="result error pad">${esc(e.message)}</p>`;
     $('#confirm').disabled = true;
   }
 }
 
+/** The Publish sheet's own sections (B5.1): its title, the checks and one line per change with its Undo. */
+function renderSheet() {
+  $('#publish-title').textContent = t('publish.button', { n: pendingCount() });
+  $('#sheet-checks').innerHTML = checksHtml([...view.issues, ...reminders()], view.looks);
+  const lines = S.noTeam ? view.team.map((r) => ({ text: t('change.role-added', { teammate: r.title }) })) : view.draft.lines;
+  $('#sheet-changes').innerHTML = lines.length ? changesHtml(lines, { undo: !S.noTeam }) : '';
+}
+
+function wireSheet() {
+  $('#sheet-changes').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-undo-line]');
+    const line = b && view.draft.lines[+b.dataset.undoLine];
+    if (!line) return;
+    change((sp) => revert(sp, published, line.change));
+    renderSheet();
+    renderImpact();
+    previewPublish();
+    // Keep the keyboard where it was: the next line's Undo, else the sheet's title.
+    const left = $$('#sheet-changes [data-undo-line]');
+    (left.find((x) => +x.dataset.undoLine >= +b.dataset.undoLine) ?? left.at(-1) ?? $('#publish-title')).focus?.();
+  });
+}
+
 async function openPublish() {
   if (locked()) return flash(lockedNote());
   const dlg = $('#publish-dialog');
+  renderSheet();
+  $('#widens').hidden = true;
+  $('#files').open = false;
   $('#publish-result').textContent = '';
   $('#publish-result').className = 'result';
-  $('#changes').innerHTML = '<p class="muted pad">Working out what changes…</p>';
+  $('#changes').innerHTML = `<p class="muted pad">${esc(t('publish.working'))}</p>`;
+  $('#advanced').open = false;
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
   $('#branch').value ||= `agent-team/publish-${stamp}`;
-  $('#message').value ||= 'Update the agent team (OrgCraft Studio)';
+  $('#message').value ||= t('publish.local.message.default', { team: spec.values?.PROJECT_NAME ?? '' });
   renderImpact();
   dlg.showModal();
   await previewPublish();
@@ -1132,7 +1204,8 @@ async function confirmPublish() {
   const out = $('#publish-result');
   $('#confirm').disabled = true;
   out.className = 'result';
-  out.textContent = 'Publishing…';
+  out.textContent = t('publish.sending');
+  const n = pendingCount();
   try {
     const items = view.safety.on ? view.safety.items : [];
     const plan = renderImpact();
@@ -1143,12 +1216,21 @@ async function confirmPublish() {
     out.className = 'result ok';
     if (r.pr?.url && /^https:\/\//.test(r.pr.url)) {
       // Mounted in a host (and gh locally): the pull request is open. The link is set through the DOM, never markup.
-      out.textContent = `Opened a pull request for ${r.files.length} file${r.files.length === 1 ? '' : 's'} on ${r.branch}: `;
+      // "Sent for review. See the change": the second sentence is the link (B5.1-3), set through the DOM, never markup.
+      const [sent, see] = t('publish.sent').split(/(?<=\.)\s+/);
       const a = document.createElement('a');
       a.href = r.pr.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-      a.textContent = r.pr.number ? `#${r.pr.number}` : r.pr.url;
-      out.append(a, '. Review and merge it as usual.');
-    } else out.textContent = r.commit ? `Committed ${r.commit} on ${r.branch} (${r.files.length} files). Push it and open a pull request: git push -u origin ${r.branch}` : r.branch ? `Nothing changed on ${r.branch}.` : 'Nothing changed: the repository already has this team.';
+      a.textContent = see ?? r.pr.url;
+      out.replaceChildren(`${sent} `, a);
+    } else if (r.commit) {
+      // Saved locally: what happened in words, then the command to send it for review on its own line, as code.
+      const done = document.createElement('span');
+      done.textContent = `${t('publish.local.done', { n })} ${t('publish.local.share')}`;
+      const cmd = document.createElement('code');
+      cmd.className = 'cmd';
+      cmd.textContent = `git push -u origin ${r.branch}`;
+      out.replaceChildren(done, cmd);
+    } else out.textContent = t('canvas.publish.none');
     const fresh = await api('/v1/team');
     const wasNew = !!S.noTeam;
     S = fresh;
@@ -1165,7 +1247,7 @@ async function confirmPublish() {
     render();
   } catch (e) {
     out.className = 'result error';
-    out.textContent = e.type === 'stale' ? 'The team changed in the repository since this page read it. Reload the page to get the latest, then publish again; your changes here are not kept.' : e.message;
+    out.textContent = e.type === 'stale' ? t('publish.stale') : e.message;
     $('#confirm').disabled = e.type === 'stale';
   }
 }
@@ -1214,7 +1296,7 @@ async function setPage(raw) {
     rolloutView ??= createRollout({ root: $('#rollout-page'), titleOf: roleTitle, apiUrl });
     rolloutView.open();
   } else if (p === 'chat') {
-    chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features) });
+    chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features), organization: () => spec?.values?.ORGANIZATION || spec?.values?.PROJECT_NAME || '' });
     if (params.has('card') || params.has('budget')) chat.focus({ card: params.get('card'), budget: params.has('budget') });
     chat.open();
   } else {
@@ -1319,7 +1401,7 @@ function destroy() {
   el.innerHTML = '';
   el.classList.remove('ats', 'ats-embedded', 'small', 'no-team', 'previewing', 'editing', 'no-publish', 'no-chat', 'no-runs', 'no-live', 'no-rollout');
   delete el.dataset.page; delete el.dataset.mode;
-  S = spec = selected = selectedSystem = view = sugg = chat = rolloutView = meetings = editor = gallery = previewing = made = published = board = pop = null;
+  S = spec = selected = selectedSystem = view = sugg = chat = rolloutView = meetings = editor = gallery = previewing = made = published = board = pop = liveCtl = null;
   query = ''; undo.length = 0; redo.length = 0; zoom = 'fit'; mode = 'org'; scale = 1; page = 'team'; initialPage = null;
   flow = { key: '', edges: [], unresolved: [] }; picks = new Map(); followUps = []; booted = false; lastEdit = { key: '', at: 0 };
 }
@@ -1443,7 +1525,9 @@ function wireTemplates() {
 // ------------------------------------------------------------------------------------------------ the draft
 // B1.1-10: unpublished changes survive a reload. The draft is kept in this browser per repository and branch, with
 // the published team it was made on; it comes back only on that same published team, and the owner can discard it.
-const draftKey = () => `orgcraft.draft:${where()}:${S.git?.branch ?? ''}`;
+// Keyed by the team (where it lives), not the branch: a local publish moves to a new branch, and the draft must
+// still be found after someone else's publish (qa-web L14 round 3, S1). rebaseDraft puts it on their version.
+const draftKey = () => `orgcraft.draft:${where()}`;
 const fingerprint = (x) => { const s = JSON.stringify(x); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return `${s.length}:${h}`; };
 function saveDraft() {
   {
@@ -1452,7 +1536,7 @@ function saveDraft() {
       // A new team, not published yet: all of it is the draft, with the template it came from.
       if (S.noTeam) localStorage.setItem(draftKey(), JSON.stringify({ base: 'new', template: made?.id ?? 'almost-empty', from: published, spec, at: Date.now() }));
       else if (JSON.stringify(spec) === JSON.stringify(published)) localStorage.removeItem(draftKey());
-      else localStorage.setItem(draftKey(), JSON.stringify({ base: fingerprint(published), spec, at: Date.now() }));
+      else localStorage.setItem(draftKey(), JSON.stringify({ base: fingerprint(published), from: published, spec, at: Date.now() }));
     } catch { /* private mode or full: this session only */ }
   }
 }
@@ -1478,9 +1562,12 @@ function restoreDraft() {
   if (S.noTeam || previewing) return false;
   const kept = readDraft();
   if (!kept?.spec || kept.base === 'new') return false;
-  // Made on another published team (someone published since): it would undo their work, so it is not brought back.
-  if (kept.base !== fingerprint(published)) { try { localStorage.removeItem(draftKey()); } catch { /* ignore */ } return false; }
-  spec = kept.spec;
+  // Made on another published team (someone published since): its own changes come back on top of their version,
+  // never undoing it. A draft kept before the published team was stored with it cannot be replayed, so it goes.
+  if (kept.base !== fingerprint(published)) {
+    if (!kept.from) { try { localStorage.removeItem(draftKey()); } catch { /* ignore */ } return false; }
+    spec = rebaseDraft(kept.from, kept.spec, published);
+  } else spec = kept.spec;
   restoredNote(kept);
   return true;
 }
@@ -1509,6 +1596,16 @@ function load(initial) {
   // A move published to happen after its open work merges lives on in the draft, even across a reload or a restart.
   for (const f of followUps) reapplyFollowUp(spec, f);
   wireImpact();
+  // L18: Stop everything, Pause and the live banner, when a control plane is connected (the Studio asks it).
+  // A host page's Studio (embedded) has no route to the control plane's live state yet: nothing is offered there.
+  if (!S.noTeam && !env.embedded) {
+    liveCtl = createLive({ say: note, titleOf: roleTitle, onChange: () => { if (spec && !editor?.slug && stateEl().dataset.page === 'team') { renderCanvas(); if (selected) { renderInspector(); lockInspector(); } } } });
+    liveCtl.wire(life.signal);
+    liveCtl.load();
+    const again = setInterval(() => liveCtl?.load(), 20_000);
+    life.signal.addEventListener('abort', () => clearInterval(again));
+  }
+  wireSheet();
   if (!S.noTeam && feature('live', S.features)) {
     loadBoard();
     try { boardStream = new EventSource(apiUrl('/v1/team/board/stream')); boardStream.addEventListener('changed', loadBoard); } catch { /* no stream: the first read stands */ }
@@ -1556,6 +1653,7 @@ function load(initial) {
   $('#views').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setMode(b.dataset.view); });
   $('#pages').addEventListener('click', (e) => {
     if (e.target.closest('#more-btn')) { const m = $('#more-menu'); const show = m.hidden; m.hidden = !show; $('#more-btn').setAttribute('aria-expanded', String(show)); if (show) m.querySelector('button')?.focus(); return; }
+    if (e.target.closest('#stop-all')) closeMore();
     const b = e.target.closest('[data-page]'); if (b) setPage(b.dataset.page);
   });
   $('#pages').addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#more-menu').hidden) { closeMore(); $('#more-btn').focus(); } });

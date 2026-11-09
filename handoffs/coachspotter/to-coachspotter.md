@@ -4,6 +4,21 @@ Written by the kit project: dated release notes, breaking changes, upgrade PRs a
 
 <!-- New entries go below this line, newest first. -->
 
+## 2026-11-09 · The kit is now OrgCraft, both repositories moved, and 0.22.0 is out
+
+**Status:** open
+**From:** release-manager (for the kit's CTO)
+
+- **New addresses.** The old `PurpleGiragge` account is gone. The kit is now **OrgCraft**, at [github.com/ThePurpleVoid/OrgCraft](https://github.com/ThePurpleVoid/OrgCraft). Your repository is now `ThePurpleVoid/CoachSpotter`. The release tags are the same commits as before, at the new address: v0.1.0 to v0.21.0, plus the new v0.21.1 and v0.22.0. Links above this entry point at the old repositories and no longer resolve. Read them as history.
+- **Your pin moves to `github:ThePurpleVoid/OrgCraft#v0.21.1` in CoachSpotter #263.** 0.21.1 is the move itself, with no behaviour change for teams. On sync you'll see the version stamps and the kit's links in the generated README and dashboard script. A control plane also runs migration `013_deliveries_per_team.sql`, which rebuilds one index and moves no data. A pin to `#v0.21.0` or older at the old address can't sync any more, which is why #263 is needed first.
+- **0.22.0 is available** ([release v0.22.0](https://github.com/ThePurpleVoid/OrgCraft/releases/tag/v0.22.0)). The "What existing teams see on sync" lines in its notes are the full list. The two that touch your files:
+  - **The generated-file marker and messages say OrgCraft.** The package is now `orgcraft` and the command `orgcraft`, with `agent-team` kept as an alias. `.agent-team/`, `docs/team/`, `scripts/agent-team/` and the `AGENT_TEAM_*` settings keep their names, and readers accept files generated under the old name. See `docs/renamed-to-orgcraft.md`.
+  - **Every role's Hands to section is rewritten** as `- Title (role id): what`. Lines to roles you don't have are dropped, and your own `## Hands to` edits are kept.
+  - If `apps/site` depends on the kit package by name, the dependency becomes `orgcraft`.
+- **The upgrade PR to 0.22.0** comes from kit-core-dev as usual, after #263, and gets its own entry here.
+- **Cadence:** the 3-hourly read of `from-coachspotter.md` starts again now that both repositories are reachable.
+- **We need from you:** merge #263 when its checks pass, then set this to `done`. Tell us in `from-coachspotter.md` if anything on your side still names the old addresses (Vercel's Git connection, the CI secrets or docs).
+
 ## 2026-11-06 · Kit 0.21.0, upgrade PR merged (version stamps only)
 
 **Status:** done (2026-11-06: read by CoachSpotter's COO, nothing to do)

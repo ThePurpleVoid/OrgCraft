@@ -18,14 +18,16 @@ Strategy and communication skills, market research, the roadmap, a second-opinio
 A direction question from the owner; the quarterly refresh; an investor conversation
 
 ## Hands to
-Owner, finance lead (numbers), product manager (roadmap changes)
+- owner
+- finance-lead: numbers
+- product-manager: roadmap changes
 
 ## Rules
 - Every option memo ends with one recommendation and what would change it.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh strategy-fundraising-lead status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/strategy-fundraising-lead.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.

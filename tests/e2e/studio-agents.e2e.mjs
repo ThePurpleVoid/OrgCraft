@@ -174,6 +174,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
 
   // Publish writes every agent's file, and lists the ones that are off in exclude.
   await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
   const changes = page.locator('#changes');
   for (const p of ['.agent-team/roles/accessibility-auditor.md', '.agent-team/roles/qa-a11y.md', '.agent-team/roles/translator.md', '.agent-team/roles/localization-lead.md', '.agent-team/team.json']) await changes.locator('summary', { hasText: p }).first().waitFor();
   await changes.locator('summary', { hasText: '.agent-team/team.json' }).click();
@@ -181,8 +182,9 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   // Commit it, then open the repository again: the same agents, with the same text (PRD E7).
   const before = Object.fromEntries(await Promise.all(['accessibility-auditor', 'qa-a11y', 'translator'].map(async (s) => [s, await page.evaluate(async (slug) => (await (await fetch('/v1/team')).json()).spec.roles[slug] ?? null, s)])));
   assert.deepEqual(before, { 'accessibility-auditor': null, 'qa-a11y': null, translator: null }, 'nothing is written before publish');
+  await page.locator('#advanced').evaluate((d) => { d.open = true; });
   await page.locator('#branch').fill('team/new-agents');
-  await page.getByRole('button', { name: 'Commit to branch' }).click();
+  await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: /team\/new-agents/ }).waitFor();
   await page.keyboard.press('Escape');
   await page.reload();

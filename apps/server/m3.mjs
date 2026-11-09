@@ -10,6 +10,8 @@ import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
 import { checkMeetingDefs } from './meetings.mjs';
 import { dayBounds, dayStart, localDay, nextDay, timeZoneOf } from './budget-day.mjs';
 import { approveScope, factsOf, redact as redactText, riskOf } from './signed.mjs';
+import { checkTriggers } from './triggers.mjs';
+import { halted } from './live.mjs';
 
 const scrypt = promisify(scryptCb);
 
@@ -61,8 +63,9 @@ export function money(minor, currency = 'USD') {
 export const personActor = (who) => ({ kind: 'person', id: who, via: 'studio' });
 
 /** A new envelope minted by the control plane. */
-export function mint(tenant, team, type, data, { actor = SYSTEM, subject, run, teamVersion, time = new Date() } = {}) {
-  const e = { specversion: '1.0', id: eventId(), type, version: 1, source: `/tenants/${tenant}/teams/${team}`, tenant, team, time: time.toISOString(), actor, data };
+export function mint(tenant, team, type, data, { actor = SYSTEM, subject, run, teamVersion, time = new Date(), id: given = null } = {}) {
+  // A deterministic id (a schedule's slot, a webhook's inbound row) makes a second write of the same thing a no-op.
+  const e = { specversion: '1.0', id: given ?? eventId(), type, version: 1, source: `/tenants/${tenant}/teams/${team}`, tenant, team, time: time.toISOString(), actor, data };
   if (subject) e.subject = subject;
   if (run) e.run = run;
   if (teamVersion) e.teamVersion = teamVersion;
@@ -284,8 +287,24 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (!Array.isArray(areas) || areas.some((a) => typeof a !== 'string' || a.length > 500) || areas.length > 200) throw new Problem(400, `role ${r.slug}: areas is a list of paths`);
       if (r.pool !== undefined && !(isInt(r.pool) && r.pool >= 1 && r.pool <= 100)) throw new Problem(400, `role ${r.slug}: pool is 1 to 100`);
       if (r.brief !== undefined && r.brief !== null && (typeof r.brief !== 'string' || Buffer.byteLength(r.brief) > 20 * 1024)) throw new Problem(400, `role ${r.slug}: brief is the brief's text, at most 20 KB`);
-      return { slug: r.slug, reportsTo: r.reportsTo, areas, ...(r.pool ? { pool: r.pool } : {}), ...(typeof r.model === 'string' ? { model: r.model.slice(0, 100) } : {}), ...(r.brief ? { brief: r.brief } : {}) };
+      // ADR 0011 (additive): the type a member is based on, its display name, and its structured Hands to (member ids).
+      if (r.type !== undefined && r.type !== null && !SLUG.test(r.type)) throw new Problem(400, `role ${r.slug}: type is a role slug`);
+      if (r.name !== undefined && r.name !== null && (typeof r.name !== 'string' || !r.name.trim() || r.name.length > 60)) throw new Problem(400, `role ${r.slug}: name is text of at most 60 characters`);
+      if (r.handsTo !== undefined && r.handsTo !== null && (!Array.isArray(r.handsTo) || r.handsTo.length > 50 || r.handsTo.some((x) => typeof x !== 'string' || !SLUG.test(x)))) throw new Problem(400, `role ${r.slug}: handsTo is a list of at most 50 member ids`);
+      return { slug: r.slug, reportsTo: r.reportsTo, areas, ...(r.type && r.type !== r.slug ? { type: r.type } : {}), ...(r.name ? { name: r.name.trim() } : {}), ...(r.handsTo?.length ? { handsTo: r.handsTo } : {}), ...(r.pool ? { pool: r.pool } : {}), ...(typeof r.model === 'string' ? { model: r.model.slice(0, 100) } : {}), ...(r.brief ? { brief: r.brief } : {}) };
     });
+    // A display name may not be another teammate's id, a role type or "owner", nor another's name: `to` resolves ids,
+    // then names, then types (L17), so a clash would let a name catch messages meant for someone else (security L17).
+    const key = (s) => String(s).trim().replace(/\s+/g, ' ').toLowerCase();
+    const reserved = new Set(['owner', ...roles.map((r) => r.slug), ...roles.map((r) => r.type).filter(Boolean)]);
+    const names = new Map();
+    for (const r of roles) {
+      if (!r.name) continue;
+      const k = key(r.name);
+      if (reserved.has(k) && k !== r.slug) throw new Problem(400, `role ${r.slug}: the name ${r.name} is already a teammate's id, a role or "owner"; pick another`);
+      if (names.has(k)) throw new Problem(400, `role ${r.slug}: ${names.get(k)} is already called ${r.name}`);
+      names.set(k, r.slug);
+    }
     const doors = roles.filter((r) => r.reportsTo === 'owner');
     if (doors.length !== 1) throw new Problem(409, `exactly one role reports to the owner (the front door); this team has ${doors.length}`);
     for (const r of roles) if (r.reportsTo !== 'owner' && !seen.has(r.reportsTo)) throw new Problem(400, `role ${r.slug} reports to ${r.reportsTo}, which is not in the team`);
@@ -318,6 +337,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     const mode = b.mode ?? 'runner';
     if (!['runner', 'subagents', 'agent-teams'].includes(mode)) throw new Problem(400, 'mode is runner, subagents or agent-teams');
     const roster = checkRoster(b.team);
+    // Triggers (N2, L21), frozen with the run like its roles and meetings.
+    const triggers = checkTriggers(b.team?.triggers, roster.roles);
     return tx(tenant, async (ctx) => {
       const budget = await budgetRow(ctx.q, team);
       if (budget?.perDay === null || budget?.perDay === undefined) throw new Problem(409, 'set a daily cap first: PUT /v1/teams/{team}/budget with perDay');
@@ -329,17 +350,20 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       }
       const [going] = await ctx.q("select id from runs where team = $1 and state <> 'stopped' limit 1", [team]);
       if (going) throw new Problem(409, `run ${going.id} is still going; stop it first`);
+      if (await halted(ctx.q, team)) throw new Problem(409, 'Stop everything is on for this team; lift it first (it needs a passkey)', { type: 'halted' });
       const t = await today(ctx.q, team, ctx.now);
       if (t.state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it or start tomorrow", { type: 'budget-exhausted' });
       const rid = id('run');
       // runs_one_going decides when two starts race; the loser gets the same 409 as the check above.
-      const [row] = await ctx.q(`insert into runs(id, tenant, team, mode, state, caps, roster, team_version, started_by) values ($1, $2, $3, $4, 'running', $5, $6, $7, $8)
+      const [row] = await ctx.q(`insert into runs(id, tenant, team, mode, state, caps, roster, team_version, started_by, triggers) values ($1, $2, $3, $4, 'running', $5, $6, $7, $8, $9)
                                  on conflict (team) where state <> 'stopped' do nothing returning ${RUN_COLS}`,
-        [rid, tenant, team, mode, JSON.stringify(caps), JSON.stringify(roster), roster.version, by]);
+        [rid, tenant, team, mode, JSON.stringify(caps), JSON.stringify(roster), roster.version, by, triggers.length ? JSON.stringify(triggers) : null]);
       if (!row) throw new Problem(409, 'another run of this team started just now; stop it first');
       await ctx.emit(team, 'run.started', { mode, by, caps, frontDoor: roster.frontDoor, roles: roster.roles.length }, { actor: personActor(by), subject: `run/${rid}`, run: rid, teamVersion: roster.version ?? undefined });
       await ctx.audit({ team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'start', mode } });
       hooks.runStarted && ctx.after.push(() => hooks.runStarted(tenant, team, rid));
+      // Signals that arrived while no run was going are matched against this run's triggers (N2 section 6).
+      hooks.drainTriggers && ctx.after.push(() => hooks.drainTriggers(tenant, team));
       return runView(row);
     });
   }
@@ -383,6 +407,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
         return runView(row);
       }
       if (r.state !== 'paused') throw new Problem(409, `the run is ${r.state}`);
+      if (await halted(ctx.q, r.team)) throw new Problem(409, 'Stop everything is on for this team; lift it first (it needs a passkey)', { type: 'halted' });
       // Whoever paused it, nothing resumes while today's budget is spent (issue #28 U2).
       if ((await today(ctx.q, r.team, ctx.now)).state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it (the budget card) or wait for tomorrow", { type: 'budget-exhausted' });
       if (!(await useStepUp(ctx, by, stepUp, `resume:${rid}`))) throw new StepUpRequired(r.reason === 'budget' ? 'Resuming a run the budget paused' : 'Resuming a paused run', `resume:${rid}`);
@@ -830,9 +855,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   }
 
   /** For writes outside this module that need step-up (runner codes, secrets: issue #28 D4). Throws when absent. */
-  async function requireStepUp(tenant, by, token, what) {
+  /** `scope` (optional) names the one change the token was minted for (ADR 0013): then only such a token counts. */
+  async function requireStepUp(tenant, by, token, what, scope = null) {
     const { result } = await tx(tenant, async (ctx) => {
-      const used = await useStepUp(ctx, by, token);
+      const used = await useStepUp(ctx, by, token, scope);
       if (used) await ctx.audit({ actorKind: 'person', actorId: by, action: 'step-up', target: used, decision: 'used', rule: what });
       return used;
     });
@@ -852,7 +878,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     requireStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
     createCard, changeCard, getCard, answerCard, requestApproval, decideApproval, readyToTry, previewArrived, checkPreviewed, previewForMerge,
-    stepUp, mintStepUp, postChat, getChat, inbox, teamExtras,
+    stepUp, mintStepUp, postChat, getChat, inbox, teamExtras, useStepUp, today,
   };
 }
 

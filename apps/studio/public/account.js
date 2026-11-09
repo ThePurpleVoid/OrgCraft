@@ -3,6 +3,7 @@
 // straight after signing in. The first passkey needs only a fresh sign-in; adding another or removing one needs
 // step-up with an existing passkey.
 import { addPasskey, call, dismissNotices, ensureSignedIn, esc, needsStepUp, noticesBanner, signOut, stepUpDialog, withStepUp } from './auth.js';
+import { t } from './i18n.js';
 
 const root = document.getElementById('account');
 const dlg = document.getElementById('passkey-add');
@@ -55,7 +56,7 @@ document.getElementById('passkey-add-form').addEventListener('submit', async (e)
   let header = {};
   if (keys.length) {
     dlg.close();
-    header = await stepUpDialog('Adding a passkey lets that device approve things for you.');
+    header = await stepUpDialog(t('stepup.action.passkey.add'));
     button.disabled = false;
     if (!header) return;
     dlg.showModal();
@@ -81,7 +82,7 @@ root.addEventListener('click', async (e) => {
   if (b.dataset.remove) {
     const k = keys.find((x) => x.id === b.dataset.remove);
     if (!confirm(`Remove the passkey "${k?.name || 'Passkey'}"? That device can no longer confirm it is you.`)) return;
-    const r = await withStepUp('Removing a passkey changes how you can prove it is you.', 'DELETE', `/v1/me/passkeys/${encodeURIComponent(b.dataset.remove)}`);
+    const r = await withStepUp(t('stepup.action.passkey.remove'), 'DELETE', `/v1/me/passkeys/${encodeURIComponent(b.dataset.remove)}`);
     note = r.ok || r.cancelled ? '' : r.data.error ?? `HTTP ${r.status}`;
     await load();
   }

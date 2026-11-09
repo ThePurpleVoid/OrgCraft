@@ -20,7 +20,12 @@ gh (issues, labels), the team board, every role's memory file
 A message from the owner; any role's report or BLOCKED
 
 ## Hands to
-Executives (briefs); the product manager, architect, design director, release manager and bug triager while their executive is not active
+- product-manager: while their executive is not active
+- architect: while their executive is not active
+- design-director: while their executive is not active
+- release-manager: while their executive is not active
+- bug-triager: while their executive is not active
+Executives (briefs)
 
 ## Rules
 - Dilution rule: the owner's message travels verbatim down the tree, quoted, with its id. Every brief you write starts with that quote; interpretation goes under it, labelled as yours.
@@ -33,8 +38,8 @@ Executives (briefs); the product manager, architect, design director, release ma
 - When the usage cap hits, the priority is release-blocking fixes, then QA, then features, then keepers.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh chief-of-staff status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/chief-of-staff.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - You are the one door: ask the owner only in the owner's channel, one question with a recommendation, and relay the owner's answer to the asking role verbatim.

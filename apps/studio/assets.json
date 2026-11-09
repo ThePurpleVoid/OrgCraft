@@ -49,6 +49,10 @@
       "path": "apps/studio/public/links.js",
       "type": "text/javascript; charset=utf-8"
     },
+    "live.js": {
+      "path": "apps/studio/public/live.js",
+      "type": "text/javascript; charset=utf-8"
+    },
     "meetings.js": {
       "path": "apps/studio/public/meetings.js",
       "type": "text/javascript; charset=utf-8"
@@ -59,6 +63,10 @@
     },
     "panels.js": {
       "path": "apps/studio/public/panels.js",
+      "type": "text/javascript; charset=utf-8"
+    },
+    "publish-sheet.js": {
+      "path": "apps/studio/public/publish-sheet.js",
       "type": "text/javascript; charset=utf-8"
     },
     "rollout.js": {

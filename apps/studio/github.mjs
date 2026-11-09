@@ -3,6 +3,7 @@
 // the shared core (core.mjs) decides what a publish changes. Refs are create-only: nothing is ever moved or forced.
 import { createHash } from 'node:crypto';
 import { READ_SET, inReadSet, CoreError } from './core.mjs';
+import { hashObject } from '../../packages/git-store/index.mjs';
 
 const MAX_FILES = 2000;
 const MAX_BYTES = 20 * 1024 * 1024;
@@ -18,8 +19,9 @@ const sentence = (status, what, body) => {
   return `GitHub answered ${status} while ${what}${msg ? ` (${msg})` : ''}`;
 };
 
-/** The git object id of a blob's content (sha1, or sha256 for a 64-character id). */
+/** The git object id of a blob's content (sha1, from packages/git-store; or sha256 for a 64-character id). */
 export const blobId = (content, algo = 'sha1') => {
+  if (algo === 'sha1') return hashObject('blob', Buffer.from(content, 'utf8'));
   const buf = Buffer.from(content, 'utf8');
   return createHash(algo).update(Buffer.concat([Buffer.from(`blob ${buf.length}\0`), buf])).digest('hex');
 };
