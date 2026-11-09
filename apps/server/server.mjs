@@ -21,6 +21,7 @@ import { createM3 } from './m3.mjs';
 import { createBus } from './bus.mjs';
 import { createInspector } from './inspector-api.mjs';
 import { createTriggers } from './triggers.mjs';
+import { createVault } from './credentials.mjs';
 import { createLive } from './live.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
@@ -124,12 +125,14 @@ export function createControlPlane(opts) {
   // The bus: what wakes whom, and sending it to runners (m3-design sections 2 to 4, 7).
   // Triggers (N2, L21): webhooks, schedules and events inside the team that wake a teammate.
   const triggers = opts.triggers ?? createTriggers({ db: opts.db, key: opts.key, m3, publicUrl: opts.publicUrl, ...(opts.now ? { now: opts.now } : {}) });
-  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl, meetingTurnMinutes: opts.meetingTurnMinutes, triggers,
+  // The vault (L20): credentials, and their release only to a session's sidecar or the gateway.
+  const vault = opts.vault ?? createVault({ db: opts.db, key: opts.key, m3, now: opts.now, ...(opts.vaultOptions ?? {}) });
+  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl, meetingTurnMinutes: opts.meetingTurnMinutes, triggers, vault,
     installationsFor: opts.installationsFor ?? (opts.identity?.installations?.enabled ? (tn, url) => opts.identity.installations.forRepo(tn, url) : null) });
   wireBus(m3, bus);
   // Runners connect here over a WebSocket (runner-protocol.md).
   runners = attachRunners(server, { db: opts.db, ops: bus.ops, welcome: bus.welcome, onLost: bus.onLost, ...(opts.serverVersion ? { version: opts.serverVersion } : {}), ...(opts.runnerOptions ?? {}) });
-  const handler = createHandler({ ...opts, runners, m3, bus, triggers });
+  const handler = createHandler({ ...opts, runners, m3, bus, triggers, vault });
   server.on('request', handler);
   // The tick runs in-process every 15 s; a deployment can also call POST /v1/internal/tick from a cron.
   const tickMs = opts.tickMs ?? 15_000;
@@ -139,6 +142,7 @@ export function createControlPlane(opts) {
   server.runners = runners;
   server.m3 = m3;
   server.bus = bus;
+  server.vault = vault;
   server.on('close', () => { if (timer) clearInterval(timer); runners.closeAll(); });
   return server;
 }
@@ -148,7 +152,7 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, triggers: givenTriggers = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, triggers: givenTriggers = null, vault: givenVault = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
@@ -200,7 +204,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   } : null);
   let tickMisses = [];
   const triggers = givenTriggers ?? createTriggers({ db, key, m3, publicUrl, now });
-  const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl, triggers, installationsFor: installations ? (tn, url) => installations.forRepo(tn, url) : null });
+  const vault = givenVault ?? createVault({ db, key, m3, now });
+  const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl, triggers, vault, installationsFor: installations ? (tn, url) => installations.forRepo(tn, url) : null });
   if (!givenBus) wireBus(m3, bus);
   m3.hooks.drainTriggers = (tn, tm) => triggers.drain(tn, tm);
   const overrides = createLive({ db, m3 });
@@ -822,6 +827,11 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (!team && m === 'POST') return send(res, 201, await members.invite(who, await readJson(req, 4 * 1024), stepUp));
       if (team && m === 'DELETE') return send(res, 200, await members.withdraw(who, team));
     }
+    // Credentials (L20): the list, Add a credential, Test connection and Remove. No route ever returns a value.
+    if (a === 'credentials' && !team && m === 'GET') return send(res, 200, await vault.list(t));
+    if (a === 'credentials' && !team && m === 'POST') return send(res, 201, await vault.add(t, me, await readJson(req, 20 * 1024), stepUp));
+    if (a === 'credentials' && team && b === 'test' && !c && m === 'POST') return send(res, 200, await vault.test(t, me, team));
+    if (a === 'credentials' && team && !b && m === 'DELETE') return send(res, 200, await vault.remove(t, me, team, stepUp));
     if (a === 'secrets' && !team && m === 'GET') return send(res, 200, { secrets: await store.listSecrets(db, t) });
     if (a === 'secrets' && team && !b && m === 'PUT') {
       const body = await readJson(req, 64 * 1024);

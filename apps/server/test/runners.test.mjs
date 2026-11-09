@@ -68,7 +68,7 @@ test('a runner needs its key to connect, says hello, and is welcomed', async () 
     c.send('secret.get', 's1', { name: 'X' });
     const no = await c.next((f) => f.ref === 's1');
     assert.equal(no.op, 'nack');
-    assert.match(no.body.problem, /not supported/);
+    assert.match(no.body.problem, /not released/);
     c.ws.send('not json');
     assert.equal((await c.next((f) => f.op === 'nack' && /JSON/.test(f.body.problem))).op, 'nack');
     c.close();

@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
 import { checkMeetingDefs } from './meetings.mjs';
 import { approveScope, factsOf, redact as redactText, riskOf } from './signed.mjs';
+import { checkSystems } from './credentials.mjs';
 import { checkTriggers } from './triggers.mjs';
 import { halted } from './live.mjs';
 
@@ -319,7 +320,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     if (team.summary !== undefined && team.summary !== null && (typeof team.summary !== 'string' || team.summary.length > 2000)) throw new Problem(400, 'team.summary is text of at most 2,000 characters');
     // The team's meetings, frozen with the run like the roles; attendees resolved by the Studio (meetings.mjs, A1).
     const meetings = checkMeetingDefs(team.meetings, roles, doors[0].slug);
-    return { version, roles, frontDoor: doors[0].slug, ...(repo ? { repo } : {}), ...(team.summary ? { summary: team.summary } : {}), ...(meetings.length ? { meetings } : {}) };
+    // L20: the team's systems (resources.json), frozen with the run: what each member's session may reach, and the
+    // secret names the vault may release to it. Names only, never values.
+    const systems = checkSystems(team, roles);
+    return { version, roles, frontDoor: doors[0].slug, ...(repo ? { repo } : {}), ...(team.summary ? { summary: team.summary } : {}), ...(meetings.length ? { meetings } : {}), ...(systems ? { systems } : {}) };
   }
 
   async function startRun(tenant, team, body, by) {
