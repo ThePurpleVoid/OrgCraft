@@ -84,7 +84,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       return redirect(`/sign-in?interaction=${uid}`);
     }
     // L27, the second way in: a passkey alone, for a live sign-in (apps/server/identity.mjs passkeyOptions/passkeyDone).
-    const pks = /^\/oauth\/interaction\/([A-Za-z0-9_-]+)\/passkey$/.exec(p);
+    const pks = /^\/oauth\/authorize\/([A-Za-z0-9_-]+)\/passkey$/.exec(p);
     if (pks) {
       const it = interactions.get(pks[1]);
       if (!it || it.expires < Date.now()) return problem(410, 'expired', 'this sign-in has expired; start again');

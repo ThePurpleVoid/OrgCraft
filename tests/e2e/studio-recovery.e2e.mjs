@@ -106,7 +106,7 @@ test('Security › Recovery owners: the banner while fewer than two count, namin
   await signInWithPasskey(page, 'octo', 'Octo laptop');
 
   const banner = page.locator('.recovery-banner');
-  await banner.getByText('Only you can recover Acme. If you lose your sign-in, nobody can let you back in. Add a second recovery owner.').waitFor();
+  await banner.getByText('Nobody can recover Acme. If its owners lose their sign-in, nobody can let them back in. Add two recovery owners.').waitFor();
   const sec = page.locator('#recovery');
   await sec.getByRole('heading', { name: 'Security' }).waitFor();
   await sec.getByRole('heading', { name: 'Recovery owners' }).waitFor();
@@ -119,6 +119,7 @@ test('Security › Recovery owners: the banner while fewer than two count, namin
   await stepUp(page, 'Add Octo Cat as a recovery owner');
   await sec.locator('tbody tr', { hasText: 'Octo Cat' }).waitFor();
   assert.equal(iss.recovery.length, 1);
+  await banner.getByText('Only you can recover Acme. If you lose your sign-in, nobody can let you back in. Add a second recovery owner.').waitFor();
 
   // Sam has no passkey: refused in the CPO's words, with nothing added.
   await sec.getByLabel('Person').selectOption({ label: 'Sam Lee' });
@@ -133,13 +134,15 @@ test('Security › Recovery owners: the banner while fewer than two count, namin
   await sec.getByRole('button', { name: 'Add a recovery owner' }).click();
   await stepUp(page, 'Add Dana Ruiz as a recovery owner');
   const pending = sec.locator('tbody tr.pending', { hasText: 'Dana Ruiz' });
-  await pending.getByText(/^Dana Ruiz becomes a recovery owner at .+\. We've told every owner\.$/).waitFor();
+  await sec.getByRole('status').getByText(/^Dana Ruiz becomes a recovery owner at .+\. We've told every owner\.$/).waitFor();
+  await pending.getByText(/^Counts from .+/).waitFor(); // the row names her once (qa-web)
+  assert.equal(await pending.locator('.sr-only').textContent(), 'Has a passkey');
   await banner.waitFor(); // still only one counts until the 24 hours pass
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'recovery-owners-desktop-light.png'), fullPage: true });
 
   // Cancel undoes the pending one, with the passkey.
   await pending.getByRole('button', { name: 'Cancel' }).click();
-  await stepUp(page, 'Remove Dana Ruiz as a recovery owner');
+  await stepUp(page, 'Cancel adding Dana Ruiz as a recovery owner');
   await pending.waitFor({ state: 'detached' });
 
   // The banner is on the other hosted page too, and links here.
@@ -158,6 +161,23 @@ test('Security › Recovery owners: the banner while fewer than two count, namin
   assert.doesNotMatch(await page.locator('#recovery').textContent(), /server text|per_/, 'only the CPO\'s words and names');
   await page.setViewportSize({ width: 360, height: 780 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 360), 'no sideways scroll at 360px');
+  assert.ok((await page.locator('#recovery tbody tr', { hasText: 'Dana Ruiz' }).getByRole('button', { name: 'Remove' }).boundingBox()).height >= 44);
+
+  // Down to the last one: a warning before any passkey; Cancel keeps them, Remove anyway goes on to the passkey.
+  await page.locator('#recovery tbody tr', { hasText: 'Dana Ruiz' }).getByRole('button', { name: 'Remove' }).click();
+  await stepUp(page, 'Remove Dana Ruiz as a recovery owner');
+  await page.locator('#recovery tbody tr', { hasText: 'Dana Ruiz' }).waitFor({ state: 'detached' });
+  const lastRow = page.locator('#recovery tbody tr', { hasText: 'Octo Cat' });
+  const warn = page.locator('#recovery-last');
+  await lastRow.getByRole('button', { name: 'Remove' }).click();
+  await warn.getByText('Octo Cat is the last recovery owner. After this, nobody can let anyone back into Acme if they lose their sign-in. Remove anyway?').waitFor();
+  assert.equal(await page.locator('#passkey-stepup[open]').count(), 0, 'the warning comes before the passkey');
+  await warn.getByRole('button', { name: 'Cancel' }).click();
+  assert.equal(iss.recovery.filter((r) => !r.removed).length, 1);
+  await lastRow.getByRole('button', { name: 'Remove' }).click();
+  await warn.getByRole('button', { name: 'Remove anyway' }).click();
+  await stepUp(page, 'Remove Octo Cat as a recovery owner');
+  await page.locator('.recovery-banner').getByText('Nobody can recover Acme. If its owners lose their sign-in, nobody can let them back in. Add two recovery owners.').waitFor();
   assert.deepEqual(errors, []);
   await ctx.close();
 });

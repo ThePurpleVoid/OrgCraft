@@ -130,7 +130,7 @@ function ceremonyError(e) {
  * CPO's words. A refusal never says why (the server's one generic 401).
  */
 export async function passkeySignIn(uid) {
-  const base = `/oauth/interaction/${encodeURIComponent(uid)}/passkey`;
+  const base = `/oauth/authorize/${encodeURIComponent(uid)}/passkey`; // backend-dev ca89dad: bound to this browser by the resume cookie
   const opts = await call('GET', base);
   if (opts.status === 410) return { expired: true };
   if (!opts.ok) return { error: t('signin.failed') };
