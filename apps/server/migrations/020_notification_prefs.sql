@@ -1,6 +1,7 @@
 -- L25 notifications: each person's quiet hours and daily digest, per tenant.
 -- Quiet hours hold non-urgent email (logged 'held'); the digest gathers what was held plus the kinds the person
--- picked, once a day at their own time. Breakthrough kinds (approvals, budget 100 %, blocked) are never held.
+-- picked, once a day at their own time. Breakthrough kinds (approvals and budget stops: approval, budget100) are never held. Held
+-- mail goes in the digest, or, for an address without one, out on its own when quiet hours end.
 -- Rollback: drop table notification_prefs; alter table email_deliveries drop column held; delete from schema_migrations where name = '020_notification_prefs.sql'.
 
 create table notification_prefs (
