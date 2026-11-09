@@ -62,7 +62,10 @@ test('the first version: accepting it needs step-up (every seat is new access), 
     const ok = await call('POST', '/teams/shop/changes/1/accept', { words: 'Yes, start it' }, await su('accept-change:shop_1'));
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.deepEqual([ok.body.state, ok.body.acceptedSha], ['accepted', pub.body.commit]);
-    const [audit] = await db.system("select actor_id, target, rule, detail from audit where action = 'change-accept'");
+    const rows = await db.system("select decision, actor_id, target, rule, detail from audit where action = 'change-accept' order by seq");
+    assert.deepEqual(rows.map((r) => r.decision), ['pending', 'allowed'], 'the pending row is written before main moves');
+    assert.equal(rows[0].detail.sha, pub.body.commit);
+    const audit = rows[1];
     assert.deepEqual([audit.actor_id, audit.target, audit.rule, audit.detail.words, audit.detail.sha], ['admin', 'cr/1', 'widens-access', 'Yes, start it', pub.body.commit]);
     assert.match(audit.detail.diffHash, /^[0-9a-f]{64}$/);
     const events = await db.system("select type, id, envelope from events where team = 'shop' and type in ('proposal.accepted', 'team.published') order by seq");

@@ -114,15 +114,21 @@ export function createChanges({ db, m3, now = () => new Date(), backendFor = nul
       if (capability.length) {
         await m3.requireStepUp(tenant, String(who.principal), stepUp, `Accepting change ${number}, which widens access (${capability.length} item${capability.length > 1 ? 's' : ''}, ${hash.slice(0, 12)})`, acceptScope(team, number));
       }
+      // The audit row is written before main moves (security L9c low): the move is a compare-and-swap on the refs
+      // table, outside this module's transaction, so a crash between the two must never leave a move with no row.
+      // The pending row names the head that will become main; the outcome row follows it.
+      const record = (decision, extra = {}) => m3.tx(tenant, (ctx) => ctx.audit({
+        team, actorKind: 'person', actorId: String(who.principal), action: 'change-accept', target: `cr/${number}`, decision, rule: capability.length ? 'widens-access' : null,
+        detail: { sha: c.head, base: c.base, widens: capability.map((x) => x.detail).slice(0, 50), diffHash: hash, words: String(words ?? '').slice(0, 2000) || null, needsCode: !!c.needsCode, ...extra },
+      }));
+      await record('pending');
       let done;
       try { done = await b.accept(number, { by: { id: String(who.principal) } }); } catch (e) {
+        await record('failed', { reason: e?.type === 'stale' ? 'head-moved' : String(e?.message ?? e).slice(0, 200) });
         if (e?.type === 'stale') return failed('head-moved', 409, e.message, 'stale');
         throw e;
       }
-      await m3.tx(tenant, (ctx) => ctx.audit({
-        team, actorKind: 'person', actorId: String(who.principal), action: 'change-accept', target: `cr/${number}`, decision: 'allowed', rule: capability.length ? 'widens-access' : null,
-        detail: { sha: done.sha, base: c.base, widens: capability.map((x) => x.detail).slice(0, 50), diffHash: hash, words: String(words ?? '').slice(0, 2000) || null, needsCode: !!c.needsCode },
-      }));
+      await record('allowed', { sha: done.sha });
       await emit(tenant, team, 'proposal.accepted', { connector: 'managed', ref: number, url: `/studio/changes/${number}`, branch: `cr/${number}`, headSha: c.head, result: done.sha }, who);
       const files = await b.diff(c.base, c.head);
       await emit(tenant, team, 'team.published', { version: done.sha, publishedAt: now().toISOString(), pr: number, roles: [], off: [], plan: {}, changes: files.map((f) => f.path).slice(0, 200), by: String(who.principal), via: 'managed' }, who, publishedId(done.sha));
