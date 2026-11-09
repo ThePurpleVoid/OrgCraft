@@ -81,14 +81,13 @@ export function ledgerLine(it, me) {
     return words === null ? line.replace('"\u0000"', t('ledger.noword')) : line.replace('\u0000', words);
   };
   let text;
-  if (it.kind === 'approved' || it.kind === 'denied') text = q(it.kind === 'approved' ? 'ledger.approved' : 'ledger.declined');
+  if (it.kind === 'approved' || it.kind === 'denied') text = q(`${it.kind === 'approved' ? 'ledger.approved' : 'ledger.declined'}${v.letter ? '' : '.noletter'}`);
   else if (it.kind === 'doit') text = fill('ledger.doit', v);
   else if (it.kind === 'rule-added') text = q('ledger.rule');
   else if (it.kind === 'rule-used') text = fill('ledger.byrule', v);
   else if (it.kind === 'rule-withdrawn') text = fill('ledger.withdrawn', v);
   else return '';
-  // fill() drops a part that names a missing value; tidy a letter left out of "approved {letter}: …".
-  return text.replace(/ (approved|declined) : /, ' $1: ').replace(/: $/, '');
+  return text;
 }
 
 export function ledgerHtml(lg, me, { error = null } = {}) {

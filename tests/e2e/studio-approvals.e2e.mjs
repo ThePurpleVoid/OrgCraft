@@ -34,7 +34,7 @@ test('rule lines, use and ledger lines are the CPO\'s patterns, with unset parts
   assert.equal(usedLine({ form: SEND, used: { n: 50 } }), "Used 50 times this day. 0 left. This rule's limit for this day is used up, so the next one asks you.");
   const me = 'per_owner';
   assert.match(ledgerLine({ at: day(0), kind: 'approved', by: me, words: 'yes, refund her', letter: 'A', what: 'Refund $64.00 to Dana R.', channel: 'chat' }, me), / · You approved A: Refund \$64\.00 to Dana R\. · "yes, refund her" · in Chat$/);
-  assert.match(ledgerLine({ at: day(0), kind: 'denied', by: 'per_kim', name: 'Kim Lo', words: null, what: 'Email 1,240 customers' }, me), / · Kim Lo declined: Email 1,240 customers · \(no words given\)$/);
+  assert.match(ledgerLine({ at: day(0), kind: 'denied', by: 'per_kim', name: 'Kim Lo', words: null, what: 'Email 1,240 customers' }, me), / · Kim Lo declined Email 1,240 customers · \(no words given\)$/);
   assert.match(ledgerLine({ at: day(0), kind: 'rule-used', by: 'rule:sr_1', ruleNumber: 9, ruleLine: 'Refunds · up to $20.00 each' }, me), / · Done under standing rule #9: Refunds · up to \$20\.00 each$/);
   assert.doesNotMatch(ledgerLine({ at: day(0), kind: 'denied', by: 'per_kim', what: 'x' }, me), /per_kim/);
   assert.match(ledgerLine({ at: day(0), kind: 'denied', by: 'per_kim', what: 'x' }, me), /Someone who no longer has access declined/);
@@ -113,7 +113,7 @@ test('the Approvals page: rules with Withdraw, kinds not available yet, the neve
 
   // Withdraw: at once, no passkey; the ledger says so.
   await a.getByRole('button', { name: 'Withdraw' }).click();
-  await rules.getByText('No standing rules yet. Every approval asks you.').waitFor();
+  await rules.getByText('No standing rules yet. Until you make one, every decision comes to you.').waitFor();
   assert.equal(cp.rules[0].live, false);
   await ledger.getByText(/ · You withdrew standing rule #1: Refunds · up to \$20\.00 each · at most \$60\.00 per customer per week · in Payments$/).waitFor();
 
