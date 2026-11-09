@@ -11,6 +11,7 @@ Rules:
 - `issue` is optional everywhere: a team whose work is not in an issue tracker names its task with `task` instead. Every message needs an `issue` or a `task`.
 - Every emitted message event keeps the kit's report fields (`to`, `task`, `issue`, `pr`, `branch`, `commit`, `severity`, `evidence`, `detail`) so sinks forward it to a team's own board unchanged. The server composes `detail` from the structured fields and stores them beside it.
 - Readers ignore input fields they do not know, and new optional fields are additive within `tools/1`.
+- **`unverified`** (governance G1), optional on `report`, `handoff`, `bug`, `signoff` and `blocked`: a list of at most 20 items of at most 500 characters, each one thing the sender passes on without having checked it itself in this task ("works on Android (only checked on iPhone)"). An **empty list** is `Unverified: none`. **Leaving it out** is `Unverified: not stated`, which the board, the digest and the gate never read as none.
 
 ## `report`
 
@@ -63,6 +64,11 @@ Emits `message.bug`. Wakes `to`. Result: `{ "event": "<id>" }`.
 | `result` | yes | `pass` or `fail` |
 | `evidence` | yes | **at least one link.** A SIGNOFF without evidence is refused |
 | `pr` | no | |
+| `version` | no (a gate counts only sign-offs that have one) | the exact version checked (governance G2): for code the **full** commit id (40 or 64 hex characters, never a short one); for a document its revision; for a draft its id and revision. At most 200 characters |
+| `versionKind` | with `version` | `commit`, `revision` or `draft`. A full commit id alone is taken as `commit`; anything else needs it |
+| `unverified` | no | see the rules. A sign-off whose list is not empty is **partial**: it shows amber and satisfies no gate |
+
+The runner adds **`checks`**: its own record of the calls this session ran and saw succeed, newest last, at most 20, each `{ call, tool, effect, summary, at, io? }` with the `call` id of that call's `session.tool` and `session.result` (N1). It is the evidence behind `unverified: []`, so a reader can see what the sender actually ran. A model can't write it: the input has no such field, and anything sent under that name is dropped before the runner adds its own. The control plane stores `checks` with the event; one that receives a sign-off from anything other than a runner session ignores it.
 
 Emits `message.signoff`. Wakes `to`. Result: `{ "event": "<id>" }`.
 
