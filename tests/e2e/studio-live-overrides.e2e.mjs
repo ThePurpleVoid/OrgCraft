@@ -116,6 +116,13 @@ test('SH-10: Pause a teammate from a 360 px phone; it stops at once, and comes b
   await page.locator('#live-stepup').getByRole('button', { name: 'Resume' }).click();
   await page.locator('#live-banner').waitFor({ state: 'hidden' });
   assert.equal(cp.live.length, 0);
+  // SH-5 on a phone: Stop everything is in More, one tap, a 44 px target.
+  await openMore(page);
+  const stop = page.locator('#stop-all');
+  await stop.waitFor();
+  assert.ok((await stop.boundingBox()).height >= 44);
+  await stop.click();
+  await page.locator('#live-banner', { hasText: "Everything is stopped. Resume when you're ready." }).waitFor();
   assert.deepEqual(errors, []);
   await ctx.close();
 });
