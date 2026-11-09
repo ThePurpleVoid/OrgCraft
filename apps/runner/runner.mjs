@@ -20,7 +20,7 @@ const RENEW_BEFORE_MS = 2 * 60_000;
  * clones, worktrees and memory files, `adapter` the runtime (agentSdkAdapter() or stubAdapter(...)).
  * Returns { sessions, link, ready, close() }; ready resolves with the first welcome.
  */
-export function startRunner({ server, key, root, work = root, sandbox = null, egressEnforced = false, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
+export function startRunner({ server, key, root, work = root, sandbox = null, egressEnforced = false, sidecarUnsandboxed = false, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
   // The model key stays in this process; sessions reach the model through the loopback proxy (modelproxy.mjs).
   const proxy = modelProxy === undefined ? startModelProxy({ log }) : modelProxy;
   // The agent users (#28): one per live session from a pool, or one shared user for a runner of a single customer.
@@ -131,7 +131,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, eg
     }
     let s;
     const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
-    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online, egressEnforced, secretGet,
+    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online, egressEnforced, sidecarUnsandboxed, secretGet,
       // step.io (N1): sent before the event that names it; a control plane that does not keep step I/O refuses it, harmlessly.
       stepIo: (frame) => { Promise.resolve(link.send('step.io', frame)).catch(() => {}); } });
     s.tools = tools;

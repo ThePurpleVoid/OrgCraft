@@ -136,10 +136,13 @@ export class Steps {
     if (this.history.length > 20) this.history.shift();
   }
 
-  /** The id of an allowed call still waiting for its result, for this tool and input (the sidecar runs only those). */
-  pendingCall(tool, input) {
+  /**
+   * The id of an allowed call still waiting for its result, for this tool and input, that has not run yet; it is
+   * marked as run (the sidecar runs only those, each once).
+   */
+  takeCall(tool, input) {
     const hash = inputHash(tool, input);
-    for (const step of this.pending.values()) if (step.tool === tool && step.hash === hash) return step.call;
+    for (const step of this.pending.values()) if (step.tool === tool && step.hash === hash && !step.taken) { step.taken = true; return step.call; }
     return null;
   }
 

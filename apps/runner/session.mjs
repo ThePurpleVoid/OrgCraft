@@ -184,8 +184,9 @@ export class Session {
       if (Object.keys(local).length) {
         this.sidecar = await startSidecar({
           session: this.id, servers: local, egressEnforced: Boolean(this.deps.egressEnforced), log: this.deps.log,
+          pool: this.pool, unsandboxed: Boolean(this.deps.sidecarUnsandboxed),
           secretGet: (name) => this.deps.secretGet(this.id, name),
-          pending: (tool, input) => this.steps.pendingCall(tool, input),
+          take: (tool, input) => this.steps.takeCall(tool, input),
           named: () => this.namedSecrets().filter((x) => !x.name.startsWith('sidecar:')),
         });
         for (const problem of this.sidecar.problems) await this.emit('session.tool', { tool: 'sidecar', decision: 'refused', rule: 'sidecar', detail: problem.slice(0, 500) });
@@ -403,6 +404,8 @@ export class Session {
     // A sidecar tool's effect comes from its manifest: one that can't be taken back waits for a person (L20).
     const effect = this.sidecar?.effectOf(tool);
     if (d.decision === 'allowed' && EFFECT_ACTION[effect]) Object.assign(d, { decision: 'needs-approval', rule: EFFECT_ACTION[effect], why: `has the effect "${effect}" in its connector's manifest`, target: tool });
+    // A tool the manifest gives no effect counts as one that acts (ADR 0013): a person decides.
+    else if (d.decision === 'allowed' && this.sidecar?.owns(tool) && !effect) Object.assign(d, { decision: 'needs-approval', rule: 'unclassified-effect', why: 'has no effect in its connector\'s manifest, so it counts as one that acts', target: tool });
     // Where the runner proposes, it alone merges (D2): the session asks for the merge, it does not run one.
     if ((d.rule === 'accept' || (d.decision === 'refused' && d.rule === 'match-head-commit')) && this.proposes()) {
       await this.toolEvent(step, { tool, target: String(d.target ?? '').slice(0, 500), decision: 'refused', rule: 'runner-merges' });

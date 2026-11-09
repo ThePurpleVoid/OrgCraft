@@ -18,12 +18,14 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { redactNamed } from './steps.mjs';
+import { asAgent, grant, reapAside } from './sandbox.mjs';
 
 export const RESULT_MAX = 64 * 1024;
 export const EFFECTS = ['read', 'write', 'send', 'destructive', 'payment', 'deploy'];
 /** The policy action a person approves for each effect that can't be taken back (policy.mjs DEFAULT_RULES names). */
 export const EFFECT_ACTION = { send: 'outbound-message', destructive: 'destructive-data', payment: 'payment', deploy: 'deploy-production' };
 const NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,40}$/;
+const NAME_TOOL = /^[A-Za-z0-9_.-]{1,64}$/;
 const SECRET_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
 const same = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && timingSafeEqual(x, y); };
 const glob = (pattern, name) => new RegExp(`^${pattern.split('*').map((p) => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`).test(name);
@@ -44,16 +46,23 @@ export function serverProblem(name, s, { egressEnforced = false } = {}) {
   return null;
 }
 
-/** The effect a manifest gives a tool; a tool it does not name counts as write. */
+/** The effect a manifest gives a tool, or undefined when it names none: such a tool asks a person (unknown counts as act, ADR 0013). */
 export function effectOfTool(effects = {}, tool) {
   const exact = effects[tool];
   if (exact) return exact;
   const hit = Object.entries(effects).filter(([k]) => k.includes('*')).sort((a, b) => b[0].length - a[0].length).find(([k]) => glob(k, tool));
-  return hit ? hit[1] : 'write';
+  return hit ? hit[1] : undefined;
 }
 
 /** The idempotency key of one decided call: the same call id always gives the same key. */
 export const idempotencyKey = (session, call) => createHash('sha256').update(`${session}\n${call}`).digest('hex');
+
+const DESCRIPTION_MAX = 1000;
+/** What the agent sees of a server's tool: its name, a short plain description and its input schema, nothing else. */
+export function cleanTool(t) {
+  const description = String(t?.description ?? '').replace(/[\u0000-\u0008\u000B-\u001F\u007F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, '').slice(0, DESCRIPTION_MAX);
+  return { name: String(t?.name ?? ''), description, inputSchema: t?.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : { type: 'object' } };
+}
 
 /** A tool result made safe for the model: secrets out, at most RESULT_MAX bytes of text. */
 export function cleanResult(result, secrets) {
@@ -80,23 +89,32 @@ export function cleanResult(result, secrets) {
 
 /**
  * Starts a session's local servers. `servers`: the command entries of tools.mcp. `secretGet(name)`: resolves the
- * value or throws (secret.get over runner/1). `pending(tool, input)`: the call id the session's Steps hold as allowed
- * for this call, or null. `named()`: the session's own secrets, by name, for redaction.
+ * value or throws (secret.get over runner/1). `take(tool, input)`: the call id the session's Steps hold as allowed
+ * for this call and not yet run, marked as run, or null. `pool`: the runner's agent users; each server takes a
+ * slot of its own (never the session's), because a process with the runner's uid can read the runner's environment
+ * (/proc/<pid>/environ: the model key, the runner key). Without a pool of separate users, command servers are
+ * refused, unless `unsandboxed` (tests and development only, never a supported deployment). `named()`: the session's own secrets, by name, for redaction.
  * Returns { mcp (entries for the SDK's mcpServers), effectOf(tool), secrets(), close() }.
  */
-export async function startSidecar({ session, servers, secretGet, pending, named = () => [], egressEnforced = false, log = () => {}, connectTimeoutMs = 15_000 }) {
+export async function startSidecar({ session, servers, secretGet, take, named = () => [], pool = null, unsandboxed = false, egressEnforced = false, log = () => {}, connectTimeoutMs = 15_000 }) {
   const live = new Map(); // name -> { client, tools, secrets: [{ name, value }], home }
   const token = randomBytes(24).toString('base64url');
   const problems = [];
   const close = async () => {
-    for (const [, s] of live) {
-      await s.client.close().catch(() => {});
-      s.secrets.length = 0;
-      rmSync(s.home, { recursive: true, force: true });
-    }
+    for (const [, s] of live) await stopServer(s);
     live.clear();
     await new Promise((r) => http.close(() => r()));
   };
+
+  async function stopServer(s) {
+    await s.client.close().catch(() => {});
+    s.secrets.length = 0;
+    if (s.slot) {
+      // Every process of the server's user goes, and its home with it; the user goes back only when it is empty.
+      const r = await reapAside(s.slot, [s.home]);
+      if (r.ok) pool.give(s.slot); else log(`sidecar user ${s.slot.uid} is kept out of use: ${r.problems.join('; ')}`);
+    } else rmSync(s.home, { recursive: true, force: true });
+  }
 
   const http = createServer(async (req, res) => {
     const m = /^\/mcp\/([^/?]+)$/.exec(req.url ?? '');
@@ -121,8 +139,9 @@ export async function startSidecar({ session, servers, secretGet, pending, named
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const tool = `mcp__${name}__${req.params.name}`;
       const input = req.params.arguments ?? {};
-      const call = pending(tool, input);
-      // Only a call the runner's policy allowed reaches the server: nothing on the loopback port can go round it.
+      // Only a call the runner's policy allowed reaches the server, and only once: nothing on the loopback port (the
+      // agent's own shell holds the endpoint's token too) can go round the policy or run a decided call again.
+      const call = take(tool, input);
       if (!call) return { content: [{ type: 'text', text: 'Refused: the runner did not decide this call.' }], isError: true };
       let out;
       try {
@@ -141,22 +160,30 @@ export async function startSidecar({ session, servers, secretGet, pending, named
   for (const [name, s] of Object.entries(servers ?? {})) {
     const problem = serverProblem(name, s, { egressEnforced });
     if (problem) { problems.push(problem); continue; }
+    let slot = null;
+    if (pool && !pool.shared) {
+      slot = pool.take(null);
+      if (!slot) { problems.push(`${name}: every user of this runner is in use, so it can't run on one of its own`); continue; }
+    } else if (!unsandboxed) {
+      problems.push(`${name}: this runner has no separate users for local servers (AGENT_TEAM_SANDBOX_UIDS), and one can't run with the runner's own`);
+      continue;
+    }
     const secrets = [];
     try {
       for (const n of s.secrets ?? []) secrets.push({ name: n, value: await secretGet(n) });
-    } catch (e) { problems.push(`${name}: a secret was not released (${e.message})`); continue; }
+    } catch (e) { if (slot) pool.give(slot); problems.push(`${name}: a secret was not released (${e.message})`); continue; }
     const home = mkdtempSync(join(tmpdir(), `sidecar-${name}-`));
+    if (slot) grant(home, slot);
     const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, ...Object.fromEntries(secrets.map((x) => [x.name, x.value])) };
     const client = new Client({ name: 'orgcraft-runner', version: '1' });
     try {
-      const transport = new StdioClientTransport({ command: s.command, args: s.args ?? [], env, cwd: home, stderr: 'ignore' });
+      const pre = slot ? asAgent(slot) : [];
+      const transport = new StdioClientTransport({ command: pre[0] ?? s.command, args: [...pre.slice(1), ...(pre.length ? [s.command] : []), ...(s.args ?? [])], env, cwd: home, stderr: 'ignore' });
       await withTimeout(client.connect(transport), connectTimeoutMs, `${name} did not start`);
       const { tools } = await withTimeout(client.listTools(), connectTimeoutMs, `${name} did not list its tools`);
-      live.set(name, { client, tools, secrets, home, effects: s.effects ?? {} });
+      live.set(name, { client, tools: tools.filter((t) => NAME_TOOL.test(t?.name ?? '')).map(cleanTool), secrets, home, slot, effects: s.effects ?? {} });
     } catch (e) {
-      await client.close().catch(() => {});
-      secrets.length = 0;
-      rmSync(home, { recursive: true, force: true });
+      await stopServer({ client, secrets, home, slot });
       problems.push(`${name}: ${e.message}`);
     }
   }
@@ -164,7 +191,9 @@ export async function startSidecar({ session, servers, secretGet, pending, named
   return {
     problems,
     mcp: Object.fromEntries([...live.keys()].map((n) => [n, { type: 'http', url: `${base}${encodeURIComponent(n)}`, headers: { authorization: `Bearer ${token}` } }])),
-    /** The manifest's effect for `mcp__<server>__<tool>`, or undefined for a tool that isn't the sidecar's. */
+    /** Whether `mcp__<server>__<tool>` is one of the sidecar's tools. */
+    owns(tool) { const m = /^mcp__([A-Za-z0-9-]+)__(.+)$/.exec(tool); return Boolean(m && live.has(m[1])); },
+    /** The manifest's effect for one of the sidecar's tools; undefined when it names none, or the tool isn't the sidecar's. */
     effectOf(tool) {
       const m = /^mcp__([A-Za-z0-9-]+)__(.+)$/.exec(tool);
       const s = m && live.get(m[1]);
