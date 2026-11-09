@@ -10,6 +10,7 @@ export const SHELL = `
 <a class="skip" href="#content">${t('nav.skip')}</a>
 <header class="bar">
   <div class="brand"><strong>OrgCraft</strong> <span id="project" class="muted"></span></div>
+  <h1 id="page-title" class="sr-only">${t('nav.team')}</h1>
   <!-- SH-1: the tabs whose screens exist in this build; the rest of the seven arrive with their slices (SH-9). -->
   <nav id="pages" class="views pages" aria-label="Pages">
     <button type="button" data-page="team" aria-pressed="true" aria-current="page" data-tip="${attr(tip('team'))}">${t('nav.team')}</button>

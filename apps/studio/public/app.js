@@ -715,9 +715,9 @@ function teamHtml() {
   ].filter(([, x]) => x);
   return `<h2>Team</h2><dl class="team-facts">${rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('')}</dl>
     <h2>Coding agents</h2>
-    <label class="switch"><input type="checkbox" id="t-agents-md"${teamTargets(spec.options).includes('agents-md') ? ' checked' : ''}> Also write AGENTS.md, for coding agents other than Claude Code</label>
-    <p class="hint">Publish writes the team's instructions into AGENTS.md at the top of the repository. Text you wrote in that file yourself stays. Roles run by those agents show "self-reported" on the board: without hooks, a card changes only when the role reports.</p>
-    <p class="hint">Every team gets the core rules: one door for the owner's requests, the owner's words passed on unchanged, one writer per area, the four message kinds and the board. A team's template or preset adds the rest.</p>
+    <label class="switch"><input type="checkbox" id="t-agents-md"${teamTargets(spec.options).includes('agents-md') ? ' checked' : ''}> Also keep AGENTS.md, for coding agents other than Claude Code</label>
+    <p class="hint">Publish puts the team's instructions into AGENTS.md at the top of the repository. Text you added to that file yourself stays. Teammates working through those agents show "self-reported" on the board: without hooks, a card changes only when the role reports.</p>
+    <p class="hint">Every team gets the core rules: one door for the owner's requests, the owner's words passed on unchanged, one owner per area, the four message kinds and the board. A team's template or preset adds the rest.</p>
     <p class="muted">Pick a role on the canvas or in the library.</p>`;
 }
 
@@ -749,8 +749,8 @@ function renderInspector() {
     ${nowOnLive(r)}
     <div class="field"><label for="i-name">${esc(t('inspector.name'))} ${infoButton(tip('teammate'), esc)}</label><input id="i-name" maxlength="60" value="${esc(r.title)}" autocomplete="off" aria-describedby="i-name-msg"><span id="i-name-msg" class="field-msg" role="status"></span></div>
     <div class="field"><span>${esc(t('inspector.role'))} ${infoButton(tip('role'), esc)}</span><span class="value">${esc(r.typeTitle)} <span class="muted">· ${esc(t('catalog.count', { n: seats }))}</span></span></div>
-    <p class="row">${r.enabled ? '' : `<span class="pill off">${esc(t('canvas.off'))}</span>`}<button type="button" id="i-enabled" aria-pressed="${!r.enabled}">${esc(r.enabled ? t('canvas.turnoff') : t('canvas.turnon'))}</button></p>
-    <div class="field"><label for="i-manager">${esc(t('inspector.reportsto'))} ${mark('Reports to')}</label><select id="i-manager">
+    <p class="row">${r.enabled ? '' : `<span class="pill off">${esc(t('canvas.off'))}</span>`}<button type="button" id="i-enabled" role="switch" aria-checked="${r.enabled}">${esc(r.enabled ? t('canvas.turnoff') : t('canvas.turnon'))}</button></p>
+    <div class="field"><label for="i-manager">${esc(t('inspector.reportsto'))} ${mark('Reports to')}</label><button type="button" id="i-moveto" class="link" aria-controls="i-manager">${esc(t('canvas.moveto'))}</button><select id="i-manager">
       <option value="owner" ${r.reportsTo === 'owner' ? 'selected' : ''}>${esc(spec.values?.OWNER || 'The owner')}</option>
       ${managers.map((m) => `<option value="${m.slug}" ${m.slug === r.reportsTo ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select></div>
     <div class="field"><label for="i-tier">${esc(t('inspector.model'))} ${mark('Model')}</label><select id="i-tier">${TIERS.map((x) => `<option ${x === r.tier ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
@@ -771,10 +771,11 @@ function renderInspector() {
     body = `<div class="row between"><h2>What it does</h2>${r.changed ? '<button id="i-reset" type="button">Reset to kit</button>' : ''}</div>` +
       sections.map((s) => {
         const name = s.heading.replace(/^##\s+/, '');
+        const shown = name.replace(/\s*\(writes\)$/i, ''); // "Owns (writes)" reads as "Owns" (ALL-5)
         const m = mine.get(name.toLowerCase());
-        return `<details class="section"${m ? ' open' : ''}><summary>${esc(name)}${m ? `<span class="badge changed">${m.mode === 'replace' ? 'replaced' : 'added to'}</span>` : ''}</summary>
+        return `<details class="section"${m ? ' open' : ''}><summary>${esc(shown)}${m ? `<span class="badge changed">${esc(t('inspector.changed'))} · ${m.mode === 'replace' ? 'replaced' : 'added to'}</span>` : ''}</summary>
           <div class="kit-text">${esc(s.body.join('\n').trim())}</div>
-          <div class="field"><span>Your text</span><textarea data-section="${esc(name)}" rows="3" placeholder="Added after the kit's text">${esc(m?.text ?? '')}</textarea></div>
+          <div class="field"><span>Your text</span><textarea data-section="${esc(name)}" aria-label="${esc(shown)}: your text" rows="3" placeholder="Added after the kit's text">${esc(m?.text ?? '')}</textarea></div>
           <label class="row hint"><input type="checkbox" data-replace="${esc(name)}" ${m?.mode === 'replace' ? 'checked' : ''}> Replace the kit's text instead of adding to it</label></details>`;
       }).join('');
   }
@@ -783,6 +784,8 @@ function renderInspector() {
   $('#i-enabled').onclick = () => switchRole(r.slug, !r.enabled);
   $('#i-tier').onchange = (e) => change(() => setExtField(r.slug, 'Model', r.model.replace(/^[a-z]+/i, e.target.value) || e.target.value));
   $('#i-manager').onchange = (e) => setManager(r.slug, e.target.value);
+  // B1.1-4: the keyboard and screen-reader way to drag a card onto another.
+  $('#i-moveto').onclick = () => { const m = $('#i-manager'); m.focus(); try { m.showPicker?.(); } catch { /* not every browser opens it */ } };
   const name = $('#i-name');
   name.onchange = () => {
     const v = name.value;
@@ -1149,6 +1152,9 @@ async function setPage(raw) {
   stateEl().dataset.page = p;
   for (const b of $$('#pages [data-page]')) { b.setAttribute('aria-pressed', String(b.dataset.page === p)); if (b.dataset.page === p) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
   $('#more-btn')?.classList.toggle('current', p === 'meetings');
+  // ALL-3: one h1 per screen, the page's name (the gallery has its own).
+  const title = $(`#pages [data-page="${p}"]`)?.textContent.trim();
+  if (title && $('#page-title')) $('#page-title').textContent = title;
   closeMore();
   if (p === 'chat') {
     chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features) });
