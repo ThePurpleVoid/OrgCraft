@@ -39,7 +39,7 @@ const PUBLISHED = ['.agent-team', 'docs/team', 'scripts/agent-team', '.claude', 
 const git = (root, ...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const tryGit = (root, ...args) => { try { return git(root, ...args); } catch { return ''; } };
 
-class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+class HttpError extends Error { constructor(status, message, extra = {}) { super(message); this.status = status; Object.assign(this, extra); } }
 
 /** Whether the team on disk writes AGENTS.md (team.json "targets"). */
 function writesAgentsMd(root) {
@@ -311,7 +311,14 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (url.pathname === '/v1/team/preview') return send(res, 200, preview(root, input.spec));
         if (url.pathname === '/v1/team/from-template') return send(res, 200, fromTemplate(root, input));
         // Only spec, branch, message and pr are read: credentials are the machine's own, never the page's.
-        if (url.pathname === '/v1/team/publish') return send(res, 200, publish(root, input.spec, { branch: input.branch, message: input.message, pr: input.pr === true }, env));
+        if (url.pathname === '/v1/team/publish') {
+          // The team as the page read it (embed spec 4, like the hosted handler): if someone published since, from
+          // another window or the command line, this would silently undo their change. The page says reload.
+          const head = gitState(root).head?.sha ?? null;
+          // base null: the page read a team with no history yet; someone publishing first is stale too (code-reviewer nit).
+          if ((typeof input.base === 'string' || input.base === null) && input.base !== head) throw new HttpError(409, 'the team changed since this page read it; reload', { type: 'stale' });
+          return send(res, 200, publish(root, input.spec, { branch: input.branch, message: input.message, pr: input.pr === true }, env));
+        }
         if (url.pathname === '/v1/team/graph') return send(res, 200, graph(input.spec));
         if (url.pathname === '/v1/team/suggestions') return send(res, 200, suggestions(root, input.spec));
         if (url.pathname === '/v1/team/chat') {
@@ -358,7 +365,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       throw new HttpError(405, 'method not allowed');
     } catch (e) {
       const status = e instanceof HttpError || e instanceof core.CoreError ? e.status : e instanceof SyntaxError ? 400 : 500;
-      return send(res, status, { error: e.message });
+      return send(res, status, { error: e.message, ...(typeof e.type === 'string' ? { type: e.type } : {}) });
     }
   });
   const allowed = hostGuard(server, env.STUDIO_ALLOWED_HOSTS ?? '');

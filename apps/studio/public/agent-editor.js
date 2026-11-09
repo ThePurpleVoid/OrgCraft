@@ -128,7 +128,7 @@ export function createAgentEditor(root, app) {
       <div class="opts">
         <button type="button" data-fix="reads" data-key="${key}">Read only, send fixes to ${esc(nameOf(clashes[0].writer))} as BUG</button>
         <button type="button" data-fix="narrow" data-key="${key}" aria-expanded="${narrow === key}">Take a narrower area</button>
-        <button type="button" data-fix="move" data-key="${key}" class="${asked ? 'warn' : ''}">${asked ? 'Move it anyway' : 'Move the whole area to this agent…'}</button>
+        <button type="button" data-fix="move" data-key="${key}" class="${asked ? 'warn' : ''}">${asked ? 'Move it anyway' : 'Move the whole area to this role…'}</button>
         ${key === 'new' ? `<button type="button" class="link" data-fix="cancel" data-key="new">Cancel</button>` : ''}
       </div>
       ${narrow === key ? `<div class="add-row"><input data-narrow="${key}" value="${esc(path)}" aria-label="A narrower area, inside or beside ${esc(path)}" spellcheck="false" autocomplete="off"><button type="button" data-fix="narrow-ok" data-key="${key}">Take this area</button></div>
@@ -179,16 +179,16 @@ export function createAgentEditor(root, app) {
         </nav>
         <div class="ed-form">
           ${kitClash ? `<div class="conflict" id="e-kit-clash" role="alert">
-            <p><strong>The kit now has a role called <code>${esc(slug)}</code>.</strong> Two roles cannot share a name: until you pick one way out, this agent cannot be published and sync stops.</p>
-            <div class="add-row"><input id="e-rename" value="${esc(renameTo(md))}" aria-label="A new slug for your agent" spellcheck="false" autocomplete="off"><button type="button" id="e-rename-go">Rename mine</button></div>
+            <p><strong>The kit now has a role called <code>${esc(slug)}</code>.</strong> Two roles cannot share a name: until you pick one way out, this role cannot be published and sync stops.</p>
+            <div class="add-row"><input id="e-rename" value="${esc(renameTo(md))}" aria-label="A new slug for your role" spellcheck="false" autocomplete="off"><button type="button" id="e-rename-go">Rename mine</button></div>
             <p class="result error" id="e-rename-msg" role="alert"></p>
             <div class="opts"><button type="button" id="e-use-kit">Use the kit's role</button></div>
-            <p class="hint">Use the kit's role removes your agent from the team (its file at publish, its systems and the areas it writes) and switches the kit's ${esc(slug)} on. Export yours first to keep a copy.</p>
+            <p class="hint">Use the kit's role removes your role from the team (its file at publish, its systems and the areas it writes) and switches the kit's ${esc(slug)} on. Export yours first to keep a copy.</p>
           </div>` : ''}
           <section id="sec-identity"><h2>Identity</h2>
             <label>Name <input id="e-title" value="${esc(titleOf(md, slug))}" maxlength="60" autocomplete="off"></label>
             <p class="hint">The slug <code>${esc(slug)}</code> names its file and its place on the board, so it stays as it is once published.</p>
-            <label>What this agent owns and how it is judged <textarea id="e-identity-text" rows="4" placeholder="${esc(hint('identity', 'What it is responsible for, and the outcome it is judged on, written to the agent.'))}">${esc(own('identity', md))}</textarea></label>
+            <label>What this role owns and how it is judged <textarea id="e-identity-text" rows="4" placeholder="${esc(hint('identity', 'What it is responsible for, and the outcome it is judged on, written to the agent.'))}">${esc(own('identity', md))}</textarea></label>
           </section>
 
           <section id="sec-place"><h2>Place in the team</h2>
@@ -205,7 +205,7 @@ export function createAgentEditor(root, app) {
           </section>
 
           <section id="sec-owns"><h2>What it owns</h2>
-            <p class="hint">The areas this agent writes: a folder or a file. Every area has exactly one writer; everyone else asks the writer.</p>
+            <p class="hint">The areas this role changes: a folder or a file. Every area has exactly one owner; everyone else asks the owner.</p>
             ${owns.paths.map((p, i) => {
               const clash = p.mode === 'writes' ? pathConflicts(app.spec(), slug, p.path) : [];
               return `<div class="area-row"><code>${esc(p.path)}</code>
@@ -234,9 +234,9 @@ export function createAgentEditor(root, app) {
           </section>
 
           <section id="sec-wakes"><h2>Wakes on</h2>
-            <p class="hint">What starts a task for this agent.</p>
+            <p class="hint">What starts a task for this role.</p>
             <div class="wakes">
-              ${wake('handoff', 'A HANDOFF to this agent')}
+              ${wake('handoff', 'A HANDOFF to this role')}
               ${wake('meeting', 'A meeting it is invited to')}
               ${wake('issue-label', 'An issue or task with a label', true, 'label, for example contract-review')}
               ${wake('schedule', 'A schedule', true, 'days and time, for example mon-fri 09:30')}
@@ -248,18 +248,18 @@ export function createAgentEditor(root, app) {
           </section>
 
           <section id="sec-hands"><h2>Hands to</h2>
-            <p class="hint">Who this agent sends work to, and with which message.</p>
+            <p class="hint">Who this role sends work to, and with which message.</p>
             <textarea id="e-hands-text" aria-label="Hands to" rows="3" placeholder="${esc(hint('hands to', 'The roles it passes work to').replace(/\.$/, ''))}, for example Chief of staff (HANDOFF)">${esc(own('hands to', md))}</textarea>
             <div class="add-row"><select id="e-hand-role" aria-label="Role"><option value="">Choose a role</option>${team.filter((r) => r.slug !== slug).map((r) => `<option value="${esc(r.slug)}">${esc(r.title)}</option>`).join('')}</select>
               <select id="e-hand-kind" aria-label="Message">${KINDS.map((k) => `<option>${k}</option>`).join('')}</select><button type="button" id="e-hand-add">Add</button></div>
           </section>
 
           <section id="sec-rules"><h2>Rules <span class="opt">optional</span></h2>
-            <textarea id="e-rules-text" aria-label="Rules" rows="3" placeholder="${esc(hint('rules', 'Two to five rules specific to this agent'))}">${esc(own('rules', md))}</textarea>
+            <textarea id="e-rules-text" aria-label="Rules" rows="3" placeholder="${esc(hint('rules', 'Two to five rules specific to this role'))}">${esc(own('rules', md))}</textarea>
           </section>
 
           <section id="sec-evidence"><h2>Sign-off evidence</h2>
-            <p class="hint">What this agent attaches to a SIGNOFF. A sign-off without it is sent back.</p>
+            <p class="hint">What this role attaches to a SIGNOFF. A sign-off without it is sent back.</p>
             ${evidence.map((e, i) => `<div class="area-row"><span>${esc(e)}</span><button type="button" class="link" data-remove-evidence="${i}">Remove</button></div>`).join('')}
             <div class="add-row"><input id="e-evidence" placeholder="for example a screenshot of each changed screen, or the signed document" aria-label="Evidence to add" autocomplete="off"><button type="button" id="e-evidence-add">Add</button></div>
           </section>
@@ -309,7 +309,7 @@ export function createAgentEditor(root, app) {
     const hands = (example('hands to', briefSection(md, 'hands to')) ? [] : unresolved.list).map((p) => ({ level: 'warning', message: `Hands to names "${p}", which is not a role on this team` }));
     const examples = [['identity', 'Identity'], ['owns', 'What it owns'], ['hands to', 'Hands to']]
       .filter(([k]) => example(k, k === 'owns' ? ownsPaths(md).prose : briefSection(md, k)) && !(k === 'owns' && ownsPaths(md).paths.length))
-      .map(([, label]) => ({ level: 'warning', message: `${label} still has the template's example text: write this agent's own` }));
+      .map(([, label]) => ({ level: 'warning', message: `${label} still has the template's example text: write this role's own` }));
     // The template's example evidence line is not evidence, though the kit's check counts any "- " line.
     const realEvidence = signoffEvidence(md).some((e) => !example('sign-off evidence', `- ${e}`));
     if (/signoff/i.test(briefSection(md, 'hands to')) && !realEvidence && !mine.some((i) => /sign-?off evidence/i.test(i.message))) {
@@ -335,7 +335,7 @@ export function createAgentEditor(root, app) {
       ['Every area has one writer', fails(/overlaps|two writers/i)],
       ['Hands to roles that are on this team', fails(/hands to/i)],
       ['Wakes on lines the runner reads', fails(/^wakes on/i)],
-      ['Sign-off evidence for an agent that signs off', fails(/sign-?off/i)],
+      ['Sign-off evidence for a role that signs off', fails(/sign-?off/i)],
       ['No secrets in the text', fails(/secret/i)],
     ];
     const known = new Set(rows.flatMap(([, f]) => f));

@@ -1,6 +1,6 @@
 {
   "name": "orgcraft",
-  "version": "0.21.1",
+  "version": "0.22.0",
   "description": "Run a company of Claude Code agents on your repository: role briefs, protocols, a board and the scripts that hold them together.",
   "license": "MIT",
   "type": "module",
@@ -23,6 +23,7 @@
   "files": [
     "apps/studio/",
     "bin/",
+    "packages/calls/",
     "packages/events/",
     "packages/github-app/",
     "packages/model-prices/",

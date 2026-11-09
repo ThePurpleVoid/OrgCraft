@@ -65,7 +65,7 @@ test('from the gallery to a published support team, and the repository opens its
   }
   assert.equal(await page.locator('#publish').isVisible(), false);
   // Neutral protocols criterion 5: each card says which shared rules it uses.
-  await gallery.locator('.g-card', { hasText: 'Startup product team' }).getByText('Shared rules: the core and engineering (pull requests, the merge gate, deploys)').waitFor();
+  await gallery.locator('.g-card', { hasText: 'Startup product team' }).getByText('Shared rules: the core and engineering (pull requests, the merge gate, going live)').waitFor();
   await gallery.locator('.g-card', { hasText: 'Customer support team' }).getByText('Shared rules: the core only').waitFor();
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'gallery-light.png') });
   await gallery.getByLabel('Search starting teams').fill('help articles');
@@ -80,7 +80,7 @@ test('from the gallery to a published support team, and the repository opens its
   await bar.getByText('Systems to connect').waitFor();
   await page.locator('.node[data-slug="support-lead"]').waitFor();
   assert.equal(await page.locator('#publish').isVisible(), false, 'no Publish while previewing');
-  assert.equal(await page.locator('#library input').first().isDisabled(), true, 'the preview is read-only');
+  assert.equal(await page.locator('#library .cat-role').first().isDisabled(), true, 'the preview is read-only');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'preview-support-light.png') });
   assert.deepEqual(readdirSync(root), ['.git'], 'nothing is written by a preview (D31)');
 
@@ -98,7 +98,7 @@ test('from the gallery to a published support team, and the repository opens its
   const facts = page.locator('#inspector .team-facts');
   await facts.getByText('Europe/Lisbon').waitFor();
   assert.match(await facts.textContent(), /Shared rules\s*the core only/);
-  assert.match(await facts.textContent(), /Started from\s*Customer support team \(kit /);
+  assert.match(await facts.textContent(), /Started from\s*Customer support team \(OrgCraft /);
   assert.equal(await page.locator('#publish').isVisible(), true);
   assert.equal(await page.locator('#pages [data-page="chat"]').isVisible(), false, 'no chat before the team exists');
 
@@ -115,17 +115,19 @@ test('from the gallery to a published support team, and the repository opens its
 
   // Publish writes the team; from then on the repository opens its team (criteria 8 and 9).
   await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
   await page.locator('#changes summary', { hasText: '.agent-team/team.json' }).waitFor();
+  await page.locator('#advanced').evaluate((d) => { d.open = true; });
   await page.locator('#branch').fill('team');
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   const team = JSON.parse(execFileSync('git', ['-C', root, 'show', 'team:.agent-team/team.json'], { encoding: 'utf8' }));
   assert.match(team.from, /^customer-support-team@/);
   assert.equal(team.values.PROJECT_NAME, 'Help desk');
   assert.equal(team.values.TIMEZONE, 'Europe/Lisbon');
   const resources = JSON.parse(readFileSync(join(root, '.agent-team/resources.json'), 'utf8'));
   assert.deepEqual(resources.resources.map((r) => [r.name, r.secrets]), [['Support inbox', []]]);
-  await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
+  await page.locator('#publish-dialog').getByRole('button', { name: 'Keep editing' }).click();
   await page.reload();
   await page.locator('.lib-role').first().waitFor();
   assert.equal(await gallery.isVisible(), false, 'a repository with a team never shows the gallery (D32)');

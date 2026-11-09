@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KIT } from '../../bin/agent-team.mjs';
 import { createStudio } from '../../apps/studio/server.mjs';
+import { isOn, openJob, slugOf, switchTeammate } from './team-page.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -51,7 +52,7 @@ test('a Contract reviewer from Blank: every section, live preview, undo per fiel
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.locator('.lib-role').first().waitFor();
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   const dlg = page.locator('#agent-dialog');
   await dlg.locator('#a-name').fill('Contract reviewer');
   await dlg.locator('#a-group').selectOption('+');
@@ -68,7 +69,7 @@ test('a Contract reviewer from Blank: every section, live preview, undo per fiel
   assert.equal(await page.locator('.layout').isVisible(), false, 'the editor has the page');
 
   // Identity: the preview follows every keystroke, and the typing is one undo step.
-  const identity = ed.getByLabel('What this agent owns and how it is judged');
+  const identity = ed.getByLabel('What this role owns and how it is judged');
   // The template's example text is a hint, not the agent's text, and the checks say it is still there.
   assert.equal(await identity.inputValue(), '');
   assert.match(await identity.getAttribute('placeholder'), /responsible for/);
@@ -110,7 +111,7 @@ test('a Contract reviewer from Blank: every section, live preview, undo per fiel
   assert.doesNotMatch(await preview(page).textContent(), /DRIVE_TOKEN=/, 'a secret shows only by name');
 
   // Wakes on: structured lines; a bad schedule is said and not written.
-  await ed.getByLabel('A HANDOFF to this agent').check();
+  await ed.getByLabel('A HANDOFF to this role').check();
   await ed.getByLabel('An issue or task with a label: label, for example contract-review').fill('contract-review');
   await ed.getByLabel('A schedule: days and time, for example mon-fri 09:30').fill('fri 25:00');
   await ed.locator('#e-wake-problem', { hasText: 'is not a time of day' }).waitFor();
@@ -162,12 +163,14 @@ test('a Contract reviewer from Blank: every section, live preview, undo per fiel
   // Round trip: publish, open the repository again, and the agent has the same text (PRD E7).
   const text = await raw(page);
   await page.getByRole('button', { name: 'Back to the team' }).click();
-  await page.getByRole('button', { name: 'Publish…' }).click();
+  await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
+  await page.locator('#advanced').evaluate((d) => { d.open = true; });
   await page.locator('#branch').fill('team/contract-reviewer');
-  await page.getByRole('button', { name: 'Commit to branch' }).click();
+  await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: /team\/contract-reviewer/ }).waitFor();
   await page.reload();
-  await page.locator('#library .lib-role', { hasText: 'Contract reviewer' }).locator('.name').click();
+  await openJob(page, 'Contract reviewer');
   assert.equal(await raw(page), text);
   assert.deepEqual(errors, []);
   await page.close();
@@ -182,7 +185,7 @@ test('a copy marks what differs, and an imported agent with an error cannot be a
   const dlg = page.locator('#agent-dialog');
   const ed = page.locator('#agent-editor');
 
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   await dlg.getByText('Copy a role').click();
   await dlg.getByLabel('Role to copy').fill('qa web');
   await dlg.locator('#a-copy-list').getByRole('option', { name: /QA web/ }).click();
@@ -191,14 +194,14 @@ test('a copy marks what differs, and an imported agent with an error cannot be a
   await ed.getByText('Copied from QA web').waitFor();
   const marked = () => preview(page).locator('.diff').allTextContents();
   const first = await marked();
-  await ed.getByLabel('What this agent owns and how it is judged').fill('You audit every screen for keyboard paths, contrast and screen-reader names.');
+  await ed.getByLabel('What this role owns and how it is judged').fill('You audit every screen for keyboard paths, contrast and screen-reader names.');
   await preview(page).locator('.diff', { hasText: 'You audit every screen' }).waitFor();
   assert.ok((await marked()).length > first.length, 'the changed line is marked');
   assert.ok(!(await marked()).some((l) => /^## (Tools|Rules)$/.test(l)), 'unchanged headings are not marked');
   await page.getByRole('button', { name: 'Back to the team' }).click();
 
   // An import with a tier the kit does not know: it arrives off, and "Add to the team" waits for the fix.
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   await dlg.locator('#a-files').setInputFiles([{ name: 'clerk.md', mimeType: 'text/markdown', buffer: Buffer.from('# Clerk\n\n**Model:** turbo\n**Group:** legal\n**Reports to:** chief-of-staff\n**Status:** active\n\n## Identity\nYou file every signed contract.\n\n## Owns (writes)\n- `filed/`\n\n## Wakes on\n- handoff\n') }]);
   await page.waitForFunction(() => document.querySelector('#a-name').value === 'Clerk');
   await dlg.getByRole('button', { name: 'Add it, switched off' }).click();
@@ -212,7 +215,7 @@ test('a copy marks what differs, and an imported agent with an error cannot be a
   await add.click();
   await ed.getByRole('button', { name: 'Add to the team' }).waitFor({ state: 'detached' });
   await page.getByRole('button', { name: 'Back to the team' }).click();
-  assert.equal(await page.locator('#library .lib-role', { hasText: 'Clerk' }).locator('input[type=checkbox]').isChecked(), true);
+  assert.equal(await isOn(page, await slugOf(page, 'Clerk')), true);
   await page.locator('#canvas .node', { hasText: 'Clerk' }).waitFor();
   assert.deepEqual(errors, []);
   await page.close();
