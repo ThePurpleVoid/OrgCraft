@@ -92,7 +92,7 @@ export function logHtml(st) {
   const head = [t('notify.log.when'), t('notify.log.what'), t('notify.log.where'), ...(who ? [t('notify.log.who')] : []), t('notify.log.status'), t('notify.log.why')];
   const rows = (lg.items ?? []).map((r) => `<tr class="st-${esc(r.status)}"><td>${esc(when(r.at))}</td><td>${esc(label(r.kind))}</td><td>${esc(t(`notify.channel.${r.channel}`))}${r.to ? ` <span class="muted">${esc(r.to)}</span>` : ''}</td>${who ? `<td>${esc(r.principal ?? '')}</td>` : ''}<td${why(r.status, r.channel) ? ` title="${esc(why(r.status, r.channel))}"` : ''}>${esc(word(`notify.status.${r.status}`, r.status))}</td><td>${esc(why(r.status, r.channel))}</td></tr>`).join('');
   return `<section class="n-section" id="log" aria-labelledby="log-title">
-    <h2 id="log-title">${esc(t('notify.log.heading'))}</h2>
+    <h2 id="log-title" tabindex="-1">${esc(t('notify.log.heading'))}</h2>
     <p class="muted">${esc(t('notify.log.explainer'))}</p>
     ${st.owner ? `<div class="row" role="group" aria-labelledby="log-scope"><span id="log-scope">${esc(t('notify.scope.label'))}</span><button type="button" data-log-all="" aria-pressed="${!everyone}">${esc(t('notify.scope.me'))}</button><button type="button" data-log-all="1" aria-pressed="${everyone}">${esc(t('notify.scope.all'))}</button></div>` : ''}
     ${lg.error ? `<p class="result error" role="alert">${esc(lg.error)} <button type="button" id="log-retry">${esc(t('action.retry'))}</button></p>` : ''}
