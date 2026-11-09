@@ -62,7 +62,10 @@ test('asks are lettered A to E per team; Do it approves the ones shown with one 
 
     const ledger = (await p.call('GET', '/teams/shop/ledger')).body.items.filter((x) => x.approval);
     const mine = ledger.filter((x) => [a.approval, b.approval].includes(x.approval));
-    assert.deepEqual(mine.map((x) => [x.letter, x.words, x.channel]).sort(), [['A', 'Tapped "Do it" (A)', 'approvals'], ['B', 'Tapped "Do it" (B)', 'approvals']]);
+    // The ledger keeps only what the person said: a tap has no words; the tap and the letters it covered are fields.
+    assert.deepEqual(mine.map((x) => [x.letter, x.words, x.channel, x.tap, x.covered]).sort(), [['A', null, 'approvals', 'do-it', ['A', 'B']], ['B', null, 'approvals', 'do-it', ['A', 'B']]]);
+    const answered = (await p.call('GET', `/cards/${a.card.id}`)).body.answer;
+    assert.deepEqual([answered.tap, answered.covered, answered.note], ['do-it', ['A', 'B'], undefined]);
     // A and B are answered, so the next ask takes the first free letter.
     assert.equal((await ask(p, s, { why: 'One more' })).card.data.letter, 'A');
   });
@@ -88,6 +91,24 @@ test('Do it records nothing when an ask changed, was answered or has no letter; 
     const typed = await p.call('POST', '/approvals/do-it', { asks: seen(asks[0], asks[2]), via: 'chat', words: 'do it' });
     assert.equal(typed.status, 200, 'no bound ask: no step-up, as for one approval');
     const items = (await p.call('GET', '/teams/shop/ledger')).body.items.filter((x) => [asks[0].approval, asks[2].approval].includes(x.approval));
-    assert.deepEqual(items.map((x) => [x.words, x.channel]).sort(), [['do it (A)', 'chat'], ['do it (C)', 'chat']]);
+    assert.deepEqual(items.map((x) => [x.words, x.channel, x.tap]).sort(), [['do it', 'chat', 'do-it'], ['do it', 'chat', 'do-it']], 'typed words are kept as typed');
+  });
+});
+
+test('two asks at the same moment never share a letter; asks from two teams are refused with nothing recorded', async () => {
+  await plane(async (p) => {
+    const { s } = await setup(p);
+    const both = await Promise.all([ask(p, s, { why: 'First' }), ask(p, s, { why: 'Second' }), ask(p, s, { why: 'Third' })]);
+    assert.deepEqual(both.map((x) => x.card.data.letter).sort(), ['A', 'B', 'C']);
+    // Another team's ask, raised by the server for the test (a second runner and run would do the same).
+    await p.call('POST', '/teams', { id: 'cafe' });
+    const { result: other } = await p.m3.tx('acme', (ctx) => p.m3.requestApproval(ctx, 'cafe', { action: 'publish', call: 'publish the cafe page', why: 'Opening day', role: 'web-dev' }));
+    const card = (await p.call('GET', `/cards/${other.card.id}`)).body;
+    assert.equal(card.data.letter, 'A', 'letters are per team');
+    const mixed = await p.call('POST', '/approvals/do-it', { asks: [...seen(both[0]), { approval: other.approval, version: card.version }] });
+    assert.equal(mixed.status, 400);
+    assert.equal((await p.call('GET', `/cards/${both[0].card.id}`)).body.state, 'open');
+    assert.equal(card.state, 'open');
+    assert.equal((await p.db.system("select count(*)::int as n from approval_ledger where tap = 'do-it'"))[0].n, 0);
   });
 });

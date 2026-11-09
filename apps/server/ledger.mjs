@@ -269,9 +269,9 @@ export async function declinedBefore(ctx, team, hash, targets = null) {
 }
 
 /** One ledger line. `words` are the person's own, kept exactly (cut only by the column's 4,000). */
-export async function ledgerRow(q, tenant, team, { kind, approval = null, rule = null, by, words = null, callsHash = null, channel = null }) {
-  await q('insert into approval_ledger(tenant, team, kind, approval, rule, by, words, calls_hash, channel) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
-    [tenant, team, kind, approval, rule, by, typeof words === 'string' && words ? words.slice(0, 4000) : null, callsHash, channel]);
+export async function ledgerRow(q, tenant, team, { kind, approval = null, rule = null, by, words = null, callsHash = null, channel = null, tap = null, letters = null }) {
+  await q('insert into approval_ledger(tenant, team, kind, approval, rule, by, words, calls_hash, channel, tap, letters) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+    [tenant, team, kind, approval, rule, by, typeof words === 'string' && words ? words.slice(0, 4000) : null, callsHash, channel, tap, letters?.length ? letters.join(',') : null]);
 }
 
 export function createLedger({ db, m3, now = () => new Date() }) {
@@ -353,8 +353,9 @@ export function createLedger({ db, m3, now = () => new Date() }) {
     // {what}: the first fact the server rendered from the signed calls, else the card's title.
     const whatOf = (card) => (Array.isArray(card?.data?.facts) && card.data.facts[0]?.text ? String(card.data.facts[0].text) : card?.title ?? null);
     const items = rows.map((r) => ({ at: new Date(r.at).toISOString(), kind: r.kind, by: r.by, name: nameIn(names, r.by), words: r.words ?? null, channel: r.channel ?? null,
-      // {letter}: the ask's letter once cards carry lettered asks; none yet.
-      ...(r.approval ? { approval: r.approval, action: r.action, role: r.role, what: whatOf(r.card), letter: r.card?.data?.letter ?? null } : {}),
+      // {letter}: the ask's letter (L39). `tap` is how it was decided when not by the person's words ('do-it'), with
+      // the letters that tap covered; `words` is only ever what the person typed.
+      ...(r.approval ? { approval: r.approval, action: r.action, role: r.role, what: whatOf(r.card), letter: r.card?.data?.letter ?? null, tap: r.tap ?? null, covered: r.letters ? r.letters.split(',') : null } : {}),
       ...(r.rule ? { rule: r.rule, ruleNumber: r.rule_spec ? Number(r.rule_number) : null, ruleForm: r.rule_spec ?? null, ruleLine: r.rule_spec ? ruleLine(r.rule_spec) : null } : {}),
       ...(r.calls_hash ? { callsHash: r.calls_hash } : {}) }));
     return { items, next: rows.length === n ? String(rows.at(-1).id) : null };
