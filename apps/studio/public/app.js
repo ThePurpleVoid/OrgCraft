@@ -7,6 +7,8 @@ import { createChat } from './chat.js';
 import { createMeetings } from './meetings.js';
 import { createRollout } from './rollout.js';
 import { createApprovals } from './approvals.js';
+import { stepUp } from './live.js';
+import { sendSystems } from './systems.js';
 import { createGallery, rolesLine, rulesLine } from './gallery.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
@@ -1051,7 +1053,7 @@ async function api(path, body) {
     try { data = await res.json(); } catch { /* not JSON */ }
     return { res, data };
   });
-  if (!res.ok) throw Object.assign(new Error(env.embedded && res.status === 401 ? 'You are not signed in to this site any more. Sign in again, then reopen this page.' : data.error ?? data.title ?? (res.statusText || `HTTP ${res.status}`)), { status: res.status, type: data.type });
+  if (!res.ok) throw Object.assign(new Error(env.embedded && res.status === 401 ? 'You are not signed in to this site any more. Sign in again, then reopen this page.' : data.error ?? data.title ?? (res.statusText || `HTTP ${res.status}`)), { status: res.status, type: data.type, scope: data.scope });
   return data;
 }
 
@@ -1204,6 +1206,29 @@ async function openPublish() {
   await previewPublish();
 }
 
+/**
+ * L40: after a publish, sends the published systems when the control plane's differ (systems.js). The passkey dialog
+ * lists what the control plane gains. One line under the result says how it went, with a retry that compares again.
+ */
+async function publishSystems(out) {
+  const result = await sendSystems({ stepUp, name: (s) => roleTitle(s), system: systemName });
+  out.querySelector('.systems-result')?.remove();
+  if (result === 'none') return;
+  const line = document.createElement('p');
+  line.className = 'systems-result';
+  line.textContent = t(`publish.systems.${result}`);
+  if (result !== 'done') {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'link'; b.textContent = t('publish.systems.retry');
+    b.onclick = () => publishSystems(out);
+    line.append(' ', b);
+  }
+  out.append(line);
+  // The step-up dialog gave focus back to a sheet control that may be gone: put it on the outcome (qa-web L40 S3).
+  line.tabIndex = -1;
+  (line.querySelector('button') ?? line).focus();
+}
+
 async function confirmPublish() {
   const out = $('#publish-result');
   $('#confirm').disabled = true;
@@ -1235,6 +1260,9 @@ async function confirmPublish() {
       cmd.textContent = `git push -u origin ${r.branch}`;
       out.replaceChildren(done, cmd);
     } else out.textContent = t('canvas.publish.none');
+    // L40: a commit in this checkout is what runs from here start on, so the control plane gets its systems now,
+    // whatever this publish changed (an earlier cancelled send is caught too). A pull request applies at merge (L40b).
+    if (r.commit && !r.pr && approvalsOn()) await publishSystems(out);
     const fresh = await api('/v1/team');
     const wasNew = !!S.noTeam;
     S = fresh;

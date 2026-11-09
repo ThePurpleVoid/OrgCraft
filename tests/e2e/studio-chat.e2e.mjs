@@ -180,7 +180,7 @@ test('start a run: the published team, a daily cap first, step-up to set it, and
       await page.goto(`${at}/#chat`);
       await page.locator('#run-state', { hasText: 'Not running' }).waitFor();
       assert.equal(await page.locator('#run-pause').isVisible(), false, 'no pause without a run');
-      await page.getByRole('button', { name: 'Start a run' }).click();
+      await page.getByRole('button', { name: 'Start the team' }).click();
       const dlg = page.locator('#start-dialog');
       await dlg.getByText('chief-of-staff reports to the owner').waitFor();
       const go = dlg.getByRole('button', { name: 'Start', exact: true });
@@ -227,7 +227,7 @@ test('start a run: the published team, a daily cap first, step-up to set it, and
       await page.getByRole('button', { name: 'Pause' }).waitFor();
       await page.getByRole('button', { name: 'Stop', exact: true }).click();
       await ask.getByRole('button', { name: 'Stop the run' }).click();
-      await page.getByRole('button', { name: 'Start a run' }).waitFor();
+      await page.getByRole('button', { name: 'Start the team' }).waitFor();
       assert.deepEqual(errors, []);
       await ctx.close();
     }

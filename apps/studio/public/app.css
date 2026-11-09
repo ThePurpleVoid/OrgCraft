@@ -173,6 +173,8 @@
 .ats .chat-page { display: flex; flex-direction: column; flex: 1; min-height: 0; max-width: 860px; margin: 0 auto; width: 100%; }
 .ats .chat-head { display: flex; justify-content: space-between; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); }
 .ats .chat-run { flex-wrap: wrap; }
+.ats .run-systems { flex-basis: 100%; margin: 0; color: var(--muted, inherit); }
+.ats .run-systems button.link { min-height: 32px; }
 .ats .cost { font-size: 12.5px; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .ats .meter { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--off); overflow: hidden; }
 .ats .meter > span { display: block; height: 100%; background: var(--accent); }
@@ -248,6 +250,8 @@
 .ats .start-dialog .result:empty { display: none; }
 .ats .start-dialog .result.error { color: var(--error); }
 .ats .stepup-dialog p { margin: 0 0 10px; }
+.ats .stepup-items, .stepup-items { margin: 0 0 10px; padding-left: 1.2em; max-height: 40vh; overflow-y: auto; }
+.stepup-items li { margin: 2px 0; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .ats .start-dialog, .ats .stepup-dialog { width: calc(100vw - 24px); } .ats .dialog-actions button { min-height: 44px; } }
 
 /* signing in to a hosted Studio (sign-in.html, account.html, the passkey dialogs in auth.js) */
