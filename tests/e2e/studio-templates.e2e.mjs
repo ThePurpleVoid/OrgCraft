@@ -80,7 +80,7 @@ test('from the gallery to a published support team, and the repository opens its
   await bar.getByText('Systems to connect').waitFor();
   await page.locator('.node[data-slug="support-lead"]').waitFor();
   assert.equal(await page.locator('#publish').isVisible(), false, 'no Publish while previewing');
-  assert.equal(await page.locator('#library input').first().isDisabled(), true, 'the preview is read-only');
+  assert.equal(await page.locator('#library .cat-role').first().isDisabled(), true, 'the preview is read-only');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'preview-support-light.png') });
   assert.deepEqual(readdirSync(root), ['.git'], 'nothing is written by a preview (D31)');
 

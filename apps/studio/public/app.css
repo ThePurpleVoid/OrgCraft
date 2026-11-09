@@ -272,11 +272,13 @@
 .ats .palette-head input { flex: 1; min-width: 0; }
 .ats .palette-head button { white-space: nowrap; }
 .ats .group-title.yours { margin-top: 4px; }
-.ats .lib-role .export { font-size: 11px; display: none; }
-.ats .lib-role:is(:hover, :focus-within) .export { display: inline; }
-.ats .lib-role:is(:hover, :focus-within) .tag.has-export { display: none; }
-.ats.small .lib-role .export { display: none; }
-.ats.small .lib-role .tag.has-export { display: inline; }
+/* A custom role's Export sits over its tag, and shows on hover or focus (the row and the button are siblings). */
+.ats #library li:has(> .export) { position: relative; }
+.ats #library li > .export { font-size: 11px; display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); }
+.ats #library li:is(:hover, :focus-within) > .export { display: inline; }
+.ats #library li:is(:hover, :focus-within) .tag.has-export { visibility: hidden; }
+.ats.small #library li > .export { display: none; }
+.ats.small #library li .tag.has-export { visibility: visible; }
 .ats .agent-dialog { padding: 0; gap: 0; }
 .ats .agent-dialog > h2, .ats .agent-dialog > .muted { padding: 0 20px; }
 .ats .agent-dialog > h2 { padding-top: 18px; }
@@ -626,3 +628,33 @@
 }
 .ats .wcol .notes { margin-top: 8px; }
 .ats .wcol .note { font-size: 13px; color: var(--muted); border-left: 3px solid var(--line); padding: 2px 8px; }
+/* Shell (SH): skip link, More menu, phone bottom bar */
+.ats .skip { position: absolute; left: 8px; top: -48px; z-index: 50; padding: 8px 12px; background: var(--accent); color: var(--accent-ink, #fff); border-radius: 6px; }
+.ats .skip:focus { top: 8px; }
+.ats .more-wrap { position: relative; display: inline-flex; }
+.ats .more-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; display: grid; min-width: 160px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel, #fff); box-shadow: 0 6px 24px rgba(0,0,0,.15); }
+.ats .more-menu[hidden] { display: none; }
+.ats .more-menu button { text-align: left; }
+.ats .more-btn.current { font-weight: 600; }
+@media (max-width: 640px) {
+  .ats #pages { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; justify-content: space-around; padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel, #fff); border-radius: 0; }
+  .ats #pages > button, .ats #pages .more-btn { min-height: 44px; flex: 1; }
+  .ats .more-menu { top: auto; bottom: calc(100% + 8px); }
+  .ats body, .ats { padding-bottom: 64px; }
+}
+
+/* Phone list view (B1.7) */
+.ats .tree { display: grid; gap: 6px; padding: 8px 12px; margin: 0; list-style: none; }
+.ats .tree-item { margin-left: calc(var(--depth, 0) * 14px); }
+.ats .tree-item[data-depth="1"] { --depth: 1; } .ats .tree-item[data-depth="2"] { --depth: 2; } .ats .tree-item[data-depth="3"] { --depth: 3; }
+.ats .tree-item[data-depth="4"] { --depth: 4; } .ats .tree-item[data-depth="5"] { --depth: 5; } .ats .tree-item[data-depth="6"] { --depth: 6; }
+.ats .tree-btn { display: grid; grid-template-columns: 1fr auto; width: 100%; min-height: 44px; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel, #fff); color: inherit; font: inherit; }
+.ats .tree-btn .sub { grid-column: 1; font-size: 12px; }
+.ats .tree-btn .badge-dot { grid-column: 2; grid-row: 1 / span 2; align-self: center; width: 22px; height: 22px; border-radius: 50%; background: var(--warn, #9a6700); color: var(--bg, #fff); text-align: center; font-weight: 700; line-height: 22px; }
+.ats .tree-btn.selected { border-color: var(--accent); }
+.ats .tree-item.off .tree-btn { opacity: .6; border-style: dashed; }
+.ats .tree-item.draft .tree-btn { border-style: dashed; }
+.ats .phone-note { padding: 8px 12px 0; }
+@media (max-width: 640px) { .ats .palette { display: none; } }
+@media (max-width: 640px) { .ats .zoom, .ats .mode-hint { display: none; } }
+.ats ul.tree.plain { padding: 8px 16px; }

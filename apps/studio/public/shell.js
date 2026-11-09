@@ -4,12 +4,15 @@
 import { t } from './i18n.js';
 
 export const SHELL = `
+<a class="skip" href="#content">${t('nav.skip')}</a>
 <header class="bar">
-  <div class="brand"><strong>Agent Team Studio</strong> <span id="project" class="muted"></span></div>
+  <div class="brand"><strong>OrgCraft</strong> <span id="project" class="muted"></span></div>
+  <!-- SH-1: the tabs whose screens exist in this build; the rest of the seven arrive with their slices (SH-9). -->
   <nav id="pages" class="views pages" aria-label="Pages">
-    <button type="button" data-page="team" aria-pressed="true">Team</button>
-    <button type="button" data-page="meetings" aria-pressed="false">Meetings</button>
-    <button type="button" data-page="chat" aria-pressed="false">Chat</button>
+    <button type="button" data-page="team" aria-pressed="true" aria-current="page">${t('nav.team')}</button>
+    <button type="button" data-page="chat" aria-pressed="false">${t('nav.chat')}</button>
+    <span class="more-wrap"><button type="button" id="more-btn" class="more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="more-menu">${t('nav.more')}</button>
+      <span id="more-menu" class="more-menu" hidden><button type="button" data-page="meetings" aria-pressed="false">${t('nav.meetings')}</button></span></span>
   </nav>
   <div class="bar-actions team-only">
     <span id="checks" class="pill" role="status"></span>
@@ -20,8 +23,7 @@ export const SHELL = `
   </div>
 </header>
 <section id="template-bar" class="template-bar team-only" aria-label="Starting team" hidden></section>
-<p class="readonly-note hint team-only">On a small screen the team is read-only. Edit it on a larger screen.</p>
-<main class="layout team-only">
+<main id="content" class="layout team-only" tabindex="-1">
   <aside class="palette" aria-label="Role library">
     <div class="palette-head"><input id="search" type="search" placeholder="Search roles" aria-label="Search roles"><button id="new-agent" type="button" class="primary edit-only">New agent</button></div>
     <p id="cat-how" class="hint edit-only">${t('catalog.how')}</p>

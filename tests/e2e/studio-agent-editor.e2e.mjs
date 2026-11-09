@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KIT } from '../../bin/agent-team.mjs';
 import { createStudio } from '../../apps/studio/server.mjs';
+import { isOn, openJob, slugOf, switchTeammate } from './team-page.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -167,7 +168,7 @@ test('a Contract reviewer from Blank: every section, live preview, undo per fiel
   await page.getByRole('button', { name: 'Commit to branch' }).click();
   await page.locator('#publish-result', { hasText: /team\/contract-reviewer/ }).waitFor();
   await page.reload();
-  await page.locator('#library .lib-role', { hasText: 'Contract reviewer' }).locator('.name').click();
+  await openJob(page, 'Contract reviewer');
   assert.equal(await raw(page), text);
   assert.deepEqual(errors, []);
   await page.close();
@@ -212,7 +213,7 @@ test('a copy marks what differs, and an imported agent with an error cannot be a
   await add.click();
   await ed.getByRole('button', { name: 'Add to the team' }).waitFor({ state: 'detached' });
   await page.getByRole('button', { name: 'Back to the team' }).click();
-  assert.equal(await page.locator('#library .lib-role', { hasText: 'Clerk' }).locator('input[type=checkbox]').isChecked(), true);
+  assert.equal(await isOn(page, await slugOf(page, 'Clerk')), true);
   await page.locator('#canvas .node', { hasText: 'Clerk' }).waitFor();
   assert.deepEqual(errors, []);
   await page.close();

@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { KIT } from '../../bin/agent-team.mjs';
 import { createStudio } from '../../apps/studio/server.mjs';
 import { context } from '../../tools/report.mjs';
+import { isOn, openJob, slugOf, switchTeammate } from './team-page.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -128,7 +129,7 @@ test('a clashing area is held until one of three choices, and moving an area in 
   // The ownership table follows: the area's writer is now this agent, and undo puts it back in one step.
   await page.getByRole('button', { name: 'Back to the team' }).click();
   await page.locator('#undo').click();
-  await page.locator('#library .lib-role', { hasText: 'Contract reviewer' }).locator('.name').click();
+  await openJob(page, 'Contract reviewer');
   assert.doesNotMatch(await owns(page), /^- `contracts\/`$/m);
 
   await page.getByRole('button', { name: 'Back to the team' }).click();
@@ -137,7 +138,7 @@ test('a clashing area is held until one of three choices, and moving an area in 
   await sec.waitFor();
   const dot = await sec.locator('.dot').getAttribute('style');
   assert.equal(await page.locator('#library .lib-role', { hasText: 'Contract reviewer' }).locator('.dot').getAttribute('style'), dot, 'one colour wherever the group shows');
-  await page.locator('#library .lib-ref', { hasText: 'Contract reviewer' }).click();
+  await openJob(page, 'Contract reviewer');
   await page.locator('#agent-editor').getByRole('heading', { name: 'Brief preview' }).waitFor();
   await page.getByRole('button', { name: 'Back to the team' }).click();
 

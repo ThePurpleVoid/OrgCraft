@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KIT } from '../../bin/agent-team.mjs';
 import { createStudio } from '../../apps/studio/server.mjs';
+import { openFromMore } from './team-page.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -52,7 +53,7 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   page.on('dialog', (d) => d.accept());
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.locator('.lib-role').first().waitFor();
-  await page.getByRole('button', { name: 'Meetings', exact: true }).click();
+  await openFromMore(page, 'Meetings');
   const view = page.locator('#meetings-page');
   // D19: no sample meetings; the definitions wait for a runner.
   await view.getByRole('heading', { name: 'No meetings yet' }).waitFor();

@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import { KIT } from '../../bin/agent-team.mjs';
 import { createStudio } from '../../apps/studio/server.mjs';
 import { context } from '../../tools/report.mjs';
+import { isOn, openJob, slugOf, switchTeammate } from './team-page.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -84,7 +85,7 @@ test('a running team: states on cards, an amber mark with its reason, the popove
   assert.equal(await page.locator('#draft-banner').isHidden(), true);
 
   // Criteria 2 to 4: switching a working role off keeps its card, greyed and amber, explains itself, and counts.
-  await page.locator('#library .lib-role[data-slug="web-dev"] input').uncheck();
+  await switchTeammate(page, 'web-dev', false);
   const popover = page.locator('.impact-pop');
   await popover.getByText('Web dev is working right now, and this draft switches it off.').waitFor();
   await popover.getByText('#142 Dark mode').waitFor();
@@ -100,7 +101,7 @@ test('a running team: states on cards, an amber mark with its reason, the popove
   // Undo from the popover puts it back as published.
   await popover.getByRole('button', { name: 'Undo switch off' }).click();
   await popover.waitFor({ state: 'detached' });
-  assert.equal(await page.locator('#library .lib-role[data-slug="web-dev"] input').isChecked(), true);
+  assert.equal(await isOn(page, 'web-dev'), true);
   assert.equal(await page.locator('#impact-pill').isHidden(), true);
 
   // A change on an idle role is safe: no amber, though it still counts as a change in the banner.
@@ -112,7 +113,7 @@ test('a running team: states on cards, an amber mark with its reason, the popove
   assert.equal(await page.locator('#impact-pill').isHidden(), true, 'nothing in flight is touched');
 
   // Criterion 5: the inspector lists the work above the fields; clicking an amber card opens its popover again.
-  await page.locator('#library .lib-role[data-slug="web-dev"] input').uncheck();
+  await switchTeammate(page, 'web-dev', false);
   await popover.getByRole('button', { name: 'Close' }).click();
   await card('web-dev').click();
   await popover.waitFor();
@@ -134,8 +135,8 @@ test('nothing running, nothing shown: no states, no marks, no count (criterion 1
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.goto(`${baseQuiet}/?t=${quiet.launchToken}`);
   await page.locator('#canvas .node[data-slug="web-dev"]').waitFor();
-  await page.locator('#library .lib-role[data-slug="web-dev"] input').uncheck();
-  await page.locator('#canvas .node[data-slug="web-dev"]').waitFor({ state: 'detached' });
+  await switchTeammate(page, 'web-dev', false);
+  await page.locator('#canvas .node.off[data-slug="web-dev"]').waitFor();
   assert.equal(await page.locator('#canvas .node .state').count(), 0);
   assert.equal(await page.locator('.impact-pop').count(), 0);
   assert.equal(await page.locator('#impact-pill').isHidden(), true);
@@ -171,7 +172,7 @@ test('Undo area move after the editor\'s Move leaves one writer: the table row a
   await page.locator('.impact-pop').getByRole('button', { name: 'Undo area move' }).click();
   await page.locator('#impact-pill').waitFor({ state: 'hidden' });
   await page.locator('#checks', { hasText: /^No problems/ }).waitFor();
-  await page.locator('#library .lib-role', { hasText: 'Site builder' }).locator('.name').click();
+  await openJob(page, 'Site builder');
   assert.doesNotMatch(await page.locator('#e-raw').inputValue(), /`web\/`/, 'the new agent no longer writes the area');
   assert.deepEqual(errors, []);
   await page.close();
@@ -185,7 +186,7 @@ test('the impact step: choices with the recommendation, a hand-off target, and t
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`http://127.0.0.1:${pubA.address().port}/?t=${pubA.launchToken}`);
   await page.locator('#canvas .node[data-slug="web-dev"] .state').waitFor();
-  await page.locator('#library .lib-role[data-slug="web-dev"] input').uncheck();
+  await switchTeammate(page, 'web-dev', false);
   await page.locator('#impact-pill').click();
   const box = page.locator('#impact');
   await box.getByRole('heading', { name: 'Work in progress' }).waitFor();
@@ -259,7 +260,7 @@ test('never two writers: "move after the PR merges" keeps the writer in the file
   await page.reload();
   await page.locator('#issues li', { hasText: 'web/ moves from web-dev to site-builder after PR #142 merges. Publish again then' }).waitFor();
   await page.locator('#impact-pill', { hasText: 'touches work in progress' }).waitFor();
-  await page.locator('#library .lib-role', { hasText: 'Site builder' }).locator('.name').click();
+  await openJob(page, 'Site builder');
   assert.match(await page.locator('#e-raw').inputValue(), /^- `web\/`$/m, 'the new agent still takes the area in the draft');
   assert.deepEqual(errors, []);
   await page.close();

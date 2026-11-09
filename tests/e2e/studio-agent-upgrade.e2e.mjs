@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KIT } from '../../bin/agent-team.mjs';
 import { createStudio } from '../../apps/studio/server.mjs';
+import { isOn, openJob, slugOf, switchTeammate } from './team-page.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -52,7 +53,7 @@ test('a custom agent the kit now ships a role for: an error with Rename mine and
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.locator('#checks.error').waitFor();
   await page.locator('#issues li.error', { hasText: 'adds a role called analytics-lead' }).waitFor({ state: 'attached' });
-  await page.locator('#library .lib-role', { hasText: 'Numbers person' }).locator('.name').click();
+  await openJob(page, 'Numbers person');
   const ed = page.locator('#agent-editor');
   const box = ed.locator('#e-kit-clash');
   await box.getByText('The kit now has a role called analytics-lead').waitFor();
@@ -73,15 +74,15 @@ test('a custom agent the kit now ships a role for: an error with Rename mine and
   assert.equal(await ed.locator('#e-checks li.error').count(), 0);
   await page.getByRole('button', { name: 'Back to the team' }).click();
   assert.equal(await page.locator('#issues li', { hasText: 'adds a role called' }).count(), 0);
-  assert.equal(await page.locator('#library .lib-role[data-slug="analytics-lead"] input').isChecked(), false, "the kit's role is back, switched off");
+  assert.equal(await isOn(page, 'analytics-lead'), false, "the kit's role is back, switched off");
 
   // Undo, then Use the kit's role: the agent goes, and the kit's role takes its place, switched on.
   await page.locator('#undo').click();
-  await page.locator('#library .lib-role', { hasText: 'Numbers person' }).locator('.name').click();
+  await openJob(page, 'Numbers person');
   await ed.locator('#e-kit-clash').getByRole('button', { name: "Use the kit's role" }).click();
   await ed.waitFor({ state: 'hidden' });
   assert.equal(await page.locator('#library .lib-role', { hasText: 'Numbers person' }).count(), 0);
-  assert.equal(await page.locator('#library .lib-role[data-slug="analytics-lead"] input').isChecked(), true);
+  assert.equal(await isOn(page, 'analytics-lead'), true);
   // Publish shows what goes with it: the binding and the area row are gone, not handed to the kit's role.
   await page.getByRole('button', { name: 'Publish…' }).click();
   for (const f of ['resources.json', 'ownership.json']) {

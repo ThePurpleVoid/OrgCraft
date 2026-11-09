@@ -12,6 +12,7 @@ import { mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { embedHost, TOKEN } from '../fixtures/embed-host.mjs';
+import { isOn, openFromMore, switchTeammate } from './team-page.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -68,7 +69,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'embedded-team-light.png') });
 
   // In memory: Meetings changes the page, never the URL, and the host hears it.
-  await ats.getByRole('button', { name: 'Meetings', exact: true }).click();
+  await openFromMore(ats, 'Meetings');
   await ats.locator('#meetings-page').getByRole('heading', { name: 'No meetings yet' }).waitFor();
   assert.equal(page.url(), url);
   assert.deepEqual(await page.evaluate(() => window.navs), ['meetings']);
@@ -78,7 +79,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   assert.deepEqual(await page.evaluate(() => window.navs), ['meetings', 'team']);
 
   // The Studio's own dialog, not confirm(): a meeting being edited asks before it is dropped.
-  await ats.getByRole('button', { name: 'Meetings', exact: true }).click();
+  await openFromMore(ats, 'Meetings');
   await ats.locator('summary', { hasText: 'New meeting' }).click();
   await ats.getByRole('button', { name: 'Daily standup' }).click();
   await ats.getByRole('button', { name: 'Team', exact: true }).click();
@@ -94,8 +95,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   assert.equal(await ats.getAttribute('data-page'), 'team');
 
   // Edit and Publish through the host's API base.
-  const role = ats.locator('.lib-role', { hasText: 'Release manager' });
-  await role.locator('input[type="checkbox"]').uncheck();
+  await switchTeammate(ats, 'release-manager', false);
   await ats.getByRole('button', { name: 'Publish…' }).click();
   const dlg = ats.locator('#publish-dialog');
   await dlg.getByText("Writes the team's files on a new branch and opens a pull request.").waitFor();
@@ -134,7 +134,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   await page.evaluate(() => window.remount());
   await ats.locator('.lib-role').first().waitFor();
   // A fresh read of the default branch, where the change waits in its pull request.
-  assert.equal(await ats.locator('.lib-role', { hasText: 'Release manager' }).locator('input[type="checkbox"]').isChecked(), true);
+  assert.equal(await isOn(ats, 'release-manager'), true);
   assert.equal(await ats.getByRole('button', { name: 'Undo' }).isDisabled(), true, 'no undo history survives destroy()');
 
   assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
@@ -156,7 +156,8 @@ test('mounted twice on one page is refused with a reason', { skip }, async () =>
 test('in the dark and at 390px the mounted Studio stays inside its element with no sideways scroll', { skip }, async () => {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: 'dark', deviceScaleFactor: SHOTS ? 3 : 1 });
   const { page, problems } = await open(ctx);
-  await page.locator('#team.ats .lib-role').first().waitFor();
+  // A phone gets the team as a read-only list (B1.7), so the catalog is not shown.
+  await page.locator('#team.ats #canvas [data-node]').first().waitFor();
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(250, 240, 230)', 'dark mode stays inside the Studio');
   assert.notEqual(await page.evaluate(() => getComputedStyle(document.getElementById('team')).backgroundColor), 'rgb(250, 240, 230)');
@@ -196,7 +197,7 @@ test('the Studio\'s own prompt answers OK on Enter, and a destructive question s
   const { page, problems } = await open(ctx);
   const ats = page.locator('#team.ats');
   await ats.locator('.lib-role').first().waitFor();
-  await ats.getByRole('button', { name: 'Meetings', exact: true }).click();
+  await openFromMore(ats, 'Meetings');
   await ats.locator('summary', { hasText: 'New meeting' }).click();
   await ats.getByRole('button', { name: 'Daily standup' }).click();
   await ats.locator('#m-tz').click();

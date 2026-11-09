@@ -5,19 +5,12 @@ import { EN } from './strings.js';
 // Words the Studio needs that the strings file does not have yet. Each one is asked of the CPO; when the strings
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
-  'teammate.openwiring': 'Open wiring',
-  'catalog.how': 'Press a role to add a teammate with it, or drag it onto the chart.',
-  'wiring.trigger': 'Trigger',
-  'wiring.level': 'Level',
-  'wiring.addsystem': 'Give access',
-  'wiring.addhandoff': 'Add a handoff',
-  'wiring.what': 'What it hands over',
-  'wiring.delete': 'Delete the wire to {target}',
-  'wiring.back': 'Back to the chart',
-  'teammate.setup': 'Set up {teammate}',
+  'nav.meetings': 'Meetings',
 };
 
 export function t(key, vars = {}) {
+  // A count of one has its own string when the file gives one ("canvas.changes.one").
+  if (vars.n === 1 && EN[`${key}.one`] !== undefined) key = `${key}.one`;
   const s = EN[key] ?? PENDING[key];
   if (s === undefined) return key;
   return s.replace(/\{([^}]+)\}/g, (m, k) => (vars[k] ?? m));

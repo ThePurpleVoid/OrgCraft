@@ -94,12 +94,12 @@ export function renderWiring(el, ctx, slug) {
     <div class="wiring-cols">
       <section class="wcol" aria-labelledby="w-in"><h3 id="w-in">${esc(t('wiring.in'))}</h3>
         ${left.length ? `<ul class="plain">${left.join('')}</ul>` : w.wakeNotes.length ? '' : `<p class="muted empty">${esc(t('wiring.empty.in'))}</p>`}
-        ${w.wakeNotes.length ? `<ul class="plain notes">${w.wakeNotes.map((x) => `<li class="note">${esc(x.replace(/^[-*]\s*/, ''))}</li>`).join('')}</ul>` : ''}</section>
+        ${w.wakeNotes.length ? `<ul class="plain notes">${w.wakeNotes.map((x) => `<li class="note" data-tip="${esc(t('wiring.prose.tip'))}">${esc(t('wiring.prose', { text: x.replace(/^[-*]\s*/, '') }))}</li>`).join('')}</ul>` : ''}</section>
       <section class="wcol mid" aria-label="${esc(r.title)}"><h3>${esc(r.title)}</h3>
         <div class="wcard" id="wiring-drop" data-node="${esc(slug)}" tabindex="-1"><strong>${esc(r.title)}</strong><span class="muted">${esc(t('teammate.subtitle.ai', { role: r.typeTitle }))}</span></div></section>
       <section class="wcol" aria-labelledby="w-out"><h3 id="w-out">${esc(t('wiring.out'))}</h3>
         ${right.length ? `<ul class="plain">${right.join('')}</ul>` : ''}
-        ${w.notes.length ? `<ul class="plain notes">${w.notes.map((x) => `<li class="note">${esc(x.replace(/^[-*]\s*/, ''))}</li>`).join('')}</ul>` : ''}
+        ${w.notes.length ? `<ul class="plain notes">${w.notes.map((x) => `<li class="note" data-tip="${esc(t('wiring.prose.tip'))}">${esc(t('wiring.prose', { text: x.replace(/^[-*]\s*/, '') }))}</li>`).join('')}</ul>` : ''}
         <div class="wadd">
           ${unbound.length ? `<div class="wtray" aria-label="${esc(t('inspector.systems'))}">${unbound.map((x) => `<button type="button" class="chip" draggable="true" data-sys="${esc(x.id)}" data-tip="${esc(tip('system'))}">${esc(x.name || x.id)}</button>`).join('')}</div>
           <p class="row"><label class="sr-only" for="w-sys">${esc(t('inspector.systems'))}</label><select id="w-sys">${unbound.map((x) => `<option value="${esc(x.id)}">${esc(x.name || x.id)}</option>`).join('')}</select>

@@ -388,6 +388,8 @@ function renderCanvas() {
   }
   const canvasMode = ['org', 'flow', 'systems'].includes(mode);
   stateEl().dataset.mode = mode;
+  // B1.7 / B1.1-12: a phone gets the team as a list, top of the org first, read-only, and says so.
+  if (small.matches && mode === 'org') { renderList(); return; }
   for (const b of $$('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
   $('#summary').textContent = view.draft.count ? t('canvas.changes', { n: view.draft.count }) : '';
   if (mode === 'systems') renderSystemsStrip($('#systems-strip'), ctx, selectedSystem);
@@ -435,6 +437,29 @@ function renderCanvas() {
     const mine = selected ? flow.edges.filter((x) => x.from === selected || x.to === selected) : flow.edges;
     $('#summary').textContent += selected ? ` · ${view.bySlug.get(selected)?.title}: ${mine.filter((x) => x.from === selected).length} out, ${mine.filter((x) => x.to === selected).length} in` : ` · ${flow.edges.length} hand-offs`;
   }
+}
+
+/** The org as an indented list, for phones: each teammate under its manager, with its state and checks. */
+function renderList() {
+  for (const b of $$('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
+  $('#summary').textContent = view.draft.count ? t('canvas.changes', { n: view.draft.count }) : '';
+  const shown = [...view.team, ...view.all.filter((r) => !r.enabled && (r.source === 'member' || (spec.layout?.exclude ?? []).includes(r.slug)))];
+  const on = new Set(shown.map((r) => r.slug));
+  const kids = new Map([['owner', []], ...shown.map((r) => [r.slug, []])]);
+  for (const r of shown) (on.has(r.reportsTo) && r.reportsTo !== r.slug ? kids.get(r.reportsTo) : kids.get('owner')).push(r);
+  const seen = new Set();
+  const item = (r, depth) => {
+    if (seen.has(r.slug)) return '';
+    seen.add(r.slug);
+    const look = view.looks.find((x) => x.slug === r.slug);
+    const off = !r.enabled;
+    return `<li class="tree-item${off ? ' off' : ''}${view.draft.changed.has(r.slug) ? ' draft' : ''}" data-depth="${Math.min(depth, 6)}">
+      <button type="button" class="tree-btn${r.slug === selected ? ' selected' : ''}" data-node="${esc(r.slug)}" data-slug="${esc(r.slug)}">
+        <span class="name">${esc(r.title)}</span><span class="muted sub">${esc(off ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle }))}</span>
+        ${look ? `<span class="badge-dot" title="${esc(look.text)}" aria-label="${esc(look.text)}">!</span>` : ''}</button></li>`
+      + kids.get(r.slug).sort((a, b) => a.title.localeCompare(b.title)).map((c) => item(c, depth + 1)).join('');
+  };
+  $('#canvas').innerHTML = `<p class="hint phone-note">${esc(t('canvas.phone.readonly'))}</p><ul class="plain tree" aria-label="${esc(t('nav.team'))}">${kids.get('owner').map((r) => item(r, 0)).join('')}</ul>`;
 }
 
 function liveSummary() {
@@ -546,6 +571,7 @@ function wireCanvas() {
     const t = target(e, d);
     if (t?.dataset.slug) setManager(d.slug, t.dataset.slug); else render();
   });
+  canvas.addEventListener('click', (e) => { const b = e.target.closest('.tree-btn'); if (b) { select(b.dataset.slug); $('#inspector').scrollIntoView({ block: 'start' }); } });
   canvas.addEventListener('keydown', (e) => { const g = e.target.closest('.node'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); select(g.dataset.slug); } });
   // Dropping a role from the library: switch it on and put it under the card it lands on.
   canvas.addEventListener('dragover', (e) => { e.preventDefault(); for (const n of canvas.querySelectorAll('.node.drop')) n.classList.remove('drop'); e.target.closest?.('.node')?.classList.add('drop'); });
@@ -589,14 +615,14 @@ function renderLibrary() {
   const rows = catalogRows().filter((c) => !q || `${c.title} ${c.type} ${c.group}`.toLowerCase().includes(q));
   const byTitle = (a, b) => a.title.localeCompare(b.title);
   const order = (a, b) => ((GROUP_ORDER.indexOf(a) + 1 || 9) - (GROUP_ORDER.indexOf(b) + 1 || 9)) || a.localeCompare(b);
-  const row = (c) => `<li><button type="button" class="lib-role cat-role${selected && typeOf(spec, selected) === c.type ? ' selected' : ''}" draggable="true" data-type="${esc(c.type)}" data-slug="${esc(c.type)}"
+  const row = (c) => `<li><button type="button" class="lib-role cat-role${selected && typeOf(spec, selected) === c.type ? ' selected' : ''}" draggable="true" data-type="${esc(c.type)}" data-slug="${esc(c.type)}"${locked() ? ' aria-disabled="true"' : ''}
       aria-describedby="cat-how" data-tip="${esc(tip('role'))}">
       <span class="dot" data-paint="${groupColor(c.group)}" aria-hidden="true"></span><span class="name">${esc(c.title)}</span>${libState(c.type)}
-      <span class="count${c.count ? '' : ' none'}">${esc(t('catalog.count', { n: c.count }))}</span>${c.custom ? `<span class="tag">${esc(t('catalog.custom'))}</span>` : ''}</button>${c.custom ? `<button type="button" class="link export" data-export="${esc(c.type)}" aria-label="Export ${esc(c.title)} as a role pack" title="Export as a role pack">Export</button>` : ''}</li>`;
+      <span class="count${c.count ? '' : ' none'}">${esc(t('catalog.count', { n: c.count }))}</span>${c.custom ? `<span class="tag has-export">${esc(t('catalog.custom'))}</span>` : ''}</button>${c.custom ? `<button type="button" class="link export" data-export="${esc(c.type)}" aria-label="Export ${esc(c.title)} as a role pack" title="Export as a role pack">Export</button>` : ''}</li>`;
   const block = (list) => {
     const groups = new Map();
     for (const c of list) { if (!groups.has(c.group)) groups.set(c.group, []); groups.get(c.group).push(c); }
-    return [...groups.keys()].sort(order).map((g) => `<h3 class="group-title"><span class="dot" data-paint="${groupColor(g)}" aria-hidden="true"></span>${esc(g)}</h3><ul class="plain cat-list">${groups.get(g).sort(byTitle).map(row).join('')}</ul>`).join('');
+    return [...groups.keys()].sort(order).map((g) => `<h3 class="group-title" data-group="${esc(g)}"><span class="dot" data-paint="${groupColor(g)}" aria-hidden="true"></span>${esc(g)}</h3><ul class="plain cat-list">${groups.get(g).sort(byTitle).map(row).join('')}</ul>`).join('');
   };
   // While searching, everything that matches; otherwise the team's own roles, then the whole catalog folded.
   const ours = q ? rows : rows.filter((c) => c.used || c.custom);
@@ -609,9 +635,12 @@ function renderLibrary() {
 function addTeammate(type, manager) {
   if (locked()) return flash(lockedNote());
   let id = type;
+  const own = spec.roles[type];
+  const free = own && !own.enabled && membersOf(spec, type, { enabledOnly: false }).length === 1 && !(spec.layout?.exclude ?? []).includes(type);
+  // A custom role with an error in its checks stays off until it is fixed (CPO story D2), however it is switched on.
+  const why = free && isCustom(own) && switchOnRefusal(spec, S.kit, type);
+  if (why) { render(); return flash(why); }
   change(() => {
-    const own = spec.roles[type];
-    const free = own && !own.enabled && membersOf(spec, type, { enabledOnly: false }).length === 1 && !(spec.layout?.exclude ?? []).includes(type);
     if (free) setEnabled(spec, type, true);
     else id = addMember(spec, S.kit, { type, ...(manager && manager !== 'owner' ? { reportsTo: manager } : {}) }).id;
     if (free && manager && manager !== 'owner') setExtField(type, 'Reports to', manager);
@@ -1114,7 +1143,9 @@ async function setPage(raw) {
   const p = (asked === 'meetings' || (asked === 'chat' && !S.noTeam && feature('chat', S.features))) && !previewing ? asked : 'team';
   if (meetings?.dirty && stateEl().dataset.page === 'meetings' && p !== 'meetings' && !(await ask('Discard the changes to this meeting?', { ok: 'Discard', cancel: 'Keep editing' }))) { if (env.urlState) history.replaceState(null, '', '#meetings'); return; }
   stateEl().dataset.page = p;
-  for (const b of $$('#pages [data-page]')) b.setAttribute('aria-pressed', String(b.dataset.page === p));
+  for (const b of $$('#pages [data-page]')) { b.setAttribute('aria-pressed', String(b.dataset.page === p)); if (b.dataset.page === p) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
+  $('#more-btn')?.classList.toggle('current', p === 'meetings');
+  closeMore();
   if (p === 'chat') {
     chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features) });
     if (params.has('card') || params.has('budget')) chat.focus({ card: params.get('card'), budget: params.has('budget') });
@@ -1133,6 +1164,8 @@ async function setPage(raw) {
   }
   showPage(p === 'team' && wiring ? `team?wiring=${encodeURIComponent(wiring)}` : p);
 }
+
+function closeMore() { const m = $('#more-menu'); if (m && !m.hidden) { m.hidden = true; $('#more-btn').setAttribute('aria-expanded', 'false'); } }
 
 /** What the Meetings view reads from the team and how it edits the draft. */
 const meetingsCtx = {
@@ -1392,7 +1425,12 @@ function load(initial) {
     if (r) ctx.selectSystem(r[1]);
   });
   $('#views').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setMode(b.dataset.view); });
-  $('#pages').addEventListener('click', (e) => { const b = e.target.closest('[data-page]'); if (b) setPage(b.dataset.page); });
+  $('#pages').addEventListener('click', (e) => {
+    if (e.target.closest('#more-btn')) { const m = $('#more-menu'); const show = m.hidden; m.hidden = !show; $('#more-btn').setAttribute('aria-expanded', String(show)); if (show) m.querySelector('button')?.focus(); return; }
+    const b = e.target.closest('[data-page]'); if (b) setPage(b.dataset.page);
+  });
+  $('#pages').addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#more-menu').hidden) { closeMore(); $('#more-btn').focus(); } });
+  env.root.addEventListener('click', (e) => { if (!e.target.closest('.more-wrap')) closeMore(); });
   if (env.urlState) addEventListener('hashchange', () => setPage(location.hash.slice(1)), { signal: life.signal });
   // Keys only when the Studio has focus or nothing does: a host page's own fields keep their Ctrl+Z.
   document.addEventListener('keydown', (e) => {
