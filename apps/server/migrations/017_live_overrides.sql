@@ -3,7 +3,7 @@
 -- or a publish. Each is an event and an audit row; an active one shows on the next publish diff as a "Live change", and
 -- lifting one needs a passkey (ADR 0013 rule 4: stopping stays cheap, carrying on does not).
 --
--- Rollback: drop table live_overrides; delete from schema_migrations where name = '016_live_overrides.sql'.
+-- Rollback: drop table live_overrides; delete from schema_migrations where name = '017_live_overrides.sql'.
 
 create table live_overrides (
   id text primary key,
