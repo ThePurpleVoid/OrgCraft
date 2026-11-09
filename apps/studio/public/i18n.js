@@ -6,8 +6,6 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
-  // L35's refusal of a name that is also an address (a role, a teammate's id or "owner"); asked of the CPO.
-  'teammate.name.address': '{name} is already the name of a role, or a teammate\'s id. Pick another name.',
 };
 
 export function t(key, vars = {}) {

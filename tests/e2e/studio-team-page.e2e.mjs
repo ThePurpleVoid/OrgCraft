@@ -171,7 +171,7 @@ test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { 
   // L35: a role's own name is an address (messages are routed by it), so it is refused in its own words.
   await page.locator('#i-name').fill('CTO');
   await page.locator('#i-name').press('Enter');
-  await insp.getByText("CTO is already the name of a role, or a teammate's id. Pick another name.").waitFor();
+  await insp.getByText('OrgCraft already uses "CTO" for something else on this team. Pick another name.').waitFor();
   assert.equal(await page.locator('#i-name').getAttribute('aria-invalid'), 'true');
   await page.locator('#i-name').fill('Backend dev');
   await page.locator('#i-name').press('Enter');
