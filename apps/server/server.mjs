@@ -21,6 +21,7 @@ import { createM3 } from './m3.mjs';
 import { createBus } from './bus.mjs';
 import { createTriggers } from './triggers.mjs';
 import { createLive } from './live.mjs';
+import { createCaps } from './caps.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
 import { atLeast, minRole } from './roles.mjs';
@@ -192,6 +193,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   if (!givenBus) wireBus(m3, bus);
   m3.hooks.drainTriggers = (tn, tm) => triggers.drain(tn, tm);
   const overrides = createLive({ db, m3 });
+  const caps = createCaps({ db, getTeam: store.getTeam, now });
   // Every write of the m3 module and the bus reaches the live streams and the sinks once it commits.
   m3.onStored((stored) => { const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); });
   /** Runs an m3 write and tells the hub and sinks about what it stored. */
@@ -718,6 +720,9 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       }
       if (b === 'events' && c === 'stream' && m === 'GET') return stream(req, res, t, team, url);
       if (b === 'budget' && !c && m === 'GET') return send(res, 200, await m3.getBudget(t, team));
+      // The cap tree and cost estimates (L24s; vision G15.1, G15.2): reads, for anyone who can see the budget.
+      if (b === 'caps' && !c && m === 'GET') return send(res, 200, await caps.tree(t, team));
+      if (b === 'estimate' && !c && m === 'GET') return send(res, 200, await caps.estimate(t, team, Object.fromEntries(url.searchParams)));
       if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
       if (b === 'runs' && !c && m === 'POST') {

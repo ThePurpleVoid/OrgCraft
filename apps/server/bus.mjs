@@ -15,6 +15,7 @@ import { canWork } from './deployment.mjs';
 import { localDay, nextDay } from './budget-day.mjs';
 import { memberHeld } from './live.mjs';
 import { resolveTo } from './routing.mjs';
+import { createCaps } from './caps.mjs';
 
 /** How a message's `to` was resolved (section 5.3), on its event: only when it was not already a member id. */
 const routedFields = (r) => (!r ? {} : { ...(r.how !== 'id' ? { toAsked: r.asked, routedBy: r.how } : {}), ...(r.offWiring ? { offWiring: true } : {}) });
@@ -34,6 +35,7 @@ const backoff = (attempts) => BACKOFF[Math.min(Math.max(attempts - 1, 0), BACKOF
 export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null, triggers = null }) {
   const reg = () => (typeof runners === 'function' ? runners() : runners);
   const meetings = createMeetings({ db, m3, publicUrl, ...(meetingTurnMinutes ? { turnMinutes: meetingTurnMinutes } : {}) });
+  const caps = createCaps({ db, getTeam: async () => {}, now });
   const toolsUrl = () => String(publicUrl || '').replace(/\/+$/, '');
 
   // ---- What wakes whom ----------------------------------------------------------------------------------------------
@@ -82,7 +84,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     if (triggers) await triggers.project(ctx, event);
     if (SESSION_STATE[event.type] && event.actor?.session) {
       await q('update sessions set state = $2, last_seen = now() where id = $1 and state <> $2', [event.actor.session, SESSION_STATE[event.type]]);
-      if (event.type === 'session.ended') ctx.after.push(() => startQueued(ctx.tenant, event.team));
+      // An ended session's spend lease ends with it, so what it held is free again (R4).
+      if (event.type === 'session.ended') { await caps.release(q, event.actor.session, ctx.now); ctx.after.push(() => startQueued(ctx.tenant, event.team)); }
     }
     if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided', 'meeting.turn', 'trigger.fired'].includes(event.type)) return;
     const run = await activeRun(q, event.team);
@@ -108,7 +111,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     return {
       budget: b ? { sessions: Number(b.sessions) } : null,
       exhausted: Boolean(d?.exhausted_at),
-      remainingToday: perDay === null ? null : Math.max(perDay - Number(d?.spent ?? 0), 0),
+      // What open spend leases hold counts as spent (R4), so a new session is not promised money already given out.
+      remainingToday: perDay === null ? null : Math.max(perDay - Number(d?.spent ?? 0) - Number((await q("select coalesce(sum(greatest(amount - used, 0)), 0) as h from spend_leases where team = (select team from runs where id = $1) and day = $2::date and ended_at is null and expires_at > now()", [run.id, localDay(now(), b?.time_zone ?? 'UTC')]))[0].h), 0),
       remainingRun: perRun === Infinity ? null : Math.max(perRun - Math.round(Number(runSpent)), 0),
     };
   }
@@ -538,6 +542,19 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         const link = prLink(run?.roster?.repo, pr);
         const r = await m3.requestApproval(ctx, sess.team, { action: String(a.action ?? 'unclassified'), call, why: String(a.why ?? 'The team policy keeps this for a person.'), links: link ? [{ rel: 'pull-request', url: link }] : [], session: sess.id, run: sess.run, role: sess.role, bound });
         return { approval: r.approval, card: r.card.id };
+      });
+      return result;
+    },
+
+    /**
+     * A spend lease before the session spends (R4): an amount from what is left today and on its run, for a few
+     * minutes. The ack is { lease, amount, currency, day, expiresAt, remainingToday }, or { amount: 0, reason }.
+     */
+    async 'spend.lease'(conn, body) {
+      const { result } = await m3.tx(conn.tenant, async (ctx) => {
+        const sess = await ownSession(ctx.q, conn, body?.session);
+        if (!LIVE.includes(sess.state)) throw new Problem(409, `session ${sess.id} is ${sess.state}`);
+        return caps.lease(ctx, sess, body?.amount);
       });
       return result;
     },

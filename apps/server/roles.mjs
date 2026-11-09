@@ -65,6 +65,8 @@ export const ROUTES = [
   ['GET', '/teams/{team}/events/stream', 'viewer'],
   ['POST', '/teams/{team}/stream-tickets', 'viewer'],
   ['GET', '/teams/{team}/budget', 'viewer'],
+  ['GET', '/teams/{team}/caps', 'viewer'],
+  ['GET', '/teams/{team}/estimate', 'viewer'],
   ['PUT', '/teams/{team}/budget', 'admin'],
   ['GET', '/teams/{team}/runs', 'viewer'],
   ['POST', '/teams/{team}/runs', 'editor'],

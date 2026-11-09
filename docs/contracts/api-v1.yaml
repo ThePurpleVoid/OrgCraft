@@ -633,6 +633,24 @@ paths:
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }
       responses: { "200": { description: Budget, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }, "401": { description: "Step-up required (problem type step-up-required)" } }
+  /teams/{team}/caps:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [runs]
+      summary: "Additive (L24s, vision G15.1). The cap tree, in the budget's currency: { currency, timeZone, caps: [...] }. Each cap has id, scope (team, run, meeting), cap (null when unset), spent, leased (what open spend leases hold), remaining, and steps: what happens at each fraction ({ at: 0.8, then: warn }, { at: 1, then: pause, ask: owner }; a meeting closes). The day cap adds day, timeZone, startedAt, resetsAt, set, raised and state (ok, warned, exhausted, unset: no run starts). One entry per running or paused run, and the meeting cap (default: true when it is a tenth of perDay)"
+      responses: { "200": { description: Caps }, "404": { description: No such team } }
+  /teams/{team}/estimate:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [runs]
+      summary: "Additive (L24s, vision G15.2). What something usually costs here before the owner starts it, from the last 30 days: kind=meeting&attendees=N (past completed meetings' spend per attendee, times N), kind=trial&role=R (one session of the role), kind=teammate&role=R (a working day of the role, in the team's time zone). A role with fewer than 5 samples uses the whole team's. Answers { kind, currency, estimate: { low, typical, high } (p25, median, p75; null with no history), basis: { from: role|team|meetings|none, samples, days }, per, remainingToday, mayNotFit }. mayNotFit is a warning, never a block"
+      parameters:
+        - { name: kind, in: query, required: true, schema: { enum: [meeting, trial, teammate] } }
+        - { name: role, in: query, schema: { type: string } }
+        - { name: attendees, in: query, schema: { type: integer, minimum: 1, maximum: 50 } }
+      responses: { "200": { description: Estimate }, "400": { description: A bad kind, role or attendees } }
   /me:
     get:
       tags: [me]
@@ -974,7 +992,8 @@ components:
         sessions: { type: integer, default: 3, description: Live sessions at once }
         meetingCap: { type: [integer, "null"], description: "Additive (G-15). The cap of a meeting started without one, in minor units; null means a tenth of perDay. At most perDay (lowering perDay below it brings it down too); raising it needs step-up" }
         currency: { type: string }
-        today: { type: object, readOnly: true, properties: { day: { type: string, format: date }, spent: { type: integer }, raised: { type: integer }, state: { type: string } } }
+        timeZone: { type: string, default: UTC, description: "Additive (L24s, R14). The IANA time zone of the team's budget day: it runs from local midnight to local midnight (23 or 25 hours when the clocks change). Changing it needs step-up, as it can start a new day sooner" }
+        today: { type: object, readOnly: true, properties: { day: { type: string, format: date }, timeZone: { type: string }, startedAt: { type: string, format: date-time }, resetsAt: { type: string, format: date-time }, spent: { type: integer }, raised: { type: integer }, state: { type: string } } }
     ToolResult:
       type: object
       properties: { event: { type: string }, card: { type: string }, approval: { type: string } }
