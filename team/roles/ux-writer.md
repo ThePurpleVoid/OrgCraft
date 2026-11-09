@@ -17,15 +17,17 @@ The ux-copy skill, the PRD, the design note
 A design note (full lane); a copy bug
 
 ## Hands to
-Platform devs (keys and strings), product manager (approval)
+- web-dev: keys and strings
+- mobile-dev: keys and strings
+- product-manager: approval
 
 ## Rules
 - Plain words, no jargon, sentence case, no exclamation marks.
 - Every string has a key; devs never invent keys.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh ux-writer status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/ux-writer.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.

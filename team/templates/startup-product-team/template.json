@@ -5,6 +5,7 @@
   "summary": "A product and engineering organization: a chief of staff, a CTO and a CPO with their teams, builders, QA and reviewers.",
   "group": "product",
   "preset": "engineering",
+  "off": ["performance-tester"],
   "systems": [
     { "type": "github", "name": "Code repository", "for": ["release-manager", "code-reviewer"] },
     { "type": "postgres", "name": "Main database", "for": ["backend-dev"] }
