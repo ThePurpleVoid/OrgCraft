@@ -10,6 +10,8 @@ const PENDING = {
   'stepup.action.runner': 'Let a new machine join this team',
   'stepup.action.passkey.add': 'Add a passkey',
   'stepup.action.passkey.remove': 'Remove a passkey',
+  // L35's refusal of a name that is also an address (a role, a teammate's id or "owner"); asked of the CPO.
+  'teammate.name.address': '{name} is already the name of a role, or a teammate\'s id. Pick another name.',
 };
 
 export function t(key, vars = {}) {
