@@ -12,6 +12,7 @@ import { personActor } from './m3.mjs';
 import { boundCalls, redact } from './signed.mjs';
 import { createMeetings } from './meetings.mjs';
 import { canWork } from './deployment.mjs';
+import { localDay, nextDay } from './budget-day.mjs';
 
 export const SESSION_TOKEN_MINUTES = 15;
 const ACK_SECONDS = 30;
@@ -23,7 +24,6 @@ const RUNNER_MAY_SEND = (type) => /^session\./.test(type) || ['usage.recorded', 
 const TOOL_EVENT = { report: 'report.status', handoff: 'message.handoff', bug: 'message.bug', signoff: 'message.signoff', blocked: 'message.blocked' };
 const SESSION_STATE = { 'session.started': 'running', 'session.idle': 'idle', 'session.ended': 'ended' };
 
-const utcDay = (d) => d.toISOString().slice(0, 10);
 const backoff = (attempts) => BACKOFF[Math.min(Math.max(attempts - 1, 0), BACKOFF.length - 1)];
 
 export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null }) {
@@ -89,8 +89,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   const sessionCap = (run, budget) => Math.min(budget?.sessions ?? 3, Number.isSafeInteger(run.caps?.sessions) ? run.caps.sessions : Infinity);
 
   async function remaining(q, run) {
-    const [b] = await q('select per_day, per_run, sessions from budgets where team = (select team from runs where id = $1)', [run.id]);
-    const [d] = await q('select spent, raised, exhausted_at from budget_days where team = (select team from runs where id = $1) and day = $2::date', [run.id, utcDay(now())]);
+    const [b] = await q('select per_day, per_run, sessions, time_zone from budgets where team = (select team from runs where id = $1)', [run.id]);
+    const [d] = await q('select spent, raised, exhausted_at from budget_days where team = (select team from runs where id = $1) and day = $2::date', [run.id, localDay(now(), b?.time_zone ?? 'UTC')]);
     const [{ spent: runSpent }] = await q(`select coalesce(sum(case when jsonb_typeof(envelope->'data'->'cost') = 'number' then (envelope->'data'->>'cost')::numeric else 0 end), 0) as spent
                                            from events where type = 'usage.recorded' and envelope->>'run' = $1`, [run.id]);
     const perDay = b?.per_day === null || b?.per_day === undefined ? null : Number(b.per_day) + Number(d?.raised ?? 0);
@@ -605,10 +605,14 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   }
 
   async function rollover(tenant) {
-    const today = utcDay(now());
+    const at = now();
     await m3.tx(tenant, async (ctx) => {
-      const runs = await ctx.q("select id, team from runs where state = 'paused' and reason = 'budget' and resume_on is not null and resume_on <= $1::date for update skip locked", [today]);
+      // Each team's day turns at its own local midnight (R14): resume_on is a day in the team's time zone.
+      const runs = await ctx.q(`select r.id, r.team, r.resume_on::text as resume_on, coalesce(b.time_zone, 'UTC') as tz from runs r left join budgets b on b.team = r.team
+                                where r.state = 'paused' and r.reason = 'budget' and r.resume_on is not null and r.resume_on <= $1::date for update of r skip locked`, [nextDay(at.toISOString().slice(0, 10))]);
       for (const r of runs) {
+        const today = localDay(at, r.tz);
+        if (r.resume_on > today) continue;
         const [d] = await ctx.q('select exhausted_at from budget_days where team = $1 and day = $2::date', [r.team, today]);
         if (d?.exhausted_at) continue;
         await m3.setRunState(ctx, r.team, r.id, 'running', 'budget', { kind: 'system', id: 'control-plane', via: 'api' });

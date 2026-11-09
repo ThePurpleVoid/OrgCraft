@@ -16,6 +16,7 @@
 //   time    a turn not answered by its deadline is skipped as missed (the tick); a meeting follows pause and resume,
 //           and a stopped run closes it as abandoned.
 import { Problem, id, SLUG } from './store.mjs';
+import { localDay } from './budget-day.mjs';
 
 export const MEETING_TURN_MINUTES = 30;
 const MEETING_ID = /^[a-z0-9][a-z0-9-]*$/;
@@ -135,7 +136,7 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
 
   /** The meeting definition's cap in the budget's money, after the checks every start makes (A2; CTO, G-15). */
   async function capFor(q, team, now, { usd = null, cap = null } = {}) {
-    const [b] = await q('select currency, per_day, meeting_cap from budgets where team = $1', [team]);
+    const [b] = await q('select currency, per_day, meeting_cap, time_zone from budgets where team = $1', [team]);
     if (b?.per_day === null || b?.per_day === undefined) throw new Problem(409, 'set a daily cap first');
     const currency = b.currency ?? 'USD';
     // The team's meeting cap: the owner's meeting_cap (raising it needs step-up), else a tenth of the daily cap.
@@ -155,7 +156,7 @@ export function createMeetings({ db, m3, publicUrl = '', turnMinutes = MEETING_T
       amount = teamCap;
     }
     if (amount > Number(b.per_day)) throw new Problem(409, `the meeting's cap (${amount}) is above the team's daily cap (${b.per_day})`);
-    const [day] = await q('select spent, raised from budget_days where team = $1 and day = $2::date', [team, now.toISOString().slice(0, 10)]);
+    const [day] = await q('select spent, raised from budget_days where team = $1 and day = $2::date', [team, localDay(now, b.time_zone ?? 'UTC')]);
     // Meetings still open hold what is left of their caps, so several together cannot overrun today's budget.
     const [held] = await q("select coalesce(sum(greatest(cap - spent, 0)), 0) as held from meetings where team = $1 and state <> 'closed'", [team]);
     const heldNow = Number(held?.held ?? 0);
