@@ -12,10 +12,12 @@ import { personActor } from './m3.mjs';
 import { boundCalls, redact } from './signed.mjs';
 import { createMeetings } from './meetings.mjs';
 import { canWork } from './deployment.mjs';
+import { localDay, nextDay } from './budget-day.mjs';
 import { checkIoRefs, ingestStepIo, projectTask, purgeIo } from './inspector.mjs';
 import { memberHeld } from './live.mjs';
 import { cleanChecks, markStale } from './signoffs.mjs';
 import { resolveTo } from './routing.mjs';
+import { createCaps } from './caps.mjs';
 
 /** How a message's `to` was resolved (section 5.3), on its event: only when it was not already a member id. */
 const routedFields = (r) => (!r ? {} : { ...(r.how !== 'id' ? { toAsked: r.asked, routedBy: r.how } : {}), ...(r.offWiring ? { offWiring: true } : {}) });
@@ -30,12 +32,12 @@ const RUNNER_MAY_SEND = (type) => /^session\./.test(type) || ['usage.recorded', 
 const TOOL_EVENT = { report: 'report.status', handoff: 'message.handoff', bug: 'message.bug', signoff: 'message.signoff', blocked: 'message.blocked' };
 const SESSION_STATE = { 'session.started': 'running', 'session.idle': 'idle', 'session.ended': 'ended' };
 
-const utcDay = (d) => d.toISOString().slice(0, 10);
 const backoff = (attempts) => BACKOFF[Math.min(Math.max(attempts - 1, 0), BACKOFF.length - 1)];
 
-export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null, triggers = null }) {
+export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null, triggers = null, gateway = null }) {
   const reg = () => (typeof runners === 'function' ? runners() : runners);
   const meetings = createMeetings({ db, m3, publicUrl, ...(meetingTurnMinutes ? { turnMinutes: meetingTurnMinutes } : {}) });
+  const caps = createCaps({ db, getTeam: async () => {}, now });
   const toolsUrl = () => String(publicUrl || '').replace(/\/+$/, '');
 
   // ---- What wakes whom ----------------------------------------------------------------------------------------------
@@ -89,6 +91,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     if (triggers) await triggers.project(ctx, event);
     if (SESSION_STATE[event.type] && event.actor?.session) {
       await q('update sessions set state = $2, last_seen = now() where id = $1 and state <> $2', [event.actor.session, SESSION_STATE[event.type]]);
+      // A session at rest holds no money: its spend lease ends when it goes idle or ends (R4); the next turn asks again.
+      if (event.type === 'session.ended' || event.type === 'session.idle') await caps.release(q, event.actor.session, ctx.now);
       if (event.type === 'session.ended') ctx.after.push(() => startQueued(ctx.tenant, event.team));
     }
     // A pull request's head moved: sign-offs on an earlier commit go stale (governance G2).
@@ -108,8 +112,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   const sessionCap = (run, budget) => Math.min(budget?.sessions ?? 3, Number.isSafeInteger(run.caps?.sessions) ? run.caps.sessions : Infinity);
 
   async function remaining(q, run) {
-    const [b] = await q('select per_day, per_run, sessions from budgets where team = (select team from runs where id = $1)', [run.id]);
-    const [d] = await q('select spent, raised, exhausted_at from budget_days where team = (select team from runs where id = $1) and day = $2::date', [run.id, utcDay(now())]);
+    const [b] = await q('select per_day, per_run, sessions, time_zone from budgets where team = (select team from runs where id = $1)', [run.id]);
+    const [d] = await q('select spent, raised, exhausted_at from budget_days where team = (select team from runs where id = $1) and day = $2::date', [run.id, localDay(now(), b?.time_zone ?? 'UTC')]);
     const [{ spent: runSpent }] = await q(`select coalesce(sum(case when jsonb_typeof(envelope->'data'->'cost') = 'number' then (envelope->'data'->>'cost')::numeric else 0 end), 0) as spent
                                            from events where type = 'usage.recorded' and envelope->>'run' = $1`, [run.id]);
     const perDay = b?.per_day === null || b?.per_day === undefined ? null : Number(b.per_day) + Number(d?.raised ?? 0);
@@ -117,7 +121,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     return {
       budget: b ? { sessions: Number(b.sessions) } : null,
       exhausted: Boolean(d?.exhausted_at),
-      remainingToday: perDay === null ? null : Math.max(perDay - Number(d?.spent ?? 0), 0),
+      // What open spend leases hold counts as spent (R4), so a new session is not promised money already given out.
+      remainingToday: perDay === null ? null : Math.max(perDay - Number(d?.spent ?? 0) - (await caps.held(q, run.team, localDay(now(), b?.time_zone ?? 'UTC'), { at: now() })), 0),
       remainingRun: perRun === Infinity ? null : Math.max(perRun - Math.round(Number(runSpent)), 0),
     };
   }
@@ -470,7 +475,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         await ctx.q("update sessions set state = 'waiting' where id = $1", [sess.id]);
         const call = { command: redact(i.call), ...(i.pr ? { pr: i.pr } : {}), ...(i.headSha ? { headSha: i.headSha } : {}) };
         const links = [...(prLink(roster.repo, i.pr) ? [{ rel: 'pull-request', url: prLink(roster.repo, i.pr) }] : []), ...(i.links ?? []).filter((u) => /^https:\/\//.test(u)).map((url) => ({ rel: 'link', url }))];
-        const r = await m3.requestApproval(ctx, sess.team, { action: i.action, call, why: i.why, links, session: sess.id, run: sess.run, role: sess.role, bound: i.bound ?? null });
+        const r = await m3.requestApproval(ctx, sess.team, { action: i.action, call, why: i.why, links, session: sess.id, run: sess.run, role: sess.role, bound: i.bound ?? null, changedWhat: i.changed ?? null });
         out = { approval: r.approval, card: r.card.id };
       }
       return out;
@@ -480,6 +485,19 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   }
 
   // ---- Runner ops after hello (section 4) ---------------------------------------------------------------------------
+
+  /**
+   * An installation a runner names (pace, governor.report) must be one its own tenant proved it owns (S9), so a
+   * runner can never pace on, or hold, another tenant's installation. Answers the id as text, or null for none.
+   */
+  async function ownInstallation(conn, given) {
+    if (given === undefined || given === null) return null;
+    const installation = String(given);
+    if (!/^\d{1,20}$/.test(installation)) throw new Problem(400, 'installation is a GitHub App installation id');
+    const rows = await db.system('select 1 from github_installations where installation_id = $1::bigint and tenant = $2', [installation, conn.tenant]);
+    if (!rows.length) throw new Problem(403, 'that installation was not proved by this account');
+    return installation;
+  }
 
   async function ownSession(q, conn, sid) {
     const [s] = await q('select id, team, run, role, instance, runner, state, team_version from sessions where id = $1', [sid]);
@@ -555,8 +573,21 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         const call = { command: redact(typeof a.call === 'string' ? a.call : JSON.stringify(a.call ?? '')), ...(pr ? { pr } : {}), ...(headSha ? { headSha } : {}) };
         const [run] = await ctx.q('select roster from runs where id = $1', [sess.run]);
         const link = prLink(run?.roster?.repo, pr);
-        const r = await m3.requestApproval(ctx, sess.team, { action: String(a.action ?? 'unclassified'), call, why: String(a.why ?? 'The team policy keeps this for a person.'), links: link ? [{ rel: 'pull-request', url: link }] : [], session: sess.id, run: sess.run, role: sess.role, bound });
+        const r = await m3.requestApproval(ctx, sess.team, { action: String(a.action ?? 'unclassified'), call, why: String(a.why ?? 'The team policy keeps this for a person.'), links: link ? [{ rel: 'pull-request', url: link }] : [], session: sess.id, run: sess.run, role: sess.role, bound, changedWhat: typeof a.changed === 'string' ? a.changed.slice(0, 500) : null });
         return { approval: r.approval, card: r.card.id };
+      });
+      return result;
+    },
+
+    /**
+     * A spend lease before the session spends (R4): an amount from what is left today and on its run, for a few
+     * minutes. The ack is { lease, amount, currency, day, expiresAt, remainingToday }, or { amount: 0, reason }.
+     */
+    async 'spend.lease'(conn, body) {
+      const { result } = await m3.tx(conn.tenant, async (ctx) => {
+        const sess = await ownSession(ctx.q, conn, body?.session);
+        if (!LIVE.includes(sess.state)) throw new Problem(409, `session ${sess.id} is ${sess.state}`);
+        return caps.lease(ctx, sess, body?.amount);
       });
       return result;
     },
@@ -567,6 +598,57 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         const sess = await ownSession(q, conn, body.session);
         return ingestStepIo(q, conn.tenant, sess, body, { now: now(), problem: (m) => new Problem(400, m) });
       });
+    },
+
+    /**
+     * The outbound governor (L20g, R1a): a slot for one call to a provider on this session's behalf, in two stages so
+     * it is answered at once and never holds the runner's other requests (they run one at a time per connection).
+     * Stage `own` (the default) answers { waitMs, next: 'account' }: wait, then ask stage `account`, whose waitMs is
+     * the last wait before the call goes. A busy key never refuses, it only delays. `installation` names a GitHub App
+     * installation the call uses.
+     */
+    async pace(conn, body) {
+      if (!gateway) throw new Problem(501, 'this control plane has no gateway');
+      const sess = await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, body?.session));
+      const installation = await ownInstallation(conn, body?.installation);
+      return gateway.stage({ provider: body?.provider, installation, tenant: conn.tenant, team: sess.team, session: sess.id }, body?.stage ?? 'own');
+    },
+
+    /**
+     * A provider told the runner to slow down (a 429, a secondary rate limit, an abuse response). Its word holds only
+     * its own tenant's keys, for at most 5 minutes; the shared App or key only when two tenants say so (gateway
+     * `reported`). Rate limited per tenant.
+     */
+    async 'governor.report'(conn, body) {
+      if (!gateway) throw new Problem(501, 'this control plane has no gateway');
+      await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, body?.session));
+      const installation = await ownInstallation(conn, body?.installation);
+      return gateway.reported({ provider: body?.provider, installation, tenant: conn.tenant }, { retryAfterMs: body?.retryAfterMs, reason: body?.reason });
+    },
+
+    /**
+     * An outward effect is about to be sent (R5): its idempotency key is recorded first. The ack is { state: 'first' }
+     * (send it), { state: 'repeat', result } (it was done already: send nothing, use this result), or
+     * { state: 'unknown' } (it was cut off 15 minutes or more ago: ask a person, approval action effect-resend with the
+     * key as its call, and begin again with `approval`); a key in flight is refused.
+     */
+    async 'effect.begin'(conn, body) {
+      if (!gateway) throw new Problem(501, 'this control plane has no gateway');
+      const { result } = await m3.tx(conn.tenant, async (ctx) => {
+        const sess = await ownSession(ctx.q, conn, body?.session);
+        return gateway.begin(ctx, { key: body?.key, team: sess.team, session: sess.id, tool: body?.tool, callHash: body?.callHash ?? null, approval: body?.approval ?? null });
+      });
+      return result;
+    },
+
+    /** How an outward effect ended: { key, ok, result }. A failed one may be tried again with the same key. */
+    async 'effect.end'(conn, body) {
+      if (!gateway) throw new Problem(501, 'this control plane has no gateway');
+      const { result } = await m3.tx(conn.tenant, async (ctx) => {
+        const sess = await ownSession(ctx.q, conn, body?.session);
+        return gateway.end(ctx, { key: body?.key, ok: body?.ok === true, result: body?.result ?? null, session: sess.id, approval: body?.approval ?? null });
+      });
+      return result;
     },
 
     /** A fresh session token, sent as session.token. */
@@ -703,10 +785,14 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   }
 
   async function rollover(tenant) {
-    const today = utcDay(now());
+    const at = now();
     await m3.tx(tenant, async (ctx) => {
-      const runs = await ctx.q("select id, team from runs where state = 'paused' and reason = 'budget' and resume_on is not null and resume_on <= $1::date for update skip locked", [today]);
+      // Each team's day turns at its own local midnight (R14): resume_on is a day in the team's time zone.
+      const runs = await ctx.q(`select r.id, r.team, r.resume_on::text as resume_on, coalesce(b.time_zone, 'UTC') as tz from runs r left join budgets b on b.team = r.team
+                                where r.state = 'paused' and r.reason = 'budget' and r.resume_on is not null and r.resume_on <= $1::date for update of r skip locked`, [nextDay(at.toISOString().slice(0, 10))]);
       for (const r of runs) {
+        const today = localDay(at, r.tz);
+        if (r.resume_on > today) continue;
         const [d] = await ctx.q('select exhausted_at from budget_days where team = $1 and day = $2::date', [r.team, today]);
         if (d?.exhausted_at) continue;
         await m3.setRunState(ctx, r.team, r.id, 'running', 'budget', { kind: 'system', id: 'control-plane', via: 'api' });

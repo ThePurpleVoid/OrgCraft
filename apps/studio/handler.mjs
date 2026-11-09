@@ -70,6 +70,10 @@ const BRANCH = /^[A-Za-z0-9._/-]{1,100}$/;
  *                        string, or ({ user, request }) → string for one that refreshes); dpopKey the private key
  *                        (KeyObject or JWK, P-256 or Ed25519) the token is bound to. Publishes that change commands
  *                        are never made through a host: the page says to use the deployment's Studio instead.
+ *   backend              a managedBackend() (apps/studio/managed.mjs, ADR 0012): the team lives in OrgCraft's own
+ *                        Git store, with no code host. repo and getInstallationToken are then not used; a publish
+ *                        opens a change request (cr/<n>), and a team with no version yet reads as empty (base null).
+ *   teamName             with backend: the team's name, for the limiter key and the template's project fallback
  */
 /**
  * An error message as it may reach the host's log: anything shaped like a GitHub token, a JWT, a bearer header or a
@@ -149,13 +153,17 @@ export function createStudioHandler(opts = {}) {
   const tmpRoot = opts.tmpRoot ?? null;
   const allowedOrigins = new Set(opts.allowedOrigins ?? []);
   const cp = opts.controlPlane ? controlPlaneClient(opts.controlPlane) : null;
-  if (!cp && !/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repo ?? '')) throw new TypeError('createStudioHandler: repo is "owner/name"');
+  // ADR 0012: a team with no code host brings its own backend (apps/studio/managed.mjs); repo and tokens are then unused.
+  const given = opts.backend ?? null;
+  if (given && (given.kind !== 'managed' || ['info', 'readTeam', 'listPaths', 'readRootFile', 'publish', 'prStatus'].some((m) => typeof given[m] !== 'function'))) throw new TypeError('createStudioHandler: backend is a managedBackend()');
+  const managed = !!given;
+  if (!cp && !managed && !/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repo ?? '')) throw new TypeError('createStudioHandler: repo is "owner/name"');
   if (!basePath.startsWith('/')) throw new TypeError('createStudioHandler: basePath is the path the host mounts it at, e.g. "/api/agent-team/studio"');
   if (!allowedOrigins.size || [...allowedOrigins].some((o) => { try { return new URL(o).origin !== o; } catch { return true; } })) throw new TypeError('createStudioHandler: allowedOrigins lists the host page origin(s), exactly, like "https://admin.example.com"');
   if (typeof authorize !== 'function') throw new TypeError('createStudioHandler: authorize(request, action) is required');
-  if (!cp && typeof getInstallationToken !== 'function') throw new TypeError('createStudioHandler: getInstallationToken({ repo, permissions }) is required');
+  if (!cp && !managed && typeof getInstallationToken !== 'function') throw new TypeError('createStudioHandler: getInstallationToken({ repo, permissions }) is required');
   if (!/^[A-Za-z0-9._-][A-Za-z0-9._/-]{0,40}\/$/.test(branchPrefix) || branchPrefix.includes('..')) throw new TypeError('createStudioHandler: branchPrefix is like "agent-team/"');
-  if (!limiter && !cp) console.warn('agent-team studio: no limiter given, so publish limits (10 per user per hour, one at a time per repository) are not enforced across instances; GitHub\'s create-only refs are the only serialisation');
+  if (!limiter && !cp && !managed) console.warn('agent-team studio: no limiter given, so publish limits (10 per user per hour, one at a time per repository) are not enforced across instances; GitHub\'s create-only refs are the only serialisation');
 
   const assets = loadAssets();
   const version = core.VERSION;
@@ -189,7 +197,7 @@ export function createStudioHandler(opts = {}) {
     return t;
   }
 
-  const backend = cp ? null : githubBackend({ repo, token, installation: opts.installationId ?? 'default', api, fetch: fetchImpl, cache });
+  const backend = cp ? null : managed ? given : githubBackend({ repo, token, installation: opts.installationId ?? 'default', api, fetch: fetchImpl, cache });
 
   async function allowed(request, action) {
     if (!ACTIONS.has(action)) throw new HttpError(500, 'unknown action');
@@ -222,7 +230,8 @@ export function createStudioHandler(opts = {}) {
     try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { throw new HttpError(400, 'send JSON'); }
   }
 
-  const baseOf = (v) => { if (typeof v !== 'string' || !SHA.test(v)) throw new HttpError(400, 'base is the commit sha the page read (40 or 64 hex characters)'); return v; };
+  // A managed team's first version has no base yet: null, until main exists.
+  const baseOf = (v, { first = false } = {}) => { if (first && managed && v === null) return null; if (typeof v !== 'string' || !SHA.test(v)) throw new HttpError(400, 'base is the commit sha the page read (40 or 64 hex characters)'); return v; };
   const specOf = (spec) => { if (!spec || typeof spec !== 'object' || Array.isArray(spec)) throw new HttpError(400, 'send the team as spec'); return spec; };
 
   function branchFor(given, message) {
@@ -241,21 +250,21 @@ export function createStudioHandler(opts = {}) {
     if (method === 'GET' && path === '/v1/team') {
       await gate(request, 'read');
       const info = await backend.info();
-      const read = await backend.readTeam(info.head.sha);
+      const read = await backend.readTeam(info.head?.sha ?? null);
       const s = core.state(read);
-      return json(200, { ...s, repo: info.repo, git: { repo: true, branch: info.defaultBranch, dirty: [], head: info.head }, features: { publish: true, chat: false, runs: false, live: false }, ...(s.noTeam ? { templates: core.templateCards(), groups: (await import('../../packages/team-model/index.mjs')).TEMPLATE_GROUPS } : { templates: core.templateCards() }) });
+      return json(200, { ...s, repo: info.repo, ...(managed ? { managed: true } : {}), git: { repo: !managed, branch: info.defaultBranch, dirty: [], head: info.head }, features: { publish: true, chat: false, runs: false, live: false }, ...(s.noTeam ? { templates: core.templateCards(), groups: (await import('../../packages/team-model/index.mjs')).TEMPLATE_GROUPS } : { templates: core.templateCards() }) });
     }
     if (method === 'GET' && path === '/v1/team/pr') {
       await gate(request, 'read');
       const branch = new URL(request.url).searchParams.get('branch') ?? '';
-      if (!branch.startsWith(branchPrefix) || !BRANCH.test(branch) || branch.includes('..')) throw new HttpError(400, `the branch is one the Studio made (${branchPrefix}…)`);
+      if (managed ? !/^cr\/[1-9][0-9]{0,8}$/.test(branch) : !branch.startsWith(branchPrefix) || !BRANCH.test(branch) || branch.includes('..')) throw new HttpError(400, `the branch is one the Studio made (${branchPrefix}…)`);
       return json(200, await backend.prStatus(branch));
     }
     if (method === 'POST' && path.startsWith('/v1/team/')) {
       const input = await body(request);
       if (path === '/v1/team/preview') {
         await gate(request, 'read');
-        const read = await backend.readTeam(baseOf(input.base));
+        const read = await backend.readTeam(baseOf(input.base, { first: true }));
         return json(200, core.preview(read, specOf(input.spec), { tmpRoot }));
       }
       if (path === '/v1/team/graph') { await gate(request, 'read'); return json(200, core.graph(specOf(input.spec))); }
@@ -269,8 +278,8 @@ export function createStudioHandler(opts = {}) {
       if (path === '/v1/team/from-template') {
         await gate(request, 'read');
         const info = await backend.info();
-        const read = await backend.readTeam(info.head.sha);
-        return json(200, core.templateDraft(input, { hasTeam: read.files.some((f) => f.path === '.agent-team/team.json'), fallbackProject: repo.split('/')[1] }));
+        const read = await backend.readTeam(info.head?.sha ?? null);
+        return json(200, core.templateDraft(input, { hasTeam: read.files.some((f) => f.path === '.agent-team/team.json'), fallbackProject: managed ? (opts.teamName ?? 'the product') : repo.split('/')[1] }));
       }
       if (path === '/v1/team/publish') return publish(request, input);
     }
@@ -302,14 +311,14 @@ export function createStudioHandler(opts = {}) {
   async function publish(request, input) {
     let user = await gate(request, 'publish');
     const spec = specOf(input.spec);
-    const base = baseOf(input.base);
+    const base = baseOf(input.base, { first: true });
     const errors = validate(spec, loadKit(KIT)).filter((i) => i.level === 'error');
     if (errors.length) throw new HttpError(422, `fix ${errors.length} error${errors.length > 1 ? 's' : ''} first: ${errors[0].where}: ${errors[0].message}`);
     const message = typeof input.message === 'string' ? input.message.slice(0, 20_000) : '';
     const branch = branchFor(input.branch, message.split('\n')[0]);
     if (limiter) {
       if (!(await limiter(`agent-team-studio:publish:user:${user.id}`, { limit: 10, windowSeconds: 3600 }))) throw new HttpError(429, 'at most 10 publishes an hour; try again later');
-      if (!(await limiter(`agent-team-studio:publish:repo:${repo}`, { limit: 1, windowSeconds: 10 }))) throw new HttpError(429, 'another publish to this repository is running; try again in a few seconds');
+      if (!(await limiter(`agent-team-studio:publish:repo:${managed ? `managed:${opts.teamName ?? 'team'}` : repo}`, { limit: 1, windowSeconds: 10 }))) throw new HttpError(429, 'another publish to this repository is running; try again in a few seconds');
     }
     const info = await backend.info();
     const read = await backend.readTeam(base);
@@ -318,12 +327,14 @@ export function createStudioHandler(opts = {}) {
     if (!p.changes.length) return json(200, { branch: null, commit: null, files: [], note: 'nothing changed', pr: null });
     // S1: a plan that changes what runs needs the narrower permission too.
     if (p.needsCode) user = await gate(request, 'publish-code');
-    if (info.head.sha !== base) throw new HttpError(409, 'the team changed on GitHub since you opened it; reload', { type: 'stale' });
+    if ((info.head?.sha ?? null) !== base) throw new HttpError(409, managed ? 'the team changed since you opened it; reload' : 'the team changed on GitHub since you opened it; reload', { type: 'stale' });
     const kitUpgrade = core.kitVersionOf(core.filesOf(read)).upgrade;
     const out = await backend.publish({
       base, into: info.defaultBranch, branch, message: core.commitMessage(message, user),
       changes: p.changes.map(({ path, content, mode }) => ({ path, content, mode })),
       pr: core.pullRequestBody(message, { commands: p.commands, kitUpgrade, via: user.via ?? null, capability: p.capability }),
+      // The managed backend keeps these on the change request (spec 4.3); the GitHub one ignores them.
+      by: { id: user.id, name: user.name }, needsCode: p.needsCode, checks: { issues: p.issues.length }, capability: p.capability ?? [],
     });
     try { logger({ event: 'agent-team-studio.publish', user: user.id, branch: out.branch, commit: out.commit, pr: out.pr?.url ?? null, files: out.files.length, ...(user.via ? { via: user.via } : {}) }); } catch { /* the host's logger */ }
     return json(200, { branch: out.branch, commit: out.commit, files: out.files, pr: out.pr, commands: p.commands });

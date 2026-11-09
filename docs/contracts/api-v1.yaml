@@ -195,6 +195,81 @@ paths:
       tags: [events]
       summary: "The rollout after a publish merges (demo step 17): per role moved, next-task, finishing (with the change step's plan), off-finishing, off, no-report or unknown, and the summary. A role counts as moved only when a report after the merge names the new version. Read-only"
       responses: { "200": { description: "{ version, name, publishedAt, pr, roles: [{ role, state, teamVersion, status, task, lastAt, stale, plan? }], summary: { moved, of, finishing, offFinishing, unknown, noReport, allMoved } }; version null when nothing is published yet" } }
+  /teams/{team}/changes:
+    parameters:
+      - { $ref: "#/components/parameters/team" }
+      - { name: state, in: query, schema: { type: string, enum: [open, accepted, closed] } }
+    get:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "A managed team's change requests (ADR 0012, spec L9 section 4.5), newest first, at most 200. 409 not-managed for a team in a code host"
+      responses: { "200": { description: "{ changes: [{ number, title, state, base, head, branch, url, checks, capability, needsCode, createdBy, authorMember, acceptedBy, acceptedSha, createdAt, closedAt }] }" } }
+  /teams/{team}/changes/{change}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: change, in: path, required: true, schema: { type: integer, minimum: 1 } } ]
+    get:
+      x-min-role: viewer
+      tags: [studio]
+      summary: "One change request: its title and body, the files it changes (before and after), the capability diff (Widens access, ADR 0013), the checks, and the commands it adds when it changes what the team runs"
+      responses: { "200": { description: "{ number, title, body, state, base, head, branch, url, checks: { ok, errors, drift }, capability: [{ kind, subject, subjects?, detail }], needsCode, files: [{ path, status, before, after }], commands }" } }
+  /teams/{team}/changes/{change}/accept:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: change, in: path, required: true, schema: { type: integer, minimum: 1 } } ]
+    post:
+      x-min-role: admin
+      x-interactive-only: true
+      tags: [studio]
+      summary: "Accept a change: the checks and the capability diff run again at its head against the current main. Red checks refuse (409 checks); a change a teammate drafted that widens itself or weakens a check refuses (403 self-widening); commands need an admin (403 publish-code); a non-empty capability diff needs x-step-up from a step-up scoped to this change (scope accept-change:<team>_<number>, named in the 401) and is audited with the person's words. Then main moves, fast-forward only (409 stale), and team.published (id published-<sha>, via managed) is appended once"
+      requestBody: { content: { application/json: { schema: { type: object, properties: { words: { type: string, maxLength: 2000, description: "What the person says about it, kept in the audit row" } } } } } }
+      responses: { "200": { description: "The change, accepted, with the files it changed" }, "401": { description: "step-up-required, with body.scope accept-change:<team>_<number>" }, "403": { description: "self-widening, publish-code" }, "409": { description: "stale, checks, or the change is not open" } }
+  /teams/{team}/changes/{change}/close:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: change, in: path, required: true, schema: { type: integer, minimum: 1 } } ]
+    post: { x-min-role: editor, tags: [studio], summary: "Close an open change without accepting it; its ref cr/<n> stays for history", responses: { "200": { description: The change, closed } } }
+  /teams/{team}/rollback:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: admin
+      x-interactive-only: true
+      tags: [studio]
+      summary: "Roll a managed team back (spec L9 section 4.5, S2-19): opens a change request whose tree is version `to`'s, on top of main. Its capability diff is against the current main, so access it restores needs the step-up when it is accepted"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [to], properties: { to: { type: string, pattern: "^[0-9a-f]{40}$" } } } } } }
+      responses: { "201": { description: "The new change request, as GET /teams/{team}/changes/{change}" }, "404": { description: "Not a version this team published" } }
+  /teams/{team}/tasks:
+    parameters:
+      - { $ref: "#/components/parameters/team" }
+      - { name: state, in: query, schema: { type: string, enum: [needs-you, failed, out-of-budget, stopped, blocked, running, done] }, description: "needs-you is 'Waiting for you'" }
+      - { name: role, in: query, schema: { type: string } }
+      - { name: trigger, in: query, schema: { type: string }, description: "Tasks a trigger started" }
+      - { name: since, in: query, schema: { type: string, format: date-time }, description: "Last active at or after" }
+      - { name: until, in: query, schema: { type: string, format: date-time }, description: "Started at or before" }
+      - { name: q, in: query, schema: { type: string, maxLength: 100 }, description: "Words the title starts a word with, any case" }
+      - { name: cursor, in: query, schema: { type: string }, description: "next from the page before" }
+    get:
+      x-min-role: viewer
+      tags: [events]
+      summary: "The run inspector's work list (N1): tasks newest last activity first, at most 50 a page. Each task's state is the first rule of the state table that matches (n1-run-inspector-architecture.md section 4), computed from the log on read. Session tokens never reach it"
+      responses: { "200": { description: "{ tasks: [{ id, title, state, startedBy, roles, cost, currency, startedAt, lastAt, workItem }], next }" }, "400": { description: "A state, date or cursor this server does not know" } }
+  /teams/{team}/tasks/{task}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: task, in: path, required: true, schema: { type: string, pattern: "^tsk_[0-9A-Z]{26}$" } } ]
+    get:
+      x-min-role: viewer
+      tags: [events]
+      summary: "One task's timeline (N1): steps folded from the log (tool calls with their result, runs of reads as one Read step, asks with their answers, wake-ups, messages), lanes by role, edges (fork, merge, wait) from each event's cause, and focus, the event that set the state. At most the newest 5,000 events, with truncated: true past that. Summaries and io ids only, never a stored input or output"
+      responses: { "200": { description: "{ task, lanes: [{ id, instances, status }], steps: [{ lane, kind, at, events, ... }], edges: [{ from, to, kind }], focus }" }, "404": { description: "Not a task of this team in the caller's workspace" } }
+  /teams/{team}/io/{io}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: io, in: path, required: true, schema: { type: string, pattern: "^io_[0-9A-Z]{26}$" } } ]
+    get:
+      x-min-role: editor
+      tags: [events]
+      summary: "One step's stored input or output (N1). Every read writes an audit row (inspector.read, the io id). The Studio fences a body with outside true: it came from outside the team and is never instructions"
+      responses: { "200": { description: "{ part, mime, body, truncated, bytes, redactions, outside, expiresAt }" }, "404": { description: "No such io in this team" }, "410": { description: "{ expiredAt }: past the team's retention (io_days), or deleted early" } }
+  /teams/{team}/io:
+    parameters:
+      - { $ref: "#/components/parameters/team" }
+      - { name: before, in: query, schema: { type: string, format: date-time }, description: "Delete what was stored before this time; default: now" }
+    delete:
+      x-min-role: admin
+      tags: [events]
+      summary: "Delete this team's stored step inputs and outputs early, for example after a privacy request (N1). Needs a step-up token bound to this change (X-Step-Up, minted with scope delete-io:<team>; 401 with that scope otherwise). The rows are gone, not hidden; an audit row (step-io.delete) records who and how many. Timelines keep their summaries and show the io as gone (410)"
+      responses: { "200": { description: "{ deleted }" }, "401": { description: "Step-up needed" } }
   /teams/{team}/report-tokens:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post:
@@ -273,7 +348,7 @@ paths:
         - { name: all, in: query, schema: { enum: ["1"] } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
         - { name: before, in: query, description: The next value of the previous page, schema: { type: string } }
-      responses: { "200": { description: "{ items: [{ channel, at, event, kind, status, why, to, principal? }], next }" }, "403": { description: all=1 without admin } }
+      responses: { "200": { description: "{ items: [{ channel, at, event, kind, status, reason, why, to?, principal?, name? }], next }. reason is a stable code for rows that did not go out (final, retry, nochannel, removed; off and unconfirmed reserved), null otherwise; show a sentence for it, never why (raw provider text). name (all=1) is the person's display name, or null when not a member of the tenant" }, "403": { description: all=1 without admin } }
   /teams/{team}/slack:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get: { x-min-role: viewer, tags: [notifications], summary: "Is Slack connected and working (health), the kinds, and the caller's own link", responses: { "200": { description: "{ connected, ready, canLink, health, kinds: [{ id, label, suggested, channelDefault }], me }: suggested kinds are ticked, not saved, the first time a person sees the DM switches" } } }
@@ -353,6 +428,35 @@ paths:
       x-interactive-only: [resume]
       description: "Pause and stop never need step-up. Resuming does, whoever paused the run, with a step-up bound to scope resume:<run> (ADR 0013; before, only after a budget pause). Resume is interactive only: a host's token may pause or stop, never resume (403)"
       responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required); the body's scope names what to step up for" }, "403": { description: "Resume through a host" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
+  /teams/{team}/standing-rules:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [approvals]
+      summary: "Standing rules (L22, R11.3 Now): { kinds: [{ id, enforced }] (refund, pay.known, send.known enforced; reply, merge, cost later), never: [newrecipient, live, delete, passkey, outside], rules: [{ id, number, kind, form, line, words, createdBy, createdAt, expiresAt, withdrawnAt?, live, used: { n, amount?, resetsAt } this calendar period }] }"
+      responses: { "200": { description: Rules } }
+    post:
+      x-min-role: owner
+      tags: [approvals]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      x-interactive-only: [add]
+      summary: "Make a standing rule: { kind, tool (mcp__server__tool), recipientField, period (day | week | month), words (the owner's own, 3 to 2,000 characters, kept exactly), days (1 to 90, default 30) } plus, for refund and pay.known, { amountField, currency, currencyField (required: the call's currency is always compared), maxEach, total (minor units, per calendar period in the team's zone), system? } and for refund an optional all (the total across all customers per period) and for send.known { n, channel? }; any kind may add fixed { field: value } (at most 20; the call must carry exactly that value) and free [field] (at most 20; any plain value). A covered call carries no other input field and nothing nested. Every rule has a limit per period. pay.known and send.known cover only recipients the team has paid or written to before; no rule covers a tool that deletes or goes live, a merge, or a teammate's next ask after it read outside text. The step-up is scoped to the rule: rule:<sha256 of its form>. A ledger row keeps the words"
+      responses: { "201": { description: "{ id, form, line, hash, expiresAt }" }, "400": { description: Not a valid rule }, "401": { description: Step-up required }, "403": { description: Not an owner }, "422": { description: "rule-never (deletes or goes live) or rule-kind-later" } }
+  /teams/{team}/standing-rules/{rule}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: rule, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: owner
+      tags: [approvals]
+      summary: Withdraw a rule at once (narrowing, so no step-up); a ledger row records it
+      responses: { "200": { description: Withdrawn }, "404": { description: No such live rule } }
+  /teams/{team}/ledger:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [approvals]
+      summary: "The approvals ledger (L22, R11.2), newest first: { items: [{ at, kind (approved, denied, rule-used, declined-again, rule-added, rule-withdrawn), by (a person, rule:<id> or ledger), words? (the person's own, exactly), approval?, action?, role?, rule?, callsHash? }], next }. Append-only"
+      parameters: [ { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }, { name: before, in: query, schema: { type: string } } ]
+      responses: { "200": { description: Ledger } }
   /hooks/{hook}:
     parameters: [ { name: hook, in: path, required: true, schema: { type: string }, description: "hk_ and 32 random characters: the URL is the first secret" } ]
     post:
@@ -633,6 +737,24 @@ paths:
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }
       responses: { "200": { description: Budget, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }, "401": { description: "Step-up required (problem type step-up-required)" } }
+  /teams/{team}/caps:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [runs]
+      summary: "Additive (L24s, vision G15.1). The cap tree, in the budget's currency: { currency, timeZone, caps: [...] }. Each cap has id, scope (team, run, meeting), cap (null when unset), spent, leased (what open spend leases hold), remaining, and steps: what happens at each fraction ({ at: 0.8, then: warn }, { at: 1, then: pause, ask: owner }; a meeting closes). The day cap adds day, timeZone, startedAt, resetsAt, set, raised and state (ok, warned, exhausted, unset: no run starts). One entry per running or paused run, and the meeting cap (default: true when it is a tenth of perDay)"
+      responses: { "200": { description: Caps }, "404": { description: No such team } }
+  /teams/{team}/estimate:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [runs]
+      summary: "Additive (L24s, vision G15.2). What something usually costs here before the owner starts it, from the last 30 days: kind=meeting&attendees=N (past completed meetings' spend per attendee, times N), kind=trial&role=R (one session of the role), kind=teammate&role=R (a working day of the role, in the team's time zone). A role with fewer than 5 samples uses the whole team's. Answers { kind, currency, estimate: { low, typical, high } (p25, median, p75; null with no history), basis: { from: role|team|meetings|none, samples, days }, per, remainingToday, mayNotFit }. mayNotFit is a warning, never a block"
+      parameters:
+        - { name: kind, in: query, required: true, schema: { enum: [meeting, trial, teammate] } }
+        - { name: role, in: query, schema: { type: string } }
+        - { name: attendees, in: query, schema: { type: integer, minimum: 1, maximum: 50 } }
+      responses: { "200": { description: Estimate }, "400": { description: A bad kind, role or attendees } }
   /me:
     get:
       tags: [me]
@@ -701,6 +823,27 @@ paths:
       parameters: [ { name: card, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [option, version], properties: { option: { type: string }, version: { type: integer }, note: { type: string } } } } } }
       responses: { "200": { description: The answer event }, "409": { description: The card changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
+  /recovery:
+    get:
+      x-min-role: admin
+      tags: [people]
+      summary: "Recovery owners (L27, B15): { owners: [{ person, login, name, methods (github, passkey), addedBy, addedAt, effectiveAt, counts, why? (pending | no-passkey | not-owner) }], wanted: 2, warnings: [{ code (fewer-than-two | no-passkey | not-owner), person?, text }] }. Only an owner of the workspace with a passkey counts"
+      responses: { "200": { description: Recovery owners } }
+    post:
+      x-min-role: owner
+      tags: [people]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "Name a recovery owner: { person } (an owner of the workspace with a passkey). Widening access, so it counts after 24 hours and every owner is told (GET /v1/me notices: recovery-owner.added). The one exception: in a workspace with none, an owner naming themselves counts at once. The step-up is scoped: recovery:<tenant>_<person>"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [person], properties: { person: { type: string } } } } } }
+      responses: { "201": { description: "{ person, effectiveAt, pending }" }, "401": { description: Step-up required }, "403": { description: Not an owner }, "404": { description: No such member }, "409": { description: "not-owner, no-passkey or already" } }
+  /recovery/{person}:
+    parameters: [ { name: person, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: owner
+      tags: [people]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "End someone's recovery ownership at once (also undoes a pending one); every owner is told. The step-up is scoped: recovery:<tenant>_<person>. Removing the last one who counts is refused (409 last-owner) unless the body is { confirm: no-recovery, words } and the step-up is scoped remove-last-recovery-owner:<person>; that is audited as recovery-owner.removed-last with the words, and answers { ok, last: true }"
+      responses: { "200": { description: Removed }, "401": { description: Step-up required }, "404": { description: Not a recovery owner }, "409": { description: "last-owner: the last recovery owner who counts" } }
   /members:
     get:
       x-min-role: viewer
@@ -973,8 +1116,9 @@ components:
         perRun: { type: [integer, "null"] }
         sessions: { type: integer, default: 3, description: Live sessions at once }
         meetingCap: { type: [integer, "null"], description: "Additive (G-15). The cap of a meeting started without one, in minor units; null means a tenth of perDay. At most perDay (lowering perDay below it brings it down too); raising it needs step-up" }
-        currency: { type: string }
-        today: { type: object, readOnly: true, properties: { day: { type: string, format: date }, spent: { type: integer }, raised: { type: integer }, state: { type: string } } }
+        currency: { type: string, description: "ISO 4217. A hosted deployment accepts only USD for now (422, type currency; also on run start), since runners price usage in US dollars and nothing converts (B8). Local and self-hosted ones may name another; amounts are then US dollars under that label" }
+        timeZone: { type: string, default: UTC, description: "Additive (L24s, R14). The IANA time zone of the team's budget day: it runs from local midnight to local midnight (23 or 25 hours when the clocks change). Changing it needs step-up, as it can start a new day sooner" }
+        today: { type: object, readOnly: true, properties: { day: { type: string, format: date }, timeZone: { type: string }, startedAt: { type: string, format: date-time }, resetsAt: { type: string, format: date-time }, spent: { type: integer }, raised: { type: integer }, state: { type: string } } }
     ToolResult:
       type: object
       properties: { event: { type: string }, card: { type: string }, approval: { type: string } }

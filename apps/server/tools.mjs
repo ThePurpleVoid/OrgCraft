@@ -134,7 +134,7 @@ export function checkTool(name, input, ctx) {
       break;
     }
     case 'request_approval':
-      out = { action: f.text('action', { need: true, max: 80 }), call: f.text('call', { need: true }), why: f.text('why', { need: true }), links: f.links('links'), pr: f.int('pr'), headSha: f.text('headSha', { max: 64 }) };
+      out = { action: f.text('action', { need: true, max: 80 }), call: f.text('call', { need: true }), why: f.text('why', { need: true }), links: f.links('links'), pr: f.int('pr'), headSha: f.text('headSha', { max: 64 }), changed: f.text('changed', { max: 500 }) };
       if (f.a.risk !== undefined && !['low', 'medium', 'high'].includes(f.a.risk)) problems.push('risk must be low, medium or high');
       else out.risk = f.a.risk;
       if (out.headSha !== undefined && !/^[0-9a-f]{7,64}$/.test(out.headSha)) problems.push('headSha must be a commit sha');
