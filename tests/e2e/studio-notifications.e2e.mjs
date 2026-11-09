@@ -349,7 +349,7 @@ test('L25: set quiet hours and a digest, then read the delivery log, mine and ev
   await prefs.getByRole('heading', { name: 'Quiet hours and the daily digest' }).waitFor();
   // Approvals and budget stops always break through, and say why on hover.
   const through = prefs.getByText('Approvals and budget stops always reach you, even in quiet hours, because the team is waiting on you.');
-  assert.match(await through.getAttribute('title'), /^A decision only you can make/);
+  assert.match(await through.getAttribute('title'), /^These are a decision only you can make/);
   await prefs.getByRole('button', { name: "Use this device's time zone (Europe/Paris)" }).click();
   await prefs.getByLabel('No quiet hours').uncheck();
   await prefs.getByLabel('Quiet from').fill('22:00');
