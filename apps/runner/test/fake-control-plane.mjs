@@ -24,7 +24,8 @@ export async function fakeControlPlane({ key = 'rk_test', tenant = 'acme', decid
 
   const decided = new Map(); // approval id -> decision, so a resent approval.wait gets its answer again
   function decideLater(approvalId, req) {
-    setTimeout(() => Promise.resolve(decide(req)).then((d) => { decided.set(approvalId, d); send('approval.result', { approval: approvalId, ...d }); check(); }), 50).unref();
+    // Like apps/server since L6: the result echoes the hash the card was bound to (a test's decide may override it).
+    setTimeout(() => Promise.resolve(decide(req)).then((d) => { const r = { ...(req?.callsHash ? { callsHash: req.callsHash } : {}), ...d }; decided.set(approvalId, r); send('approval.result', { approval: approvalId, ...r }); check(); }), 50).unref();
   }
 
   const http = createServer(async (req, res) => {

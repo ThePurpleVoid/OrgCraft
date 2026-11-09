@@ -22,6 +22,7 @@
   "files": [
     "apps/studio/",
     "bin/",
+    "packages/calls/",
     "packages/events/",
     "packages/github-app/",
     "packages/model-prices/",

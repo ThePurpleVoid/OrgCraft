@@ -107,10 +107,11 @@ const GRANT_MS = 15 * 60_000;
 
 /**
  * Whether an approval.result is for these calls. A control plane that signs calls echoes the hash it bound; one that
- * echoes a different hash approved something else. A result with no hash (a control plane from before ADR 0013) is
- * taken as for the calls the runner sent with it, unless the runner requires signed results (ORGCRAFT_SIGNED_CALLS).
+ * echoes a different hash approved something else. A result with no hash is refused: the control plane signs calls
+ * since L6, and the two ship together. ORGCRAFT_SIGNED_CALLS=0 accepts one, for local development against an older
+ * control plane only.
  */
-export function signedFor(result, hash, { require = process.env.ORGCRAFT_SIGNED_CALLS === '1' } = {}) {
+export function signedFor(result, hash, { require = process.env.ORGCRAFT_SIGNED_CALLS !== '0' } = {}) {
   if (typeof result?.callsHash === 'string') return result.callsHash === hash;
   return !require;
 }
