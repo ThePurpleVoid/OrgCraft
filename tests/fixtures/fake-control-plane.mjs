@@ -16,6 +16,9 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
   const cost = { today: 620, capPerDay: perDay, currency: 'USD', state: 'ok' };
   const started = []; // the RunCreate bodies, for the tests
   const stepUps = new Map(); // su_ token -> expiry (ms)
+  // L22 (apps/server/ledger.mjs): standing rules and the ledger, newest first; a test pushes rows.
+  const rules = [];
+  const ledger = [];
   const live = []; // live overrides in force (apps/server/live.mjs): { id, kind, member, state, reason, by, at, text, liveChange }
   let n = 0;
   const id = () => `ev_${String(++n).padStart(6, '0')}`;
@@ -49,7 +52,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     usage(amount) { cost.today += amount; append('usage.recorded', role('chief-of-staff'), { inputTokens: 1000, outputTokens: 200, cost: amount, currency: cost.currency }); },
     /** Spends today's budget: the runs pause with reason budget, as the real control plane does at 100%. */
     exhaust() { cost.state = 'exhausted'; for (const r of runs) if (r.state === 'running') { r.state = 'paused'; r.reason = 'budget'; append('run.paused', { kind: 'system', id: 'budget' }, { reason: 'budget' }, `run/${r.id}`); } },
-    events, cards, runs, cost, budget, started, live,
+    events, cards, runs, cost, budget, started, live, rules, ledger,
   };
   const scopes = new Map(); // su -> scope it was bound to (ADR 0013)
   const stepped = (req, scope = null) => { const su = req.headers['x-step-up']; if (!su || !(stepUps.get(su) > Date.now()) || (scopes.get(su) ?? null) !== scope) return false; stepUps.delete(su); scopes.delete(su); return true; };
@@ -159,6 +162,24 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     }
     // Live overrides (L18), like apps/server/live.mjs: setting needs no step-up; lifting one needs a step-up bound to
     // lift:<id>; only a lift clears one (a run that starts does not).
+    if (p === '/v1/me' && req.method === 'GET') return send(res, 200, { id: 'per_owner', login: 'owner', name: 'Owner' });
+    if (p === `/v1/teams/${team}/standing-rules` && req.method === 'GET') {
+      return send(res, 200, { kinds: [['refund', true], ['pay.known', true], ['send.known', true], ['reply', false], ['merge', false], ['cost', false]].map(([id, enforced]) => ({ id, enforced })), never: ['newrecipient', 'live', 'delete', 'passkey', 'outside'], rules });
+    }
+    const sr = new RegExp(`^/v1/teams/${team}/standing-rules/([^/]+)$`).exec(p);
+    if (sr && req.method === 'DELETE') {
+      const r = rules.find((x) => x.id === sr[1] && x.live);
+      if (!r) return send(res, 404, { error: 'no such live rule' });
+      Object.assign(r, { live: false, withdrawnAt: new Date().toISOString(), withdrawnBy: 'per_owner' });
+      ledger.unshift({ at: new Date().toISOString(), kind: 'rule-withdrawn', by: 'per_owner', rule: r.id, ruleNumber: r.number, ruleForm: r.form });
+      return send(res, 200, { id: r.id, withdrawn: true });
+    }
+    if (p === `/v1/teams/${team}/ledger` && req.method === 'GET') {
+      // Pages of three; here `before` is an offset, where the real server's is a row id (both opaque to the Studio).
+      const start = Number(url.searchParams.get('before') ?? 0);
+      const page = ledger.slice(start, start + 3);
+      return send(res, 200, { items: page, next: start + 3 < ledger.length ? String(start + 3) : null });
+    }
     if (p === `/v1/teams/${team}/live` && req.method === 'GET') return send(res, 200, { live });
     const at = () => new Date().toISOString();
     if (p === `/v1/teams/${team}/live/stop-everything` && req.method === 'POST') {

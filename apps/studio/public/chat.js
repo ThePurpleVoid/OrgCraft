@@ -117,7 +117,33 @@ function cardFrom(e) {
   return { id: d.cardId || subjectId(e.subject) || e.id, kind: 'decision', subject: e.subject, version: d.version ?? 1, title: d.question ?? d.title ?? 'A decision', body: d.body ?? '', options: opts, recommendation: rec };
 }
 
-export function createChat({ root, onOpen, runs = true, organization = () => '' } = {}) {
+/** A day for the CPO's {date}: "9 Nov". */
+const fmtDay = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleDateString([], { day: 'numeric', month: 'short' }); };
+
+/**
+ * L22, the lines above an approval's facts (strings-now §6b): asked again after a decline (declines stick, AI-10),
+ * what the teammate says changed, and a card that replaced one whose calls changed. `me` is the viewer's id, if known.
+ */
+export function declineHtml(card, me = null) {
+  const d = card.data ?? {};
+  const out = [];
+  const db = d.declinedBefore;
+  const what = typeof d.changed?.what === 'string' && d.changed.what.trim() ? d.changed.what.trim() : '';
+  if (db && (db.declinedOn || db.at)) {
+    const date = fmtDay(db.declinedOn ?? db.at);
+    const mine = db.declinedBy && me ? db.declinedBy === me : !db.declinedByName;
+    if (mine && what) out.push(t('card.declined.before', { date, reason: what }));
+    else {
+      out.push(t('card.declined.other', { person: mine ? t('notify.log.you') : db.declinedByName || t('notify.log.who.unknown'), date }));
+      if (what) out.push(t('card.changed.what', { reason: what }));
+    }
+    if (db.cooldownUntil ?? db.until) out.push(t('card.cooldown', { date: fmtDay(db.cooldownUntil ?? db.until) }));
+  } else if (what) out.push(t('card.changed.what', { reason: what }));
+  if (Array.isArray(d.changed?.from) && d.changed.from.length) out.unshift(t('card.changed'));
+  return out.length ? `<div class="declined notice" role="note">${out.map((x) => `<p>${esc(x)}</p>`).join('')}</div>` : '';
+}
+
+export function createChat({ root, onOpen, runs = true, organization = () => '', me = () => null } = {}) {
   const st = {
     connected: null, error: null, events: [], next: null, cards: new Map(), answers: new Map(), pending: [],
     notes: new Map(), // card id -> note shown above it (changed, step-up)
@@ -206,6 +232,8 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
   function closedText(card) {
     if (card.state === 'answered' && card.answer) {
       const a = card.answer;
+      // Done under a standing rule (L22): the rule's number and line, never "rule:sr_…".
+      if (Number.isInteger(a.ruleNumber) && a.ruleLine) return t('ledger.byrule', { time: a.at ? fmtTime(a.at) : '', n: a.ruleNumber, what: a.ruleLine }).replace(/^ · /, '');
       const label = (card.options ?? []).find((o) => o.id === a.option)?.label ?? human(a.option);
       const by = typeof a.by === 'object' ? a.by?.name ?? a.by?.id : a.by;
       return `${label}${by ? ` · ${by}` : ''}${a.at ? ` at ${fmtTime(a.at)}` : ''}${a.note ? `: ${a.note}` : ''}`;
@@ -254,6 +282,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '' 
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
       ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="${esc(t('stepup.label.interim'))}" placeholder="${esc(t('stepup.label.interim'))}" required><button type="submit" class="primary">${esc(t('stepup.button'))}</button></form>` : ''}
       <h3>${esc(card.title)}</h3>
+      ${card.kind === 'approval' ? declineHtml(card, me()) : ''}
       ${boundHtml(card)}
       ${factsHtml(card)}
       ${card.body ? `${factsHtml(card) ? '<p class="muted why-label">Why, in the teammate\'s words:</p>' : ''}<div class="md">${md(card.body)}</div>` : ''}

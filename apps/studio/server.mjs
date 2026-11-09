@@ -283,6 +283,16 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (!chat.connected) return send(res, 200, { connected: false, live: [] });
         return relay(res, async () => ({ connected: true, ...(await chat.live()) }));
       }
+      // Approvals (L22): the standing rules and the ledger, from the control plane only.
+      if (req.method === 'GET' && url.pathname === '/v1/team/approvals') {
+        if (!chat.connected) return send(res, 200, { connected: false });
+        const before = url.searchParams.get('before');
+        if (before !== null && !/^\d{1,18}$/.test(before)) throw new HttpError(400, 'before is the next value of the previous page');
+        return relay(res, async () => {
+          const [me, rules, ledger] = await Promise.all([chat.me().catch(() => null), before ? null : chat.rules(), chat.ledger(before)]);
+          return { connected: true, me: me?.id ?? me?.person?.id ?? null, ...(rules ? { rules } : {}), ledger };
+        });
+      }
       if (req.method === 'GET' && url.pathname === '/v1/team/runners') {
         if (!chat.connected) return send(res, 200, { connected: false, runners: [] });
         return relay(res, async () => ({ connected: true, ...(await chat.runners()) }));
@@ -353,6 +363,8 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           if (!['paused', 'off'].includes(input.state)) throw new HttpError(400, 'state is paused or off');
           return relay(res, () => chat.setMember(decodeURIComponent(member[1]), input.state, reason, key));
         }
+        const withdraw = /^\/v1\/team\/standing-rules\/([^/]+)\/withdraw$/.exec(url.pathname);
+        if (withdraw) return relay(res, () => chat.withdrawRule(decodeURIComponent(withdraw[1])));
         if (url.pathname === '/v1/team/live/lift') {
           if (typeof input.id !== 'string' || !input.id) throw new HttpError(400, 'send the id of the live change');
           return relay(res, () => chat.lift(input.id));

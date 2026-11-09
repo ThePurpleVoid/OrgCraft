@@ -6,6 +6,21 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
+  // L22 Approvals page (asked of the CPO).
+  'approvals.rules.heading': 'Standing rules',
+  'approvals.rules.empty': 'No standing rules yet. Every approval asks you.',
+  'approvals.rules.withdrawn': 'Withdrawn rules',
+  'approvals.ledger.heading': 'Ledger',
+  'approvals.ledger.empty': 'No decisions yet. Each one you make shows here, in your words.',
+  'approvals.ledger.failed': "The ledger couldn't load. Try again in a moment.",
+  'approvals.offline': 'Approvals show here once the team is connected to its server.',
+  'approvals.withdraw.failed': "That rule couldn't be withdrawn. Nothing changed. Try again in a moment.",
+  'ledger.withdrawn': '{time} · {person} withdrew standing rule #{n}: {rule line}',
+  'ledger.showall': 'Show all',
+  'ledger.via.chat': 'Chat',
+  'ledger.via.approvals': 'Approvals',
+  'ledger.via.email': 'Email',
+  'ledger.via.slack': 'Slack',
 };
 
 export function t(key, vars = {}) {

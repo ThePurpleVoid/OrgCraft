@@ -109,6 +109,12 @@ export function chatSource(env = process.env) {
     // step-up and no code host or Git involved (SH-10). Only lifting one needs a step-up, bound to lift:<id>.
     /** The live changes in force: { live: [{ id, kind, member, state, reason, by, at, text, liveChange }] }. */
     live: () => call('GET', `/teams/${t}/live`),
+    // Approvals (L22, apps/server/ledger.mjs): the standing rules with their use this period, and the ledger, newest
+    // first. Withdrawing narrows what the team may do, so it needs no step-up. `me` names the viewer for "You".
+    me: () => call('GET', '/me'),
+    rules: () => call('GET', `/teams/${t}/standing-rules`),
+    withdrawRule: (id) => call('DELETE', `/teams/${t}/standing-rules/${encodeURIComponent(id)}`),
+    ledger: (before) => call('GET', `/teams/${t}/ledger${before ? `?before=${encodeURIComponent(before)}` : ''}`),
     stopEverything: (reason, key) => call('POST', `/teams/${t}/live/stop-everything`, reason ? { reason } : {}, key ? { 'idempotency-key': key } : {}),
     setMember: (member, state, reason, key) => call('PUT', `/teams/${t}/live/members/${encodeURIComponent(member)}`, { state, ...(reason ? { reason } : {}) }, key ? { 'idempotency-key': key } : {}),
     /** Lifts one change: it spends the step-up this server holds, if any; without one the control plane asks (401). */
