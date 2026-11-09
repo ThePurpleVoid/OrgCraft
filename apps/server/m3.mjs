@@ -81,7 +81,7 @@ const isInt = (v) => Number.isSafeInteger(v);
  * list of what was stored. `hooks.afterCommit` lets the bus send frames once the transaction is durable.
  */
 /** A merge card's sign-offs (governance G2): each with its version and whether it is fresh, and what blocks the merge. */
-const signoffData = (g) => ({ signoffs: g.signoffs.map(({ signoff, by, origin, label, version, versionKind, result, unverified, fresh, problem, notes }) => ({ signoff, by, origin, ...(label ? { label } : {}), version, versionKind, result, unverified, fresh, ...(problem ? { problem } : {}), ...(notes ? { notes } : {}) })), ...(g.missing.length ? { blocked: refusal(g.missing) } : {}) });
+const signoffData = (g) => ({ signoffs: g.signoffs.map(({ signoff, by, origin, label, version, versionKind, result, unverified, fresh, problem }) => ({ signoff, by, origin, ...(label ? { label } : {}), version, versionKind, result, unverified, fresh, ...(problem ? { problem } : {}) })), ...(g.missing.length ? { blocked: refusal(g.missing) } : {}) });
 /** Approve is off, with the reason, while a sign-off on the pull request is not fresh. Deny always works. */
 const approvalOptions = (g) => [
   { id: 'approve', label: 'Approve', style: 'primary', stepUp: true, ...(g && g.missing.length ? { disabled: true, reason: refusal(g.missing) } : {}) },

@@ -37,7 +37,7 @@ export async function cleanChecks(q, session, checks) {
   return out;
 }
 
-/** A reported sign-off's kit is 0.23.0 or later: it sends version and unverified, so leaving them out means something. */
+/** A reported sign-off's kit is 0.23.0 or later, which can send version and unverified (only used to word a problem). */
 export function kitStates(kit) {
   const m = /^(\d+)\.(\d+)\.\d+/.exec(String(kit ?? ''));
   return Boolean(m) && (Number(m[1]) > 0 || Number(m[2]) >= 23);
@@ -64,10 +64,11 @@ export async function signoffsOn(q, team, pr) {
   const out = [];
   for (const list of byRole.values()) {
     const s = list.filter((r) => r.session).at(-1);
-    if (s) out.push({ e: s.envelope, origin: 'session', later: list.filter((r) => !r.session && Number(r.seq) > Number(s.seq)).map((r) => r.envelope) });
-    else out.push({ e: list.at(-1).envelope, origin: 'reported', later: [] });
+    if (s) out.push({ e: s.envelope, seq: Number(s.seq), origin: 'session', later: list.filter((r) => !r.session && Number(r.seq) > Number(s.seq)).map((r) => r.envelope) });
+    else out.push({ e: list.at(-1).envelope, seq: Number(list.at(-1).seq), origin: 'reported', later: [] });
   }
-  return out.sort((a, b) => Date.parse(a.e.time) - Date.parse(b.e.time));
+  // In the order the server stored them (the sender sets a reported envelope's time).
+  return out.sort((a, b) => a.seq - b.seq);
 }
 
 /** The envelopes that count, as `signoffsOn` picks them (for stale marking). */
@@ -76,31 +77,29 @@ export async function latestSignoffs(q, team, pr) {
 }
 
 /**
- * One sign-off against the version being shipped: { signoff, by, origin, label, version, fresh, problem, notes }.
+ * One sign-off against the version being shipped: { signoff, by, origin, label, version, fresh, problem }.
  * `kind` is what is shipped: a merge ships a commit, so a sign-off that names a revision or a draft on that pull
  * request is not compared with the head (nothing could ever match it); it still blocks when it failed or left
- * something unchecked. A reported sign-off from a kit before 0.23.0 (no `kit`, or an older one) can't state a version
- * or what it did not check: those are shown as "not stated" and do not block; one from 0.23.0 on is judged in full.
+ * something unchecked. A reported sign-off is judged the same way; from a kit before 0.23.0 (no `kit`, or an older
+ * one), which can't name a version, the problem says to upgrade the kit or sign off from a runner session.
  * `later` (session sign-offs only): reported sign-offs after it, which can only add a problem.
  */
 export function judge(e, version, { kind = null, origin = 'session', later = [] } = {}) {
   const d = e.data ?? {};
   const by = who(e);
   const reported = origin === 'reported';
-  const old = reported && !kitStates(d.kit);
+  // A kit before 0.23.0 can't name a version or what it did not check: its sign-offs block like any other that
+  // leaves them out (security and code review on L23s), and the problem says how to get past it.
+  const upgrade = reported && !kitStates(d.kit) ? ' (it was reported by a kit before 0.23.0: upgrade the kit, or sign off from a runner session)' : '';
   const base = {
     signoff: e.id, by, origin, ...(reported ? { label: 'reported, not run here' } : {}),
-    version: d.version ?? null, versionKind: d.versionKind ?? null, result: d.result ?? (old ? 'pass' : null), unverified: Array.isArray(d.unverified) ? d.unverified : null,
+    version: d.version ?? null, versionKind: d.versionKind ?? null, result: d.result ?? null, unverified: Array.isArray(d.unverified) ? d.unverified : null,
   };
-  const notes = [];
   let problem = null;
-  if (!d.version && old) notes.push(`${by}'s sign-off was reported by a kit before 0.23.0: version not stated`);
-  else if (!d.version) problem = `${by}'s sign-off names no version; it needs to check again and name it`;
-  if (problem) { /* already blocked */ }
-  else if (d.version && d.version !== version && !(kind && d.versionKind && d.versionKind !== kind)) problem = `needs a fresh sign-off from ${by} (theirs was for ${short(d.version)})`;
-  else if (base.result !== 'pass') problem = `${by}'s sign-off${d.version ? ` on ${short(d.version)}` : ''} did not pass`;
-  else if (!Array.isArray(d.unverified) && old) notes.push(`${by}'s sign-off was reported by a kit before 0.23.0: Unverified not stated`);
-  else if (!Array.isArray(d.unverified)) problem = `${by}'s sign-off does not say what it did not check (Unverified: not stated)`;
+  if (!d.version) problem = `${by}'s sign-off names no version; it needs to check again and name it${upgrade}`;
+  else if (d.version !== version && !(kind && d.versionKind && d.versionKind !== kind)) problem = `needs a fresh sign-off from ${by} (theirs was for ${short(d.version)})`;
+  else if (d.result !== 'pass') problem = `${by}'s sign-off on ${short(d.version)} ${d.result ? 'did not pass' : `does not say whether it passed${upgrade}`}`;
+  else if (!Array.isArray(d.unverified)) problem = `${by}'s sign-off does not say what it did not check (Unverified: not stated)${upgrade}`;
   else if (d.unverified.length) problem = `${by}'s sign-off has unchecked items: "${String(d.unverified[0]).slice(0, 200)}"${d.unverified.length > 1 ? ` and ${d.unverified.length - 1} more` : ''}`;
   // A newer reported sign-off tightens a session one: a fail or unchecked items count; a pass changes nothing.
   for (const r of problem ? [] : later) {
@@ -109,7 +108,7 @@ export function judge(e, version, { kind = null, origin = 'session', later = [] 
     else if (Array.isArray(x.unverified) && x.unverified.length) problem = `${by} reported unchecked items after its own sign-off (reported, not run here): "${String(x.unverified[0]).slice(0, 200)}"`;
     if (problem) break;
   }
-  return { ...base, fresh: !problem, ...(problem ? { problem } : {}), ...(notes.length ? { notes } : {}) };
+  return { ...base, fresh: !problem, ...(problem ? { problem } : {}) };
 }
 
 /** The gate for shipping `version` of pull request `pr`: every sign-off on it, and what is missing. */
