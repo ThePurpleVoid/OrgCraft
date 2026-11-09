@@ -4,7 +4,7 @@ Status: accepted, 2026-11-06. Owner: architect (web dev implements).
 
 ## Context
 
-The architecture plans the Studio editor on React, React Flow and Vite. The kit, though, ships with `npx github:PurpleGiragge/Agent-Team-Kit#vX`: no install step, no build step, no dependencies. That is how every team on the kit runs it today, and the dashboard already works this way. A Vite build would mean either committing built files or publishing to npm before anyone can open the editor.
+The architecture plans the Studio editor on React, React Flow and Vite. The kit, though, ships with `npx github:ThePurpleVoid/OrgCraft#vX`: no install step, no build step, no dependencies. That is how every team on the kit runs it today, and the dashboard already works this way. A Vite build would mean either committing built files or publishing to npm before anyone can open the editor.
 
 ## Decision
 

@@ -127,7 +127,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         await q('update deliveries set next_at = now() + make_interval(secs => 10) where id = $1', [d.id]);
         return null;
       }
-      if (wake.type === 'meeting.turn') await meetings.sent(q, wake.id);
+      if (wake.type === 'meeting.turn') await meetings.sent(q, wake.id, d.team);
       if (s && LIVE.includes(s.state) && conn) {
         await q("update deliveries set state = 'sent', session = $2, attempts = attempts + 1, next_at = now() + make_interval(secs => $3) where id = $1", [d.id, s.id, ACK_SECONDS]);
         return { d, conn, op: 'session.message', body: { session: s.id, message: wake, delivery: d.id } };

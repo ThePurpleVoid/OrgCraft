@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/PurpleGiragge/Agent-Team-Kit/docs/contracts/schema/event.v1.json",
+  "$id": "https://github.com/ThePurpleVoid/OrgCraft/docs/contracts/schema/event.v1.json",
   "title": "Agent Team event envelope, version 1 (CloudEvents 1.0 compatible)",
   "type": "object",
   "required": ["specversion", "id", "type", "version", "source", "tenant", "time", "actor", "data"],

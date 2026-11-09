@@ -3,7 +3,7 @@
 // lights each role up from what its thread reports with team-status.sh. No dependencies; Node 18 or later.
 //
 //   node scripts/agent-team/dashboard.mjs [--port 4747] [--host 127.0.0.1] [--dir <repo>] [--demo] [--open]
-//   npx github:PurpleGiragge/Agent-Team-Kit dashboard      (the same, from the kit)
+//   npx github:ThePurpleVoid/OrgCraft dashboard      (the same, from the kit)
 //   node scripts/agent-team/dashboard.mjs export --out <dir> [--board <url>] [--dir <repo>]
 //     writes the page as static files with roster.json, for your own website (see docs/dashboard.md)
 //

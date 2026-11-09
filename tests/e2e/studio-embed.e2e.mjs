@@ -63,6 +63,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
 
   // Step 1 features: no Chat page, no Live board; Publish is there.
   assert.equal(await ats.getByRole('button', { name: 'Chat', exact: true }).isVisible(), false);
+  assert.equal(await ats.getByRole('button', { name: 'Rollout', exact: true }).isVisible(), false, 'an embedded Studio has no rollout source yet');
   assert.equal(await ats.getByRole('button', { name: 'Live' }).isVisible(), false);
   assert.equal(await ats.getByRole('button', { name: 'Publish…' }).isVisible(), true);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'embedded-team-light.png') });

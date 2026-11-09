@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/PurpleGiragge/Agent-Team-Kit/docs/contracts/schema/connector.v1.json",
+  "$id": "https://github.com/ThePurpleVoid/OrgCraft/docs/contracts/schema/connector.v1.json",
   "title": "Connector manifest, connector/1",
   "type": "object",
   "required": ["schema", "id", "name", "version", "capabilities"],
