@@ -34,8 +34,9 @@ test('two teammates of one role get two briefs, with their own names and slugs',
   assert.doesNotMatch(maya, /\{\{ROLE\}\}/);
   assert.ok(!warnings.some((w) => /not installed/.test(w)), warnings.join('\n'));
   const instructions = files.get('docs/team/project-instructions.md');
-  assert.match(instructions, /backend-dev-2 \([^)]*\): Maya, Backend dev/);
-  assert.match(instructions, /backend-dev-3 \([^)]*\): Leo, Backend dev/);
+  assert.match(instructions, /─ Maya \(backend-dev-2\), Backend dev \([^)]*\)\n/);
+  assert.match(instructions, /─ Leo \(backend-dev-3\), Backend dev \([^)]*\)\n/);
+  assert.match(maya, /^\*\*Type:\*\* Backend dev \(backend-dev\)$/m, 'the header names the role it is based on');
   assert.match(instructions, /├─ backend-dev \([^)]*\)\n/, 'a kit role keeps its plain line');
 });
 
@@ -52,5 +53,20 @@ test('Hands to: structured lines name the target, and lines to roles the team la
 
 test('a team without teammates gets the same org tree as before', () => {
   const { files } = build(team());
-  assert.doesNotMatch(files.get('docs/team/project-instructions.md'), /\): [A-Z]/);
+  assert.doesNotMatch(files.get('docs/team/project-instructions.md'), /─ [A-Z][^\n]*\([a-z0-9-]+\), /);
+});
+
+test('with subagents on, each teammate gets its own agent file, and AGENTS.md lists both', () => {
+  const root = team({ 'backend-dev-2.extend.md': member('Maya'), 'backend-dev-3.extend.md': member('Leo') });
+  const f = join(root, '.agent-team/team.json');
+  const t = JSON.parse(readFileSync(f, 'utf8'));
+  t.targets = ['claude-code', 'agents-md'];
+  t.subagents = true;
+  writeFileSync(f, JSON.stringify(t, null, 2) + '\n');
+  const { files } = build(root);
+  const agents = [...files.keys()].filter((k) => k.startsWith('.claude/agents/backend-dev'));
+  assert.deepEqual(agents.sort(), ['.claude/agents/backend-dev-2.md', '.claude/agents/backend-dev-3.md', '.claude/agents/backend-dev.md']);
+  assert.match(files.get('.claude/agents/backend-dev-2.md'), /^name: backend-dev-2$/m);
+  assert.match(files.get('AGENTS.md'), /Maya \(backend-dev-2\), Backend dev/);
+  assert.match(files.get('AGENTS.md'), /Leo \(backend-dev-3\), Backend dev/);
 });
