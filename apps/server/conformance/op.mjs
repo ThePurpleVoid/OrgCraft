@@ -58,7 +58,7 @@ const server = createServer({ cert: readFileSync(process.env.OP_CERT), key: read
   const url = new URL(req.url, ISSUER);
   // The Studio's sign-in page, reduced to its one button: "Continue with GitHub" (the suite's browser clicks it).
   if (url.pathname === '/sign-in' && /^[A-Za-z0-9_-]{1,100}$/.test(url.searchParams.get('interaction') ?? '')) {
-    const go = `/oauth/interaction/${url.searchParams.get('interaction')}/github`;
+    const go = `/oauth/authorize/${url.searchParams.get('interaction')}/github`;
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     return res.end(`<!doctype html><title>Sign in</title><h1>Sign in to Agent Team</h1><a id="continue" href="${go}">Continue with GitHub</a>`);
   }

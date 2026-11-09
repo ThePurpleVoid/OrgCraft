@@ -776,6 +776,27 @@ paths:
       parameters: [ { name: card, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/stepUp" } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [option, version], properties: { option: { type: string }, version: { type: integer }, note: { type: string } } } } } }
       responses: { "200": { description: The answer event }, "409": { description: The card changed, content: { application/json: { schema: { $ref: "#/components/schemas/Card" } } } } }
+  /recovery:
+    get:
+      x-min-role: admin
+      tags: [people]
+      summary: "Recovery owners (L27, B15): { owners: [{ person, login, name, methods (github, passkey), addedBy, addedAt, effectiveAt, counts, why? (pending | no-passkey | not-owner) }], wanted: 2, warnings: [{ code (fewer-than-two | no-passkey | not-owner), person?, text }] }. Only an owner of the workspace with a passkey counts"
+      responses: { "200": { description: Recovery owners } }
+    post:
+      x-min-role: owner
+      tags: [people]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "Name a recovery owner: { person } (an owner of the workspace with a passkey). Widening access, so it counts after 24 hours and every owner is told (GET /v1/me notices: recovery-owner.added). The one exception: in a workspace with none, an owner naming themselves counts at once. The step-up is scoped: recovery:<tenant>_<person>"
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [person], properties: { person: { type: string } } } } } }
+      responses: { "201": { description: "{ person, effectiveAt, pending }" }, "401": { description: Step-up required }, "403": { description: Not an owner }, "404": { description: No such member }, "409": { description: "not-owner, no-passkey or already" } }
+  /recovery/{person}:
+    parameters: [ { name: person, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: owner
+      tags: [people]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "End someone's recovery ownership at once (also undoes a pending one); every owner is told. The step-up is scoped: recovery:<tenant>_<person>. Removing the last one who counts is refused (409 last-owner) unless the body is { confirm: no-recovery, words } and the step-up is scoped remove-last-recovery-owner:<person>; that is audited as recovery-owner.removed-last with the words, and answers { ok, last: true }"
+      responses: { "200": { description: Removed }, "401": { description: Step-up required }, "404": { description: Not a recovery owner }, "409": { description: "last-owner: the last recovery owner who counts" } }
   /members:
     get:
       x-min-role: viewer

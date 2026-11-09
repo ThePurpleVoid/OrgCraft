@@ -133,6 +133,10 @@ export const ROUTES = [
   ['POST', '/me/devices', 'viewer'],
   ['DELETE', '/me/devices/{device}', 'viewer'],
   ['GET', '/members', 'viewer'],
+  // L27: recovery owners. Changing them is an owner's call (checked again in recovery.mjs) with step-up.
+  ['GET', '/recovery', 'admin'],
+  ['POST', '/recovery', 'owner'],
+  ['DELETE', '/recovery/{person}', 'owner'],
   ['PATCH', '/members/{member}', 'admin'],
   ['DELETE', '/members/{member}', 'admin'],
   ['GET', '/invitations', 'admin'],
