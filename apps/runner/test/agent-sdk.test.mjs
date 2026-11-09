@@ -183,3 +183,14 @@ test('N1: the adapter passes each call\'s tool_use id to the policy, and reports
   assert.deepEqual(pre, [['Bash', 'tu_1'], ['Read', 'tu_2']]);
   assert.deepEqual(post, [['Bash', { stdout: 'a' }, 'tu_1']]);
 });
+
+test('N1: a call the SDK reports as failed (PostToolUseFailure) ends its step as an error (review F2)', async () => {
+  const post = [];
+  const a = agentSdkAdapter({ sdk: fakeSdk(async (options) => {
+    const [after] = options.hooks.PostToolUseFailure[0].hooks;
+    assert.deepEqual(await after({ hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'false' }, tool_use_id: 'tu_9', error: 'exit 1' }), {});
+    await after({ hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'sleep 9' }, tool_use_id: 'tu_10', error: 'interrupted', is_interrupt: true });
+  }) });
+  await a.turn(turnOpts({ preToolUse: async () => ({ allow: true }), postToolUse: async (tool, input, response, meta) => post.push([tool, response, meta.id]) }));
+  assert.deepEqual(post, [['Bash', { is_error: true, error: 'exit 1', interrupted: false }, 'tu_9'], ['Bash', { is_error: true, error: 'interrupted', interrupted: true }, 'tu_10']]);
+});

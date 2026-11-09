@@ -7,6 +7,7 @@
 // live outside the event log so they can be deleted; the events name them by `io` id.
 import { createHash } from 'node:crypto';
 import { ulid } from './link.mjs';
+import { PATTERNS } from './secrets.mjs';
 
 export const IO_MAX = 64 * 1024;
 export const CHECKS_MAX = 20;
@@ -30,14 +31,29 @@ export const isOutside = (tool) => OUTSIDE.has(tool) || (/^mcp__/.test(tool) && 
 const stable = (v) => (v && typeof v === 'object' ? (Array.isArray(v) ? v.map(stable) : Object.fromEntries(Object.keys(v).sort().map((k) => [k, stable(v[k])]))) : v);
 const inputHash = (tool, input) => createHash('sha256').update(`${tool}\n${JSON.stringify(stable(input ?? {}))}`).digest('hex');
 
-/** Known secret values replaced by `[secret: NAME]`; returns the text and the names it found. */
+/**
+ * Known secret values replaced by `[secret: NAME]`, and anything that looks like a credential (secrets.mjs PATTERNS)
+ * by `[secret: KIND]`; returns the text and the names it found. A value is also found in its JSON-escaped form,
+ * because step I/O is often a tool's response turned into JSON (a value with a quote, a backslash or a newline).
+ */
 export function redactNamed(text, secrets) {
   let out = String(text ?? '');
   const names = [];
   for (const { name, value } of secrets) {
-    if (typeof value !== 'string' || value.length < 8 || !out.includes(value)) continue;
-    out = out.split(value).join(`[secret: ${name}]`);
-    names.push(name);
+    if (typeof value !== 'string' || value.length < 8) continue;
+    let hit = false;
+    for (const form of new Set([value, JSON.stringify(value).slice(1, -1)])) {
+      if (!out.includes(form)) continue;
+      out = out.split(form).join(`[secret: ${name}]`);
+      hit = true;
+    }
+    if (hit) names.push(name);
+  }
+  for (const [kind, re] of PATTERNS) {
+    const g = new RegExp(re.source, 'g');
+    if (!g.test(out)) continue;
+    out = out.replace(new RegExp(re.source, 'g'), `[secret: ${kind}]`);
+    names.push(kind);
   }
   return { text: out, names };
 }
@@ -148,6 +164,9 @@ export class Steps {
   said(text) { if (this.capture === 'all' && String(text ?? '').trim()) this.text.push(String(text)); }
 
   /** The turn's own text as an output io, for usage.recorded; undefined when there is none or it is not captured. */
+  /** Drop this turn's text without sending it (no usage.recorded names it). */
+  forgetText() { this.text = []; }
+
   turnText() {
     if (this.capture !== 'all' || !this.text.length) { this.text = []; return undefined; }
     const body = this.text.join('\n\n');
