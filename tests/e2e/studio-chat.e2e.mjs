@@ -93,15 +93,15 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
   await page.getByText('Another update arrives.').waitFor();
   assert.equal(await approval.getByText('3f9c2ab41e7d0c95b8f6a2d4e1c0b9a8f7e6d5c4').isVisible(), true, 'still shown after a redraw');
   await approval.getByRole('button', { name: 'Approve' }).click();
-  await approval.getByLabel('Step-up secret').fill('not it');
-  await approval.getByRole('button', { name: 'Confirm' }).click();
-  await approval.getByText('That token was not accepted').waitFor();
-  await approval.getByLabel('Step-up secret').fill(cp.stepUpSecret);
+  await approval.getByLabel('Confirmation code').fill('not it');
+  await approval.getByRole('button', { name: 'Use passkey' }).click();
+  await approval.getByText("That didn't work. Try again, or cancel.").waitFor();
+  await approval.getByLabel('Confirmation code').fill(cp.stepUpSecret);
   // A live update redraws the chat while the secret is typed in: what was typed must survive it (qa-web, PR #53).
   cp.say('A note that arrives while you type.');
   await page.getByText('A note that arrives while you type.').waitFor();
-  assert.equal(await approval.getByLabel('Step-up secret').inputValue(), cp.stepUpSecret, 'the redraw kept the typed secret');
-  await approval.getByRole('button', { name: 'Confirm' }).click();
+  assert.equal(await approval.getByLabel('Confirmation code').inputValue(), cp.stepUpSecret, 'the redraw kept the typed secret');
+  await approval.getByRole('button', { name: 'Use passkey' }).click();
   await approval.locator('.answer').waitFor();
   assert.match(await approval.locator('.answer').textContent(), /^Approve · owner/);
 
@@ -205,11 +205,11 @@ test('start a run: the published team, a daily cap first, step-up to set it, and
       await go.click();
       // The first cap lets the team spend at all, so it needs a recent sign-in.
       const su = page.locator('#stepup-dialog');
-      await su.getByLabel('Step-up secret').fill('not it');
-      await su.getByRole('button', { name: 'Confirm' }).click();
-      await su.getByText('That secret was not accepted').waitFor();
-      await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
-      await su.getByRole('button', { name: 'Confirm' }).click();
+      await su.getByLabel('Confirmation code').fill('not it');
+      await su.getByRole('button', { name: 'Use passkey' }).click();
+      await su.getByText("That didn't work. Try again, or cancel.").waitFor();
+      await su.getByLabel('Confirmation code').fill(plane.stepUpSecret);
+      await su.getByRole('button', { name: 'Use passkey' }).click();
       await page.locator('#run-state', { hasText: 'Running' }).waitFor();
       await dlg.waitFor({ state: 'hidden' });
       assert.equal(plane.budget.perDay, 2000);
@@ -297,14 +297,14 @@ test('a resume refused because today\'s budget is spent says so in words, and Ra
     await ask.locator('input').fill('80');
     await ask.getByRole('button', { name: 'OK' }).click();
     const su = page.locator('#stepup-dialog');
-    await su.getByText('Raising the daily cap to $80.00 lets the team spend more today.').waitFor();
-    await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
-    await su.getByRole('button', { name: 'Confirm' }).click();
+    await su.getByText(/^Raise today's cap from .+ to \$80\.00\. Use your passkey to confirm\./).waitFor();
+    await su.getByLabel('Confirmation code').fill(plane.stepUpSecret);
+    await su.getByRole('button', { name: 'Use passkey' }).click();
     // Each step-up is used once, so resuming asks again.
-    await su.getByText('Resuming the run lets the team carry on working and spending.').waitFor();
+    await su.getByText('Resume the team. Use your passkey to confirm. It covers this one action only.').waitFor();
     assert.equal(plane.budget.perDay, 8000);
-    await su.getByLabel('Step-up secret').fill(plane.stepUpSecret);
-    await su.getByRole('button', { name: 'Confirm' }).click();
+    await su.getByLabel('Confirmation code').fill(plane.stepUpSecret);
+    await su.getByRole('button', { name: 'Use passkey' }).click();
     await page.locator('#run-state', { hasText: 'Running' }).waitFor();
     assert.equal(await page.getByText("Today's budget is spent, so the run can't resume").count(), 0);
     if (SHOTS) await page.screenshot({ path: join(SHOTS, 'raise-cap-phone.png') });
