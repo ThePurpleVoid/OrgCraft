@@ -42,7 +42,7 @@ test('widensLine: one line per kind of systems widening', { skip: !widensLine &&
   // More than one kind, or settings: the general line.
   assert.equal(line({ egress: ['a'], tier: { from: 'verified', to: 'custom' } }), line({ secrets: ['X'] }));
   assert.equal(line({ egress: ['a'], settings: true }), line({ secrets: ['X'] }));
-  assert.match(widensLine({ kind: 'system-added', resource: 'drive', type: 'mcp' }, name, sys), /Shared drive/);
+  assert.equal(widensLine({ kind: 'system-added', resource: 'drive', type: 'mcp' }, name, sys), 'New system: Shared drive', 'no connector type on screen');
 });
 
 test('changeLines: a lowered level names the level kept, not "can no longer use"', { skip: !changeLines && 'needs module.registerHooks (Node 22.15 or later)' }, () => {

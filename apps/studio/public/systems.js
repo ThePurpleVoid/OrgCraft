@@ -22,9 +22,13 @@ export async function systemsState() {
  * Lines for what a send widens, in the Publish sheet's words. Loaded when needed, so the chat page's module stays
  * importable on its own (its unit tests load it in Node, where the team model is not served).
  */
-export async function systemsLines(state, name = (s) => s, system = (s) => s) {
-  const { widensLine } = await import('./publish-sheet.js');
-  return (state?.items ?? []).map((x) => widensLine(x, name, system)).filter(Boolean);
+export async function systemsLines(state, name, system) {
+  const { widensLine, changeLines } = await import('./publish-sheet.js');
+  // The server's names first (the chat page has no team loaded), then the page's, never an id (qa-web L40 N1).
+  const who = (id) => state?.names?.roles?.[id] ?? name?.(id) ?? id;
+  const sys = (id) => state?.names?.systems?.[id] ?? system?.(id) ?? id;
+  const lost = (state?.lost ?? []).flatMap((c) => (c.kind === 'system-removed' ? [t('systems.removed', { system: sys(c.resource) })] : changeLines(c, who, sys)));
+  return [...(state?.items ?? []).map((x) => widensLine(x, who, sys)), ...lost].filter(Boolean);
 }
 
 /** Shows `lines` under a step-up dialog's why line (or clears them), so the passkey confirms what will change. */

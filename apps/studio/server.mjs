@@ -75,7 +75,33 @@ export async function systemsPlan(root, chat) {
   const there = await chat.systems();
   const here = publishedSystems(root) ?? { resources: [], bindings: [] };
   const inSync = sameSystems(here, there);
-  return { connected: true, version: there.version ?? 0, inSync, items: inSync ? [] : systemsCapability(there, here), hash: systemsHash(here), here };
+  return { connected: true, version: there.version ?? 0, inSync, items: inSync ? [] : systemsCapability(there, here), lost: inSync ? [] : systemsLost(there, here), names: systemsNames(root, here, there), hash: systemsHash(here), here };
+}
+
+/**
+ * What a send takes away: systems removed, and seats that lose a system or get a lower level. The passkey dialog lists
+ * them too, so a send that only narrows still says why it asks (qa-web L40 N3).
+ */
+export function systemsLost(there, here) {
+  const RANK = { read: 0, write: 1, deploy: 2 };
+  const now = new Map((here?.bindings ?? []).map((b) => [`${b.role}\u0000${b.resource}`, b]));
+  const ids = new Set((here?.resources ?? []).map((r) => r.id));
+  const out = [];
+  for (const r of there?.resources ?? []) if (!ids.has(r.id)) out.push({ kind: 'system-removed', resource: r.id });
+  for (const b of there?.bindings ?? []) {
+    const n = now.get(`${b.role}\u0000${b.resource}`);
+    if (!n) { if (ids.has(b.resource)) out.push({ kind: 'binding-removed', role: b.role, resource: b.resource }); }
+    else if ((RANK[n.permission] ?? 0) < (RANK[b.permission] ?? 0)) out.push({ kind: 'binding-narrowed', role: b.role, resource: b.resource, from: b.permission, to: n.permission });
+  }
+  return out;
+}
+
+/** People's words for the ids a systems list names: teammates by name, systems by name (never ids on screen). */
+function systemsNames(root, here, there) {
+  const systems = Object.fromEntries([...(there?.resources ?? []), ...(here?.resources ?? [])].map((r) => [r.id, r.name || r.id]));
+  let roles = {};
+  try { roles = Object.fromEntries((state(root).members ?? []).map((m) => [m.id, m.name])); } catch { /* the names fall back to the page's */ }
+  return { roles, systems };
 }
 
 const PUBLIC = join(HERE, 'public');

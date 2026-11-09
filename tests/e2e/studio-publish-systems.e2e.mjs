@@ -188,7 +188,12 @@ test('the run-start plan: systems not the published ones, Send now, a cancel, th
   await line.getByRole('button', { name: 'Send them now' }).click();
   const dlg = page.locator('#stepup-dialog');
   await dlg.locator('#stepup-why', { hasText: 'Change which systems your team can use' }).waitFor();
-  assert.equal((await items(dlg)).length, 1);
+  const listed = await items(dlg);
+  assert.equal(listed.length, 1);
+  // People's words, never ids (qa-web L40 N1): the chat page has no team loaded, so the names come from the server.
+  assert.match(listed[0], /Chief of staff/);
+  assert.match(listed[0], /Shared drive/);
+  assert.doesNotMatch(listed[0], /chief-of-staff|(?<!Shared )drive\b|mcp/);
   await dlg.getByRole('button', { name: /cancel/i }).click();
   await line.getByText("Your latest system changes haven't been sent yet").waitFor();
   const before = cp.systemsPuts.length;
@@ -198,6 +203,33 @@ test('the run-start plan: systems not the published ones, Send now, a cancel, th
   await line.getByText('Your systems are updated').waitFor();
   assert.equal(cp.systemsPuts.length, before + 1);
   assert.equal(cp.systems.bindings.length, 1);
+  await page.close();
+});
+
+test('a send that only takes access away says what it removes; the running header offers Send and Stop', { skip }, async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  // The control plane still has a system the published file dropped: nothing is gained, something is removed.
+  const drive = cp.systems.resources.find((r) => r.id === 'drive');
+  cp.setSystems({ resources: [drive, { id: 'wiki', type: 'mcp', name: 'Old wiki', secrets: [] }], bindings: [...cp.systems.bindings, { role: ROLE, resource: 'wiki', permission: 'read' }] });
+  cp.runs.push({ id: 'run_systems', state: 'running', started: new Date().toISOString() });
+  await page.goto(`${base}/?t=${studio.launchToken}`);
+  await page.goto(`${base}/#chat`);
+  const head = page.locator('#run-systems');
+  await head.getByText('The running team still uses the systems it started with').waitFor();
+  await head.getByText("They take access away").waitFor();
+  assert.equal(await head.getByRole('button', { name: 'Stop the team now' }).isVisible(), true);
+  await head.getByRole('button', { name: 'Send them now' }).click();
+  const dlg = page.locator('#stepup-dialog');
+  await dlg.locator('#stepup-why', { hasText: 'Change which systems your team can use' }).waitFor();
+  const listed = await items(dlg);
+  assert.ok(listed.includes('Old wiki is removed'), listed.join(' | '));
+  assert.doesNotMatch(listed.join(' '), /(?<!Old )wiki\b|chief-of-staff/);
+  await dlg.locator('#stepup-secret').fill(cp.stepUpSecret);
+  await dlg.locator('button[type="submit"]').click();
+  await head.getByText('Sent. The team uses them from its next start.').waitFor();
+  assert.deepEqual(cp.systems.resources.map((r) => r.id), ['drive']);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'run-systems');
+  cp.runs.find((r) => r.id === 'run_systems').state = 'stopped';
   await page.close();
 });
 

@@ -6,6 +6,13 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
+  // L40 (asked of the CPO): a system the send removes.
+  'systems.removed': '{system} is removed',
+  // L40 (asked of the CPO): the running header when the systems aren't the published ones.
+  'run.systems.behind': 'The running team still uses the systems it started with. Your latest system changes apply from its next start.',
+  'run.systems.narrows': "They take access away, so stop the team now if that can't wait.",
+  'run.systems.stop': 'Stop the team now',
+  'run.systems.sent': 'Sent. The team uses them from its next start.',
 };
 
 export function t(key, vars = {}) {

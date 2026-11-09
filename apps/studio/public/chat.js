@@ -167,6 +167,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
         <button id="run-stop" type="button" class="danger">Stop</button>
         <button id="runner-add" type="button" data-tip="${esc(t('runner.connect.tip'))}" hidden>${esc(t('runner.connect'))}</button>
       </div>
+      <p id="run-systems" class="run-systems" role="status" hidden></p>
     </div>
     <dialog id="start-dialog" class="start-dialog">
       <form method="dialog" class="dialog" id="start-form">
@@ -436,6 +437,41 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     $('#run-start', root).hidden = going || st.connected !== true;
     $('#run-start', root).disabled = st.busy;
     $('#runner-add', root).hidden = st.connected !== true;
+    renderRunSystems(going);
+  }
+
+  // L40 (CTO ruling on qa-web round 2): while the team runs on systems that aren't the published ones, the header says
+  // the run keeps the ones it started with, offers Send now for the next start, and, when the change takes access
+  // away, Stop so the wider access ends now. Read at most every 30 seconds, not on every chat refresh.
+  function renderRunSystems(going) {
+    const el = $('#run-systems', root);
+    if (going && st.connected === true && Date.now() - (st.runSystemsAt ?? 0) > 30_000) {
+      st.runSystemsAt = Date.now();
+      systemsState().then((s) => { st.runSystems = s; renderRunSystems(going); }).catch(() => {});
+    }
+    const s = st.runSystems;
+    const sending = s === 'sending';
+    const sent = s?.result === 'done' && s.inSync;
+    el.hidden = !(going && st.connected === true && (sending || sent || (s && !s.inSync && s.connected !== false)));
+    if (el.hidden) return;
+    if (sending) { el.textContent = t('start.systems.sending'); return; }
+    if (sent) { el.textContent = t('run.systems.sent'); return; }
+    const button = (id, label, onclick) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'link'; b.id = id; b.textContent = label; b.onclick = onclick; return b; };
+    const parts = [`${t(s.result === 'failed' ? 'start.systems.failed' : 'run.systems.behind')} `, button('run-systems-send', t('start.systems.send'), sendRunSystems)];
+    if (s.lost?.length) parts.push(` ${t('run.systems.narrows')} `, button('run-systems-stop', t('run.systems.stop'), () => control('stop')));
+    el.replaceChildren(...parts);
+  }
+  async function sendRunSystems() {
+    const was = st.runSystems;
+    st.runSystems = 'sending'; renderRun();
+    const result = await sendSystems({ stepUp });
+    const fresh = await systemsState();
+    st.runSystems = fresh ? { ...fresh, result: result === 'none' ? null : result } : was;
+    st.runSystemsAt = Date.now();
+    renderRun();
+    const el = $('#run-systems', root);
+    el.tabIndex = -1;
+    if (!el.hidden) ($('#run-systems-send', root) ?? el).focus();
   }
 
   async function load() {
