@@ -124,6 +124,42 @@ function ceremonyError(e) {
   return e?.message ?? String(e);
 }
 
+/**
+ * The second way in (L27, m4-sign-in.md section 2 step 5): sign in with a passkey alone, for sign-in `uid`. Resolves
+ * { location } (where the browser goes next), { expired: true } when the sign-in is too old, or { error } with the
+ * CPO's words. A refusal never says why (the server's one generic 401).
+ */
+export async function passkeySignIn(uid) {
+  const base = `/oauth/interaction/${encodeURIComponent(uid)}/passkey`;
+  const opts = await call('GET', base);
+  if (opts.status === 410) return { expired: true };
+  if (!opts.ok) return { error: t('signin.failed') };
+  let cred;
+  try { cred = await navigator.credentials.get({ publicKey: requestOptions(opts.data) }); } catch { return { error: t('signin.failed') }; }
+  const r = await call('POST', base, { webauthn: credentialJSON(cred) });
+  if (r.status === 410) return { expired: true };
+  if (!r.ok || typeof r.data.location !== 'string') return { error: t('signin.failed') };
+  return { location: r.data.location };
+}
+
+// ---- recovery owners (L27; GET/POST /v1/recovery, DELETE /v1/recovery/{person})
+
+/** The organization's name for the copy: the workspace this deployment serves, else the CPO's fallback. */
+export const orgName = (me) => (me?.workspaces ?? []).find((w) => w.name)?.name ?? t('org.fallback');
+
+/** The "only you can recover" banner, when the list says fewer than two count. '' otherwise. */
+export function recoveryBanner(rec, me) {
+  if (!rec?.warnings?.some((w) => w.code === 'fewer-than-two')) return '';
+  return `<div class="notice recovery-banner" role="status"><p>${esc(t('recovery.banner.one', { organization: orgName(me) }))}</p><p><a class="button" href="/account#recovery">${esc(t('recovery.add'))}</a></p></div>`;
+}
+
+/** Recovery owners for an admin or owner, or null (a member who is neither, or no recovery here). */
+export async function loadRecovery(me) {
+  if (!(me?.workspaces ?? []).some((w) => w.role === 'owner' || w.role === 'admin')) return null;
+  const r = await call('GET', '/v1/recovery');
+  return r.ok ? r.data : null;
+}
+
 /** Registers a passkey on this device. `stepUp` is the header from a step-up, needed for every passkey after the first. */
 export async function addPasskey(name, stepUpHeader = {}) {
   const opts = await call('GET', '/v1/me/passkeys/options');
