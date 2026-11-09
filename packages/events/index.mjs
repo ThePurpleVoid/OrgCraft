@@ -20,7 +20,8 @@ export const kindOfType = (type) => (/^(report|message)\.([a-z]+)$/.exec(type) ?
 export function fromKitRow(row, { tenant, team }) {
   const data = {};
   for (const [k, v] of Object.entries(row)) {
-    if (LIFTED.has(k) || v === null || v === undefined || (Array.isArray(v) && !v.length)) continue;
+    // An empty `unverified` is kept: it means "Unverified: none" (governance G1); left out means "not stated".
+    if (LIFTED.has(k) || v === null || v === undefined || (Array.isArray(v) && !v.length && k !== 'unverified')) continue;
     data[k] = v;
   }
   if (row.to_role) data.to = row.to_role;
@@ -69,6 +70,8 @@ export function toKitRow(event) {
     source: d.source ?? 'team-status.sh',
     session: event.actor.session ?? null,
     team_version: event.teamVersion ?? null,
+    // A sign-off's version fields (governance G1, kit 0.23.0), only when it has them.
+    ...(kind === 'signoff' ? Object.fromEntries(['version', 'versionKind', 'result', 'unverified', 'kit'].filter((k) => d[k] !== undefined).map((k) => [k, d[k]])) : {}),
   };
 }
 
