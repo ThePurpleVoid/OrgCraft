@@ -133,8 +133,9 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
   await page.goto(`${base}/#meetings`);
   await view.locator('.meeting-row', { hasText: 'Daily standup' }).waitFor();
-  await page.locator('#publish').click();
-  await page.getByText('Nothing to publish: the repository already has this team.').waitFor();
+  // Nothing to publish: the button says so and is disabled.
+  await page.locator('#publish', { hasText: 'Nothing to publish' }).waitFor();
+  assert.equal(await page.locator('#publish').isDisabled(), true);
   assert.deepEqual(errors, []);
   await page.close();
 });

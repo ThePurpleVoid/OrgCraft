@@ -66,7 +66,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   assert.equal(await ats.getByRole('button', { name: 'Chat', exact: true }).isVisible(), false);
   assert.equal(await ats.getByRole('button', { name: 'Rollout', exact: true }).isVisible(), false, 'an embedded Studio has no rollout source yet');
   assert.equal(await ats.getByRole('button', { name: 'Live' }).isVisible(), false);
-  assert.equal(await ats.getByRole('button', { name: 'Publish…' }).isVisible(), true);
+  assert.equal(await ats.locator('#publish').isVisible(), true);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'embedded-team-light.png') });
 
   // In memory: Meetings changes the page, never the URL, and the host hears it.
@@ -97,7 +97,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
 
   // Edit and Publish through the host's API base.
   await switchTeammate(ats, 'release-manager', false);
-  await ats.getByRole('button', { name: 'Publish…' }).click();
+  await ats.locator('#publish').click();
   const dlg = ats.locator('#publish-dialog');
   await dlg.getByText("Writes the team's files on a new branch and opens a pull request.").waitFor();
   await dlg.locator('#changes summary').first().waitFor();

@@ -23,30 +23,38 @@ const skip = !chromium && 'the playwright package is not installed';
 const SHOTS = process.env.SCREENSHOTS;
 
 let browser, studio, base;
+const studios = [];
 
-before(async () => {
-  if (skip) return;
-  const root = join(mkdtempSync(join(tmpdir(), 'studio-team-page-')), 'acme');
+/** A Studio on a new repository with one empty commit (no team yet), and its address. */
+async function newStudio(name) {
+  const root = join(mkdtempSync(join(tmpdir(), 'studio-team-page-')), name);
   execFileSync('git', ['init', '-q', root]);
   const git = (...a) => execFileSync('git', ['-C', root, ...a]);
   git('config', 'user.name', 'Studio test');
   git('config', 'user.email', 'studio-test@example.com');
   git('config', 'commit.gpgsign', 'false');
   git('commit', '-q', '--allow-empty', '-m', 'start');
-  studio = createStudio({ root, env: { AGENT_TEAM_HOME: mkdtempSync(join(tmpdir(), 'studio-team-page-home-')) } });
-  await new Promise((r) => studio.listen(0, '127.0.0.1', r));
-  base = `http://127.0.0.1:${studio.address().port}`;
+  const s = createStudio({ root, env: { AGENT_TEAM_HOME: mkdtempSync(join(tmpdir(), 'studio-team-page-home-')) } });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  studios.push(s);
+  return { studio: s, base: `http://127.0.0.1:${s.address().port}` };
+}
+
+before(async () => {
+  if (skip) return;
+  ({ studio, base } = await newStudio('acme'));
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 });
-after(async () => { await browser?.close(); studio?.closeAllConnections?.(); studio?.close(); });
+after(async () => { await browser?.close(); for (const s of studios) { s.closeAllConnections?.(); s.close(); } });
 
 const card = (page, slug) => page.locator(`#canvas [data-node="${slug}"]`);
 
 /** Drags teammate `slug`'s card onto teammate `onto`'s card, with the pointer, the way a person does (B1.1-2). */
 async function dragCard(page, slug, onto) {
   const box = (s) => card(page, s).locator('rect.card').first().boundingBox();
-  // Zoom out until both cards are on screen, as a person would (B1.1-5).
+  // Zoom out (as far as B1.1-11 allows) until both cards are on screen, as a person would; the test window is tall
+  // enough for the product org. Farther moves use "Reports to…".
   const { height } = page.viewportSize();
   for (let i = 0; i < 8; i++) {
     const [x, y] = [await box(slug), await box(onto)];
@@ -65,7 +73,7 @@ async function dragCard(page, slug, onto) {
 const managerOf = async (page, slug) => { await selectTeammate(page, slug); return page.locator('#i-manager').inputValue(); };
 
 test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { skip }, async () => {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: SHOTS ? 2 : 1 });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 1200 }, deviceScaleFactor: SHOTS ? 2 : 1 });
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -127,6 +135,17 @@ test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { 
   assert.match(await catalogRow(page, 'Backend dev').locator('.count').textContent(), /^2 on the team$/);
   // B1.1-6: every change since the last publish is counted.
   assert.match(await page.locator('#summary').textContent(), /\d+ changes not published/);
+
+  // B1.1-11: no card text is drawn below 12 px, whatever the zoom.
+  await page.getByRole('button', { name: 'Zoom out' }).click();
+  await page.getByRole('button', { name: 'Zoom out' }).click();
+  const smallest = await page.evaluate(() => {
+    const svg = document.querySelector('#canvas svg');
+    const k = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width;
+    return Math.min(...[...svg.querySelectorAll('text')].map((x) => parseFloat(getComputedStyle(x).fontSize) * k));
+  });
+  assert.ok(smallest >= 12, `card text is at least 12 px (${smallest.toFixed(1)})`);
+  await page.getByRole('button', { name: 'Fit to screen' }).click();
 
   // ---- Step 4 (D4): open Backend dev and change it.
   await selectTeammate(page, 'backend-dev');
@@ -204,13 +223,45 @@ test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { 
   for (const b of await page.locator('#canvas .tree-btn').all()) assert.ok((await b.boundingBox()).height >= 44, 'touch targets are at least 44 px');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'list-phone-light.png') });
 
-  // A dismissed hint stays dismissed after a reload (the draft is not kept yet, so this comes last).
-  await page.setViewportSize({ width: 1280, height: 800 });
+  // ---- B1.1-10: a reload keeps the unpublished team, says so, and Discard changes asks first. The hint stays dismissed.
+  await page.setViewportSize({ width: 1280, height: 1200 });
   await page.reload();
-  await page.locator('.g-card').first().waitFor();
+  await page.locator('#restored', { hasText: /^Your unpublished changes from .+ are back\./ }).waitFor();
+  await card(page, 'backend-dev-2').waitFor();
+  await selectTeammate(page, 'backend-dev');
+  assert.equal(await insp.locator('details.section', { has: page.locator('summary', { hasText: /^Rules/ }) }).locator('textarea').inputValue(), 'Every migration has a rollback note.');
+  assert.match(await page.locator('#publish').textContent(), /^Publish \d+ changes$/);
   assert.equal(await page.locator('[data-hint-once="team"]').isVisible(), false, 'a dismissed hint stays dismissed');
   assert.match(await page.locator('.ats').getAttribute('data-hints-off'), /\bteam\b/);
+  await page.locator('#restored').getByRole('button', { name: 'Discard changes' }).click();
+  const confirm = page.locator('.ask-dialog');
+  await confirm.getByText(/^Discard \d+ unpublished changes\? This can't be undone\.$/).waitFor();
+  await confirm.getByRole('button', { name: 'Discard changes' }).click();
+  await page.locator('.g-card').first().waitFor();
+  await page.reload();
+  await page.locator('.g-card').first().waitFor();
+  assert.equal(await card(page, 'backend-dev').count(), 0, 'a discarded draft stays discarded');
 
   assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+test('B4.1-3: a support team draws only its own teammates; the rest of the kit stays in the catalog', { skip }, async () => {
+  const { studio: st, base: b } = await newStudio('help-desk');
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  await page.goto(`${b}/?t=${st.launchToken}`);
+  await page.locator('.g-card', { hasText: 'Customer support team' }).click();
+  await page.locator('#template-bar').getByRole('button', { name: 'Use this template' }).click();
+  await page.locator('#create-dialog').getByLabel('Project name').fill('Help desk');
+  await page.locator('#create-dialog').getByRole('button', { name: 'Open the team' }).click();
+  await card(page, 'support-lead').waitFor();
+  for (const slug of ['cto', 'architect', 'backend-dev', 'qa-web', 'product-manager']) assert.equal(await card(page, slug).count(), 0, `no ${slug} card`);
+  // They are still in the catalog, folded under "Browse all roles…", and adding one works.
+  const browse = page.locator('#library details.browse');
+  assert.equal(await browse.locator('.cat-role[data-type="cto"]').count(), 1);
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.locator('#canvas .tree-btn[data-node="support-lead"]').waitFor();
+  assert.equal(await page.locator('#canvas .tree-btn[data-node="cto"]').count(), 0, 'not in the phone list either');
   await ctx.close();
 });

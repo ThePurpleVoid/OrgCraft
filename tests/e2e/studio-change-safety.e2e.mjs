@@ -151,7 +151,7 @@ test('Undo area move after the editor\'s Move leaves one writer: the table row a
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${base}/?t=${busy.launchToken}`);
   await page.locator('#canvas .node[data-slug="web-dev"] .state').waitFor();
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   const dlg = page.locator('#agent-dialog');
   await dlg.locator('#a-name').fill('Site builder');
   await dlg.locator('#a-group').selectOption('engineering');
@@ -160,7 +160,7 @@ test('Undo area move after the editor\'s Move leaves one writer: the table row a
   const box = ed.locator('.conflict');
   await ed.getByLabel('Area to add').fill('web/');
   await ed.getByLabel('Area to add').press('Enter');
-  await box.getByRole('button', { name: 'Move the whole area to this agent…' }).click();
+  await box.getByRole('button', { name: 'Move the whole area to this role…' }).click();
   await box.getByRole('button', { name: 'Move it anyway' }).click();
   await box.waitFor({ state: 'detached' });
   await page.getByRole('button', { name: 'Back to the team' }).click();
@@ -229,7 +229,7 @@ test('never two writers: "move after the PR merges" keeps the writer in the file
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`http://127.0.0.1:${pubB.address().port}/?t=${pubB.launchToken}`);
   await page.locator('#canvas .node[data-slug="web-dev"] .state').waitFor();
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   const dlg = page.locator('#agent-dialog');
   await dlg.locator('#a-name').fill('Site builder');
   await dlg.locator('#a-group').selectOption('engineering');
@@ -237,7 +237,7 @@ test('never two writers: "move after the PR merges" keeps the writer in the file
   const ed = page.locator('#agent-editor');
   await ed.getByLabel('Area to add').fill('web/');
   await ed.getByLabel('Area to add').press('Enter');
-  await ed.locator('.conflict').getByRole('button', { name: 'Move the whole area to this agent…' }).click();
+  await ed.locator('.conflict').getByRole('button', { name: 'Move the whole area to this role…' }).click();
   await ed.locator('.conflict').getByRole('button', { name: 'Move it anyway' }).click();
   await page.getByRole('button', { name: 'Back to the team' }).click();
 

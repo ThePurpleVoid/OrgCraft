@@ -44,7 +44,7 @@
 .ats :is(.lib-role, .lib-ref).selected { outline: 2px solid var(--accent); }
 .ats .lib-role input { width: auto; margin: 0; }
 .ats :is(.lib-role, .lib-ref) .name { flex: 1; }
-.ats :is(.lib-role, .lib-ref) .tag { font-size: 11px; color: var(--muted); }
+.ats :is(.lib-role, .lib-ref) .tag { font-size: 12px; color: var(--muted); }
 
 .ats .canvas-wrap { display: flex; flex-direction: column; min-width: 0; }
 .ats .zoom button { padding: 2px 9px; min-width: 30px; }
@@ -59,7 +59,7 @@
 .ats .node.drop rect.card { fill: var(--drop); stroke: var(--accent); stroke-dasharray: 4 3; }
 .ats .node.dragging { opacity: .35; }
 .ats .node .title { font-weight: 600; fill: var(--ink); font-size: 13px; }
-.ats .node .meta { fill: var(--muted); font-size: 11.5px; }
+.ats .node .meta { fill: var(--muted); font-size: 13px; }
 .ats .node .stripe { rx: 2; }
 .ats .node.owner rect.card { fill: var(--off); }
 /* The live board on the canvas: a dot per role, coloured by what it is doing now. */
@@ -71,7 +71,7 @@
 .ats .node.stale .dot { fill: var(--warn); }
 .ats .node.stale rect.card { stroke-dasharray: 5 3; }
 .ats .node.live.none .meta { font-style: italic; }
-.ats .node .threads { fill: var(--muted); font-size: 11px; }
+.ats .node .threads { fill: var(--muted); font-size: 13px; }
 .ats .live-toggle[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 @media (prefers-reduced-motion: no-preference) { .ats .node.s-working .dot { animation: pulse 2s ease-in-out infinite; } }
 @keyframes pulse { 50% { opacity: .45; } }
@@ -79,7 +79,7 @@
 .ats .field { margin: 10px 0; }
 .ats .field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
 .ats .row { display: flex; gap: 8px; align-items: center; }
-.ats .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.ats .badge { font-size: 12px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .ats .badge.changed { color: var(--accent); border-color: var(--accent); }
 .ats details.section { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin: 8px 0; }
 .ats details.section summary { cursor: pointer; font-weight: 600; display: flex; justify-content: space-between; gap: 8px; }
@@ -382,7 +382,7 @@
 @media (max-width: 1100px) { .ats .ed { grid-template-columns: 180px 1fr 320px; } }
 
 /* Change safety part 1 (mockup 06): the board state on each card, amber where the draft touches work in flight. */
-.ats .node .state { fill: var(--ink); font-size: 11.5px; }
+.ats .node .state { fill: var(--ink); font-size: 13px; }
 .ats .node.quiet .dot { fill: var(--muted); }
 .ats .node.quiet .state { fill: var(--muted); }
 .ats .node.live.none .state { fill: var(--muted); font-style: italic; }
@@ -402,7 +402,7 @@
 .ats .now-live ul { margin: 0 0 6px; padding-left: 18px; }
 .ats .now-live .reason { color: var(--warn); margin: 0 0 6px; }
 .ats .now-live .hint { margin: 0; }
-.ats .lib-role .state { font-size: 11px; color: var(--ok); }
+.ats .lib-role .state { font-size: 12px; color: var(--ok); }
 .ats .lib-role .state.s-waiting, .ats .lib-role .state.s-review { color: var(--accent); }
 .ats .lib-role .state.s-blocked { color: var(--error); }
 .ats .lib-role .state.quiet, .ats .lib-role .state.s-idle, .ats .lib-role .state.s-done { color: var(--muted); }
@@ -695,3 +695,11 @@
 @media (max-width: 640px) { .ats .ro-row { grid-template-columns: 12px 1fr; } .ats .ro-state { grid-column: 2; } }
 .ats .ro-head { text-transform: none; letter-spacing: 0; font-size: 18px; color: var(--ink); }
 .ats .ro-plain .ro-dot { background: var(--line); }
+
+/* B1.1-10: the restored draft's note */
+.ats .restored { margin: 0; padding: 6px 14px; border-bottom: 1px solid var(--line); background: var(--drop); color: var(--ink); }
+.ats .restored[hidden] { display: none; }
+
+/* The AGENTS.md switch: the whole row is the target (ALL-1). */
+.ats label.row-target { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.ats label.row-target input { width: 20px; height: 20px; flex: none; }

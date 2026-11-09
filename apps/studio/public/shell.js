@@ -23,30 +23,31 @@ export const SHELL = `
     <button id="impact-pill" type="button" class="pill warn" hidden></button>
     <button id="undo" type="button" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" type="button" title="Redo (Ctrl+Shift+Z)">Redo</button>
-    <button id="publish" type="button" class="primary" data-tip="${attr(tip('publish'))}">Publish…</button>
+    <button id="publish" type="button" class="primary" data-tip="${attr(tip('publish'))}">${t('canvas.publish.none')}</button>
   </div>
 </header>
 <section id="template-bar" class="template-bar team-only" aria-label="Starting team" hidden></section>
 <main id="content" class="layout team-only" tabindex="-1">
   <aside class="palette" aria-label="Role library">
-    <div class="palette-head"><input id="search" type="search" placeholder="Search roles" aria-label="Search roles"><button id="new-agent" type="button" class="primary edit-only">New agent</button></div>
+    <div class="palette-head"><input id="search" type="search" placeholder="Search roles" aria-label="Search roles"><button id="new-agent" type="button" class="primary edit-only">${t('catalog.custom')}</button></div>
     <p id="cat-how" class="hint edit-only">${t('catalog.how')}</p>
     <div id="library" data-catalog></div>
   </aside>
-  <section class="canvas-wrap" aria-label="Org chart">
+  <section class="canvas-wrap" aria-label="${t('canvas.view.chart')}">
     <div class="canvas-head">
       <nav id="views" class="views" aria-label="Views">
-        <button type="button" data-view="org" aria-pressed="true">Org</button>
-        <button type="button" data-view="flow" aria-pressed="false">Flow</button>
-        <button type="button" data-view="systems" aria-pressed="false">Systems</button>
-        <button type="button" data-view="areas" aria-pressed="false">Owned areas</button>
-        <button type="button" data-view="checks" aria-pressed="false">Checks</button>
+        <button type="button" data-view="org" aria-pressed="true">${t('canvas.view.chart')}</button>
+        <button type="button" data-view="flow" aria-pressed="false">${t('canvas.view.handoffs')}</button>
+        <button type="button" data-view="systems" aria-pressed="false">${t('canvas.view.systems')}</button>
+        <button type="button" data-view="areas" aria-pressed="false">${t('canvas.view.areas')}</button>
+        <button type="button" data-view="checks" aria-pressed="false">${t('canvas.view.checks')}</button>
       </nav>
       <span id="summary" class="muted" data-tip="${attr(tip('dashed.card.or.wire'))}"></span>
       <button id="live" class="canvas-only live-toggle" type="button" aria-pressed="false" title="Show where every role stands, from the team's reports">Live</button>
-      <span class="row zoom canvas-only"><button id="zoom-out" type="button" aria-label="Zoom out">−</button><button id="zoom-fit" type="button" title="${t('canvas.fit')}"><span id="zoom-level">100%</span></button><button id="zoom-in" type="button" aria-label="Zoom in">+</button></span>
+      <span class="row zoom canvas-only"><button id="zoom-out" type="button" aria-label="Zoom out">−</button><button id="zoom-level" type="button" title="Actual size">100%</button><button id="zoom-in" type="button" aria-label="Zoom in">+</button><button id="zoom-fit" type="button">${t('canvas.fit')}</button></span>
     </div>
     <p id="draft-banner" class="draft-banner" hidden></p>
+    <p id="restored" class="restored" role="status" hidden><span></span> <button type="button" class="link" id="restored-discard">${t('canvas.discard')}</button></p>
     ${hintHtml('team', attr)}
     <p class="mode-hint hint" data-for="org"><span class="edit-only">Drag a card onto another to change who it reports to. Click a card to edit it.</span><span class="small-only">Who reports to whom. Tap a card to see the role.</span></p>
     <p class="mode-hint hint" data-for="flow">Who hands work to whom, from each role's "Hands to". Click a role to see its hand-offs: blue goes out, green comes in.</p>

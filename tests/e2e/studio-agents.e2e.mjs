@@ -56,7 +56,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   const dlg = page.locator('#agent-dialog');
 
   // Blank, with a group the kit does not have.
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   await dlg.getByLabel('Name', { exact: true }).fill('Accessibility auditor');
   assert.equal(await dlg.getByLabel('Slug (file name and board name)').inputValue(), 'accessibility-auditor');
   await dlg.locator('.check-line.ok', { hasText: 'The slug is free' }).waitFor();
@@ -84,7 +84,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   await page.locator('#canvas .node', { hasText: 'Accessibility auditor' }).waitFor();
 
   // A copy of a role: a separate agent, the original untouched. A kit role's slug needs "replace".
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   await dlg.getByText('Copy a role').click();
   await dlg.getByLabel('Role to copy').fill('qa');
   await dlg.locator('#a-copy-list').getByRole('option', { name: /QA web/ }).click();
@@ -106,7 +106,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   assert.equal(await isOn(page, 'qa-web'), true, 'the role copied is still on');
 
   // Taking a kit role's place on purpose: the card says so, with the check's warning on it (criterion 3).
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   await dlg.getByLabel('Name', { exact: true }).fill('Docs keeper');
   await dlg.getByLabel(/Replace the kit's role/).check();
   await dlg.getByRole('button', { name: 'Continue to the brief' }).click();
@@ -118,13 +118,13 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
 
   // A role pack: two agents, added switched off and tagged imported. One has a model tier the kit does not know, so it
   // cannot be switched on until that is fixed; the other can.
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   await dlg.locator('#a-files').setInputFiles([
     file('pack.json', JSON.stringify({ schema: 'agent-team/role-pack@1', roles: ['localization-lead', 'translator'], needs: {} })),
     file('localization-lead.md', brief('Localization lead', 'localization-lead', '', 'turbo')),
     file('translator.md', brief('Translator', 'translator')),
   ]);
-  await dlg.getByText('2 agents in this pack').waitFor();
+  await dlg.getByText('2 roles in this pack').waitFor();
   await dlg.getByRole('button', { name: 'Add them, switched off' }).click();
   for (const name of ['Localization lead', 'Translator']) {
     const row = catalogRow(page, name);
@@ -157,15 +157,15 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   assert.deepEqual(pack.needs.resources, []);
 
   // One file: added switched off too. One with a secret in it is refused before it is added.
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   await dlg.locator('#a-files').setInputFiles([file('glossary-keeper.md', brief('Glossary keeper', 'glossary-keeper'))]);
   await page.waitForFunction(() => document.querySelector('#a-name').value === 'Glossary keeper'); // filled from the file's title
-  await dlg.getByText('An imported agent is added switched off').waitFor();
+  await dlg.getByText('An imported role is added switched off').waitFor();
   await dlg.getByRole('button', { name: 'Add it, switched off' }).click();
   await page.getByRole('button', { name: 'Back to the team' }).click();
   assert.equal(await isOn(page, await slugOf(page, 'Glossary keeper')), false);
 
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   await dlg.locator('#a-files').setInputFiles([file('leaky.md', brief('Leaky', 'leaky', ' Use ghp_abcdefghijklmnopqrstuvwxyz0123 to push.'))])
   await dlg.locator('.result.error', { hasText: 'secret' }).waitFor();
   assert.equal(await dlg.getByRole('button', { name: 'Add it, switched off' }).isDisabled(), true);
@@ -173,7 +173,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   assert.equal(await page.locator('#library .cat-role', { hasText: 'Leaky' }).count(), 0);
 
   // Publish writes every agent's file, and lists the ones that are off in exclude.
-  await page.getByRole('button', { name: 'Publish…' }).click();
+  await page.locator('#publish').click();
   const changes = page.locator('#changes');
   for (const p of ['.agent-team/roles/accessibility-auditor.md', '.agent-team/roles/qa-a11y.md', '.agent-team/roles/translator.md', '.agent-team/roles/localization-lead.md', '.agent-team/team.json']) await changes.locator('summary', { hasText: p }).first().waitFor();
   await changes.locator('summary', { hasText: '.agent-team/team.json' }).click();
@@ -191,7 +191,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   assert.equal(await isOn(page, await slugOf(page, 'Localization lead')), false);
   assert.match(await catalogRow(page, 'Translator').locator('.tag').textContent(), /Custom role/);
   if (SHOTS) {
-    await page.getByRole('button', { name: 'New agent' }).click();
+    await page.getByRole('button', { name: 'Custom role', exact: true }).click();
     await dlg.getByText('Copy a role').click();
     await dlg.getByLabel('Role to copy').fill('back');
     await page.emulateMedia({ colorScheme: 'dark' });
@@ -209,7 +209,7 @@ test('at 390px there is no New agent button, and an agent says to edit it on a l
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: SHOTS ? 2 : 1 });
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.locator('#canvas [data-node]').first().waitFor();
-  assert.equal(await page.getByRole('button', { name: 'New agent' }).isVisible(), false);
+  assert.equal(await page.getByRole('button', { name: 'Custom role', exact: true }).isVisible(), false);
   // The team is a read-only list on a phone (B1.7, CPO story D9): tapping a teammate shows it and says where to edit it.
   await page.locator('#canvas .tree-btn', { hasText: 'Accessibility auditor' }).dispatchEvent('click');
   await page.getByText('Open the Studio on a larger screen to edit this agent.').waitFor();

@@ -59,7 +59,7 @@ test('a clashing area is held until one of three choices, and moving an area in 
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.locator('.lib-role').first().waitFor();
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   const dlg = page.locator('#agent-dialog');
   await dlg.locator('#a-name').fill('Contract reviewer');
   // No group is picked for the owner: Continue waits for one.
@@ -109,7 +109,7 @@ test('a clashing area is held until one of three choices, and moving an area in 
   // A move of an area typed inside the writer's: the agent gets the writer's whole area, so the table and brief agree.
   await area.fill('reports/finance/q2/');
   await area.press('Enter');
-  await box.getByRole('button', { name: 'Move the whole area to this agent…' }).click();
+  await box.getByRole('button', { name: 'Move the whole area to this role…' }).click();
   await box.waitFor({ state: 'detached' }); // the product manager is not working on it, so one click moves it
   assert.match(await owns(page), /^- `reports\/finance\/`$/m);
   assert.doesNotMatch(await owns(page), /reports\/finance\/q2/);
@@ -117,7 +117,7 @@ test('a clashing area is held until one of three choices, and moving an area in 
   // 3. Move the whole area: the docs keeper is working on it now, so the first click says so and a second one moves it.
   await area.fill('contracts/');
   await area.press('Enter');
-  await box.getByRole('button', { name: 'Move the whole area to this agent…' }).click();
+  await box.getByRole('button', { name: 'Move the whole area to this role…' }).click();
   await box.getByText('is working now on "Index the signed contracts", branch docs/contracts-index').waitFor();
   assert.doesNotMatch(await owns(page), /^- `contracts\/`/m, 'the first click moves nothing');
   if (SHOTS) { mkdirSync(SHOTS, { recursive: true }); await ed.locator('#sec-owns').scrollIntoViewIfNeeded(); await page.screenshot({ path: join(SHOTS, 'agent-editor-conflict.png') }); }
@@ -152,7 +152,7 @@ test('a pack says what it needs: each system is asked for, bound only on Connect
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.locator('.lib-role').first().waitFor();
-  await page.getByRole('button', { name: 'New agent' }).click();
+  await page.getByRole('button', { name: 'Custom role', exact: true }).click();
   const dlg = page.locator('#agent-dialog');
   const md = '# Archivist\n\n**Model:** routine\n**Group:** legal\n**Reports to:** chief-of-staff\n**Status:** active\n\n## Identity\nYou keep every signed contract findable.\n\n## Owns (writes)\n- `contracts/`\n\n## Wakes on\n- handoff\n';
   const file = (name, text) => ({ name, mimeType: name.endsWith('.json') ? 'application/json' : 'text/markdown', buffer: Buffer.from(text) });

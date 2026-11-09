@@ -60,13 +60,13 @@ test('a custom agent the kit now ships a role for: an error with Rename mine and
   await ed.locator('#e-checks li.error', { hasText: 'adds a role called analytics-lead' }).waitFor();
   if (SHOTS) { mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: join(SHOTS, 'agent-editor-kit-clash.png') }); }
 
-  assert.equal(await box.getByLabel('A new slug for your agent').inputValue(), 'numbers-person', 'offered from its name');
+  assert.equal(await box.getByLabel('A new slug for your role').inputValue(), 'numbers-person', 'offered from its name');
   await ed.locator('.badge', { hasText: 'name clash' }).waitFor();
   // Rename mine: the slug is checked like a new one; a free one moves the agent, and the kit's role is back (off).
-  await box.getByLabel('A new slug for your agent').fill('cto');
+  await box.getByLabel('A new slug for your role').fill('cto');
   await box.getByRole('button', { name: 'Rename mine' }).click();
   await box.getByText('The kit has a role called cto').waitFor();
-  await box.getByLabel('A new slug for your agent').fill('numbers-person');
+  await box.getByLabel('A new slug for your role').fill('numbers-person');
   await box.getByRole('button', { name: 'Rename mine' }).click();
   await box.waitFor({ state: 'detached' });
   await ed.getByText('.agent-team/roles/numbers-person.md').waitFor();
@@ -84,7 +84,7 @@ test('a custom agent the kit now ships a role for: an error with Rename mine and
   assert.equal(await page.locator('#library .lib-role', { hasText: 'Numbers person' }).count(), 0);
   assert.equal(await isOn(page, 'analytics-lead'), true);
   // Publish shows what goes with it: the binding and the area row are gone, not handed to the kit's role.
-  await page.getByRole('button', { name: 'Publish…' }).click();
+  await page.locator('#publish').click();
   for (const f of ['resources.json', 'ownership.json']) {
     await page.locator('summary', { hasText: f }).click();
   }
