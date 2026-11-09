@@ -418,6 +418,8 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         if (limited(team, ':published')) throw new Problem(429, `more than ${REPORTS_PER_MINUTE} publishes a minute`);
         const { id, stored, duplicate } = await store.appendPublished(db, t, team, body, now());
         appended(team, stored);
+        // L40b: a matching systemsHash marks a pending systems change "merged, ready" (the CI's word; never applied).
+        if (stored.length) await vault.reported(t, team, { version: String(body.version).toLowerCase(), pr: body.pr ?? null, systemsHash: body.systemsHash ?? null });
         return send(res, 200, { ok: true, id, duplicate });
       }
       const role = String(body?.role ?? '').toLowerCase();

@@ -17,6 +17,7 @@
 import { randomBytes } from 'node:crypto';
 import { Problem, getTeam } from './store.mjs';
 import { seal, unseal } from './vault.mjs';
+import { canonicalSystemsHash } from '../../packages/team-model/node.mjs';
 
 const NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SERVICE = /^[a-z0-9][a-z0-9.-]{0,39}$/;
@@ -210,16 +211,16 @@ export async function expirePending(ctx, team) {
  * team.published, which any teammate can send. Only when the base it was confirmed against has not moved (else it
  * is dropped and the owner told). Runs inside a transaction.
  */
-export async function activatePending(ctx, team, { shas = null, via, by = null } = {}) {
+export async function activatePending(ctx, team, { shas = null, via, by = null, ciReported = null } = {}) {
   const [p] = await ctx.q('select sha, pr, resources, bindings, expect, created_by, expires_at from team_systems_pending where team = $1 for update', [team]);
   if (!p) return null;
   if (new Date(p.expires_at).getTime() <= ctx.now.getTime()) { await dropPendingIn(ctx, team, p, 'expired'); return null; }
-  if (shas && !shas.includes(p.sha)) return null;
   const [prev] = await ctx.q('select resources, bindings, version from team_systems where team = $1 for update', [team]);
   if ((prev?.version ?? 0) !== p.expect) { await dropPendingIn(ctx, team, p, 'base-moved'); return null; }
+  if (shas && !shas.includes(p.sha)) return null;
   await ctx.q('delete from team_systems_pending where team = $1', [team]);
   // Recorded as the admin who confirmed it (and who switched it on, when that was a person), with its commit.
-  return writeSystems(ctx, team, prev, { resources: p.resources, bindings: p.bindings }, p.created_by, { sha: p.sha, pr: p.pr, via, ...(by ? { switchedOnBy: by } : {}) });
+  return writeSystems(ctx, team, prev, { resources: p.resources, bindings: p.bindings }, p.created_by, { sha: p.sha, pr: p.pr, via, ...(by ? { switchedOnBy: by } : {}), ...(ciReported !== null ? { ciReported } : {}) });
 }
 
 /**
@@ -355,9 +356,12 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     await getTeam(db, tenant, team);
     const [row, p] = await db.tenant(tenant, async ({ q }) => [
       (await q('select resources, bindings, version, updated_by, updated_at from team_systems where team = $1', [team]))[0],
-      (await q('select sha, pr, resources, bindings, expect, created_by, created_at, expires_at from team_systems_pending where team = $1', [team]))[0],
+      (await q('select sha, pr, resources, bindings, expect, content_hash, ready_sha, ready_at, created_by, created_at, expires_at from team_systems_pending where team = $1', [team]))[0],
     ]);
-    const pending = p ? { sha: p.sha, pr: p.pr, resources: p.resources, bindings: p.bindings, expect: p.expect, createdBy: p.created_by, createdAt: new Date(p.created_at).toISOString(), expiresAt: new Date(p.expires_at).toISOString() } : null;
+    // `ready` is the CI's report that the change merged (a matching systemsHash): its word, shown as such.
+    const pending = p ? { sha: p.sha, pr: p.pr, resources: p.resources, bindings: p.bindings, expect: p.expect, contentHash: p.content_hash,
+      ready: p.ready_sha ? { sha: p.ready_sha, at: new Date(p.ready_at).toISOString(), by: 'ci' } : null,
+      createdBy: p.created_by, createdAt: new Date(p.created_at).toISOString(), expiresAt: new Date(p.expires_at).toISOString() } : null;
     return row ? { resources: row.resources, bindings: row.bindings, version: row.version, updatedBy: row.updated_by, updatedAt: new Date(row.updated_at).toISOString(), pending } : { resources: [], bindings: [], version: 0, pending };
   }
 
@@ -397,13 +401,14 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
       // A newer pending set replaces the older one, which is never applied.
       const [old] = await ctx.q('select sha from team_systems_pending where team = $1 for update', [team]);
       const sha = String(pend.sha);
-      await ctx.q(`insert into team_systems_pending(tenant, team, sha, pr, resources, bindings, expect, created_by, created_at, expires_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      const contentHash = canonicalSystemsHash(next);
+      await ctx.q(`insert into team_systems_pending(tenant, team, sha, pr, resources, bindings, expect, content_hash, created_by, created_at, expires_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                    on conflict (tenant, team) do update set sha = excluded.sha, pr = excluded.pr, resources = excluded.resources, bindings = excluded.bindings, expect = excluded.expect,
-                     created_by = excluded.created_by, created_at = excluded.created_at, expires_at = excluded.expires_at`,
-        [tenant, team, sha, pend.pr ?? null, JSON.stringify(next.resources), JSON.stringify(next.bindings), prev?.version ?? 0, who, ctx.now, new Date(ctx.now.getTime() + PENDING_DAYS * 86_400_000)]);
+                     content_hash = excluded.content_hash, ready_sha = null, ready_at = null, created_by = excluded.created_by, created_at = excluded.created_at, expires_at = excluded.expires_at`,
+        [tenant, team, sha, pend.pr ?? null, JSON.stringify(next.resources), JSON.stringify(next.bindings), prev?.version ?? 0, contentHash, who, ctx.now, new Date(ctx.now.getTime() + PENDING_DAYS * 86_400_000)]);
       const diff = systemsDiff(prev, next);
       await ctx.audit({ team, actorKind: 'person', actorId: who, action: 'team.systems.pending', target: team, decision: 'allowed', detail: { sha, pr: pend.pr ?? null, expect: prev?.version ?? 0, ...(old && old.sha !== sha ? { replaced: old.sha } : {}), ...diff } });
-      return { version: prev?.version ?? 0, pending: { sha, pr: pend.pr ?? null }, ...diff };
+      return { version: prev?.version ?? 0, pending: { sha, pr: pend.pr ?? null, contentHash }, ...diff };
     });
     return { ...next, ...result };
   }
@@ -466,13 +471,47 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     await getTeam(db, tenant, team);
     const sha = String(body?.sha ?? '');
     if (!SHA.test(sha)) throw new Problem(400, 'sha is the commit the pending change is bound to');
-    const [p] = await db.tenant(tenant, ({ q }) => q('select sha from team_systems_pending where team = $1', [team]));
+    const [p, base] = await db.tenant(tenant, async ({ q }) => [
+      (await q('select sha, expect, expires_at, ready_sha from team_systems_pending where team = $1', [team]))[0],
+      (await q('select version from team_systems where team = $1', [team]))[0],
+    ]);
     if (!p || p.sha !== sha) throw new Problem(409, 'no pending change for that commit', { type: 'no-pending' });
+    // Checked before the step-up is spent (and again under the lock): an expired set or a moved base is dropped and
+    // the person confirms again; nothing is ever written over a base they did not see.
+    if (new Date(p.expires_at).getTime() <= now().getTime() || (base?.version ?? 0) !== p.expect) {
+      await m3.tx(tenant, (ctx) => activatePending(ctx, team, { shas: [], via: 'switched-on' }));
+      throw new Problem(409, 'the pending change could not be switched on: it expired, or the team\'s systems changed since it was confirmed; confirm it again', { type: 'pending-dropped' });
+    }
     await m3.requireStepUp(tenant, who, stepUp, 'Switching on what the team can reach', systemsScope(team));
-    const { result } = await m3.tx(tenant, (ctx) => activatePending(ctx, team, { shas: [sha], via: 'switched-on', by: who }));
+    // Allowed with or without the CI's "ready" mark (an older kit sends no systemsHash): an admin with a step-up can
+    // set systems directly anyway. The audit row records whether the CI had reported the merge.
+    const { result } = await m3.tx(tenant, (ctx) => activatePending(ctx, team, { shas: [sha], via: 'switched-on', by: who, ciReported: !!p.ready_sha }));
     if (!result) throw new Problem(409, 'the pending change could not be switched on: it expired, or the team\'s systems changed since it was confirmed; confirm it again', { type: 'pending-dropped' });
     return { ...result, applied: true };
   }
 
-  return { list, add, test, remove, release, getSystems, putSystems, dropPending, applyPending };
+  /**
+   * A publish reported by the repository's CI (report token: any teammate holds it, so it is a claim). With a
+   * `systemsHash` equal to the pending set's, the set is marked "merged, ready" for an admin to switch on; it is never
+   * applied here. The same pull request published with another hash drops the set (it merged changed). No hash (an
+   * older kit, or the file did not parse) is neither a match nor a drop.
+   */
+  async function reported(tenant, team, { version, pr = null, systemsHash = null }) {
+    if (typeof systemsHash !== 'string' || !/^[0-9a-f]{64}$/.test(systemsHash)) return null;
+    const { result } = await m3.tx(tenant, async (ctx) => {
+      const [p] = await ctx.q('select sha, pr, content_hash, ready_sha from team_systems_pending where team = $1 for update', [team]);
+      if (!p) return null;
+      if (p.content_hash === systemsHash) {
+        if (p.ready_sha) return { ready: p.ready_sha };
+        await ctx.q('update team_systems_pending set ready_sha = $2, ready_at = $3 where team = $1', [team, version, ctx.now]);
+        await ctx.emit(team, 'systems.pending.ready', { sha: p.sha, pr: p.pr ?? null, publishedSha: version, by: 'ci' });
+        return { ready: version };
+      }
+      if (pr && p.pr && Number(pr) === Number(p.pr)) { await dropPendingIn(ctx, team, p, 'merged-different'); return { dropped: p.sha }; }
+      return null;
+    });
+    return result;
+  }
+
+  return { list, add, test, remove, release, getSystems, putSystems, dropPending, applyPending, reported };
 }

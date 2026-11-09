@@ -169,7 +169,9 @@ export async function appendPublished(db, tenant, team, body, now = new Date()) 
   }
   if (b.changes != null && (!Array.isArray(b.changes) || b.changes.length > 200 || !b.changes.every((c) => typeof c === 'string' && c.length <= 300))) throw new Problem(400, 'changes is a list of at most 200 paths');
   const publishedAt = b.publishedAt ? new Date(b.publishedAt).toISOString() : now.toISOString();
-  const data = { version, publishedAt, pr: b.pr ?? null, roles, off, plan, changes: b.changes ?? [], by: String(b.by ?? '').slice(0, 120) || null, via: 'repository' };
+  // systemsHash (L40b): canonicalSystemsHash of the commit's resources.json, as the CI computed it (its word).
+  const systemsHash = typeof b.systemsHash === 'string' && /^[0-9a-f]{64}$/.test(b.systemsHash) ? b.systemsHash : null;
+  const data = { version, publishedAt, pr: b.pr ?? null, roles, off, plan, changes: b.changes ?? [], by: String(b.by ?? '').slice(0, 120) || null, via: 'repository', ...(systemsHash ? { systemsHash } : {}) };
   const event = {
     specversion: '1.0', id: publishedId(version), type: 'team.published', version: 1, source: `/tenants/${tenant}/teams/${team}`,
     tenant, team, time: publishedAt, actor: { kind: 'system', id: 'repository' }, subject: 'team', data,
