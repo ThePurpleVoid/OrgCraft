@@ -41,6 +41,7 @@ test('a published commit never switches a pending set on by itself: not a report
     assert.deepEqual([ready.sha, ready.ready.sha, ready.ready.by], [SHA, NEWER, 'ci']);
     const said = await db.system("select envelope from events where team = 'shop' and type = 'systems.pending.ready'");
     assert.deepEqual(said.map((e) => [e.envelope.data.sha, e.envelope.data.publishedSha, e.envelope.data.by]), [[SHA, NEWER, 'ci']]);
+    assert.equal((await call('GET', '/teams/shop/chat')).body.items.filter((e) => e.type === 'systems.pending.ready').length, 1, 'shown in Chat');
     const forged = { specversion: '1.0', id: `published-${SHA}`, source: '/tenants/acme/teams/shop', type: 'team.published', time: new Date().toISOString(), tenant: 'acme', team: 'shop', version: 1, actor: { kind: 'system', id: 'repository' }, data: { version: SHA, via: 'managed' } };
     await call('POST', '/teams/shop/events', { events: [{ ...forged, id: 'published-x' }] });
     await new Promise((r) => setTimeout(r, 100));
@@ -76,6 +77,13 @@ test('a step-up for another team is refused, a superseded set never applies, and
     assert.equal((await call('PUT', '/teams/shop/systems', { resources: [], bindings: [], expect: 0 }, await su('systems:shop'))).status, 200);
     assert.equal((await systems(call)).pending, null, 'a direct change drops the pending set');
     assert.equal((await call('PUT', '/teams/shop/systems', { ...slack('write'), expect: 1, pending: { sha: NEWER } }, await su('systems:shop'))).status, 200);
+    // Security: the person's dialog showed other content (another admin re-PUT the same sha): 409, nothing spent.
+    const seen = await su('systems:shop');
+    const stale = await call('POST', '/teams/shop/systems/pending/apply', { sha: NEWER, contentHash: canonicalSystemsHash({ resources: slack().resources, bindings: slack().bindings }) }, seen);
+    assert.deepEqual([stale.status, stale.body.type], [409, 'pending-changed']);
+    assert.equal((await call('POST', '/teams/shop/systems/pending/apply', { sha: NEWER, contentHash: 'X' }, seen)).status, 400);
+    assert.equal((await systems(call)).pending.sha, NEWER, 'kept for the person to look again');
+    assert.equal((await systems(call)).pending.contentHash, canonicalSystemsHash({ resources: slack('write').resources, bindings: slack('write').bindings }));
     await db.system("update team_systems set version = 5 where team = 'shop'");
     const token = await su('systems:shop');
     const late = await call('POST', '/teams/shop/systems/pending/apply', { sha: NEWER }, token);

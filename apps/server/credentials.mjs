@@ -211,13 +211,18 @@ export async function expirePending(ctx, team) {
  * team.published, which any teammate can send. Only when the base it was confirmed against has not moved (else it
  * is dropped and the owner told). Runs inside a transaction.
  */
-export async function activatePending(ctx, team, { shas = null, via, by = null, ciReported = null } = {}) {
-  const [p] = await ctx.q('select sha, pr, resources, bindings, expect, created_by, expires_at from team_systems_pending where team = $1 for update', [team]);
+const changedProblem = () => new Problem(409, 'the pending change was changed since it was shown; look at it again', { type: 'pending-changed' });
+
+export async function activatePending(ctx, team, { shas, via, by = null, ciReported = null, contentHash = null } = {}) {
+  // Only a commit the server vouches for switches a set on: callers must name the shas (code review).
+  if (!Array.isArray(shas)) throw new TypeError('activatePending needs the vouched shas');
+  const [p] = await ctx.q('select sha, pr, resources, bindings, expect, content_hash, created_by, expires_at from team_systems_pending where team = $1 for update', [team]);
   if (!p) return null;
   if (new Date(p.expires_at).getTime() <= ctx.now.getTime()) { await dropPendingIn(ctx, team, p, 'expired'); return null; }
   const [prev] = await ctx.q('select resources, bindings, version from team_systems where team = $1 for update', [team]);
   if ((prev?.version ?? 0) !== p.expect) { await dropPendingIn(ctx, team, p, 'base-moved'); return null; }
-  if (shas && !shas.includes(p.sha)) return null;
+  if (!shas.includes(p.sha)) return null;
+  if (contentHash && p.content_hash !== contentHash) throw changedProblem();
   await ctx.q('delete from team_systems_pending where team = $1', [team]);
   // Recorded as the admin who confirmed it (and who switched it on, when that was a person), with its commit.
   return writeSystems(ctx, team, prev, { resources: p.resources, bindings: p.bindings }, p.created_by, { sha: p.sha, pr: p.pr, via, ...(by ? { switchedOnBy: by } : {}), ...(ciReported !== null ? { ciReported } : {}) });
@@ -471,11 +476,16 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     await getTeam(db, tenant, team);
     const sha = String(body?.sha ?? '');
     if (!SHA.test(sha)) throw new Problem(400, 'sha is the commit the pending change is bound to');
+    // Optional (security): the contentHash the person was shown. Another admin's re-PUT at the same sha between the
+    // dialog and the tap changes the content, and 409 pending-changed asks the person to look again.
+    const shown = body?.contentHash ?? null;
+    if (shown !== null && !/^[0-9a-f]{64}$/.test(String(shown))) throw new Problem(400, 'contentHash is the pending set\'s contentHash (64 lowercase hex), as shown');
     const [p, base] = await db.tenant(tenant, async ({ q }) => [
-      (await q('select sha, expect, expires_at, ready_sha from team_systems_pending where team = $1', [team]))[0],
+      (await q('select sha, expect, content_hash, expires_at, ready_sha from team_systems_pending where team = $1', [team]))[0],
       (await q('select version from team_systems where team = $1', [team]))[0],
     ]);
     if (!p || p.sha !== sha) throw new Problem(409, 'no pending change for that commit', { type: 'no-pending' });
+    if (shown && p.content_hash !== shown) throw changedProblem();
     // Checked before the step-up is spent (and again under the lock): an expired set or a moved base is dropped and
     // the person confirms again; nothing is ever written over a base they did not see.
     if (new Date(p.expires_at).getTime() <= now().getTime() || (base?.version ?? 0) !== p.expect) {
@@ -485,7 +495,7 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     await m3.requireStepUp(tenant, who, stepUp, 'Switching on what the team can reach', systemsScope(team));
     // Allowed with or without the CI's "ready" mark (an older kit sends no systemsHash): an admin with a step-up can
     // set systems directly anyway. The audit row records whether the CI had reported the merge.
-    const { result } = await m3.tx(tenant, (ctx) => activatePending(ctx, team, { shas: [sha], via: 'switched-on', by: who, ciReported: !!p.ready_sha }));
+    const { result } = await m3.tx(tenant, (ctx) => activatePending(ctx, team, { shas: [sha], via: 'switched-on', by: who, ciReported: !!p.ready_sha, contentHash: shown }));
     if (!result) throw new Problem(409, 'the pending change could not be switched on: it expired, or the team\'s systems changed since it was confirmed; confirm it again', { type: 'pending-dropped' });
     return { ...result, applied: true };
   }

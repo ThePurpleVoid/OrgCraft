@@ -19,7 +19,8 @@ import { coveredBy, declinedBefore, ledgerRow, ruleLine, targetsOf } from './led
 const scrypt = promisify(scryptCb);
 
 export const CHAT_TYPES = ['chat.message', 'decision.requested', 'decision.answered', 'approval.requested', 'approval.decided', 'card.updated', 'ready.posted', 'ready.previewed',
-  'run.started', 'run.paused', 'run.resumed', 'run.stopped', 'budget.warned', 'budget.exhausted'];
+  'run.started', 'run.paused', 'run.resumed', 'run.stopped', 'budget.warned', 'budget.exhausted',
+  'systems.pending.ready', 'systems.pending.dropped'];
 export const STEP_UP_MINUTES = 5;
 export const APPROVAL_HOURS = 24;
 /** Governance G3 (L39): the letters a session's open asks carry; "Do it" takes at most this many at once. */

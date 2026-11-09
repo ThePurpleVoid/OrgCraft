@@ -424,10 +424,10 @@ paths:
       x-min-role: admin
       x-interactive-only: true
       tags: [connectors]
-      summary: "Switch on now (L40b): the pull request merged; apply the pending set bound to sha. Needs a fresh step-up scoped systems:<team>. 409 no-pending for another sha, 409 pending-dropped when it expired or the base moved (the person confirms again)"
+      summary: "Switch on now (L40b): the pull request merged; apply the pending set bound to sha. Needs a fresh step-up scoped systems:<team>. 409 no-pending for another sha, 409 pending-dropped when it expired or the base moved (the person confirms again). Optional contentHash (the pending set's, as shown): 409 pending-changed when the set was re-confirmed with other content since"
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [sha], properties: { sha: { type: string, pattern: "^[0-9a-f]{40}$" } } } } } }
-      responses: { "200": { description: "{ applied: true, version, added, removed, changed, bound, unbound, commands }" }, "401": { description: "Step-up required, with scope" }, "409": { description: "no-pending or pending-dropped" } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [sha], properties: { sha: { type: string, pattern: "^[0-9a-f]{40}$" }, contentHash: { type: string, pattern: "^[0-9a-f]{64}$" } } } } } }
+      responses: { "200": { description: "{ applied: true, version, added, removed, changed, bound, unbound, commands }" }, "401": { description: "Step-up required, with scope" }, "409": { description: "no-pending, pending-dropped or pending-changed" } }
   /credentials/{id}/test:
     parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
     post: { x-min-role: admin, tags: [connectors], summary: "Test connection: one read-only call to the service (slack auth.test, github /user, stripe /v1/balance) through the gateway's pacing. A repeat within a minute answers the last result with again true", responses: { "200": { description: "{ ok, at, detail }" } } }
