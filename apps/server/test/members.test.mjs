@@ -68,6 +68,8 @@ test('a viewer reads but cannot write, and cannot answer an approval even with s
   const tried = await viewer.b.call('POST', `/approvals/${a.approval}`, { decision: 'approved' }, { 'x-step-up': await viewer.su() });
   assert.equal(tried.status, 403);
   assert.match(tried.body.error, /approver role/);
+  const doIt = await viewer.b.call('POST', '/approvals/do-it', { asks: [{ approval: a.approval, version: 1 }] }, { 'x-step-up': await viewer.su() });
+  assert.equal(doIt.status, 403, '"Do it" is an approver\'s too (L39)');
   // An approver may.
   const up = await boss.b.call('PATCH', `/members/${(await viewer.b.call('GET', '/members')).body.members.find((m) => m.login === 'dana').id}`, { role: 'approver' }, { 'x-step-up': await boss.su() });
   assert.equal(up.status, 200, JSON.stringify(up.body));

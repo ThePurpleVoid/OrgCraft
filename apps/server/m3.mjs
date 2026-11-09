@@ -560,10 +560,14 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
    * A session asks for an approval (request_approval, or the runner's policy through approval.wait). Writes the
    * approval and its card, and emits approval.requested and card.updated. `call` is stored as sent; callers redact it.
    */
-  /** The first of A to E no pending ask of this team holds, or null. */
+  /**
+   * The first of A to E no live ask of this team holds, or null. Taken under a per-team lock until the transaction
+   * ends, so two asks at the same moment never share a letter; an expired ask no longer holds one.
+   */
   async function nextLetter(ctx, team) {
+    await ctx.q('select pg_advisory_xact_lock(hashtext($1))', [`letters:${ctx.tenant}:${team}`]);
     const held = new Set((await ctx.q(`select c.card->'data'->>'letter' as letter from approvals a join cards c on c.id = a.card
-                                       where a.team = $1 and a.state = 'pending'`, [team])).map((x) => x.letter).filter(Boolean));
+                                       where a.team = $1 and a.state = 'pending' and a.expires_at > $2`, [team, ctx.now])).map((x) => x.letter).filter(Boolean));
     return LETTERS.find((l) => !held.has(l)) ?? null;
   }
 
@@ -713,18 +717,19 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     // ADR 0013: approving a bound card needs a step-up bound to it: tenant, team, approval, card version and calls.
     const scope = a.calls_hash ? approveScope({ tenant: ctx.tenant, team: a.team, approval: apr, version: open.version, callsHash: a.calls_hash }) : null;
     if (decision === 'approved' && !(stepUpId = await useStepUp(ctx, by, stepUp, scope))) throw new StepUpRequired('An approval', scope);
-    return applyDecision(ctx, a, apr, { decision, note, channel, words: note ?? null }, by, stepUpId);
+    return applyDecision(ctx, a, apr, { decision, note, channel }, by, stepUpId);
   }
 
   /** Records a decision the caller has checked (state, version, freshness, step-up): approval, card, event, audit, ledger. */
-  async function applyDecision(ctx, a, apr, { decision, note, channel, words }, by, stepUpId) {
+  async function applyDecision(ctx, a, apr, { decision, note, channel, tap = null, letters = null }, by, stepUpId) {
     await ctx.q('update approvals set state = $2, decided_by = $3, decided_at = now() where id = $1', [apr, decision, by]);
-    const card = await changeCard(ctx, a.team, a.card, { state: 'answered', answer: { option: decision === 'approved' ? 'approve' : 'deny', ...(note ? { note } : {}), by, at: ctx.now.toISOString() } });
+    const card = await changeCard(ctx, a.team, a.card, { state: 'answered', answer: { option: decision === 'approved' ? 'approve' : 'deny', ...(note ? { note } : {}), ...(tap ? { tap, covered: letters } : {}), by, at: ctx.now.toISOString() } });
     const ev = await ctx.emit(a.team, 'approval.decided', { approval: apr, decision, by, ...(note ? { note } : {}), session: a.session, cardId: a.card },
       { actor: personActor(by), subject: `approval/${apr}`, ...(a.run ? { run: a.run } : {}) });
     await ctx.audit({ team: a.team, actorKind: 'person', actorId: by, session: a.session, action: 'approval', target: apr, decision, event: ev.id, detail: stepUpId || a.calls_hash ? { ...(stepUpId ? { stepUp: stepUpId } : {}), ...(a.calls_hash ? { callsHash: a.calls_hash } : {}) } : null });
     // The ledger keeps the person's own words (their note), exactly (L22, R11.2).
-    await ledgerRow(ctx.q, ctx.tenant, a.team, { kind: decision, approval: apr, by, words, callsHash: a.calls_hash ?? null, channel });
+    // The ledger keeps only the person's own words (their note, or what they typed); a tap is its own field.
+    await ledgerRow(ctx.q, ctx.tenant, a.team, { kind: decision, approval: apr, by, words: note ?? null, callsHash: a.calls_hash ?? null, channel, tap, letters });
     hooks.approvalDecided && ctx.after.push(() => hooks.approvalDecided(ctx.tenant, a.team, { approval: apr, decision, by, note: note ?? null, session: a.session }));
     return { card, event: ev.id, approval: apr, decision };
   }
@@ -751,6 +756,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
         if (!a) throw new Problem(404, `no such approval ${ask.approval.slice(0, 40)}`);
         const [c] = await ctx.q('select state, version, card from cards where id = $1 for update', [a.card]);
         const expired = a.state === 'pending' && new Date(a.expires_at).getTime() <= ctx.now.getTime();
+        if (!c) { stale.push({ id: a.card, approval: a.id, state: 'gone' }); continue; }
         if (a.state !== 'pending' || expired || c.state !== 'open' || Number(c.version) !== Number(ask.version) || !c.card?.data?.letter) { stale.push(c.card); continue; }
         rows.push({ a, version: Number(c.version), letter: c.card.data.letter });
       }
@@ -764,9 +770,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       let stepUpId = null;
       if (scope && !(stepUpId = await useStepUp(ctx, by, stepUp, scope))) throw new StepUpRequired(`Do it (covers ${rows.filter((x) => x.a.calls_hash).map((x) => x.letter).sort().join(', ')})`, scope);
       const out = [];
+      const letters = rows.map((x) => x.letter).sort();
       for (const { a, letter } of rows.sort((x, y) => (x.letter < y.letter ? -1 : 1))) {
-        const words = `${said ?? 'Tapped "Do it"'} (${letter})`;
-        out.push({ letter, ...(await applyDecision(ctx, a, a.id, { decision: 'approved', note: null, channel, words }, by, stepUpId)) });
+        // `said` is the person's typed words (chat "do it"), kept as words; the tap itself is `tap: do-it`.
+        out.push({ letter, ...(await applyDecision(ctx, a, a.id, { decision: 'approved', note: said, channel, tap: 'do-it', letters }, by, stepUpId)) });
       }
       return { decided: out };
     });
