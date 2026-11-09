@@ -88,3 +88,18 @@ test('sync: the org chart and the Type line name the role, not the renamed seat'
   assert.match(files.get('docs/team/roles/backend-dev-2.md'), /^\*\*Type:\*\* Backend dev \(backend-dev\)$/m);
   assert.match(files.get('docs/team/roles/backend-dev.md'), /^# Ana$/m);
 });
+
+test('a name may not be another seat\'s id, a role type on the team or "owner" (the server\'s run-start roster check)', () => {
+  const spec = importLayer({ 'team.json': teamJson, 'roles/backend-dev-2.extend.md': MAYA, 'roles/billing.extend.md': '**Based on:** backend-dev\n**Reports to:** cto\n' }, kit);
+  const refused = (id, name) => assert.throws(() => setDisplayName(spec, id, name, kit), (e) => e.status === 409 && e.message === `${name.trim().replace(/\s+/g, ' ')} is already a teammate's id, a role or "owner"; pick another.`);
+  refused('backend-dev-2', 'Billing');
+  refused('backend-dev-2', '  OWNER ');
+  refused('backend-dev-2', 'backend-dev');
+  refused('backend-dev-2', 'CTO');
+  // Its own id is fine.
+  setDisplayName(spec, 'billing', 'Billing', kit);
+  assert.equal(displayName(spec, kit, 'billing'), 'Billing');
+  // validate refuses the same names in files, so the Studio never publishes a team the server would refuse.
+  const bad = importLayer({ 'team.json': teamJson, 'roles/backend-dev-2.extend.md': '**Name:** Owner\n**Based on:** backend-dev\n**Reports to:** cto\n' }, kit);
+  assert.ok(validate(bad, kit).some((i) => i.level === 'error' && i.where === 'roles/backend-dev-2' && /is already a teammate's id, a role or "owner"/.test(i.message)));
+});

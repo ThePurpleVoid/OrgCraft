@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Teammates: a name can't look like an address** (L35, security's L17 low; the same rule as the server's run-start roster check). A teammate's name may not equal another seat's id, a role type on the team, or `owner` (trimmed, spaces collapsed, any case); its own id is fine. Renaming refuses it with 409 ("{name} is already a teammate's id, a role or \"owner\"; pick another."), and `validate` reports it as an error. `packages/team-model` exports `addressClash`. **What existing teams see:** nothing, unless a name already breaks the rule; then validate says which one to change.
+
 ## 0.22.0
 
 - **Teammates: a teammate's name and its role's title are separate** (local PR L11b, CPO ruling). A seat's name is a `**Name:** <name>` line in its `.extend.md`; the `# ` line of a role's own extension is the role's title (a pack's or the team's, such as "Problem-report triager"). Renaming any seat, the role's own included, now writes only `Name`, so the role's other teammates keep their role in the Studio, in their `**Type:**` line and in the org tree. `members[]` carries `name` and `typeTitle` from these two fields, and `packages/team-model` exports `seatName` and `roleTitle`. **What existing teams see:** nothing, no migration. A teammate's own `# Maya` line still reads as its name; a role's own `# ` line, which used to be read as its seat's name, is now its title for every teammate, which is what teams that set one by hand meant.
