@@ -10,6 +10,7 @@ import { Problem, id, sha } from './store.mjs';
 import { checkTool, detailOf } from './tools.mjs';
 import { personActor } from './m3.mjs';
 import { createMeetings } from './meetings.mjs';
+import { canWork } from './deployment.mjs';
 
 export const SESSION_TOKEN_MINUTES = 15;
 const ACK_SECONDS = 30;
@@ -127,6 +128,11 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         await q('update deliveries set next_at = now() + make_interval(secs => 10) where id = $1', [d.id]);
         return null;
       }
+      if (s && LIVE.includes(s.state) && conn && !canWork(conn)) {
+        // Outage mode (L29, O37.8): its runner can't reach the model provider. The wake waits here, unspent, until it can.
+        await q('update deliveries set next_at = now() + make_interval(secs => 10) where id = $1', [d.id]);
+        return null;
+      }
       if (wake.type === 'meeting.turn') await meetings.sent(q, wake.id, d.team);
       if (s && LIVE.includes(s.state) && conn) {
         await q("update deliveries set state = 'sent', session = $2, attempts = attempts + 1, next_at = now() + make_interval(secs => $3) where id = $1", [d.id, s.id, ACK_SECONDS]);
@@ -196,11 +202,12 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     }
   }
 
-  /** The connected runner of the tenant with the fewest live sessions, below its maxSessions. */
+  /** The connected runner of the tenant with the fewest live sessions, below its maxSessions, that can reach the model. */
   function pickRunner(tenant, counts) {
     const busy = new Map(counts.map((c) => [c.runner, c.n]));
     let best = null;
     for (const conn of reg()?.connected(tenant) ?? []) {
+      if (!canWork(conn)) continue; // outage mode: it says it can't reach the model provider
       const n = busy.get(conn.runner) ?? 0;
       const max = Number(conn.hello?.capabilities?.maxSessions) || 8;
       if (n >= max) continue;

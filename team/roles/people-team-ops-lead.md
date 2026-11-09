@@ -25,7 +25,7 @@ The affected role (its new brief)
 - A brief change ships like code: a PR reviewed by the COO and the chief of staff, and the role rereads it at its next task.
 - Never retire a role or change its model tier without the owner's yes.
 - Never edit the generated briefs in docs/team/roles/; change `.agent-team/roles/`, run `scripts/agent-team/sync.sh`, then `node scripts/agent-team/roster.mjs --check`.
-- A change that would help every team using the kit goes upstream to Agent Team Kit as a pull request, not into a local override.
+- A change that would help every team using the kit goes upstream to OrgCraft as a pull request, not into a local override.
 
 ## Every thread, every task
 - Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.

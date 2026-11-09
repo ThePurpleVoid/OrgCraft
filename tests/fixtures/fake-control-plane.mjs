@@ -50,7 +50,8 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     exhaust() { cost.state = 'exhausted'; for (const r of runs) if (r.state === 'running') { r.state = 'paused'; r.reason = 'budget'; append('run.paused', { kind: 'system', id: 'budget' }, { reason: 'budget' }, `run/${r.id}`); } },
     events, cards, runs, cost, budget, started,
   };
-  const stepped = (req) => { const su = req.headers['x-step-up']; if (!su || !(stepUps.get(su) > Date.now())) return false; stepUps.delete(su); return true; };
+  const scopes = new Map(); // su -> scope it was bound to (ADR 0013)
+  const stepped = (req, scope = null) => { const su = req.headers['x-step-up']; if (!su || !(stepUps.get(su) > Date.now()) || (scopes.get(su) ?? null) !== scope) return false; stepUps.delete(su); scopes.delete(su); return true; };
   const needStepUp = (res, what) => send(res, 401, { type: 'step-up-required', title: `${what} needs a recent sign-in`, status: 401 });
 
   const send = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -111,6 +112,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       if (body.secret !== stepUpSecret) return send(res, 401, { title: 'not accepted', status: 401 });
       const su = `su_${Math.random().toString(36).slice(2)}`;
       stepUps.set(su, Date.now() + 5 * 60_000);
+      if (typeof body.scope === 'string') scopes.set(su, body.scope);
       return send(res, 201, { token: su, expires: new Date(Date.now() + 5 * 60_000).toISOString() });
     }
     if (p === `/v1/teams/${team}/runs` && req.method === 'GET') return send(res, 200, { runs });
@@ -146,7 +148,8 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       const r = runs.find((x) => x.id === act[1]);
       if (!r) return send(res, 404, { error: 'no such run' });
       if (act[2] === 'resume' && cost.state === 'exhausted') return send(res, 409, { type: 'budget-exhausted', title: "today's budget is spent; raise it or wait for tomorrow", status: 409 });
-      if (act[2] === 'resume' && r.reason === 'budget' && !stepped(req)) return needStepUp(res, 'Resuming a run the budget paused');
+      // Like the control plane (ADR 0013): resuming needs a step-up bound to this run, whoever paused it.
+      if (act[2] === 'resume' && !stepped(req, `resume:${act[1]}`)) return send(res, 401, { type: 'step-up-required', title: 'Resuming a paused run needs a recent sign-in', status: 401, scope: `resume:${act[1]}` });
       r.state = { pause: 'paused', resume: 'running', stop: 'stopped' }[act[2]];
       r.reason = act[2] === 'pause' ? 'owner' : null;
       return done(200, append(`run.${r.state === 'running' ? 'resumed' : r.state}`, { kind: 'person', id: 'owner', via: 'studio' }, { by: 'owner' }, `run/${r.id}`));

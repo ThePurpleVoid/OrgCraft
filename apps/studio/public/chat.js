@@ -483,7 +483,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
   }
 
   /** Asks for the step-up secret in a dialog. Resolves true once the Studio server holds a step-up token. */
-  function stepUp(why) {
+  function stepUp(why, scope) {
     const dlg = $('#stepup-dialog', root);
     const form = $('#stepup-form', root);
     const input = $('#stepup-secret', root);
@@ -500,7 +500,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
         const confirm = form.querySelector('button[type="submit"]');
         if (confirm?.disabled) return;
         if (confirm) confirm.disabled = true;
-        const r = await api('/v1/team/step-up', { secret }).finally(() => { if (confirm) confirm.disabled = false; });
+        const r = await api('/v1/team/step-up', { secret, ...(scope ? { scope } : {}) }).finally(() => { if (confirm) confirm.disabled = false; });
         if (r.ok) return finish(true);
         $('#stepup-result', root).textContent = r.status === 401 ? 'That secret was not accepted. Try again.' : r.data.error ?? `HTTP ${r.status}`;
         input.focus();
@@ -554,8 +554,8 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     if (action === 'stop' && !(await ask('Stop the run? Every role session stops after its current step. You can start a new run later.', { ok: 'Stop the run', cancel: 'Keep it running', danger: true }))) return;
     st.busy = true; renderRun();
     let r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
-    // Resuming a run the budget paused needs a recent sign-in.
-    if (needsStepUp(r) && await stepUp('Resuming a run that today\'s cap paused lets the team spend again.')) r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
+    // Resuming needs a recent sign-in, bound to this run (ADR 0013): the control plane names the scope when it asks.
+    if (needsStepUp(r) && await stepUp('Resuming the run lets the team carry on working and spending.', r.data.scope)) r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
     st.busy = false;
     // Kept apart from load errors, which the next load clears: a refused resume (today's cap is spent) must stay visible.
     st.runError = r.ok || needsStepUp(r) ? null : refusal(r);

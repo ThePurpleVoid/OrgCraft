@@ -1,4 +1,4 @@
--- Agent Team Kit: hosted team board.
+-- OrgCraft: hosted team board.
 -- Threads report through the team-report Edge Function (scripts/agent-team/team-status.sh with a write-only token);
 -- dashboards read through the same function with a separate read token. Nothing here is reachable with the anon
 -- or authenticated keys: RLS is on and only the service role has grants.

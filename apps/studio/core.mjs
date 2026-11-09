@@ -221,8 +221,8 @@ export const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u
  * the host's user id, never an email address or a token.
  */
 export function commitMessage(text, user) {
-  const body = String(text ?? '').replace(/\r/g, '').split('\n').filter((l) => !/^\s*(published-by|co-authored-by)\s*:/i.test(l)).join('\n').trim() || 'Update the agent team (Agent Team Studio)';
-  return user ? `${body}\n\nPublished-by: ${cleanName(user.name)} (${cleanName(user.id)}) via Agent Team Studio` : body;
+  const body = String(text ?? '').replace(/\r/g, '').split('\n').filter((l) => !/^\s*(published-by|co-authored-by)\s*:/i.test(l)).join('\n').trim() || 'Update the agent team (OrgCraft Studio)';
+  return user ? `${body}\n\nPublished-by: ${cleanName(user.name)} (${cleanName(user.id)}) via OrgCraft Studio` : body;
 }
 
 /**
@@ -238,13 +238,13 @@ export const cleanVia = (v) => {
 export function pullRequestBody(text, { commands = [], kitUpgrade = null, commit = null, via = null, capability = [] } = {}) {
   const [first, ...rest] = String(text ?? '').replace(/\r/g, '').split('\n').filter((l) => !/^\s*(published-by|co-authored-by)\s*:/i.test(l));
   const defuse = (s) => s.replace(/@/g, '&#64;');
-  const title = cleanName(defuse(first ?? '')).slice(0, 100) || 'Update the agent team (Agent Team Studio)';
+  const title = cleanName(defuse(first ?? '')).slice(0, 100) || 'Update the agent team (OrgCraft Studio)';
   const quoted = rest.join('\n').trim();
   return {
     title,
     body: [quoted ? quoted.split('\n').map((l) => `> ${defuse(l)}`).join('\n') : '', capabilitySection(capability), kitUpgrade ? `This also moves the team to kit ${VERSION}.` : '', commandsSection(commands),
       via ? (({ host, user }) => `Published through ${host}${user ? ` for \`${user}\`` : ''}.`)(cleanVia(via)) : '',
-      `Published from Agent Team Studio${commit ? ` (commit ${commit.slice(0, 12)})` : ''}. Review it like any change to the team's rules: a person with write access merges it.`].filter(Boolean).join('\n\n'),
+      `Published from OrgCraft Studio${commit ? ` (commit ${commit.slice(0, 12)})` : ''}. Review it like any change to the team's rules: a person with write access merges it.`].filter(Boolean).join('\n\n'),
   };
 }
 

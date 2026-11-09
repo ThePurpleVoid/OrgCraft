@@ -249,7 +249,7 @@ test('proof 7 and 8: a second start of an open meeting is refused; stopping the 
     // Paused: the turn waits; resumed: the deadline starts again.
     assert.equal((await p.call('POST', `/runs/${run.id}/pause`)).status, 200);
     assert.equal((await p.call('POST', '/teams/shop/meetings', { meeting: 'design' })).status, 409, 'no meeting starts while the run is paused');
-    assert.equal((await p.call('POST', `/runs/${run.id}/resume`)).status, 200);
+    assert.equal((await p.call('POST', `/runs/${run.id}/resume`, undefined, await p.su(`resume:${run.id}`))).status, 200);
     assert.equal((await p.call('POST', `/runs/${run.id}/stop`)).status, 200);
     const [closed] = await events(p.call, 'meeting.closed');
     assert.deepEqual([closed.data.meeting, closed.data.outcome], [m.id, 'abandoned']);
