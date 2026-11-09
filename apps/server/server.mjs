@@ -23,6 +23,7 @@ import { createInspector } from './inspector-api.mjs';
 import { createTriggers } from './triggers.mjs';
 import { createLive } from './live.mjs';
 import { createCaps } from './caps.mjs';
+import { createLedger } from './ledger.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createRecovery } from './recovery.mjs';
 import { createMembers } from './members.mjs';
@@ -211,6 +212,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   m3.hooks.drainTriggers = (tn, tm) => triggers.drain(tn, tm);
   const overrides = createLive({ db, m3 });
   const caps = createCaps({ db, getTeam: store.getTeam, now });
+  const ledger = createLedger({ db, m3, now });
   // Every write of the m3 module and the bus reaches the live streams and the sinks once it commits.
   m3.onStored((stored) => { const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); });
   /** Runs an m3 write and tells the hub and sinks about what it stored. */
@@ -686,6 +688,13 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (m === 'GET') return send(res, 200, { teams: await store.listTeams(db, t) });
       if (m === 'POST') return send(res, 201, await store.createTeam(db, t, (await readJson(req, 16 * 1024)) ?? {}));
     }
+    // Standing rules and the approvals ledger (L22).
+    if (a === 'teams' && team && b === 'standing-rules' && !parts[5]) {
+      if (!c && m === 'GET') return send(res, 200, await ledger.list(t, team));
+      if (!c && m === 'POST') return send(res, 201, await ledger.add(t, team, (await readJson(req, 8 * 1024)) ?? {}, who, stepUp));
+      if (c && m === 'DELETE') return send(res, 200, await ledger.withdraw(t, team, c, who));
+    }
+    if (a === 'teams' && team && b === 'ledger' && !c && m === 'GET') return send(res, 200, await ledger.ledger(t, team, { limit: url.searchParams.get('limit'), before: url.searchParams.get('before') }));
     // Hooks and triggers (N2, L21).
     if (a === 'teams' && team && b === 'hooks') {
       const d = parts[5];

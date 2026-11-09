@@ -428,6 +428,35 @@ paths:
       x-interactive-only: [resume]
       description: "Pause and stop never need step-up. Resuming does, whoever paused the run, with a step-up bound to scope resume:<run> (ADR 0013; before, only after a budget pause). Resume is interactive only: a host's token may pause or stop, never resume (403)"
       responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required); the body's scope names what to step up for" }, "403": { description: "Resume through a host" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
+  /teams/{team}/standing-rules:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [approvals]
+      summary: "Standing rules (L22, R11.3 Now): { kinds: [{ id, enforced }] (refund, pay.known, send.known enforced; reply, merge, cost later), never: [newrecipient, live, delete, passkey, outside], rules: [{ id, number, kind, form, line, words, createdBy, createdAt, expiresAt, withdrawnAt?, live, used: { n, amount?, resetsAt } this calendar period }] }"
+      responses: { "200": { description: Rules } }
+    post:
+      x-min-role: owner
+      tags: [approvals]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      x-interactive-only: [add]
+      summary: "Make a standing rule: { kind, tool (mcp__server__tool), recipientField, period (day | week | month), words (the owner's own, 3 to 2,000 characters, kept exactly), days (1 to 90, default 30) } plus, for refund and pay.known, { amountField, currency, currencyField (required: the call's currency is always compared), maxEach, total (minor units, per calendar period in the team's zone), system? } and for refund an optional all (the total across all customers per period) and for send.known { n, channel? }; any kind may add fixed { field: value } (at most 20; the call must carry exactly that value) and free [field] (at most 20; any plain value). A covered call carries no other input field and nothing nested. Every rule has a limit per period. pay.known and send.known cover only recipients the team has paid or written to before; no rule covers a tool that deletes or goes live, a merge, or a teammate's next ask after it read outside text. The step-up is scoped to the rule: rule:<sha256 of its form>. A ledger row keeps the words"
+      responses: { "201": { description: "{ id, form, line, hash, expiresAt }" }, "400": { description: Not a valid rule }, "401": { description: Step-up required }, "403": { description: Not an owner }, "422": { description: "rule-never (deletes or goes live) or rule-kind-later" } }
+  /teams/{team}/standing-rules/{rule}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: rule, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: owner
+      tags: [approvals]
+      summary: Withdraw a rule at once (narrowing, so no step-up); a ledger row records it
+      responses: { "200": { description: Withdrawn }, "404": { description: No such live rule } }
+  /teams/{team}/ledger:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [approvals]
+      summary: "The approvals ledger (L22, R11.2), newest first: { items: [{ at, kind (approved, denied, rule-used, declined-again, rule-added, rule-withdrawn), by (a person, rule:<id> or ledger), words? (the person's own, exactly), approval?, action?, role?, rule?, callsHash? }], next }. Append-only"
+      parameters: [ { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }, { name: before, in: query, schema: { type: string } } ]
+      responses: { "200": { description: Ledger } }
   /hooks/{hook}:
     parameters: [ { name: hook, in: path, required: true, schema: { type: string }, description: "hk_ and 32 random characters: the URL is the first secret" } ]
     post:

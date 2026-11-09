@@ -12,6 +12,7 @@ import { dayBounds, dayStart, localDay, nextDay, timeZoneOf } from './budget-day
 import { approveScope, factsOf, redact as redactText, riskOf } from './signed.mjs';
 import { checkTriggers } from './triggers.mjs';
 import { halted } from './live.mjs';
+import { coveredBy, declinedBefore, ledgerRow, ruleLine, targetsOf } from './ledger.mjs';
 
 const scrypt = promisify(scryptCb);
 
@@ -485,7 +486,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (!atLeast(role, need)) throw new Problem(403, `a ${row.kind} card needs the ${need} role or above; you are ${role}`, { type: 'forbidden' });
       if (row.kind === 'approval') {
         const [a] = await ctx.q('select id from approvals where card = $1', [cid]);
-        return decideIn(ctx, a.id, { decision: option === 'approve' ? 'approved' : option === 'deny' ? 'denied' : null, note, version }, by, stepUp);
+        return decideIn(ctx, a.id, { decision: option === 'approve' ? 'approved' : option === 'deny' ? 'denied' : null, note, version, channel: 'chat' }, by, stepUp);
       }
       const chosen = row.card.options.find((o) => o.id === option);
       if (!chosen) throw new Problem(400, `option is one of ${row.card.options.map((o) => o.id).join(', ')}`);
@@ -546,7 +547,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
    * A session asks for an approval (request_approval, or the runner's policy through approval.wait). Writes the
    * approval and its card, and emits approval.requested and card.updated. `call` is stored as sent; callers redact it.
    */
-  async function requestApproval(ctx, team, { action, call, why, links = [], session = null, run = null, role = null, hours = APPROVAL_HOURS, bound = null }) {
+  async function requestApproval(ctx, team, { action, call, why, links = [], session = null, run = null, role = null, hours = APPROVAL_HOURS, bound = null, changedWhat = null }) {
     if (typeof action !== 'string' || !action || action.length > 100) throw new Problem(400, 'action is a policy classification, like accept');
     if (call === undefined || call === null || JSON.stringify(call).length > 16 * 1024) throw new Problem(400, 'call is the exact command or tool call, at most 16 KiB');
     if (typeof why !== 'string' || !why || why.length > 4000) throw new Problem(400, 'why is required, at most 4,000 characters');
@@ -554,6 +555,23 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     const r = riskOf({ bound });
     const apr = id('apr');
     const expiresAt = new Date(ctx.now.getTime() + hours * 3_600_000);
+    // L22. A changed call raises a new card: this session's earlier pending ask with other signed calls is superseded,
+    // and the new card says so ("This changed since you were asked").
+    const changed = bound && session ? await ctx.q("select id, card from approvals where session = $1 and state = 'pending' and calls_hash is not null and calls_hash <> $2 for update", [session, bound.hash]) : [];
+    for (const o of changed) {
+      await ctx.q("update approvals set state = 'expired', decided_at = $2, decided_by = 'changed' where id = $1", [o.id, ctx.now]);
+      await changeCard(ctx, team, o.card, { state: 'superseded', answer: { note: 'This changed since you were asked.', by: 'changed', at: ctx.now.toISOString(), replacedBy: apr } });
+      hooks.approvalDecided && ctx.after.push(() => hooks.approvalDecided(ctx.tenant, team, { approval: o.id, decision: 'expired', by: null, note: 'asked again with changed calls', session }));
+    }
+    // Declines stick (AI-10): the same effect on the same target (or the same calls), declined by a person in the last
+    // 7 days, is not put in front of anyone again, unless the teammate says what changed. The exact same calls are
+    // refused even then: nothing changed.
+    const targets = bound ? targetsOf(bound.calls) : null;
+    const what = typeof changedWhat === 'string' && changedWhat.trim() ? changedWhat.trim().slice(0, 500) : null;
+    const declined = bound && action !== 'accept' ? await declinedBefore(ctx, team, bound.hash, targets) : null;
+    const refuse = declined && (declined.exact || !what);
+    // A standing rule the owner made covers it (R11.3 Now), within its limits; never after a decline, never a merge.
+    const covered = bound && !declined ? await coveredBy(ctx, team, { action, bound, session }) : null;
     const callText = typeof call === 'string' ? call : JSON.stringify(call);
     const card = await createCard(ctx, team, {
       kind: 'approval', subject: `approval/${apr}`, session, run, approval: apr,
@@ -566,18 +584,45 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       data: {
         ...(call && typeof call === 'object' && call.pr ? { pr: call.pr, ...(call.headSha ? { headSha: call.headSha } : {}) } : {}),
         ...(bound ? { facts: factsOf(bound.calls, redactText), callsHash: bound.hash } : { call: callText.length > 2000 ? `${callText.slice(0, 2000)}…` : callText }),
+        ...(changed.length || (declined && what) ? { changed: { ...(changed.length ? { from: changed.map((o) => o.id) } : {}), ...(declined && what ? { what } : {}) } } : {}),
+        // card.declined.before / card.cooldown: the Studio renders these from the fields.
+        ...(declined ? { declinedBefore: { approval: declined.id, at: new Date(declined.decided_at).toISOString(), until: declined.until.toISOString(), declinedOn: new Date(declined.decided_at).toISOString(), cooldownUntil: declined.until.toISOString(), declinedBy: declined.decided_by } } : {}),
       },
       body: bound ? why : `${why}\n\n${describeCall(call)}`,
       options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger', stepUp: false }],
       risk: r, expiresAt, links: links.filter((l) => l && typeof l.url === 'string').slice(0, 20),
     });
-    await ctx.q(`insert into approvals(id, tenant, team, run, session, role, action, call, why, risk, card, expires_at, calls, calls_hash) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-      [apr, ctx.tenant, team, run, session, role, action, JSON.stringify(call), why, r, card.id, expiresAt.toISOString(), bound ? JSON.stringify(bound.calls) : null, bound?.hash ?? null]);
+    await ctx.q(`insert into approvals(id, tenant, team, run, session, role, action, call, why, risk, card, expires_at, calls, calls_hash, effect_targets) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [apr, ctx.tenant, team, run, session, role, action, JSON.stringify(call), why, r, card.id, expiresAt.toISOString(), bound ? JSON.stringify(bound.calls) : null, bound?.hash ?? null, targets]);
     // The calls themselves stay in the approval row (deletable with it), not in the permanent log: the event names the hash.
     const ev = await ctx.emit(team, 'approval.requested', { approval: apr, action, ...(bound ? {} : { call }), why, risk: r, expires: expiresAt.toISOString(), cardId: card.id, session, ...(bound ? { callsHash: bound.hash } : {}) },
       { subject: `approval/${apr}`, ...(run ? { run } : {}), ...(role ? { actor: { kind: 'role', id: role, session, via: 'tool' } } : {}) });
     await ctx.audit({ team, actorKind: role ? 'role' : 'system', actorId: role ?? 'control-plane', session, action: 'approval', target: apr, decision: 'needs-approval', rule: action, event: ev.id });
+    if (refuse) {
+      // Surfaces render card.declined.before and card.cooldown from declinedBefore; this English line is for email,
+      // Slack and logs, which do not know who is reading (the CPO's "{person} declined this…").
+      const note = `Declined on ${new Date(declined.decided_at).toISOString().slice(0, 10)}. The team can't ask for this again until ${declined.until.toISOString().slice(0, 10)}, unless something changes.`;
+      return { approval: apr, card: await settle(ctx, team, { apr, cid: card.id, session, run, decision: 'denied', by: 'ledger', note, kind: 'declined-again', hash: bound.hash }) };
+    }
+    if (covered) {
+      const n = (await ctx.q('select count(*)::int as n from standing_rules where team = $1 and created_at <= (select created_at from standing_rules where id = $2)', [team, covered.rule.id]))[0].n;
+      for (const u of covered.uses) await ctx.q('insert into standing_rule_uses(tenant, team, rule, approval, amount, recipient) values ($1, $2, $3, $4, $5, $6)', [ctx.tenant, team, covered.rule.id, apr, u.amount, u.recipient]);
+      // ledger.byrule: "Done under standing rule #{n}: {what}".
+      return { approval: apr, card: await settle(ctx, team, { apr, cid: card.id, session, run, decision: 'approved', by: `rule:${covered.rule.id}`, note: `Done under standing rule #${n}: ${ruleLine(covered.rule.spec)}`, kind: 'rule-used', rule: covered.rule.id, hash: bound.hash, extra: { ruleNumber: n, ruleForm: covered.rule.spec, ruleLine: ruleLine(covered.rule.spec) } }) };
+    }
     return { approval: apr, card };
+  }
+
+  /** Answers an approval for the ledger or a standing rule, in the same transaction that made it (L22). */
+  async function settle(ctx, team, { apr, cid, session, run, decision, by, note, kind, rule = null, hash, extra = {} }) {
+    await ctx.q('update approvals set state = $2, decided_by = $3, decided_at = $4 where id = $1', [apr, decision, by, ctx.now]);
+    const card = await changeCard(ctx, team, cid, { state: 'answered', answer: { option: decision === 'approved' ? 'approve' : 'deny', note, by, at: ctx.now.toISOString(), ...(rule ? { rule } : {}), ...extra } });
+    const ev = await ctx.emit(team, 'approval.decided', { approval: apr, decision, by, note, session, cardId: cid, ...(rule ? { rule } : {}) },
+      { actor: { kind: 'system', id: 'control-plane' }, subject: `approval/${apr}`, ...(run ? { run } : {}) });
+    await ctx.audit({ team, actorKind: 'system', actorId: 'control-plane', session, action: 'approval', target: apr, decision, rule: kind, event: ev.id, detail: { callsHash: hash, ...(rule ? { standingRule: rule } : {}) } });
+    await ledgerRow(ctx.q, ctx.tenant, team, { kind, approval: apr, rule, by, callsHash: hash });
+    hooks.approvalDecided && ctx.after.push(() => hooks.approvalDecided(ctx.tenant, team, { approval: apr, decision, by, note, session }));
+    return card;
   }
 
   /** POST /v1/approvals/{id}: approving needs a fresh step-up; denying never does. */
@@ -586,10 +631,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     if (!['approved', 'denied'].includes(decision)) throw new Problem(400, 'decision is approved or denied');
     if (version !== undefined && !isInt(version)) throw new Problem(400, 'version is the card version you saw');
     if (note !== undefined && (typeof note !== 'string' || note.length > 4000)) throw new Problem(400, 'a note is text of at most 4,000 characters');
-    return tx(tenant, (ctx) => decideIn(ctx, apr, { decision, note, version }, by, stepUp));
+    return tx(tenant, (ctx) => decideIn(ctx, apr, { decision, note, version, channel: 'approvals' }, by, stepUp));
   }
 
-  async function decideIn(ctx, apr, { decision, note, version }, by, stepUp) {
+  async function decideIn(ctx, apr, { decision, note, version, channel = null }, by, stepUp) {
     if (!decision) throw new Problem(400, 'option is approve or deny');
     const [a] = await ctx.q('select id, team, run, session, card, state, expires_at, calls_hash from approvals where id = $1 for update', [apr]);
     if (!a) throw new Problem(404, 'no such approval');
@@ -605,6 +650,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     const ev = await ctx.emit(a.team, 'approval.decided', { approval: apr, decision, by, ...(note ? { note } : {}), session: a.session, cardId: a.card },
       { actor: personActor(by), subject: `approval/${apr}`, ...(a.run ? { run: a.run } : {}) });
     await ctx.audit({ team: a.team, actorKind: 'person', actorId: by, session: a.session, action: 'approval', target: apr, decision, event: ev.id, detail: stepUpId || a.calls_hash ? { ...(stepUpId ? { stepUp: stepUpId } : {}), ...(a.calls_hash ? { callsHash: a.calls_hash } : {}) } : null });
+    // The ledger keeps the person's own words (their note), exactly (L22, R11.2).
+    await ledgerRow(ctx.q, ctx.tenant, a.team, { kind: decision, approval: apr, by, words: note ?? null, callsHash: a.calls_hash ?? null, channel });
     hooks.approvalDecided && ctx.after.push(() => hooks.approvalDecided(ctx.tenant, a.team, { approval: apr, decision, by, note: note ?? null, session: a.session }));
     return { card, event: ev.id, approval: apr, decision };
   }
