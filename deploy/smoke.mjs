@@ -103,6 +103,30 @@ async function callerCheck() {
   if (direct.edge !== false) return unverified('the container reports the edge on a direct request');
   if (!plain(via.ip) || plain(via.ip) !== plain(direct.ip)) return unverified(`through the site the caller is ${via.ip || 'unknown'}, directly ${direct.ip || 'unknown'}: the server is reading a proxy's address, not the caller's (or this machine reached the two over different IP versions)`);
   ok(`caller IP resolves through the site (${via.ip}, as the container sees it directly)`);
+  return oauthCheck(unverified);
+}
+
+// The same on a sign-in path, so the check cannot pass on /v1 alone: the /oauth limiter (60 a minute per caller,
+// outside authorize) must count this machine's requests through the site and directly in one bucket. Discovery, then
+// 59 JWKS reads through the site, then one direct read must be refused (429). Had the site's requests been keyed to
+// a Vercel address (no middleware on /oauth, or no edge secret), the direct read would still answer 200. Everything
+// read is public; the only effect is that this machine waits a minute before its next sign-in request.
+const OAUTH_LIMIT = 60;
+async function oauthCheck(unverified) {
+  const get = (url) => fetch(url, { redirect: 'manual', headers: { 'cache-control': 'no-cache' }, signal: AbortSignal.timeout(10_000) }).catch(() => null);
+  const disc = await get(`${site}/.well-known/openid-configuration?smoke=${Date.now()}`);
+  if (!disc || disc.status !== 200) return unverified(`/.well-known/openid-configuration through the site answered ${disc?.status ?? 'nothing'}`);
+  const issuer = await disc.json().then((b) => b.issuer).catch(() => null);
+  if (String(issuer ?? '').replace(/\/+$/, '') !== site) return unverified(`the issuer is ${issuer ?? 'missing'}, not the site ${site}`);
+  for (let i = 1; i < OAUTH_LIMIT; i++) {
+    const r = await get(`${site}/oauth/jwks?smoke=${Date.now()}-${i}`);
+    if (!r) return unverified('/oauth/jwks through the site did not answer');
+    if (r.status === 429) break; // already counted from here: the direct read below must be refused too
+    if (r.status !== 200) return unverified(`/oauth/jwks through the site answered ${r.status}`);
+  }
+  const direct = await get(`${api}/oauth/jwks?smoke=${Date.now()}`);
+  if (direct?.status !== 429) return unverified(`after ${OAUTH_LIMIT} sign-in requests through the site, a direct one answered ${direct?.status ?? 'nothing'}, not 429: /oauth requests through the site are not keyed to the caller`);
+  ok('sign-in paths resolve the caller through the site too (/oauth limiter counted the site and direct requests together)');
 }
 
 const caller = await callerCheck();

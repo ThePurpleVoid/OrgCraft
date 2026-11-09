@@ -1,5 +1,5 @@
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.1.0",
+  "kit": "github:ThePurpleVoid/OrgCraft#v0.1.0",
   "preset": "engineering",
   "include": [],
   "exclude": ["mobile-dev", "qa-mobile"],

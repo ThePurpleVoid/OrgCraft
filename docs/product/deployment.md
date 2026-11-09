@@ -49,7 +49,7 @@ The same images, run by us, with the same release cadence as self-hosted. Launch
 
 ```sh
 cd ~/code/my-app
-npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.x studio      # http://localhost:4747
+npx --yes github:ThePurpleVoid/OrgCraft#v0.x studio      # http://localhost:4747
 ```
 
 - One process runs the control plane and one runner, with a bundled Postgres in `~/.agent-team/studio/`. It is the same code as the online shapes, so anything built here works online.

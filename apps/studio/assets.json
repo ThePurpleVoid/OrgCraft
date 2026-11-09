@@ -57,6 +57,10 @@
       "path": "apps/studio/public/panels.js",
       "type": "text/javascript; charset=utf-8"
     },
+    "rollout.js": {
+      "path": "apps/studio/public/rollout.js",
+      "type": "text/javascript; charset=utf-8"
+    },
     "safety.js": {
       "path": "apps/studio/public/safety.js",
       "type": "text/javascript; charset=utf-8"
