@@ -9,7 +9,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { DEFAULT_KIT_SPEC, initExtras, KIT, sync, VERSION } from '../../bin/agent-team.mjs';
-import { compileLayer, importLayer, listMembers, resolveSpec, TEMPLATE_SCHEMA, templateCard, templateSpec, validate, withoutBlock } from '../../packages/team-model/index.mjs';
+import { capabilityDiff, compileLayer, importLayer, listMembers, resolveSpec, TEMPLATE_SCHEMA, templateCard, templateSpec, validate, withoutBlock } from '../../packages/team-model/index.mjs';
 import { loadKit, loadTemplates, readLayer, writeLayer } from '../../packages/team-model/node.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
@@ -139,7 +139,11 @@ export function plan(read, spec, { strict = true, tmpRoot = null } = {}) {
     changes.push({ path, content: b ? b.content : null, mode: b ? b.mode : (a?.mode ?? '100644'), before: a ? a.content : null });
   }
   changes.sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
-  return { changes, issues, ...code(changes) };
+  // ADR 0013 rule 2: what this publish widens, computed here for every publish, whoever drafted it.
+  const published = hasTeam(files) ? scratch(new Map([...files].filter(([p]) => p.startsWith('.agent-team/'))), (dir) => importLayer(readLayer(dir), kit)) : { roles: {} };
+  let capability;
+  try { capability = capabilityDiff(published, spec, kit); } catch (e) { throw new CoreError(422, `the team could not be compared: ${String(e?.message ?? e).slice(0, 200)}`); }
+  return { changes, issues, capability, ...code(changes) };
 }
 
 /** Files whose change changes what runs: gates, systems, config.sh, and any script (S1 a). */
@@ -175,7 +179,7 @@ export function preview(read, spec, { tmpRoot = null } = {}) {
   const p = plan(read, spec, { strict: false, tmpRoot });
   return {
     changes: p.changes.map((c) => ({ path: c.path, status: c.before === null ? 'added' : c.content === null ? 'removed' : 'changed', before: c.before, after: c.content })),
-    issues: p.issues, commands: p.commands, needsCode: p.needsCode, kitUpgrade: kitVersionOf(files).upgrade,
+    issues: p.issues, commands: p.commands, needsCode: p.needsCode, kitUpgrade: kitVersionOf(files).upgrade, capability: p.capability,
   };
 }
 
@@ -186,6 +190,13 @@ export function commandsSection(commands) {
   const longest = Math.max(0, ...commands.map((c) => Math.max(0, ...(c.line.match(/`+/g) ?? []).map((r) => r.length))));
   const fence = '`'.repeat(Math.max(3, longest + 1));
   return `### Commands this PR adds or changes\n\n${fence}\n${commands.map((c) => `${c.line}    # ${c.path}`).join('\n')}\n${fence}`;
+}
+
+/** The "Widens access" section (ADR 0013 rule 2), first in the body after the author's words, or '' when nothing widens. */
+export function capabilitySection(items = []) {
+  if (!items.length) return '';
+  const clean = (x) => String(x ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/`/g, "'").replace(/@/g, '&#64;');
+  return `### Widens access\n\n${items.map((x) => `- ${clean(x.detail)} (\`${x.kind}\`)`).join('\n')}`;
 }
 
 /** `name` as it may appear in a trailer: no control characters, at most 100 characters (S5). */
@@ -210,14 +221,14 @@ export const cleanVia = (v) => {
 };
 
 /** The pull request's title and body: the user's text quoted, with `@` defused so it pings nobody (S5), and the commands. */
-export function pullRequestBody(text, { commands = [], kitUpgrade = null, commit = null, via = null } = {}) {
+export function pullRequestBody(text, { commands = [], kitUpgrade = null, commit = null, via = null, capability = [] } = {}) {
   const [first, ...rest] = String(text ?? '').replace(/\r/g, '').split('\n').filter((l) => !/^\s*(published-by|co-authored-by)\s*:/i.test(l));
   const defuse = (s) => s.replace(/@/g, '&#64;');
   const title = cleanName(defuse(first ?? '')).slice(0, 100) || 'Update the agent team (OrgCraft Studio)';
   const quoted = rest.join('\n').trim();
   return {
     title,
-    body: [quoted ? quoted.split('\n').map((l) => `> ${defuse(l)}`).join('\n') : '', kitUpgrade ? `This also moves the team to kit ${VERSION}.` : '', commandsSection(commands),
+    body: [quoted ? quoted.split('\n').map((l) => `> ${defuse(l)}`).join('\n') : '', capabilitySection(capability), kitUpgrade ? `This also moves the team to kit ${VERSION}.` : '', commandsSection(commands),
       via ? (({ host, user }) => `Published through ${host}${user ? ` for \`${user}\`` : ''}.`)(cleanVia(via)) : '',
       `Published from OrgCraft Studio${commit ? ` (commit ${commit.slice(0, 12)})` : ''}. Review it like any change to the team's rules: a person with write access merges it.`].filter(Boolean).join('\n\n'),
   };
