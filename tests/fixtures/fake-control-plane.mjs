@@ -97,7 +97,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       const body = await read(req);
       const found = (body.asks ?? []).map((x) => ({ x, c: [...cards.values()].find((c) => c.subject === `approval/${x.approval}`) }));
       if (found.some(({ c }) => !c)) return send(res, 404, { error: 'no such approval' });
-      const stale = found.filter(({ x, c }) => c.version !== x.version || c.answered || !c.data?.letter).map(({ c }) => c);
+      const stale = found.filter(({ x, c }) => c.version !== x.version || c.answered || c.state === 'answered' || !c.data?.letter).map(({ c }) => c);
       if (stale.length) return send(res, 409, { type: 'asks-changed', title: 'these asks changed since you saw them; nothing was approved', status: 409, cards: stale });
       if (found.some(({ c }) => c.data?.facts)) {
         const scope = `do-it:${found.map(({ x }) => `${x.approval}@${x.version}`).sort().join(',')}`;
@@ -105,8 +105,8 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       }
       doIts.push(body);
       const decided = found.sort((a, b) => (a.c.data.letter < b.c.data.letter ? -1 : 1)).map(({ x, c }) => {
-        const event = append('approval.decided', { kind: 'person', id: 'owner', via: 'studio' }, { approval: x.approval, cardId: c.id, decision: 'approved', by: 'owner', words: `Tapped "Do it" (${c.data.letter})` }, c.subject);
-        const done = { ...c, version: c.version + 1, state: 'answered', answered: { option: 'approve', by: 'owner' } };
+        const event = append('approval.decided', { kind: 'person', id: 'owner', via: 'studio' }, { approval: x.approval, cardId: c.id, decision: 'approved', by: 'owner', words: null, tap: 'do-it' }, c.subject);
+        const done = { ...c, version: c.version + 1, state: 'answered', answer: { option: 'approve', by: 'owner', at: new Date().toISOString(), tap: 'do-it', covered: found.map((f) => f.c.data.letter).sort(), channel: body.via ?? 'approvals' } };
         cards.set(c.id, done);
         append('card.updated', { kind: 'system', id: 'cards' }, { card: done }, `card/${c.id}`);
         return { letter: c.data.letter, approval: x.approval, decision: 'approved', card: done, event };

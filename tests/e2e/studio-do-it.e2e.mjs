@@ -62,8 +62,9 @@ test('Do it covers the asks it can, leaves a held one open, and sends each card 
   assert.equal(await page.locator('[data-card-id="card_D"] #doit').count(), 1);
   assert.equal(await page.locator('#doit .doitcov').textContent(), 'Covers A and B. C and D need you to do something first.');
   await page.locator('#doit').click();
-  await page.locator('[data-card-id="card_A"] .answer').waitFor();
-  await page.locator('[data-card-id="card_B"] .answer').waitFor();
+  await page.locator('[data-card-id="card_A"] .answer', { hasText: /took the recommendation on A and B with Do it · in Chat$/ }).waitFor();
+  await page.locator('[data-card-id="card_B"] .answer', { hasText: 'took the recommendation on A and B with Do it' }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.className), 'muted doit-none', 'focus on what is left (qa-web F1)');
   assert.deepEqual(cp.doIts[0].asks, [{ approval: 'apr_A', version: 1 }, { approval: 'apr_B', version: 1 }]);
   assert.equal(cp.doIts[0].via, 'chat');
   // Only the held ask is left: nothing to cover, so no button, and the reason.
@@ -81,6 +82,11 @@ test('one bound ask: one passkey for the set, scoped to it', { skip }, async () 
   assert.match(await page.locator('#doit .doitcov').textContent(), /The passkey shows each payment and send\./);
   await page.locator('#doit').click();
   const dlg = page.locator('#stepup-dialog');
+  await dlg.locator('#stepup-why').waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.activeElement?.id === 'doit');
+  assert.equal(cp.doIts.length, 0);
+  await page.locator('#doit').click();
   await dlg.locator('#stepup-why', { hasText: 'Take the recommended answer on A' }).waitFor();
   assert.deepEqual(await dlg.locator('.stepup-items li').allTextContents(), ['A. web-dev asks to send report A', 'send email to client@example.com: Launch posts'], 'each ask, then each send on its own line');
   assert.equal(cp.doIts.length, 0, 'nothing approved before the passkey');
@@ -101,6 +107,7 @@ test('an ask that changed since it was shown: nothing is approved, the page says
   cp.bump('card_B', { title: 'web-dev asks to send report B, now to everyone' }, { silent: true });
   await page.locator('#doit').click();
   await page.getByText('This changed since you were asked. Look again.').waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'This changed since you were asked. Look again.');
   assert.equal(cp.doIts.length, 0);
   assert.equal(await page.locator('[data-card-id="card_A"] .answer').count(), 0, 'all or nothing');
   await page.locator('[data-card-id="card_B"] h3', { hasText: 'now to everyone' }).waitFor();

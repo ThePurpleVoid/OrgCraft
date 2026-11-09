@@ -234,6 +234,12 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     if (card.state === 'answered' && card.answer) {
       const a = card.answer;
       // Done under a standing rule (L22): the rule's number and line, never "rule:sr_…".
+      // Taken with Do it (L39): the letters the tap covered, in the ledger's words; never words the person didn't type.
+      if (a.tap === 'do-it' && Array.isArray(a.covered)) {
+        const id = typeof a.by === 'object' ? a.by?.id : a.by;
+        const who = id && id === me() ? t('notify.log.you') : (typeof a.by === 'object' ? a.by?.name : null) ?? t('notify.log.who.unknown');
+        return t('ledger.doit', { time: a.at ? fmtTime(a.at) : '', person: who, list: andList(a.covered.filter((x) => LETTER.test(x))), channel: t(`ledger.via.${a.channel === 'approvals' ? 'approvals' : 'chat'}`) }).replace(/^ · /, '');
+      }
       if (Number.isInteger(a.ruleNumber) && (a.ruleForm || a.ruleLine)) return t('ledger.byrule', { time: a.at ? fmtTime(a.at) : '', n: a.ruleNumber, what: a.ruleForm ? ruleLine(a.ruleForm) : a.ruleLine }).replace(/^ · /, '');
       const label = (card.options ?? []).find((o) => o.id === a.option)?.label ?? human(a.option);
       const by = typeof a.by === 'object' ? a.by?.name ?? a.by?.id : a.by;
@@ -308,15 +314,20 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     const acts = p.covered.flatMap((c) => [`${c.data.letter}. ${c.title}`, ...(Array.isArray(c.data?.facts) ? c.data.facts : []).filter((f) => f && typeof f.text === 'string').map((f) => f.text)]);
     if (needsStepUp(r) && await stepUp(t('stepup.action.doit', { list }), r.data.scope, acts)) r = await api('/v1/team/do-it', { asks, key: newId() });
     st.busy = false;
+    // Focus goes somewhere that says what happened, never back to the page (qa-web L39w F1).
+    const focus = (...els) => { const el = els.find(Boolean); if (!el) return; if (!el.matches('button, a, input')) el.tabIndex = -1; el.focus(); };
     if (r.status === 409 && Array.isArray(r.data.cards)) {
       // Something changed since it was shown: nothing was approved. The cards are redrawn as they are now.
       takeCards(r.data.cards);
       render();
-      return flashNote(t('card.changed'));
+      flashNote(t('card.changed'));
+      return focus(log.parentElement.querySelector('.focus-miss'), $('#doit', root));
     }
-    if (!r.ok && !needsStepUp(r)) { render(); return flashNote(r.data.error ?? `HTTP ${r.status}`); }
-    for (const d of r.ok ? r.data.decided ?? [] : []) if (d.card?.id) takeCards([d.card]);
+    if (!r.ok) { render(); if (!needsStepUp(r)) flashNote(r.data.error ?? `HTTP ${r.status}`); return focus($('#doit', root), log.parentElement.querySelector('.focus-miss')); }
+    for (const d of r.data.decided ?? []) if (d.card?.id) takeCards([d.card]);
     await load();
+    const first = p.covered[0] && $(`[data-card-id="${CSS.escape(p.covered[0].id)}"]`, root);
+    focus($('#doit', root), $('.doit-none', root), first);
   }
 
   function cardHtml(card, answered) {
@@ -348,6 +359,9 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   }
 
   function answerText(e, card) {
+    // Taken with Do it: the card's answer says which letters the tap covered (L39).
+    const cur = card?.id ? st.cards.get(card.id) ?? card : card;
+    if (cur?.answer?.tap === 'do-it') return closedText(cur);
     const d = e.data ?? {};
     const by = d.by ? (typeof d.by === 'object' ? d.by.name ?? d.by.id : d.by) : e.actor?.kind === 'person' ? 'you' : human(e.actor?.id);
     const what = String(d.decision ?? d.answer ?? d.option ?? 'answered');
