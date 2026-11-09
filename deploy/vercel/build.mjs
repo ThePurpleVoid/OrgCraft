@@ -126,7 +126,7 @@ export const STATUS_PAGE = `<!doctype html>
   <h1>Agent Team</h1>
   <p id="status" data-health>Checking the control plane…</p>
   <p>The hosted Studio arrives in milestone M4. Until then this site fronts the API at <code>/v1</code>.</p>
-  <p><a href="https://github.com/PurpleGiragge/Agent-Team-Kit/blob/main/docs/deploy/vercel-supabase.md">How this deployment works</a></p>
+  <p><a href="https://github.com/ThePurpleVoid/OrgCraft/blob/main/docs/deploy/vercel-supabase.md">How this deployment works</a></p>
 </main>
 <script src="/status.js"></script>
 </body>

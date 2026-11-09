@@ -6,7 +6,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PurpleGiragge/Agent-Team-Kit.git"
+    "url": "git+https://github.com/ThePurpleVoid/OrgCraft.git"
   },
   "bin": {
     "agent-team": "bin/agent-team.mjs"

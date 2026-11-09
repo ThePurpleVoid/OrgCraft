@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/PurpleGiragge/Agent-Team-Kit/packages/team-model/schema/team-spec.v1.json",
+  "$id": "https://github.com/ThePurpleVoid/OrgCraft/packages/team-model/schema/team-spec.v1.json",
   "title": "Agent Team Kit TeamSpec, version 1",
   "description": "A team as one document. It compiles 1:1 to a project layer (.agent-team/); see packages/team-model/index.mjs.",
   "type": "object",
@@ -15,7 +15,7 @@
     },
     "kit": {
       "type": "string",
-      "description": "The pinned kit, as team.json's \"kit\" (an npx spec such as github:PurpleGiragge/Agent-Team-Kit#v0.4.0)."
+      "description": "The pinned kit, as team.json's \"kit\" (an npx spec such as github:ThePurpleVoid/OrgCraft#v0.4.0)."
     },
     "preset": {
       "type": "string",
