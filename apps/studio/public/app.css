@@ -674,7 +674,7 @@
 /* The screen's h1 is its page name, for screen readers (ALL-3); the gallery shows its own. Phones: 44 px targets. */
 .ats[data-page="gallery"] #page-title { display: none; }
 @media (max-width: 640px) { .ats .skip, .ats #views button, .ats #live { min-height: 44px; } }
-.ats .skip:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.ats .skip:focus { outline: 2px solid var(--ink); outline-offset: 2px; }
 
 /* Phones: whatever scrolls into view lands above the bottom bar, not under it. */
 @media (max-width: 640px) { html:has(.ats) { scroll-padding-bottom: 80px; } .ats main.layout { padding-bottom: 72px; } }
