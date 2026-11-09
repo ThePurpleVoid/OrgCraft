@@ -134,7 +134,7 @@ paths:
     get:
       x-min-role: viewer
       tags: [studio]
-      summary: "The Studio (hosted mode): the team as the Studio reads it from the team's GitHub repository, with base (the default branch's head sha), git and features. 503 until the deployment's GitHub App is set up; 409 no-repo when the team has no repository connected"
+      summary: "The Studio (hosted mode): the team as the Studio reads it from the team's GitHub repository, with base (the default branch's head sha), git, features, and (kit 0.22, additive) members[] and catalog[] computed from the spec exactly as the local Studio returns them (plans team-json-0.22 section 4: each teammate with id, name, type, lane, pool, handsTo, problems; each role type with count of enabled teammates). 503 until the deployment's GitHub App is set up; 409 no-repo when the team has no repository connected"
       responses: { "200": { description: OK } }
   /teams/{team}/studio/v1/team/pr:
     parameters: [ { $ref: "#/components/parameters/team" } ]
@@ -822,6 +822,9 @@ components:
                   reportsTo: { type: string, description: A role slug, or owner }
                   areas: { type: array, items: { type: string }, description: Owned paths, sent to the runner in session.start }
                   pool: { type: integer, description: "Most instances, so to: role#instance can be checked" }
+                  type: { type: string, description: "Additive (ADR 0011, L17): the type a member is based on, when it differs from slug. A message's to may name the type; see team-tools.md" }
+                  name: { type: string, maxLength: 60, description: "Additive: the member's display name, for text people read; a message's to may name it" }
+                  handsTo: { type: array, maxItems: 50, items: { type: string }, description: "Additive: the member ids its structured Hands to lists (the drawn wiring, used to route a message to a type with several members; never a firewall)" }
                   model: { type: string }
                   brief: { type: string, description: "The role's brief as text, at most 20 KB; sent to the runner as session.start prompt.brief" }
             meetings:

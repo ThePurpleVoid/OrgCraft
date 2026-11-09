@@ -8,6 +8,7 @@ import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
 import { checkMeetingDefs } from './meetings.mjs';
+import { approveScope, factsOf, redact as redactText, riskOf } from './signed.mjs';
 import { halted } from './live.mjs';
 
 const scrypt = promisify(scryptCb);
@@ -17,7 +18,6 @@ export const CHAT_TYPES = ['chat.message', 'decision.requested', 'decision.answe
 export const STEP_UP_MINUTES = 5;
 export const APPROVAL_HOURS = 24;
 const STEP_UP_LOCKOUT = { failures: 5, minutes: 15 };
-const RISKS = ['low', 'medium', 'high'];
 
 /** A step-up is needed: 401 with problem type step-up-required (clients.md section 3), never a silent approval. */
 export class StepUpRequired extends Problem {
@@ -276,8 +276,24 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (!Array.isArray(areas) || areas.some((a) => typeof a !== 'string' || a.length > 500) || areas.length > 200) throw new Problem(400, `role ${r.slug}: areas is a list of paths`);
       if (r.pool !== undefined && !(isInt(r.pool) && r.pool >= 1 && r.pool <= 100)) throw new Problem(400, `role ${r.slug}: pool is 1 to 100`);
       if (r.brief !== undefined && r.brief !== null && (typeof r.brief !== 'string' || Buffer.byteLength(r.brief) > 20 * 1024)) throw new Problem(400, `role ${r.slug}: brief is the brief's text, at most 20 KB`);
-      return { slug: r.slug, reportsTo: r.reportsTo, areas, ...(r.pool ? { pool: r.pool } : {}), ...(typeof r.model === 'string' ? { model: r.model.slice(0, 100) } : {}), ...(r.brief ? { brief: r.brief } : {}) };
+      // ADR 0011 (additive): the type a member is based on, its display name, and its structured Hands to (member ids).
+      if (r.type !== undefined && r.type !== null && !SLUG.test(r.type)) throw new Problem(400, `role ${r.slug}: type is a role slug`);
+      if (r.name !== undefined && r.name !== null && (typeof r.name !== 'string' || !r.name.trim() || r.name.length > 60)) throw new Problem(400, `role ${r.slug}: name is text of at most 60 characters`);
+      if (r.handsTo !== undefined && r.handsTo !== null && (!Array.isArray(r.handsTo) || r.handsTo.length > 50 || r.handsTo.some((x) => typeof x !== 'string' || !SLUG.test(x)))) throw new Problem(400, `role ${r.slug}: handsTo is a list of at most 50 member ids`);
+      return { slug: r.slug, reportsTo: r.reportsTo, areas, ...(r.type && r.type !== r.slug ? { type: r.type } : {}), ...(r.name ? { name: r.name.trim() } : {}), ...(r.handsTo?.length ? { handsTo: r.handsTo } : {}), ...(r.pool ? { pool: r.pool } : {}), ...(typeof r.model === 'string' ? { model: r.model.slice(0, 100) } : {}), ...(r.brief ? { brief: r.brief } : {}) };
     });
+    // A display name may not be another teammate's id, a role type or "owner", nor another's name: `to` resolves ids,
+    // then names, then types (L17), so a clash would let a name catch messages meant for someone else (security L17).
+    const key = (s) => String(s).trim().replace(/\s+/g, ' ').toLowerCase();
+    const reserved = new Set(['owner', ...roles.map((r) => r.slug), ...roles.map((r) => r.type).filter(Boolean)]);
+    const names = new Map();
+    for (const r of roles) {
+      if (!r.name) continue;
+      const k = key(r.name);
+      if (reserved.has(k) && k !== r.slug) throw new Problem(400, `role ${r.slug}: the name ${r.name} is already a teammate's id, a role or "owner"; pick another`);
+      if (names.has(k)) throw new Problem(400, `role ${r.slug}: ${names.get(k)} is already called ${r.name}`);
+      names.set(k, r.slug);
+    }
     const doors = roles.filter((r) => r.reportsTo === 'owner');
     if (doors.length !== 1) throw new Problem(409, `exactly one role reports to the owner (the front door); this team has ${doors.length}`);
     for (const r of roles) if (r.reportsTo !== 'owner' && !seen.has(r.reportsTo)) throw new Problem(400, `role ${r.slug} reports to ${r.reportsTo}, which is not in the team`);
@@ -511,11 +527,12 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
    * A session asks for an approval (request_approval, or the runner's policy through approval.wait). Writes the
    * approval and its card, and emits approval.requested and card.updated. `call` is stored as sent; callers redact it.
    */
-  async function requestApproval(ctx, team, { action, call, why, risk = 'medium', links = [], session = null, run = null, role = null, hours = APPROVAL_HOURS }) {
+  async function requestApproval(ctx, team, { action, call, why, links = [], session = null, run = null, role = null, hours = APPROVAL_HOURS, bound = null }) {
     if (typeof action !== 'string' || !action || action.length > 100) throw new Problem(400, 'action is a policy classification, like accept');
     if (call === undefined || call === null || JSON.stringify(call).length > 16 * 1024) throw new Problem(400, 'call is the exact command or tool call, at most 16 KiB');
     if (typeof why !== 'string' || !why || why.length > 4000) throw new Problem(400, 'why is required, at most 4,000 characters');
-    const r = RISKS.includes(risk) ? risk : 'medium';
+    // The risk class is the server's (ADR 0013, security criterion 7): a role's own `risk` is ignored.
+    const r = riskOf({ bound });
     const apr = id('apr');
     const expiresAt = new Date(ctx.now.getTime() + hours * 3_600_000);
     const callText = typeof call === 'string' ? call : JSON.stringify(call);
@@ -526,14 +543,19 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
         ? `${role ?? 'A role'} asks to ${action === 'accept' ? 'merge' : action} #${call.pr} at ${String(call.headSha).slice(0, 7)}`
         : `${role ?? 'A role'} asks to ${action}`,
       // The held call is data, for the client to lay out (and wrap) as code; the body is the role's words only.
-      data: { ...(call && typeof call === 'object' && call.pr ? { pr: call.pr, ...(call.headSha ? { headSha: call.headSha } : {}) } : {}), call: callText.length > 2000 ? `${callText.slice(0, 2000)}…` : callText },
-      body: `${why}\n\n${describeCall(call)}`,
+      // A bound card (ADR 0013) shows facts the server rendered from the signed calls, never the role's `call` text.
+      data: {
+        ...(call && typeof call === 'object' && call.pr ? { pr: call.pr, ...(call.headSha ? { headSha: call.headSha } : {}) } : {}),
+        ...(bound ? { facts: factsOf(bound.calls, redactText), callsHash: bound.hash } : { call: callText.length > 2000 ? `${callText.slice(0, 2000)}…` : callText }),
+      },
+      body: bound ? why : `${why}\n\n${describeCall(call)}`,
       options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger', stepUp: false }],
       risk: r, expiresAt, links: links.filter((l) => l && typeof l.url === 'string').slice(0, 20),
     });
-    await ctx.q(`insert into approvals(id, tenant, team, run, session, role, action, call, why, risk, card, expires_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-      [apr, ctx.tenant, team, run, session, role, action, JSON.stringify(call), why, r, card.id, expiresAt.toISOString()]);
-    const ev = await ctx.emit(team, 'approval.requested', { approval: apr, action, call, why, risk: r, expires: expiresAt.toISOString(), cardId: card.id, session },
+    await ctx.q(`insert into approvals(id, tenant, team, run, session, role, action, call, why, risk, card, expires_at, calls, calls_hash) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+      [apr, ctx.tenant, team, run, session, role, action, JSON.stringify(call), why, r, card.id, expiresAt.toISOString(), bound ? JSON.stringify(bound.calls) : null, bound?.hash ?? null]);
+    // The calls themselves stay in the approval row (deletable with it), not in the permanent log: the event names the hash.
+    const ev = await ctx.emit(team, 'approval.requested', { approval: apr, action, ...(bound ? {} : { call }), why, risk: r, expires: expiresAt.toISOString(), cardId: card.id, session, ...(bound ? { callsHash: bound.hash } : {}) },
       { subject: `approval/${apr}`, ...(run ? { run } : {}), ...(role ? { actor: { kind: 'role', id: role, session, via: 'tool' } } : {}) });
     await ctx.audit({ team, actorKind: role ? 'role' : 'system', actorId: role ?? 'control-plane', session, action: 'approval', target: apr, decision: 'needs-approval', rule: action, event: ev.id });
     return { approval: apr, card };
@@ -550,18 +572,20 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   async function decideIn(ctx, apr, { decision, note, version }, by, stepUp) {
     if (!decision) throw new Problem(400, 'option is approve or deny');
-    const [a] = await ctx.q('select id, team, run, session, card, state, expires_at from approvals where id = $1 for update', [apr]);
+    const [a] = await ctx.q('select id, team, run, session, card, state, expires_at, calls_hash from approvals where id = $1 for update', [apr]);
     if (!a) throw new Problem(404, 'no such approval');
     if (a.state === 'pending' && new Date(a.expires_at).getTime() <= ctx.now.getTime()) throw new Problem(409, 'this approval expired', { body: { ...(await currentCard(ctx, a.card)), state: 'expired' } });
-    await lockOpenCard(ctx, a.card, version);
+    const open = await lockOpenCard(ctx, a.card, version);
     if (a.state !== 'pending') throw new Problem(409, `this approval is ${a.state}`, { body: await currentCard(ctx, a.card) });
     let stepUpId = null;
-    if (decision === 'approved' && !(stepUpId = await useStepUp(ctx, by, stepUp))) throw new StepUpRequired('An approval');
+    // ADR 0013: approving a bound card needs a step-up bound to it: tenant, team, approval, card version and calls.
+    const scope = a.calls_hash ? approveScope({ tenant: ctx.tenant, team: a.team, approval: apr, version: open.version, callsHash: a.calls_hash }) : null;
+    if (decision === 'approved' && !(stepUpId = await useStepUp(ctx, by, stepUp, scope))) throw new StepUpRequired('An approval', scope);
     await ctx.q('update approvals set state = $2, decided_by = $3, decided_at = now() where id = $1', [apr, decision, by]);
     const card = await changeCard(ctx, a.team, a.card, { state: 'answered', answer: { option: decision === 'approved' ? 'approve' : 'deny', ...(note ? { note } : {}), by, at: ctx.now.toISOString() } });
     const ev = await ctx.emit(a.team, 'approval.decided', { approval: apr, decision, by, ...(note ? { note } : {}), session: a.session, cardId: a.card },
       { actor: personActor(by), subject: `approval/${apr}`, ...(a.run ? { run: a.run } : {}) });
-    await ctx.audit({ team: a.team, actorKind: 'person', actorId: by, session: a.session, action: 'approval', target: apr, decision, event: ev.id, detail: stepUpId ? { stepUp: stepUpId } : null });
+    await ctx.audit({ team: a.team, actorKind: 'person', actorId: by, session: a.session, action: 'approval', target: apr, decision, event: ev.id, detail: stepUpId || a.calls_hash ? { ...(stepUpId ? { stepUp: stepUpId } : {}), ...(a.calls_hash ? { callsHash: a.calls_hash } : {}) } : null });
     hooks.approvalDecided && ctx.after.push(() => hooks.approvalDecided(ctx.tenant, a.team, { approval: apr, decision, by, note: note ?? null, session: a.session }));
     return { card, event: ev.id, approval: apr, decision };
   }

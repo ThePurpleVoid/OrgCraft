@@ -23,7 +23,7 @@ const RENEW_BEFORE_MS = 2 * 60_000;
  * clones, worktrees and memory files, `adapter` the runtime (agentSdkAdapter() or stubAdapter(...)).
  * Returns { sessions, link, ready, close() }; ready resolves with the first welcome.
  */
-export function startRunner({ server, key, root, work = root, sandbox = null, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
+export function startRunner({ server, key, root, work = root, sandbox = null, egressEnforced = false, sidecarUnsandboxed = false, proposals = null, previewDelays, adapter, id = 'runner', maxSessions = 8, tiers, rules, sessionEnv, modelProxy, log = () => {}, fetch, link: makeLink = connect }) {
   // The model key stays in this process; sessions reach the model through the loopback proxy (modelproxy.mjs).
   const proxy = modelProxy === undefined ? startModelProxy({ log, onHealth: (h) => reportHealth(h) }) : modelProxy;
   // Outage mode (L29): the control plane hears when the model provider stops or starts answering, and starts no new
@@ -92,11 +92,20 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     return new Promise((resolve) => approvals.set(approvalId, { resolve, session, approval: { ...approval, id: approvalId } }));
   }
 
+  /** secret.get (runner/1): one value for a session's bound resource; the ack carries it, a nack refuses. */
+  async function secretGet(session, name) {
+    const ack = await link.send('secret.get', { session, name });
+    if (ack.nack || typeof ack.value !== 'string') throw new Error(ack.nack ?? 'no value came back');
+    return ack.value;
+  }
+
   /** The policy path: approval.wait, whose ack names the approval the control plane minted. */
   async function approve(s, req) {
-    const ack = await link.send('approval.wait', { session: s.id, approval: { action: req.action, call: req.call, why: req.why, ...(req.pr ? { pr: req.pr, headSha: req.headSha, ...(req.repo ? { repo: req.repo } : {}) } : {}) } });
+    // calls and callsHash (ADR 0013): the exact calls held, and the hash the card is signed over.
+    const signed = req.calls ? { calls: req.calls, callsHash: req.callsHash } : {};
+    const ack = await link.send('approval.wait', { session: s.id, approval: { action: req.action, call: req.call, ...signed, why: req.why, ...(req.pr ? { pr: req.pr, headSha: req.headSha, ...(req.repo ? { repo: req.repo } : {}) } : {}) } });
     if (ack.nack || !ack.approval) return { decision: 'denied', note: ack.nack ?? 'the control plane did not record the approval' };
-    return awaitApproval(ack.approval, s.id, { action: req.action, call: req.call, why: req.why });
+    return awaitApproval(ack.approval, s.id, { action: req.action, call: req.call, ...signed, why: req.why });
   }
 
   function renew(s) {
@@ -134,7 +143,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
     }
     let s;
     const tools = toolServer({ server, session: body.session, token: body.token, fetch, renew: () => renew(s) });
-    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online,
+    s = new Session(body, { adapter, root, work, sandbox: pool, proposals, previewDelays, runnerKey: key, tiers, rules, sessionEnv, modelProxy: proxy, log, tools, emit, approve: (r) => approve(s, r), awaitApproval, online, egressEnforced, sidecarUnsandboxed, secretGet,
       // step.io (N1): sent before the event that names it; a control plane that does not keep step I/O refuses it, harmlessly.
       stepIo: (frame) => { Promise.resolve(link.send('step.io', frame)).catch(() => {}); } });
     s.tools = tools;
@@ -198,7 +207,7 @@ export function startRunner({ server, key, root, work = root, sandbox = null, pr
         return;
       }
       case 'approval.result': {
-        const d = { decision: b.decision, by: b.by, note: b.note, ...(b.headSha ? { headSha: b.headSha } : {}) };
+        const d = { decision: b.decision, by: b.by, note: b.note, ...(b.headSha ? { headSha: b.headSha } : {}), ...(typeof b.callsHash === 'string' ? { callsHash: b.callsHash } : {}) };
         const r = approvals.get(b.approval);
         if (r?.resolve) { approvals.delete(b.approval); r.resolve(d); } else approvals.set(b.approval, { early: d });
         return;

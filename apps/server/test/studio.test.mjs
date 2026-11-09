@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { plane, ADMIN } from './helpers.mjs';
 import { createHostedStudio } from '../studio.mjs';
 import { fakeGitHub } from '../../../tests/fake-github.mjs';
+import { listMembers } from '../../../packages/team-model/index.mjs';
 
 const KIT = new URL('../../../', import.meta.url).pathname;
 const ORIGIN = 'https://cp.example';
@@ -55,6 +56,14 @@ test('read, preview and publish through the M4 app on a bound installation; a re
       const { spec, base } = read.body;
       assert.match(base, /^[0-9a-f]{40}$/);
       assert.equal(read.body.features.publish, true);
+      // L13: the same members[] and catalog[] as the local Studio (team-json-0.22 section 4), computed, never stored.
+      assert.ok(read.body.members.length > 0 && read.body.catalog.length > 0);
+      assert.deepEqual({ members: read.body.members, catalog: read.body.catalog }, JSON.parse(JSON.stringify(listMembers(spec, read.body.kit))));
+      for (const mb of read.body.members) {
+        for (const k of ['id', 'name', 'type', 'typeTitle', 'source', 'enabled', 'lane', 'handsTo', 'problems']) assert.ok(k in mb, `member ${mb.id} has ${k}`);
+        assert.ok(mb.name, 'a name is always filled');
+      }
+      for (const c of read.body.catalog) assert.equal(c.count, read.body.members.filter((mb) => mb.type === c.type && mb.enabled).length, `count of ${c.type}`);
       spec.values = { ...spec.values, PROJECT_NAME: 'Shop online' };
       const pre = await call('POST', '/teams/shop/studio/v1/team/preview', { spec, base }, writeHeaders());
       assert.equal(pre.status, 200, JSON.stringify(pre.body));

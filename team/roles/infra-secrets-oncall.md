@@ -17,7 +17,9 @@ Your cloud and hosting plugins, gh, error monitoring
 A workflow or config change; a deploy request from the release manager; an error alert
 
 ## Hands to
-Release manager, security reviewer, the owning dev
+- release-manager
+- security-reviewer
+The owning dev
 
 ## Rules
 - Secrets live in the CI secret store, the cloud vault and the machine keychain; never in chat, memory or briefs.
@@ -25,8 +27,8 @@ Release manager, security reviewer, the owning dev
 - Reject workflow changes that blow the CI budget (for example device or macOS jobs when the team tests locally).
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh infra-secrets-oncall status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/infra-secrets-oncall.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.
