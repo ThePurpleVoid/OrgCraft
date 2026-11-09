@@ -241,8 +241,10 @@ const ctx = {
 // ------------------------------------------------------------------------------------------------ canvas
 
 const W = 208, GX = 22, GY = 48, IND = 22;
-// B1.1-11: the smallest card text is 13 px, so the chart never draws smaller than 12/13 of its size; a wider org scrolls.
+// B1.1-11: the smallest card text is 13 px, so the chart never draws smaller than 12/13 of its size. A wide org wraps
+// its rows to the canvas instead (layout's maxW), so no teammate is ever cut off at the side; a tall one scrolls down.
 const MIN_SCALE = 0.93;
+const PAD = 24;
 let H = 54, ROW = H + 12; // a third line, the board state, when the team is running (change safety, criterion 1)
 
 /**
@@ -250,7 +252,7 @@ let H = 54, ROW = H + 12; // a third line, the board state, when the team is run
  * (two levels, up to ten roles) is drawn as a lane, listed down a column and indented by depth; a manager's
  * direct reports that manage no one stack in one column beside its other reports.
  */
-function layout(team) {
+function layout(team, maxW = Infinity) {
   const kids = new Map(team.map((r) => [r.slug, []]));
   kids.set('owner', []);
   const present = new Set(team.map((r) => r.slug));
@@ -291,33 +293,51 @@ function layout(team) {
     } };
   };
   const stack = (list) => ({ w: W + IND, h: list.length * ROW - 12, list });
+  // A manager's reports sit side by side; when they are wider than the canvas they wrap onto more rows (B1.1-11),
+  // and the line to a later row runs down the block's left edge, between the blocks, so it crosses no card.
+  const rowsOf = (parts) => {
+    const rows = [];
+    for (const p of parts) {
+      const row = rows.at(-1);
+      if (row && row.w + GX + p.w <= maxW) { row.parts.push(p); row.w += GX + p.w; } else rows.push({ parts: [p], w: p.w });
+    }
+    for (const r of rows) r.h = Math.max(...r.parts.map((p) => p.h));
+    return rows;
+  };
   const block = (s) => {
     if (isLane(s)) return lane(s);
     const list = kids.get(s);
     const leaves = list.filter((c) => !kids.get(c).length);
     const parts = list.filter((c) => kids.get(c).length).map(block);
     if (leaves.length) parts.push(stack(leaves));
-    const inner = parts.reduce((n, p) => n + p.w, 0) + GX * Math.max(0, parts.length - 1);
-    const w = Math.max(W, inner);
-    return { w, head: w / 2, h: H + (parts.length ? GY + Math.max(...parts.map((p) => p.h)) : 0), at(x, y) {
+    const rows = rowsOf(parts);
+    const w = Math.max(W, ...rows.map((r) => r.w));
+    const tall = rows.reduce((n, r) => n + GY + r.h, 0);
+    return { w, head: w / 2, h: H + tall, at(x, y) {
       const me = { x: x + (w - W) / 2, y };
       pos.set(s, me);
-      let cx = x + (w - inner) / 2;
-      const cy = y + H + GY;
-      const bar = y + H + GY / 2;
-      for (const p of parts) {
-        if (p.list) {
-          p.list.forEach((c, i) => {
-            const at = { x: cx + IND, y: cy + i * ROW };
-            pos.set(c, at);
-            edges.push(`M${me.x + W / 2},${me.y + H} V${bar} H${cx + 8} V${at.y + H / 2} H${at.x}`);
-          });
-        } else {
-          p.at(cx, cy);
-          edges.push(`M${me.x + W / 2},${me.y + H} V${bar} H${cx + p.head} V${cy}`);
+      let top = y + H;
+      rows.forEach((row, k) => {
+        const cy = top + GY;
+        const bar = top + GY / 2;
+        // The first row hangs from the manager; a later row from a line down the block's left edge.
+        const from = k === 0 ? `M${me.x + W / 2},${me.y + H} V${bar}` : `M${me.x + W / 2},${me.y + H} V${y + H + GY / 2} H${x - GX / 2} V${bar}`;
+        let cx = x + (w - row.w) / 2;
+        for (const p of row.parts) {
+          if (p.list) {
+            p.list.forEach((c, i) => {
+              const at = { x: cx + IND, y: cy + i * ROW };
+              pos.set(c, at);
+              edges.push(`${from} H${cx + 8} V${at.y + H / 2} H${at.x}`);
+            });
+          } else {
+            p.at(cx, cy);
+            edges.push(`${from} H${cx + p.head} V${cy}`);
+          }
+          cx += p.w + GX;
         }
-        cx += p.w + GX;
-      }
+        top = cy + row.h;
+      });
     } };
   };
   const root = block('owner');
@@ -406,7 +426,7 @@ function renderCanvas() {
     renderWiring($('#canvas'), wiringCtx, wiring);
     // On a phone (or in a preview) the wiring reads but does not change (B1.7): wires open, nothing is added or deleted.
     if (locked()) for (const c of $$('#canvas :is(select, input, textarea, [data-del], #w-bind, #w-hand, .chip)')) { c.disabled = true; c.draggable = false; }
-    $('#summary').textContent = view.draft.count ? t('canvas.changes', { n: view.draft.count }) : '';
+    $('#summary').textContent = pendingCount() ? t('canvas.changes', { n: pendingCount() }) : '';
     return;
   }
   const canvasMode = ['org', 'flow', 'systems'].includes(mode);
@@ -414,7 +434,7 @@ function renderCanvas() {
   // B1.7 / B1.1-12: a phone gets the team as a list, top of the org first, read-only, and says so.
   if (small.matches && mode === 'org') { renderList(); return; }
   for (const b of $$('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
-  $('#summary').textContent = view.draft.count ? t('canvas.changes', { n: view.draft.count }) : '';
+  $('#summary').textContent = pendingCount() ? t('canvas.changes', { n: pendingCount() }) : '';
   if (mode === 'systems') renderSystemsStrip($('#systems-strip'), ctx, selectedSystem);
   if (!canvasMode) {
     if (!sugg) loadSuggestions();
@@ -435,7 +455,9 @@ function renderCanvas() {
     if (offSeat(r)) { ghosts.push({ ...r, off: true }); shown.add(r.slug); }
   }
   const cards = [...view.team, ...ghosts];
-  const lay = layout(cards);
+  // The widest chart that still fits the canvas at the smallest scale: rows wrap to it, so nothing is cut at the side.
+  const room = $('#canvas').clientWidth - 24; // room for a vertical scroll bar
+  const lay = layout(cards, room > 0 ? room / MIN_SCALE - PAD * 2 : Infinity);
   const { pos, w, h } = lay;
   let edges = lay.edges.map((d) => `<path class="edge" d="${d}"></path>`);
   if (mode === 'flow') {
@@ -443,8 +465,9 @@ function renderCanvas() {
     edges = edges.map((e) => e.replace('class="edge"', 'class="edge faint"')).concat(flow.edges.filter((x) => pos.has(x.from) && pos.has(x.to) && (!selected || x.from === selected || x.to === selected))
       .map((x) => handoff(pos.get(x.from), pos.get(x.to), !selected ? 'all' : x.from === selected ? 'out' : 'in')));
   }
-  const PAD = 24;
-  const fit = Math.min(1, ($('#canvas').clientWidth - 8) / (w + PAD * 2));
+  // Fit to screen fits both ways (B1.1-5), down to the 12 px text floor; below that a tall team scrolls down, never sideways.
+  const box = $('#canvas');
+  const fit = Math.min(1, (box.clientWidth - 24) / (w + PAD * 2), (box.clientHeight - 8) / (h + PAD * 2));
   scale = Math.max(MIN_SCALE, zoom === 'fit' ? fit : zoom);
   $('#zoom-level').textContent = `${Math.round(scale * 100)}%`;
   const owner = pos.get('owner');
@@ -466,7 +489,7 @@ function renderCanvas() {
 /** The org as an indented list, for phones: each teammate under its manager, with its state and checks. */
 function renderList() {
   for (const b of $$('#views [data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === mode));
-  $('#summary').textContent = view.draft.count ? t('canvas.changes', { n: view.draft.count }) : '';
+  $('#summary').textContent = pendingCount() ? t('canvas.changes', { n: pendingCount() }) : '';
   const shown = [...view.team, ...view.all.filter((r) => !r.enabled && offSeat(r))];
   const on = new Set(shown.map((r) => r.slug));
   const kids = new Map([['owner', []], ...shown.map((r) => [r.slug, []])]);
@@ -736,7 +759,7 @@ function teamHtml() {
   return `<h2>Team</h2><dl class="team-facts">${rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('')}</dl>
     <h2>${esc(t('settings.agentsmd.heading'))}</h2>
     <label class="switch row-target"><input type="checkbox" id="t-agents-md"${teamTargets(spec.options).includes('agents-md') ? ' checked' : ''}> ${esc(t('settings.agentsmd'))}</label>
-    <p class="hint">Publish puts the team's instructions into AGENTS.md at the top of the repository. Text you added to that file yourself stays. Teammates working through those agents show "self-reported" on the board: without hooks, a card changes only when the role reports.</p>
+    <p class="hint">Publish puts the team's instructions into AGENTS.md at the top of the repository. Text you added to that file yourself stays. Teammates working through those tools show "self-reported" on the board: without hooks, a card changes only when the role reports.</p>
     <p class="hint">Every team gets the core rules: one door for the owner's requests, the owner's words passed on unchanged, one owner per area, the four message kinds and the board. A team's template or preset adds the rest.</p>
     <p class="muted">Pick a role on the canvas or in the library.</p>`;
 }
@@ -1422,7 +1445,7 @@ function saveDraft() {
     if (!spec || !published || previewing) return;
     try {
       // A new team, not published yet: all of it is the draft, with the template it came from.
-      if (S.noTeam) localStorage.setItem(draftKey(), JSON.stringify({ base: 'new', template: made?.id ?? 'almost-empty', spec, at: Date.now() }));
+      if (S.noTeam) localStorage.setItem(draftKey(), JSON.stringify({ base: 'new', template: made?.id ?? 'almost-empty', from: published, spec, at: Date.now() }));
       else if (JSON.stringify(spec) === JSON.stringify(published)) localStorage.removeItem(draftKey());
       else localStorage.setItem(draftKey(), JSON.stringify({ base: fingerprint(published), spec, at: Date.now() }));
     } catch { /* private mode or full: this session only */ }
@@ -1439,7 +1462,9 @@ function restoreNewTeam() {
   const kept = readDraft();
   if (kept?.base !== 'new' || !kept.spec) return false;
   made = kept.template === 'almost-empty' ? null : cardOf(kept.template);
-  load(kept.spec);
+  // The template as it was opened stays the baseline, so "{n} changes not published" counts the same after a reload.
+  load(kept.from ?? kept.spec);
+  spec = kept.spec;
   restoredNote(kept);
   setPage('team');
   return true;
