@@ -146,6 +146,22 @@ test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { 
   });
   assert.ok(smallest >= 12, `card text is at least 12 px (${smallest.toFixed(1)})`);
   await page.getByRole('button', { name: 'Fit to screen' }).click();
+  // B1.1-11 / B1.1-5 at 1280 x 800: every teammate fits the canvas's width (the rows wrap), first and after Fit to
+  // screen, and the text floor holds; a team taller than the canvas scrolls down only.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const cut = () => page.evaluate(() => {
+    const c = document.querySelector('#canvas');
+    const r = c.getBoundingClientRect();
+    const out = [...c.querySelectorAll('.node rect.card')].filter((x) => { const b = x.getBoundingClientRect(); return b.left < r.left || b.right > r.left + c.clientWidth; });
+    return { wide: c.scrollWidth > c.clientWidth, cut: out.length };
+  });
+  assert.deepEqual(await cut(), { wide: false, cut: 0 }, 'no teammate is cut off at the side');
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await page.getByRole('button', { name: 'Fit to screen' }).click();
+  assert.deepEqual(await cut(), { wide: false, cut: 0 }, 'Fit to screen brings every teammate back');
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'chart-1280-light.png') });
+  await page.setViewportSize({ width: 1280, height: 1200 });
+  await page.getByRole('button', { name: 'Fit to screen' }).click();
 
   // ---- Step 4 (D4): open Backend dev and change it.
   await selectTeammate(page, 'backend-dev');
@@ -225,9 +241,12 @@ test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { 
 
   // ---- B1.1-10: a reload keeps the unpublished team, says so, and Discard changes asks first. The hint stays dismissed.
   await page.setViewportSize({ width: 1280, height: 1200 });
+  const summaryBefore = await page.locator('#summary').textContent();
+  assert.match(summaryBefore, /\d+ changes not published/);
   await page.reload();
   await page.locator('#restored', { hasText: /^Your unpublished changes from .+ are back\./ }).waitFor();
   await card(page, 'backend-dev-2').waitFor();
+  assert.equal(await page.locator('#summary').textContent(), summaryBefore, 'B1.1-6: the counter counts the restored draft');
   await selectTeammate(page, 'backend-dev');
   assert.equal(await insp.locator('details.section', { has: page.locator('summary', { hasText: /^Rules/ }) }).locator('textarea').inputValue(), 'Every migration has a rollback note.');
   assert.match(await page.locator('#publish').textContent(), /^Publish \d+ changes$/);
@@ -257,6 +276,16 @@ test('B4.1-3: a support team draws only its own teammates; the rest of the kit s
   await page.locator('#create-dialog').getByRole('button', { name: 'Open the team' }).click();
   await card(page, 'support-lead').waitFor();
   for (const slug of ['cto', 'architect', 'backend-dev', 'qa-web', 'product-manager']) assert.equal(await card(page, slug).count(), 0, `no ${slug} card`);
+  // The pack's own role names everywhere a person reads (CPO ruling): the card, the catalog; ids stay in files.
+  assert.match(await card(page, 'bug-triager').textContent(), /Problem-report triager/);
+  assert.doesNotMatch(await page.locator('#library').textContent(), /Bug triager/);
+  assert.match(await page.locator('#library .cat-role[data-type="bug-triager"]').textContent(), /Problem-report triager/);
+  // The page header names the team only; the files and the version are in the team's settings.
+  assert.equal(await page.locator('#project').textContent(), 'Help desk');
+  const facts = await page.locator('.team-facts').textContent();
+  assert.match(facts, /Files.*help-desk/);
+  assert.match(facts, /VersionOrgCraft \d/);
+  assert.doesNotMatch(facts, /\bKit\b/);
   // They are still in the catalog, folded under "Browse all roles…", and adding one works.
   const browse = page.locator('#library details.browse');
   assert.equal(await browse.locator('.cat-role[data-type="cto"]').count(), 1);

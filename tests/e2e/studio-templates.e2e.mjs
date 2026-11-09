@@ -98,7 +98,7 @@ test('from the gallery to a published support team, and the repository opens its
   const facts = page.locator('#inspector .team-facts');
   await facts.getByText('Europe/Lisbon').waitFor();
   assert.match(await facts.textContent(), /Shared rules\s*the core only/);
-  assert.match(await facts.textContent(), /Started from\s*Customer support team \(kit /);
+  assert.match(await facts.textContent(), /Started from\s*Customer support team \(OrgCraft /);
   assert.equal(await page.locator('#publish').isVisible(), true);
   assert.equal(await page.locator('#pages [data-page="chat"]').isVisible(), false, 'no chat before the team exists');
 
