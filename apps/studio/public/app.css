@@ -703,3 +703,12 @@
 /* The AGENTS.md switch: the whole row is the target (ALL-1). */
 .ats label.row-target { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .ats label.row-target input { width: 20px; height: 20px; flex: none; }
+
+/* Live overrides (L18): Stop everything in More, and a banner for every live change in force until it is lifted. */
+.ats .stop-all { color: var(--error); font-weight: 600; }
+.ats .stop-all[aria-pressed="true"] { opacity: .6; }
+.ats .live-banner { background: color-mix(in srgb, var(--error) 10%, var(--panel)); border-bottom: 1px solid var(--error); color: var(--ink); padding: 6px 16px; }
+.ats .live-banner .live-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0; font-size: 14px; }
+.ats .live-banner .live-text { font-weight: 600; }
+.ats .live-banner .hint { margin: 2px 0; font-size: 12.5px; }
+@media (max-width: 640px) { .ats .live-banner button, .ats #i-live-pause, .ats .stop-all { min-height: 44px; } }
