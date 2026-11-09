@@ -72,6 +72,9 @@ test('a local server runs in the sidecar with its secret; the agent never sees i
       return {};
     },
   });
+  // What a CI host or a login shell sets (the MCP SDK passes these through by default): none may reach the server.
+  const had = Object.fromEntries(['USER', 'LOGNAME', 'SHELL', 'TERM'].map((k) => [k, process.env[k]]));
+  Object.assign(process.env, { USER: 'runner', LOGNAME: 'runner', SHELL: '/bin/bash', TERM: 'xterm' });
   const runner = startRunner({ server: cp.url, key: cp.key, root, adapter, sidecarUnsandboxed: true });
   try {
     await runner.ready;
@@ -82,7 +85,7 @@ test('a local server runs in the sidecar with its secret; the agent never sees i
     assert.equal(seen.mcp.notes.type, 'http', 'the agent gets the sidecar\'s endpoint, not the command');
     assert.ok(!JSON.stringify(seen.mcp).includes(FIXTURE));
     assert.match(seen.envResult, /NOTES_TOKEN=\[secret: NOTES_TOKEN\]/, 'the server had it; the result is redacted');
-    assert.match(seen.envResult, /keys=HOME,NOTES_TOKEN,PATH/, 'the server gets PATH, HOME and its own secrets only');
+    assert.match(seen.envResult, /keys=HOME,NOTES_TOKEN,PATH$/, 'the server gets PATH, HOME and its own secrets only');
     assert.equal(seen.key, idempotencyKey(cp.events.find((e) => e.type === 'session.started').actor.session, seen.callId), 'the key is made from the decided call\'s id');
     assert.equal(seen.again.isError, true, 'a decided call runs once');
     assert.equal(seen.undecided.isError, true);
@@ -93,6 +96,7 @@ test('a local server runs in the sidecar with its secret; the agent never sees i
     assert.ok(!JSON.stringify(cp.events).includes(SECRET) && !JSON.stringify(cp.frames).includes(SECRET), 'no event or frame carries the secret');
     noFailedTurns(cp);
   } finally {
+    for (const [k, v] of Object.entries(had)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     await runner.close();
     await cp.close();
   }

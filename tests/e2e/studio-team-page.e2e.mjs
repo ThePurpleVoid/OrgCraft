@@ -168,9 +168,10 @@ test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { 
   const insp = page.locator('#inspector');
   const markOf = (label) => insp.locator('.field', { has: page.locator(`label:has-text("${label}")`) }).first();
   // B1.3-2: a name clash says so, and nothing changes.
+  // L35: a role's own name is an address (messages are routed by it), so it is refused in its own words.
   await page.locator('#i-name').fill('CTO');
   await page.locator('#i-name').press('Enter');
-  await insp.getByText('Another teammate is already called CTO.').waitFor();
+  await insp.getByText('OrgCraft already uses "CTO" for something else on this team. Pick another name.').waitFor();
   assert.equal(await page.locator('#i-name').getAttribute('aria-invalid'), 'true');
   await page.locator('#i-name').fill('Backend dev');
   await page.locator('#i-name').press('Enter');

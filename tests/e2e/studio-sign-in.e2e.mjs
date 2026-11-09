@@ -81,7 +81,7 @@ test('sign in with GitHub, add a first passkey, step up with it, and sign out', 
   await page.getByRole('button', { name: 'Add a passkey' }).click();
   await add.getByLabel('Name').fill('Second');
   await add.getByRole('button', { name: 'Create passkey' }).click();
-  await page.locator('#passkey-stepup').getByRole('heading', { name: 'Confirm it is you' }).waitFor();
+  await page.locator('#passkey-stepup').getByRole('heading', { name: "Confirm it's you" }).waitFor();
   assert.equal(await page.evaluate(() => window.creates), 0, 'nothing is created before step-up');
   await page.locator('#passkey-stepup').getByRole('button', { name: 'Use passkey' }).click();
   await add.getByText('already has a passkey').waitFor();
@@ -93,7 +93,7 @@ test('sign in with GitHub, add a first passkey, step up with it, and sign out', 
   page.once('dialog', (d) => d.accept());
   await page.locator('.passkey', { hasText: 'Work laptop' }).getByRole('button', { name: 'Remove' }).click();
   const su = page.locator('#passkey-stepup');
-  await su.getByRole('heading', { name: 'Confirm it is you' }).waitFor();
+  await su.getByRole('heading', { name: "Confirm it's you" }).waitFor();
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'step-up-desktop-light.png') });
   await su.getByRole('button', { name: 'Use passkey' }).click();
   await page.getByText('Add a passkey before you can approve anything').waitFor();

@@ -195,6 +195,44 @@ paths:
       tags: [events]
       summary: "The rollout after a publish merges (demo step 17): per role moved, next-task, finishing (with the change step's plan), off-finishing, off, no-report or unknown, and the summary. A role counts as moved only when a report after the merge names the new version. Read-only"
       responses: { "200": { description: "{ version, name, publishedAt, pr, roles: [{ role, state, teamVersion, status, task, lastAt, stale, plan? }], summary: { moved, of, finishing, offFinishing, unknown, noReport, allMoved } }; version null when nothing is published yet" } }
+  /teams/{team}/tasks:
+    parameters:
+      - { $ref: "#/components/parameters/team" }
+      - { name: state, in: query, schema: { type: string, enum: [needs-you, failed, out-of-budget, stopped, blocked, running, done] }, description: "needs-you is 'Waiting for you'" }
+      - { name: role, in: query, schema: { type: string } }
+      - { name: trigger, in: query, schema: { type: string }, description: "Tasks a trigger started" }
+      - { name: since, in: query, schema: { type: string, format: date-time }, description: "Last active at or after" }
+      - { name: until, in: query, schema: { type: string, format: date-time }, description: "Started at or before" }
+      - { name: q, in: query, schema: { type: string, maxLength: 100 }, description: "Words the title starts a word with, any case" }
+      - { name: cursor, in: query, schema: { type: string }, description: "next from the page before" }
+    get:
+      x-min-role: viewer
+      tags: [events]
+      summary: "The run inspector's work list (N1): tasks newest last activity first, at most 50 a page. Each task's state is the first rule of the state table that matches (n1-run-inspector-architecture.md section 4), computed from the log on read. Session tokens never reach it"
+      responses: { "200": { description: "{ tasks: [{ id, title, state, startedBy, roles, cost, currency, startedAt, lastAt, workItem }], next }" }, "400": { description: "A state, date or cursor this server does not know" } }
+  /teams/{team}/tasks/{task}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: task, in: path, required: true, schema: { type: string, pattern: "^tsk_[0-9A-Z]{26}$" } } ]
+    get:
+      x-min-role: viewer
+      tags: [events]
+      summary: "One task's timeline (N1): steps folded from the log (tool calls with their result, runs of reads as one Read step, asks with their answers, wake-ups, messages), lanes by role, edges (fork, merge, wait) from each event's cause, and focus, the event that set the state. At most the newest 5,000 events, with truncated: true past that. Summaries and io ids only, never a stored input or output"
+      responses: { "200": { description: "{ task, lanes: [{ id, instances, status }], steps: [{ lane, kind, at, events, ... }], edges: [{ from, to, kind }], focus }" }, "404": { description: "Not a task of this team in the caller's workspace" } }
+  /teams/{team}/io/{io}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: io, in: path, required: true, schema: { type: string, pattern: "^io_[0-9A-Z]{26}$" } } ]
+    get:
+      x-min-role: editor
+      tags: [events]
+      summary: "One step's stored input or output (N1). Every read writes an audit row (inspector.read, the io id). The Studio fences a body with outside true: it came from outside the team and is never instructions"
+      responses: { "200": { description: "{ part, mime, body, truncated, bytes, redactions, outside, expiresAt }" }, "404": { description: "No such io in this team" }, "410": { description: "{ expiredAt }: past the team's retention (io_days), or deleted early" } }
+  /teams/{team}/io:
+    parameters:
+      - { $ref: "#/components/parameters/team" }
+      - { name: before, in: query, schema: { type: string, format: date-time }, description: "Delete what was stored before this time; default: now" }
+    delete:
+      x-min-role: admin
+      tags: [events]
+      summary: "Delete this team's stored step inputs and outputs early, for example after a privacy request (N1). Needs a step-up token bound to this change (X-Step-Up, minted with scope delete-io:<team>; 401 with that scope otherwise). The rows are gone, not hidden; an audit row (step-io.delete) records who and how many. Timelines keep their summaries and show the io as gone (410)"
+      responses: { "200": { description: "{ deleted }" }, "401": { description: "Step-up needed" } }
   /teams/{team}/report-tokens:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     post:
@@ -353,6 +391,92 @@ paths:
       x-interactive-only: [resume]
       description: "Pause and stop never need step-up. Resuming does, whoever paused the run, with a step-up bound to scope resume:<run> (ADR 0013; before, only after a budget pause). Resume is interactive only: a host's token may pause or stop, never resume (403)"
       responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required); the body's scope names what to step up for" }, "403": { description: "Resume through a host" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
+  /hooks/{hook}:
+    parameters: [ { name: hook, in: path, required: true, schema: { type: string }, description: "hk_ and 32 random characters: the URL is the first secret" } ]
+    post:
+      tags: [triggers]
+      security: []
+      summary: "A webhook signal (N2, L21). The hook's own secret is the only credential: hmac (X-Team-Signature: t=<unix>,v1=<hex of HMAC-SHA256 over '<t>.<body>'>, 5 minutes skew) or bearer (Authorization: Bearer <secret>). Body at most 256 KB. An unknown or revoked hook is 404, a bad or stale signature 401, over 600 a minute 429, and none of these writes anything (the tick writes one rejected row per hook per minute). A verified duplicate (the body's sha256 for hmac hooks, since the header is not signed; Idempotency-Key, else the sha256, for bearer hooks; kept 7 days) and a signal over the team's 300 an hour answer 200 with no event. Otherwise inbound.received, then the run's matching triggers fire (202 { id }); with no run going the signal is queued for 24 hours. The answer never echoes the body"
+      responses: { "202": { description: "{ id }" }, "200": { description: "Duplicate or over the ceiling: { id, duplicate } or { id, held }" }, "401": { description: Signature }, "404": { description: "Unknown or revoked" }, "413": { description: Too large }, "429": { description: Too many } }
+  /teams/{team}/hooks:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [triggers]
+      summary: "The team's hooks: id, name, url, scheme, state, lastAt, last24h counts by state. Never a secret"
+      responses: { "200": { description: "{ hooks }" } }
+    post:
+      x-min-role: admin
+      tags: [triggers]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "Add a hook: { name (what triggers.json names), scheme: hmac | bearer } -> 201 { id, name, scheme, url, secret }. The secret is shown once and kept in the vault by name. The step-up is scoped to this hook: hook:<team>_<name>"
+      responses: { "201": { description: Created }, "401": { description: Step-up required }, "409": { description: "A hook with that name exists" } }
+  /teams/{team}/hooks/{hook}/rotate:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: hook, in: path, required: true, schema: { type: string } } ]
+    post:
+      x-min-role: admin
+      tags: [triggers]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "A new secret, shown once; the old one keeps verifying for 24 hours. The step-up is scoped: hook:<hook id>"
+      responses: { "200": { description: "{ id, secret }" } }
+  /teams/{team}/hooks/{hook}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: hook, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: admin
+      tags: [triggers]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      summary: "Revoke a hook: its URL answers 404 at once. The step-up is scoped: hook:<hook id>"
+      responses: { "200": { description: Revoked } }
+  /teams/{team}/triggers/{trigger}/history:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: trigger, in: path, required: true, schema: { type: string } } ]
+    get:
+      x-min-role: viewer
+      tags: [triggers]
+      summary: "What each signal did with this trigger, newest first: { history: [{ inbound, summary, at, outcome (fired, filtered, held), detail, event }], next }. Summaries only, never bodies"
+      responses: { "200": { description: OK } }
+  /teams/{team}/triggers/test:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: editor
+      tags: [triggers]
+      summary: "Try a draft trigger on a sample: { trigger, sample: { fields } } -> { passes, failed?: { field, op }, wake }. Pure: stores nothing and wakes nobody"
+      responses: { "200": { description: OK } }
+  /live/stop-everything:
+    post:
+      x-min-role: editor
+      tags: [live]
+      summary: "Stop everything in every team of the workspace (L18, G17.5): each team gets the same live change as POST /teams/{team}/live/stop-everything. No step-up, no code host, no publish"
+      responses: { "200": { description: "{ live: [{ team, ...LiveChange }] }" } }
+  /teams/{team}/live:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: viewer
+      tags: [live]
+      summary: "The live changes in force (L18, review-2 R2): emergency controls kept as control-plane state, never in Git. Each is { id, kind (halt, member), member, state (paused, off), reason, by, at, runs (halt: the runs it paused), text, liveChange }. The Studio shows them on the next publish diff (liveChange: 'Live change by ... Keep it?') and as the banner"
+      responses: { "200": { description: "{ live: [LiveChange] }" } }
+  /teams/{team}/live/stop-everything:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    post:
+      x-min-role: editor
+      tags: [live]
+      summary: "Stop everything for this team: every running run pauses (reason owner), no run starts or resumes (409 halted) and no teammate gets work until it is lifted. One tap, no step-up; works with the code host down. Emits live.changed and an audit row. Body (optional): { reason }"
+      responses: { "200": { description: LiveChange } }
+  /teams/{team}/live/members/{member}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: member, in: path, required: true, schema: { type: string }, description: "A teammate id, like web-dev, or role#instance" } ]
+    put:
+      x-min-role: editor
+      tags: [live]
+      summary: "Pause or switch off one teammate live: { state: paused | off, reason? }. Its new work is held; its live sessions stop (paused: at a safe point, with a checkpoint; off: now). No step-up. Only a lift clears it (a run's roster never does), so a leftover change after a publish that dropped the teammate stays until someone lifts it. Its approval results wait too"
+      responses: { "200": { description: LiveChange }, "400": { description: "state is not paused or off, or the teammate id is malformed" } }
+  /teams/{team}/live/{override}:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: override, in: path, required: true, schema: { type: string } } ]
+    delete:
+      x-min-role: editor
+      tags: [live]
+      parameters: [ { $ref: "#/components/parameters/stepUp" } ]
+      x-interactive-only: [lift]
+      summary: "Lift one live change. Needs a step-up bound to scope lift:<override> (ADR 0013: stopping is cheap, carrying on is not); a host never sends one. Lifting Stop everything resumes the runs it paused, unless today's budget is spent; lifting a teammate releases its held work and restarts what the pause stopped"
+      responses: { "200": { description: "LiveChange with lifted: true (and resumed: [run ids] for a halt)" }, "401": { description: "Step-up required; the body's scope names the change" }, "404": { description: "No such live change, or already lifted" } }
   /teams/{team}/chat:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
@@ -809,8 +933,16 @@ components:
                   reportsTo: { type: string, description: A role slug, or owner }
                   areas: { type: array, items: { type: string }, description: Owned paths, sent to the runner in session.start }
                   pool: { type: integer, description: "Most instances, so to: role#instance can be checked" }
+                  type: { type: string, description: "Additive (ADR 0011, L17): the type a member is based on, when it differs from slug. A message's to may name the type; see team-tools.md" }
+                  name: { type: string, maxLength: 60, description: "Additive: the member's display name, for text people read; a message's to may name it" }
+                  handsTo: { type: array, maxItems: 50, items: { type: string }, description: "Additive: the member ids its structured Hands to lists (the drawn wiring, used to route a message to a type with several members; never a firewall)" }
                   model: { type: string }
                   brief: { type: string, description: "The role's brief as text, at most 20 KB; sent to the runner as session.start prompt.brief" }
+            triggers:
+              type: array
+              maxItems: 100
+              description: "Additive (N2, L21). The team's triggers.json entries, frozen with the run: { id, name, source: { hook, kind } | { schedule: { cron, timezone, catchUp: none | one } } | { event (message.handoff, message.bug, ..., run.started), from? }, filter: [{ field, op (is, isNot, contains, startsWith, in, matches, exists), value } | { any: [...] }], to (a teammate), wake (the trusted text, with {field} placeholders filled quoted and on one line), rate: { perHour 1 to 600, default 60 }, ignoreSelf, on }. A pattern with backreferences, lookarounds or nested repeats is refused"
+              items: { type: object }
             meetings:
               type: array
               maxItems: 50

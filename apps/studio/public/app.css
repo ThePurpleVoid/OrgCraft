@@ -723,3 +723,31 @@
   .ats #notifications input:not([type="checkbox"]), .ats #notifications select, .ats #notifications button:not(.info) { min-height: 44px; }
   .ats .auth-brand a { display: inline-flex; align-items: center; min-height: 44px; }
 }
+
+/* Live overrides (L18): Stop everything in More, and a banner for every live change in force until it is lifted. */
+.ats .stop-all { color: var(--error); font-weight: 600; }
+.ats .stop-all[aria-pressed="true"] { opacity: .6; }
+.ats .live-banner { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--error) 10%, var(--panel)); border-bottom: 1px solid var(--error); color: var(--ink); padding: 6px 16px; }
+.ats .live-banner .live-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0; font-size: 14px; }
+.ats .live-banner .live-text { font-weight: 600; }
+.ats .live-banner .hint { margin: 2px 0; font-size: 12.5px; }
+@media (max-width: 640px) { .ats .live-banner button, .ats #i-live-pause, .ats .stop-all { min-height: 44px; } }
+/* The Publish sheet (B5.1, L14): Widens access first, then checks, one line per change with its Undo, folded files. */
+.ats #publish-dialog { width: min(720px, calc(100vw - 32px)); }
+.ats .sheet-sec h3 { margin: 4px 0 6px; font-size: 14px; color: var(--ink); text-transform: none; letter-spacing: 0; }
+.ats .sheet-sec .clist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ats .sheet-sec .clist li { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 13.5px; color: var(--ink); }
+.ats .sheet-sec .clist .ctext { flex: 1; }
+.ats .sheet-sec .clist .dot.accent { background: var(--accent); }
+.ats .sheet-sec .clist .dot.warn { background: var(--warn); }
+.ats .sheet-sec .clist .dot.error { background: var(--error); }
+.ats .sheet-sec .clist li.error { color: var(--error); }
+.ats .sheet-sec .pass { color: var(--ok); margin: 0 0 4px; font-size: 13.5px; }
+.ats .sheet-sec .warnline { color: var(--warn); margin: 0 0 4px; font-size: 13.5px; }
+.ats .sheet-sec.widens { border: 1px solid var(--warn); border-radius: 8px; padding: 8px 12px; }
+.ats #files > summary { cursor: pointer; font-size: 14px; color: var(--ink); padding: 4px 0; }
+.ats #files[open] > summary { margin-bottom: 6px; }
+@media (max-width: 640px) { .ats .sheet-sec .clist li { min-height: 44px; } .ats .sheet-sec .clist [data-undo-line] { min-height: 44px; padding: 0 8px; } }
+.ats #publish-result .cmd { display: block; margin-top: 6px; padding: 6px 8px; background: var(--off); border-radius: 6px; font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; user-select: all; overflow-wrap: anywhere; }
+.ats #advanced > summary, .ats .changes details.generated > summary { cursor: pointer; font-size: 13.5px; color: var(--muted); padding: 4px 0; }
+.ats .changes details.generated > summary { padding: 6px 10px; font-family: inherit; }

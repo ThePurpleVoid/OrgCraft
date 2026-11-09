@@ -212,7 +212,7 @@ test('the impact step: choices with the recommendation, a hand-off target, and t
   await plan.getByText(/Switched off: let it finish its current task first\./).waitFor();
 
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   const msg = git(pubA.root, 'log', '-1', '--format=%B');
   assert.match(msg, /^Work in progress$/m);
   assert.match(msg, /^Chief of staff carries these out when this change is merged\./m, 'the role that takes requests, by name');
@@ -248,12 +248,12 @@ test('never two writers: "move after the PR merges" keeps the writer in the file
   await box.getByText('The published files keep the current writer').waitFor();
   await page.locator('#plan pre').getByText(/Area web\/ moved from web-dev to site-builder: move the area after PR #142 merges\./).waitFor();
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   const rows = JSON.parse(git(pubB.root, 'show', 'HEAD:.agent-team/ownership.json')).rows;
   assert.equal(rows.find((r) => r.path === 'web/').writer, 'web-dev', 'the files keep the current writer');
   assert.doesNotMatch(git(pubB.root, 'show', 'HEAD:.agent-team/roles/site-builder.md'), /`web\/`/, 'and the new agent does not write it yet');
   // The checks keep a reminder, and the draft still carries the move for the next publish.
-  await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
+  await page.locator('#publish-dialog').getByRole('button', { name: 'Keep editing' }).click();
   await page.locator('#issues li', { hasText: 'web/ moves from web-dev to site-builder after PR #142 merges. Publish again then' }).waitFor();
   await page.locator('#impact-pill', { hasText: 'touches work in progress' }).waitFor();
   // A reload reads the published team from disk; the deferred move and its reminder come back with the draft.

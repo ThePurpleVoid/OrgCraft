@@ -12,6 +12,12 @@ import { personActor } from './m3.mjs';
 import { boundCalls, redact } from './signed.mjs';
 import { createMeetings } from './meetings.mjs';
 import { canWork } from './deployment.mjs';
+import { checkIoRefs, ingestStepIo, projectTask, purgeIo } from './inspector.mjs';
+import { memberHeld } from './live.mjs';
+import { resolveTo } from './routing.mjs';
+
+/** How a message's `to` was resolved (section 5.3), on its event: only when it was not already a member id. */
+const routedFields = (r) => (!r ? {} : { ...(r.how !== 'id' ? { toAsked: r.asked, routedBy: r.how } : {}), ...(r.offWiring ? { offWiring: true } : {}) });
 
 export const SESSION_TOKEN_MINUTES = 15;
 const ACK_SECONDS = 30;
@@ -26,7 +32,7 @@ const SESSION_STATE = { 'session.started': 'running', 'session.idle': 'idle', 's
 const utcDay = (d) => d.toISOString().slice(0, 10);
 const backoff = (attempts) => BACKOFF[Math.min(Math.max(attempts - 1, 0), BACKOFF.length - 1)];
 
-export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null }) {
+export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null, triggers = null }) {
   const reg = () => (typeof runners === 'function' ? runners() : runners);
   const meetings = createMeetings({ db, m3, publicUrl, ...(meetingTurnMinutes ? { turnMinutes: meetingTurnMinutes } : {}) });
   const toolsUrl = () => String(publicUrl || '').replace(/\/+$/, '');
@@ -55,6 +61,9 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (to === 'owner') to = roster.frontDoor;
       const [role, instance] = String(to ?? '').split('#');
       add(role, instance || null);
+    } else if (event.type === 'trigger.fired') {
+      // A trigger wakes its teammate like a handoff (N2 section 6); the server named it from the frozen triggers.
+      add(event.data?.to);
     } else if (event.type === 'meeting.turn') {
       // A turn goes to the role; a pool role's lowest-numbered live instance takes it (meetings, A8).
       add(event.data?.to, await meetings.instanceFor(q, run.id, event.data?.to));
@@ -70,16 +79,19 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     if (!event.team) return;
     const { q } = ctx;
     await meetings.project(ctx, event);
+    await projectTask(q, ctx.tenant, event);
+    // Event triggers inside the team (N2, L21): may emit trigger.fired, which this projection then delivers.
+    if (triggers) await triggers.project(ctx, event);
     if (SESSION_STATE[event.type] && event.actor?.session) {
       await q('update sessions set state = $2, last_seen = now() where id = $1 and state <> $2', [event.actor.session, SESSION_STATE[event.type]]);
       if (event.type === 'session.ended') ctx.after.push(() => startQueued(ctx.tenant, event.team));
     }
-    if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided', 'meeting.turn'].includes(event.type)) return;
+    if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided', 'meeting.turn', 'trigger.fired'].includes(event.type)) return;
     const run = await activeRun(q, event.team);
     if (!run) return;
     for (const t of await targets(q, run, event)) {
-      const [d] = await q(`insert into deliveries(id, tenant, team, event, run, role, instance) values ($1, $2, $3, $4, $5, $6, $7)
-                           on conflict do nothing returning id`, [id('dlv'), ctx.tenant, event.team, event.id, run.id, t.role, t.instance]);
+      const [d] = await q(`insert into deliveries(id, tenant, team, event, run, role, instance, task) values ($1, $2, $3, $4, $5, $6, $7, $8)
+                           on conflict do nothing returning id`, [id('dlv'), ctx.tenant, event.team, event.id, run.id, t.role, t.instance, event.task ?? null]);
       if (d) ctx.after.push(() => deliver(ctx.tenant, d.id));
     }
   }
@@ -121,6 +133,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (!run || run.state === 'stopped' || !ev) { await q("update deliveries set state = 'dead' where id = $1", [d.id]); return null; }
       const money = await remaining(q, run);
       if (run.state !== 'running' || money.exhausted) { await q("update deliveries set state = 'held' where id = $1", [d.id]); return null; }
+      // A teammate paused or switched off live (L18): its work waits, held, until the live change is lifted.
+      if (await memberHeld(q, d.team, d.role, d.instance)) { await q("update deliveries set state = 'held' where id = $1", [d.id]); return null; }
       const wake = ev.envelope;
       const [s] = await q("select * from sessions where run = $1 and role = $2 and coalesce(instance, '') = coalesce($3, '') for update", [run.id, d.role, d.instance]);
       const conn = s?.runner ? reg()?.get(s.runner) : null;
@@ -135,9 +149,13 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         return null;
       }
       if (wake.type === 'meeting.turn') await meetings.sent(q, wake.id, d.team);
+      // A trigger's outside data (N2 section 6): fields and the body, for the runner to fence; never in the brief.
+      const outside = wake.type === 'trigger.fired' && triggers ? await triggers.outsideOf(q, d.team, wake.data?.source) : null;
       if (s && LIVE.includes(s.state) && conn) {
         await q("update deliveries set state = 'sent', session = $2, attempts = attempts + 1, next_at = now() + make_interval(secs => $3) where id = $1", [d.id, s.id, ACK_SECONDS]);
-        return { d, conn, op: 'session.message', body: { session: s.id, message: wake, delivery: d.id } };
+        // The session's events now belong to this delivery's task, caused by its wake (ADR 0009).
+        await q('update sessions set task = $2, cause = $3 where id = $1', [s.id, d.task ?? null, wake.id]);
+        return { d, conn, op: 'session.message', body: { session: s.id, message: wake, delivery: d.id, ...(outside ? { outside } : {}), ...(d.task ? { task: d.task } : {}), cause: wake.id } };
       }
       // No live session: start one, unless the run is at its session cap.
       const [{ n }] = await q('select count(*)::int as n from sessions where run = $1 and state = any($2)', [run.id, [...LIVE, 'unknown']]);
@@ -162,6 +180,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       else await q("insert into sessions(id, tenant, team, run, role, instance, state, runner, team_version, branch, token_hash, token_expires) values ($1, $2, $3, $4, $5, $6, 'starting', $7, $8, $9, $10, $11)",
         [sid, tenant, run.team, run.id, d.role, d.instance, choice.runner, run.team_version, branch, tok.hash, tok.expires.toISOString()]);
       await q("update deliveries set state = 'sent', session = $2, attempts = attempts + 1, next_at = now() + make_interval(secs => $3) where id = $1", [d.id, sid, ACK_SECONDS]);
+      await q('update sessions set task = $2, cause = $3 where id = $1', [sid, d.task ?? null, wake.id]);
       const roster = run.roster ?? {};
       const body = {
         session: sid, run: run.id, team: run.team, teamVersion: run.team_version, role: d.role, instance: d.instance,
@@ -171,8 +190,10 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         secrets: [], caps: { remainingToday: money.remainingToday, remainingRun: money.remainingRun },
         areas: role.areas ?? [], roster: (roster.roles ?? []).map((r) => r.slug), frontDoor: roster.frontDoor === d.role, frontDoorRole: roster.frontDoor,
         ...(role.model ? { model: role.model } : {}),
-        wake, resume: Boolean(s), ...(s?.checkpoint ? { checkpoint: s.checkpoint } : {}),
-        token: tok.token, tokenExpires: tok.expires.toISOString(), delivery: d.id,
+        // ADR 0011 (L17): a teammate's type and display name, for its prompt; it is still addressed by its member id.
+        ...(role.type ? { type: role.type } : {}), ...(role.name ? { name: role.name } : {}),
+        wake, ...(outside ? { outside } : {}), resume: Boolean(s), ...(s?.checkpoint ? { checkpoint: s.checkpoint } : {}),
+        token: tok.token, tokenExpires: tok.expires.toISOString(), delivery: d.id, ...(d.task ? { task: d.task } : {}), cause: wake.id,
       };
       return { d, conn: choice.conn, op: 'session.start', body };
     });
@@ -297,6 +318,53 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     }
   }
 
+  /**
+   * A live change to one teammate (L18). paused: its live sessions come to a safe point (checkpoint) and stop;
+   * off: they stop now; on (lifted): what the pause stopped starts again from its checkpoint, then its held work goes.
+   * Each step re-checks the override, so a lift that lands meanwhile wins.
+   */
+  async function memberChanged(tenant, team, role, instance, state, override = null) {
+    const run = await db.tenant(tenant, ({ q }) => activeRun(q, team));
+    if (!run) return;
+    const mine = "role = $2 and ($3::text is null or coalesce(instance, '') = $3)";
+    if (state === 'on') {
+      if (run.state !== 'running') return; // the run's own resume releases it
+      const due = await db.tenant(tenant, async ({ q }) => {
+        if (await memberHeld(q, team, role, instance)) return [];
+        const [ev] = await q("select id from events where team = $1 and type = 'live.changed' and envelope->'data'->>'op' = 'lifted' and envelope->'data'->>'override' = $2 order by seq desc limit 1", [team, override]);
+        const out = [];
+        if (ev) {
+          for (const s of await q(`select role, instance from sessions where run = $1 and state = 'stopped' and ${mine}`, [run.id, role, instance])) {
+            const [d] = await q('insert into deliveries(id, tenant, team, event, run, role, instance) values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing returning id',
+              [id('dlv'), tenant, team, ev.id, run.id, s.role, s.instance]);
+            if (d) out.push(d);
+          }
+        }
+        out.push(...(await q(`update deliveries set state = 'pending', next_at = now() where run = $1 and state = 'held' and ${mine} returning id`, [run.id, role, instance])));
+        return out;
+      });
+      for (const d of due) await deliver(tenant, d.id);
+      return;
+    }
+    const live = await db.tenant(tenant, ({ q }) => q(`select id, runner from sessions where run = $1 and state = any($4) and runner is not null and ${mine}`, [run.id, role, instance, [...LIVE, 'unknown']]));
+    const stillHeld = (q) => memberHeld(q, team, role, instance);
+    for (const s of live) {
+      const conn = reg()?.get(s.runner);
+      if (!conn) {
+        await db.tenant(tenant, async ({ q }) => { if (await stillHeld(q)) await q("update sessions set state = 'stopped' where id = $1 and state = any($2)", [s.id, [...LIVE, 'unknown']]); });
+        continue;
+      }
+      (async () => {
+        if (state === 'paused') {
+          const cp = await conn.send('session.checkpoint', { session: s.id, reason: 'member-paused' }, { timeoutMs: CHECKPOINT_MS }).catch(() => null);
+          if (cp && (cp.commit || cp.memory !== undefined)) await saveCheckpoint(tenant, s.id, cp);
+        }
+        const stopped = await db.tenant(tenant, async ({ q }) => ((await stillHeld(q)) ? q("update sessions set state = 'stopped' where id = $1 and state = any($2) returning id", [s.id, LIVE]) : []));
+        if (stopped.length) await conn.send('session.stop', { session: s.id, mode: state === 'paused' ? 'finish-step' : 'now', reason: state === 'paused' ? 'member-paused' : 'member-off' }).catch(() => {});
+      })().catch((e) => log.error?.(`bus: stopping ${s.id}: ${e.message}`));
+    }
+  }
+
   async function saveCheckpoint(tenant, sid, { commit = null, memory = null }) {
     const m = typeof memory === 'string' ? memory.slice(0, 64 * 1024) : null;
     await db.tenant(tenant, ({ q }) => q('update sessions set checkpoint = $2 where id = $1', [sid, JSON.stringify({ commit: typeof commit === 'string' ? commit.slice(0, 64) : null, memory: m, at: now().toISOString() })]));
@@ -305,10 +373,12 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   /** An approval was answered: tell the runner holding that session (D6: approval.result only ever comes from here). */
   async function approvalDecided(tenant, team, { approval, decision, by, note, session }) {
     if (!session) return;
-    const [s] = await db.tenant(tenant, ({ q }) => q('select runner from sessions where id = $1', [session]));
+    const [s] = await db.tenant(tenant, ({ q }) => q('select runner, role, instance from sessions where id = $1', [session]));
     const [a] = await db.tenant(tenant, ({ q }) => q('select a.call, a.action, a.calls_hash, r.state as run_state from approvals a left join runs r on r.id = a.run where a.id = $1', [approval]));
     // A merge is only ever let go while its run is running: a stopped or paused run lands nothing, whatever the runner does.
     if (decision === 'approved' && a?.action === 'accept' && a.run_state && a.run_state !== 'running') return;
+    // A teammate paused or switched off live (L18) gets no result either; the resend after a lift delivers it.
+    if (s && (await db.tenant(tenant, ({ q }) => memberHeld(q, team, s.role, s.instance)))) return;
     const conn = s?.runner ? reg()?.get(s.runner) : null;
     const headSha = a?.call && typeof a.call === 'object' ? a.call.headSha ?? null : null;
     // ADR 0013: the hash this card was bound to, so the runner runs only the calls the person signed.
@@ -336,7 +406,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       const [run] = await ctx.q('select id, state, roster from runs where id = $1', [sess.run]);
       const roster = run?.roster ?? {};
       const me = roster.roles?.find((r) => r.slug === sess.role);
-      const check = checkTool(tool, input, { role: sess.role, frontDoor: roster.frontDoor === sess.role, frontDoorRole: roster.frontDoor, roster: (roster.roles ?? []).map((r) => r.slug), reportsTo: me?.reportsTo });
+      const check = checkTool(tool, input, { role: sess.role, frontDoor: roster.frontDoor === sess.role, frontDoorRole: roster.frontDoor, roster: (roster.roles ?? []).map((r) => r.slug), reportsTo: me?.reportsTo, resolve: (to, msg) => resolveTo(roster, to, sess.role, msg) });
       const actor = { kind: 'role', id: sess.role, instance: sess.instance ?? null, session: sess.id, via: 'tool' };
       const opts = { actor, run: sess.run, teamVersion: sess.team_version ?? undefined, subject: `role/${sess.role}` };
       if (check.problems) {
@@ -349,11 +419,11 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       if (TOOL_EVENT[tool]) {
         const data = tool === 'report'
           ? { status: i.status, task: i.task, issue: i.issue, pr: i.pr, branch: i.branch, commit: i.commit, detail: i.detail, ...(i.waitingOn && roster.roles?.some((r) => r.slug === i.waitingOn) ? { to: i.waitingOn } : {}), ...(i.waitingOn ? { waitingOn: i.waitingOn } : {}) }
-          : { ...i, ...(tool === 'blocked' && !i.to ? { to: i.needFrom === 'owner' ? roster.frontDoor : i.needFrom !== sess.role ? i.needFrom : undefined } : {}), detail: detailOf(tool, i), ...(i.artifact ? { evidence: [i.artifact] } : {}) };
+          : { ...i, ...(tool === 'blocked' && !i.to ? { to: i.needFrom === 'owner' ? roster.frontDoor : i.needFrom !== sess.role ? i.needFrom : undefined } : {}), detail: detailOf(tool, i), ...(i.artifact ? { evidence: [i.artifact] } : {}), ...routedFields(check.routed) };
         const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
         const ev = await ctx.emit(sess.team, TOOL_EVENT[tool], clean, opts);
         if (tool === 'blocked') await ctx.emit(sess.team, 'report.status', { status: 'blocked', task: i.task, issue: i.issue, detail: i.need }, opts);
-        out = { event: ev.id };
+        out = { event: ev.id, ...(check.routed ? { to: check.routed.to, routedBy: check.routed.how, ...(check.routed.offWiring ? { offWiring: true } : {}) } : {}) };
         await ctx.audit({ team: sess.team, actorKind: 'role', actorId: sess.role, session: sess.id, action: 'tool', target: tool, decision: 'allowed', rule: 'tools/1', event: ev.id });
       } else if (tool === 'meeting_reply' || tool === 'meeting_close' || tool === 'meeting_start') {
         const r = tool === 'meeting_start' ? await meetings.startAdhoc(ctx, sess, i, roster) : await meetings.tool(ctx, sess, tool, i, roster);
@@ -425,6 +495,8 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
           const env = { ...e, tenant: conn.tenant, team: sess.team, source: `/tenants/${conn.tenant}/teams/${sess.team}`, run: sess.run, teamVersion: sess.team_version ?? e.teamVersion,
             actor: { kind: 'role', id: sess.role, instance: sess.instance ?? null, session: sess.id, via: e.actor?.via === 'tool' ? 'tool' : 'hook' } };
           if (e.type === 'chat.message') env.data = { ...(e.data ?? {}), from: sess.role };
+          // Step I/O named by this event must be this session's own (N1); outside output is marked on its row.
+          await checkIoRefs(ctx.q, sess.id, env);
           // One stored event per deployment, whatever id the frame had, so a repeat after a reconnect is a no-op.
           if (e.type === 'proposal.previewed') { env.data = m3.checkPreviewed(e.data); env.id = `previewed-${env.data.ref}-${env.data.deployment}`; await m3.previewForMerge(ctx, sess.team, env.data); }
           const out = await m3.appendIn(ctx, sess.team, [env]);
@@ -445,12 +517,15 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     async 'approval.wait'(conn, body) {
       const a = body.approval ?? {};
       if (body.resend && typeof a.id === 'string') {
-        const [row] = await db.tenant(conn.tenant, ({ q }) => q('select a.id, a.card, a.state, a.session, a.decided_by, a.call, a.action, a.calls_hash, r.state as run_state from approvals a left join runs r on r.id = a.run where a.id = $1', [a.id]));
+        const [row] = await db.tenant(conn.tenant, ({ q }) => q(`select a.id, a.card, a.state, a.session, a.decided_by, a.call, a.action, a.calls_hash, r.state as run_state,
+                                                                  exists (select 1 from sessions s join live_overrides o on o.team = s.team and o.kind = 'member' and o.cleared_at is null and o.role = s.role
+                                                                          and (o.instance is null or o.instance = coalesce(s.instance, '')) where s.id = a.session) as member_held
+                                                                from approvals a left join runs r on r.id = a.run where a.id = $1`, [a.id]));
         if (!row) throw new Problem(404, `no approval ${a.id}`);
         if (!row.session) throw new Problem(403, `approval ${a.id} is not a session's`);
         await db.tenant(conn.tenant, ({ q }) => ownSession(q, conn, row.session));
         if (body.session && body.session !== row.session) throw new Problem(403, `approval ${a.id} belongs to another session`);
-        const held = row.state === 'approved' && row.action === 'accept' && row.run_state && row.run_state !== 'running'; // as in approvalDecided
+        const held = (row.state === 'approved' && row.action === 'accept' && row.run_state && row.run_state !== 'running') || row.member_held; // as in approvalDecided
         if (row.state !== 'pending' && !held) setImmediate(() => conn.send('approval.result', { approval: row.id, decision: row.state, by: row.decided_by, ...(row.call?.headSha ? { headSha: row.call.headSha } : {}), ...(row.calls_hash ? { callsHash: row.calls_hash } : {}) }).catch(() => {}));
         return { approval: row.id, card: row.card };
       }
@@ -472,6 +547,14 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         return { approval: r.approval, card: r.card.id };
       });
       return result;
+    },
+
+    /** A tool call's input or output, or a turn's own text, for the run inspector (N1): stored outside the log. */
+    async 'step.io'(conn, body) {
+      return db.tenant(conn.tenant, async ({ q }) => {
+        const sess = await ownSession(q, conn, body.session);
+        return ingestStepIo(q, conn.tenant, sess, body, { now: now(), problem: (m) => new Problem(400, m) });
+      });
     },
 
     /** A fresh session token, sent as session.token. */
@@ -578,9 +661,12 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       await expire(tenant);
       await rollover(tenant);
       await meetings.tick(tenant);
+      if (triggers) await triggers.tick(tenant).catch((e) => log.error?.(`bus: triggers tick: ${e.message}`));
       // A runner gone for ten minutes is not coming back for its sessions: they can start elsewhere.
       await db.tenant(tenant, ({ q }) => q("update sessions set state = 'stopped' where state = 'unknown' and last_seen < now() - interval '10 minutes'"));
     }
+    // Step I/O past its retention goes for real (N1), as the owner, with an audit row per batch.
+    await purgeIo(db).catch((e) => log.error?.(`step io purge: ${e.message}`));
     // A revoke on any instance closes the socket here.
     const live = reg();
     if (live?.all) {
@@ -616,7 +702,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     });
   }
 
-  return { project, deliver, tick, toolCall, authSession, ops, onLost, welcome, runChanged, approvalDecided, saveCheckpoint, meetings };
+  return { project, deliver, tick, toolCall, authSession, ops, onLost, welcome, runChanged, memberChanged, approvalDecided, saveCheckpoint, meetings };
 }
 
 /**

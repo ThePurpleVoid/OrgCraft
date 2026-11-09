@@ -17,7 +17,11 @@ frontend-design, a design-critique skill, the design canvas
 A story from the product manager (full lane only)
 
 ## Hands to
-Style threads, then the design critic; UX writer (copy table); platform devs (design note)
+- design-critic: after the style threads
+- ux-writer: copy table
+- web-dev: design note
+- mobile-dev: design note
+Style threads, before the design critic
 
 ## Rules
 - Each style thread gets one direction and one pass; it returns screens plus a one-page rationale and closes.
@@ -25,8 +29,8 @@ Style threads, then the design critic; UX writer (copy table); platform devs (de
 - The design note lists every screen, state and token it touches, and attaches the UX writer's copy table before devs start.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh design-director status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/design-director.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.

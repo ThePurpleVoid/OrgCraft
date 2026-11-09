@@ -210,6 +210,8 @@ export const EN = {
   "notify.status.emailed.why": "Slack couldn't be reached.",
   "notify.status.failed": "Couldn't send",
   "notify.status.failed.why": "{channel} didn't accept it.",
+  "notify.status.failed.why.email": "The email service didn't accept the message. Check the address in Channels, then send a test.",
+  "notify.status.failed.why.slack": "Slack didn't accept the message. Check the channel, or reconnect Slack in Channels.",
   "notify.status.held": "Held for the digest",
   "notify.status.held.why": "It came in during quiet hours.",
   "notify.status.sent": "Sent",

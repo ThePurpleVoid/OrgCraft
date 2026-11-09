@@ -10,6 +10,8 @@
 // return-path check can be tested in Node and reused by the test issuer.
 
 /** The web client's id at the issuer (spec section 2). */
+import { t } from './i18n.js';
+
 export const WEB_CLIENT = 'agent-team-web';
 
 const CONTROL = /[\u0000-\u001f\u007f]/;
@@ -157,15 +159,15 @@ export function stepUpDialog(why, { doc = document, scope = null } = {}) {
     dlg.className = 'auth-dialog';
     dlg.setAttribute('aria-labelledby', 'passkey-stepup-title');
     dlg.innerHTML = `<form class="dialog" method="dialog">
-      <h2 id="passkey-stepup-title">Confirm it is you</h2>
+      <h2 id="passkey-stepup-title">${t('stepup.title')}</h2>
       <p class="why"></p>
-      <p class="hint">Your device asks for your fingerprint, face or screen lock. Nothing leaves it but a one-time proof.</p>
+      <p class="hint">${t('stepup.why')}</p>
       <p class="result error" role="alert"></p>
-      <div class="dialog-actions"><button type="button" data-act="cancel">Cancel</button><button type="button" class="primary" data-act="go">Use passkey</button></div>
+      <div class="dialog-actions"><button type="button" data-act="cancel">${t('stepup.cancel')}</button><button type="button" class="primary" data-act="go">${t('stepup.button')}</button></div>
     </form>`;
     doc.body.append(dlg);
   }
-  dlg.querySelector('.why').textContent = why;
+  dlg.querySelector('.why').textContent = t('stepup.body', { action: why });
   dlg.querySelector('.result').textContent = '';
   return new Promise((done) => {
     const go = dlg.querySelector('[data-act="go"]');
