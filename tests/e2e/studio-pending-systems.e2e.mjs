@@ -7,7 +7,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,7 +22,7 @@ if (!chromium && process.env.CI) throw new Error('CI is set but the playwright p
 const skip = !chromium && 'the playwright package is not installed';
 
 const ROLE = 'chief-of-staff';
-let cp, studio, base, browser, root;
+let cp, studio, base, browser, root, ghOut;
 before(async () => {
   if (skip) return;
   root = mkdtempSync(join(tmpdir(), 'studio-pending-'));
@@ -35,7 +35,12 @@ before(async () => {
   execFileSync('git', ['-C', root, 'add', '-A']);
   execFileSync('git', ['-C', root, 'commit', '-qm', 'team']);
   cp = await fakeControlPlane({ team: 'sample-app', running: false });
-  studio = createStudio({ root, env: cp.env });
+  // A stand-in for gh: "pr view" prints what the test put in ghOut, and fails while there is none (no change open).
+  const bin = mkdtempSync(join(tmpdir(), 'studio-pending-gh-'));
+  ghOut = join(bin, 'pr.json');
+  writeFileSync(join(bin, 'gh'), `#!/bin/sh\n[ "$1 $2" = "pr view" ] && [ -f '${ghOut}' ] && cat '${ghOut}' && exit 0\nexit 1\n`);
+  chmodSync(join(bin, 'gh'), 0o755);
+  studio = createStudio({ root, env: { ...cp.env, AGENT_TEAM_GH: join(bin, 'gh') } });
   await new Promise((r) => studio.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${studio.address().port}`;
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
@@ -122,5 +127,44 @@ test('a set changed after it was shown is refused with nothing spent; a dropped 
   cp.dropPending('withdrawn');
   await page.goto(`${base}/#chat`);
   await page.locator('.timeline', { hasText: 'The system changes were dropped because the change was closed without being approved.' }).waitFor();
+  await page.close();
+});
+
+test('Send them now from a branch whose change is still open waits for it; a purely local branch sends directly', { skip }, async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${base}/?t=${studio.launchToken}`);
+  // A widening (deploy) on a pushed branch with an open pull request (#12).
+  execFileSync('git', ['-C', root, 'checkout', '-qb', 'more-drive']);
+  writeFileSync(join(root, '.agent-team/resources.json'), JSON.stringify({ resources: [{ id: 'drive', type: 'mcp', name: 'Shared drive', config: {}, secrets: ['DRIVE_TOKEN'] }], bindings: [{ role: ROLE, resource: 'drive', permission: 'deploy' }] }, null, 2) + '\n');
+  execFileSync('git', ['-C', root, 'commit', '-qam', 'admin']);
+  const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  execFileSync('git', ['-C', root, 'update-ref', 'refs/remotes/origin/more-drive', head]);
+  execFileSync('git', ['-C', root, 'branch', '-q', '--set-upstream-to', 'origin/more-drive']);
+  writeFileSync(ghOut, JSON.stringify({ number: 12, state: 'OPEN' }));
+  const before = cp.systems.version;
+  const line = await openStart(page);
+  await line.getByRole('button', { name: 'Send them now' }).click();
+  const dlg = page.locator('#stepup-dialog');
+  await dlg.locator('#stepup-secret').fill(cp.stepUpSecret);
+  await dlg.locator('button[type="submit"]').click();
+  await line.getByText('The system changes wait until this change is approved. Then you switch them on.').waitFor();
+  assert.deepEqual(cp.systemsPuts.at(-1).pending, { sha: head, pr: 12 }, 'stored as pending, bound to the commit');
+  assert.equal(cp.systems.version, before, 'nothing switched on: an unreviewed widening does not apply');
+  assert.notEqual(cp.systems.bindings[0]?.permission, 'deploy');
+
+  // The same branch with no upstream: nothing is open for it, so the send applies directly.
+  cp.dropPending('withdrawn');
+  rmSync(ghOut);
+  execFileSync('git', ['-C', root, 'branch', '-q', '--unset-upstream']);
+  const s = await state(page);
+  const ask = await post(page, '/v1/team/systems', { version: s.version, hash: s.hash });
+  if (ask.status === 401) assert.equal((await post(page, '/v1/team/step-up', { secret: cp.stepUpSecret, scope: ask.scope })).status, 200);
+  const r = ask.status === 401 ? await post(page, '/v1/team/systems', { version: s.version, hash: s.hash }) : ask;
+  assert.equal(r.status, 200);
+  assert.equal(cp.systemsPuts.at(-1).pending, undefined);
+  assert.equal(cp.systems.bindings[0].permission, 'deploy');
+  assert.deepEqual(errors, []);
   await page.close();
 });

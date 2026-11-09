@@ -25,7 +25,7 @@ import { liveSource } from './live.mjs';
 import { changeUrl, localRollout, pendingOf } from './rollout.mjs';
 import { chatSource } from './chat.mjs';
 import { runRequest, RunRefused } from './runs.mjs';
-import { openPullRequest, prSupport, pullRequestText } from './pr.mjs';
+import { openChangeRequest, openPullRequest, prSupport, pullRequestText } from './pr.mjs';
 import { linkHash, resolveMeeting } from './public/links.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -34,9 +34,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * The systems as published: .agent-team/resources.json at HEAD, as { resources, bindings }, or null when the published
  * team has none. Read from Git, so a draft on the canvas or an uncommitted edit is never what the control plane gets.
  */
-export function publishedSystems(root) {
+export function publishedSystems(root, rev = 'HEAD') {
   let text;
-  try { text = execFileSync('git', ['-C', root, 'show', 'HEAD:.agent-team/resources.json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return null; }
+  try { text = execFileSync('git', ['-C', root, 'show', `${rev}:.agent-team/resources.json`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return null; }
   let json;
   try { json = JSON.parse(text); } catch { return null; }
   return { resources: Array.isArray(json?.resources) ? json.resources : [], bindings: Array.isArray(json?.bindings) ? json.bindings : [] };
@@ -480,11 +480,17 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           // A refusal here drops any held step-up: it was given for the set shown, and must not carry over to the next
           // one (security review L40w sev3).
           if (!Number.isInteger(input.version) || typeof input.hash !== 'string') { chat.dropStepUp(); throw new HttpError(400, 'send the version and hash from GET /v1/team/systems'); }
-          const here = publishedSystems(root) ?? { resources: [], bindings: [] };
+          // The commit is read once and its systems read from it, so the sha a pending set is bound to and the content
+          // sent can't drift apart (security review L40b-web nit).
+          const sha = git(root, 'rev-parse', 'HEAD');
+          const here = publishedSystems(root, sha) ?? { resources: [], bindings: [] };
           if (systemsHash(here) !== input.hash) { chat.dropStepUp(); throw new HttpError(409, 'the published systems changed since they were shown', { type: 'systems-moved' }); }
           // PR mode (L40b): bound to the commit the pull request carries, applied only when the owner switches it on.
-          const pr = input.pending === true ? (Number.isInteger(input.pr) && input.pr > 0 ? input.pr : null) : undefined;
-          const pending = pr === undefined ? null : { sha: git(root, 'rev-parse', 'HEAD'), ...(pr ? { pr } : {}) };
+          // A plain send from a branch whose change request is still open waits too (CTO ruling): systems nobody has
+          // reviewed must not widen a team's access. A purely local branch, or the default branch, sends directly.
+          const open = input.pending === true ? null : openChangeRequest(root, env);
+          const pr = input.pending === true ? (Number.isInteger(input.pr) && input.pr > 0 ? input.pr : null) : open ? open.pr : undefined;
+          const pending = pr === undefined ? null : { sha, ...(pr ? { pr } : {}) };
           return relay(res, () => chat.setSystems({ ...here, expect: input.version, ...(pending ? { pending } : {}) }, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
         }
         // L40b: switch on a pending set, the one shown (its commit and content hash), behind a fresh systems step-up.
