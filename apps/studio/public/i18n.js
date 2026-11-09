@@ -6,15 +6,6 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
-  // L14: Publish sheet lines for the change kinds strings-now §5a does not list yet (asked of the CPO).
-  'change.path-added': '{teammate} now owns {area}',
-  'change.path-removed': '{area} no longer has an owner (was {from})',
-  'change.gate': 'The checks before {target} change',
-  'change.gate.all': 'every change',
-  'change.meeting': 'The meeting "{meeting}" changes',
-  'change.rules': 'The team rules change',
-  'change.values': 'The project details change',
-  'change.settings': 'The team settings change',
 };
 
 export function t(key, vars = {}) {

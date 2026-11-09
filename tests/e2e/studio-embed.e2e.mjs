@@ -102,7 +102,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   const dlg = ats.locator('#publish-dialog');
   await dlg.getByText("Writes the team's files on a new branch and opens a pull request.").waitFor();
   await dlg.locator('#changes summary').first().waitFor();
-  const go = dlg.getByRole('button', { name: 'Open a pull request' });
+  const go = dlg.locator('#confirm');
   assert.equal(await go.isVisible(), true);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'embedded-publish-light.png') });
   await go.click();

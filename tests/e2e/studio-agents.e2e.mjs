@@ -183,7 +183,7 @@ test('new agents: blank in a new group, a copy, a kit slug only by replacing, a 
   const before = Object.fromEntries(await Promise.all(['accessibility-auditor', 'qa-a11y', 'translator'].map(async (s) => [s, await page.evaluate(async (slug) => (await (await fetch('/v1/team')).json()).spec.roles[slug] ?? null, s)])));
   assert.deepEqual(before, { 'accessibility-auditor': null, 'qa-a11y': null, translator: null }, 'nothing is written before publish');
   await page.locator('#branch').fill('team/new-agents');
-  await page.getByRole('button', { name: 'Commit to branch' }).click();
+  await page.locator('#confirm').click();
   await page.locator('#publish-result', { hasText: /team\/new-agents/ }).waitFor();
   await page.keyboard.press('Escape');
   await page.reload();

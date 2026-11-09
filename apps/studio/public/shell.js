@@ -82,9 +82,10 @@ export const SHELL = `
     <label>Commit message <input id="message"></label>
     <p class="hint">${t('publish.hint')}</p>
     <p id="publish-result" class="result" role="status"></p>
+    <p id="confirm-sub" class="hint confirm-sub"><span class="local-only">${t('publish.confirm.sub.local')}</span><span class="embedded-only">${t('publish.confirm.sub.review')}</span></p>
     <div class="dialog-actions">
       <button value="cancel" type="submit">${t('publish.keep')}</button>
-      <button id="confirm" type="button" class="primary"><span class="local-only">Commit to branch</span><span class="embedded-only">Open a pull request</span></button>
+      <button id="confirm" type="button" class="primary" aria-describedby="confirm-sub">${t('publish.confirm')}</button>
     </div>
   </form>
 </dialog>
