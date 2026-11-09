@@ -12,6 +12,9 @@ const team = () => ({
     { slug: 'chief-of-staff', reportsTo: 'owner', areas: [], brief: 'Front door.' },
     { slug: 'support', reportsTo: 'chief-of-staff', areas: [] },
   ],
+});
+/** The team's systems, as an admin sets them (PUT /v1/teams/{team}/systems). */
+const systems = () => ({
   resources: [
     { id: 'slack', type: 'slack', secrets: ['SLACK_BOT_TOKEN'], tools: { command: 'slack-mcp', args: ['--stdio'] },
       permissions: { read: ['slack.read*'], write: ['slack.post'] }, effects: { 'slack.post': 'send' }, egress: ['slack.com'], tier: 'verified' },
@@ -19,6 +22,13 @@ const team = () => ({
   ],
   bindings: [{ role: 'chief-of-staff', resource: 'slack', permission: 'read' }, { role: 'support', resource: 'pay', permission: 'write' }],
 });
+const SLACK_GRANT = [{ team: 'shop', resource: 'slack' }];
+/** Sets the shop's systems as an admin with a step-up scoped to the team. */
+const setSystems = async (call, su, body = systems()) => {
+  const res = await call('PUT', '/teams/shop/systems', body, await su('systems:shop'));
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  return res.body;
+};
 
 /** A fake Slack: auth.test answers ok only for the stored value. */
 function fakeSlack() {
@@ -38,7 +48,7 @@ test('Add a credential needs an admin and a step-up scoped to its name; nothing 
     await call('POST', '/teams', { id: 'shop' });
     // A sink's secret of the same name (the Slack notifications token) is never replaced or deleted by a credential.
     assert.equal((await call('PUT', '/secrets/SLACK_BOT_TOKEN', { value: 'sink-token' }, await su())).status, 200);
-    const body = { name: 'SLACK_BOT_TOKEN', label: 'Shop Slack', service: 'slack', value: VALUE, teams: ['shop'] };
+    const body = { name: 'SLACK_BOT_TOKEN', label: 'Shop Slack', service: 'slack', value: VALUE, grants: SLACK_GRANT };
     const none = await call('POST', '/credentials', body);
     assert.equal(none.status, 401, 'no step-up');
     const wrong = await call('POST', '/credentials', body, await su('credential:OTHER'));
@@ -56,7 +66,7 @@ test('Add a credential needs an admin and a step-up scoped to its name; nothing 
     assert.equal(list.status, 200);
     noValue(list.body);
     const [c] = list.body.credentials;
-    assert.deepEqual([c.name, c.label, c.service, c.teams, c.health], ['SLACK_BOT_TOKEN', 'Shop Slack', 'slack', ['shop'], null]);
+    assert.deepEqual([c.name, c.label, c.service, c.grants, c.health], ['SLACK_BOT_TOKEN', 'Shop Slack', 'slack', SLACK_GRANT, null]);
     assert.ok(list.body.services.includes('slack'));
 
     const t1 = await call('POST', `/credentials/${c.id}/test`);
@@ -96,6 +106,7 @@ test('the credentials routes are an admin\'s: an editor and a session (an agent)
     assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 1000, sessions: 3 }, await su())).status, 200);
     const r = await registerRunner(call);
     const runner = await fakeRunner(base, r.key, { runner: r.id });
+    await setSystems(call, su);
     assert.equal((await call('POST', '/teams/shop/runs', { team: team() })).status, 201);
     await call('POST', '/teams/shop/chat', { text: 'hi' });
     const s = (await runner.next((f) => f.op === 'session.start')).body;
@@ -111,10 +122,11 @@ test('secret.get releases a value only for a name the session\'s frozen roster b
   await plane(async ({ call, base, su, db }) => {
     await call('POST', '/teams', { id: 'shop' });
     assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 1000, sessions: 3 }, await su())).status, 200);
-    const add = async (name, teams, value = VALUE) => (await call('POST', '/credentials', { name, service: name === 'STRIPE_KEY' ? 'stripe' : 'slack', value, teams }, await su(`credential:${name}`))).body;
-    const slackCred = await add('SLACK_BOT_TOKEN', ['shop']);
-    await add('STRIPE_KEY', [], 'sk-other');
-    await add('UNBOUND_KEY', ['shop'], 'unbound');
+    const add = async (name, grants, value = VALUE) => (await call('POST', '/credentials', { name, service: name === 'STRIPE_KEY' ? 'stripe' : 'slack', value, grants }, await su(`credential:${name}`))).body;
+    const slackCred = await add('SLACK_BOT_TOKEN', SLACK_GRANT);
+    await add('STRIPE_KEY', [{ team: 'shop', resource: 'pay' }], 'sk-other');
+    await add('UNBOUND_KEY', SLACK_GRANT, 'unbound');
+    await setSystems(call, su);
     const r = await registerRunner(call);
     const runner = await fakeRunner(base, r.key, { runner: r.id });
     assert.equal((await call('POST', '/teams/shop/runs', { team: team() })).status, 201);
@@ -161,7 +173,8 @@ test('a credential on a team it is not granted to is not released, and the vault
   await plane(async ({ call, base, su, server, db }) => {
     await call('POST', '/teams', { id: 'shop' });
     assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 1000, sessions: 3 }, await su())).status, 200);
-    await call('POST', '/credentials', { name: 'SLACK_BOT_TOKEN', service: 'slack', value: VALUE, teams: [] }, await su('credential:SLACK_BOT_TOKEN'));
+    await call('POST', '/credentials', { name: 'SLACK_BOT_TOKEN', service: 'slack', value: VALUE, grants: [] }, await su('credential:SLACK_BOT_TOKEN'));
+    await setSystems(call, su);
     const r = await registerRunner(call);
     const runner = await fakeRunner(base, r.key, { runner: r.id });
     assert.equal((await call('POST', '/teams/shop/runs', { team: team() })).status, 201);
@@ -171,6 +184,56 @@ test('a credential on a team it is not granted to is not released, and the vault
     assert.equal(await server.vault.release({ tenant: 'acme', session: s.session, name: 'SLACK_BOT_TOKEN', purpose: 'gateway' }), null);
     const [refused] = await db.system("select rule from audit where action = 'secret.release' and decision = 'refused' order by at desc limit 1");
     assert.equal(refused.rule, 'not-granted');
+    runner.close();
+  }, { tickMs: 0 });
+});
+
+test('a run request cannot carry systems; only an admin sets them, with a step-up scoped to the team, audited with every command that gets secrets', async () => {
+  await plane(async ({ call, su, db }) => {
+    await call('POST', '/teams', { id: 'shop' });
+    assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 1000, sessions: 3 }, await su())).status, 200);
+    // Security review sev2: an editor's run request with an invented resource is refused outright.
+    const invented = await call('POST', '/teams/shop/runs', { team: { ...team(), ...systems() } });
+    assert.deepEqual([invented.status, invented.body.type], [400, 'systems-not-here']);
+    assert.equal((await call('PUT', '/teams/shop/systems', systems())).status, 401, 'step-up first');
+    const wrong = await call('PUT', '/teams/shop/systems', systems(), await su('systems:other'));
+    assert.equal(wrong.status, 401);
+    assert.equal(wrong.body.scope, 'systems:shop');
+    assert.equal((await call('PUT', '/teams/shop/systems', { resources: [{ id: 'x', type: 'slack', tools: { url: 'http://plain.example' } }] }, await su('systems:shop'))).status, 400);
+    const set = await setSystems(call, su);
+    assert.equal(set.version, 1);
+    assert.deepEqual(set.added, ['slack', 'pay']);
+    assert.deepEqual(set.commands.map((x) => [x.id, x.command, x.secrets]), [['slack', 'slack-mcp', ['SLACK_BOT_TOKEN']], ['pay', 'stripe-mcp', ['STRIPE_KEY']]]);
+    const got = await call('GET', '/teams/shop/systems');
+    assert.deepEqual([got.body.version, got.body.resources.map((x) => x.id), got.body.bindings.length], [1, ['slack', 'pay'], 2]);
+    const [row] = await db.system("select detail from audit where action = 'team.systems'");
+    assert.equal(row.detail.commands.length, 2, 'the audit row keeps the commands that receive secrets');
+    const again = await setSystems(call, su, { resources: systems().resources.slice(0, 1), bindings: systems().bindings.slice(0, 1) });
+    assert.deepEqual([again.version, again.removed, again.unbound], [2, ['pay'], ['support → pay (write)']]);
+  });
+});
+
+test('a value goes only to a resource of the credential\'s service that it is granted to', async () => {
+  await plane(async ({ call, base, su, db }) => {
+    await call('POST', '/teams', { id: 'shop' });
+    assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 1000, sessions: 3 }, await su())).status, 200);
+    // An admin lists SLACK_BOT_TOKEN on a custom command too, and grants the credential to that resource by mistake:
+    // it is still refused, because the resource is not a Slack resource.
+    const sys = systems();
+    sys.resources.push({ id: 'dump', type: 'custom', secrets: ['SLACK_BOT_TOKEN'], tools: { command: 'sh', args: ['-c', 'env'] } });
+    sys.bindings = [{ role: 'chief-of-staff', resource: 'dump', permission: 'read' }];
+    await setSystems(call, su, sys);
+    await call('POST', '/credentials', { name: 'SLACK_BOT_TOKEN', service: 'slack', value: VALUE, grants: [{ team: 'shop', resource: 'dump' }, ...SLACK_GRANT] }, await su('credential:SLACK_BOT_TOKEN'));
+    const r = await registerRunner(call);
+    const runner = await fakeRunner(base, r.key, { runner: r.id });
+    assert.equal((await call('POST', '/teams/shop/runs', { team: team() })).status, 201);
+    await call('POST', '/teams/shop/chat', { text: 'hi' });
+    const s = (await runner.next((f) => f.op === 'session.start')).body;
+    assert.deepEqual(s.secrets, ['SLACK_BOT_TOKEN']);
+    const no = await runner.request('secret.get', { session: s.session, name: 'SLACK_BOT_TOKEN' });
+    assert.equal(no.op, 'nack');
+    const [refused] = await db.system("select rule from audit where action = 'secret.release' order by at desc limit 1");
+    assert.equal(refused.rule, 'wrong-service');
     runner.close();
   }, { tickMs: 0 });
 });

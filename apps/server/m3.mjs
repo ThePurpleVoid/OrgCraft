@@ -10,7 +10,7 @@ import { Problem, appendIn, getTeam, id, sha, SLUG } from './store.mjs';
 import { checkMeetingDefs } from './meetings.mjs';
 import { dayBounds, dayStart, localDay, nextDay, timeZoneOf } from './budget-day.mjs';
 import { approveScope, factsOf, redact as redactText, riskOf } from './signed.mjs';
-import { checkSystems } from './credentials.mjs';
+import { freezeSystems } from './credentials.mjs';
 import { checkTriggers } from './triggers.mjs';
 import { halted } from './live.mjs';
 import { coveredBy, declinedBefore, ledgerRow, ruleLine, targetsOf } from './ledger.mjs';
@@ -333,10 +333,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     if (team.summary !== undefined && team.summary !== null && (typeof team.summary !== 'string' || team.summary.length > 2000)) throw new Problem(400, 'team.summary is text of at most 2,000 characters');
     // The team's meetings, frozen with the run like the roles; attendees resolved by the Studio (meetings.mjs, A1).
     const meetings = checkMeetingDefs(team.meetings, roles, doors[0].slug);
-    // L20: the team's systems (resources.json), frozen with the run: what each member's session may reach, and the
-    // secret names the vault may release to it. Names only, never values.
-    const systems = checkSystems(team, roles);
-    return { version, roles, frontDoor: doors[0].slug, ...(repo ? { repo } : {}), ...(team.summary ? { summary: team.summary } : {}), ...(meetings.length ? { meetings } : {}), ...(systems ? { systems } : {}) };
+    // L20 (security review sev2): what a session can reach, and with which secrets, is never the run request's to say.
+    // An admin sets it (PUT /v1/teams/{team}/systems, with a step-up); startRun freezes that.
+    if (team.resources !== undefined || team.bindings !== undefined) throw new Problem(400, 'a run does not carry resources or bindings: an admin sets them with PUT /v1/teams/{team}/systems', { type: 'systems-not-here' });
+    return { version, roles, frontDoor: doors[0].slug, ...(repo ? { repo } : {}), ...(team.summary ? { summary: team.summary } : {}), ...(meetings.length ? { meetings } : {}) };
   }
 
   async function startRun(tenant, team, body, by) {
@@ -361,6 +361,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (await halted(ctx.q, team)) throw new Problem(409, 'Stop everything is on for this team; lift it first (it needs a passkey)', { type: 'halted' });
       const t = await today(ctx.q, team, ctx.now);
       if (t.state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it or start tomorrow", { type: 'budget-exhausted' });
+      // L20: the team's systems as an admin last set them, frozen with the run (the bindings of this run's members).
+      const [sys] = await ctx.q('select resources, bindings, version from team_systems where team = $1', [team]);
+      const systems = freezeSystems(sys, roster.roles);
+      if (systems) roster.systems = systems;
       const rid = id('run');
       // runs_one_going decides when two starts race; the loser gets the same 409 as the check above.
       const [row] = await ctx.q(`insert into runs(id, tenant, team, mode, state, caps, roster, team_version, started_by, triggers) values ($1, $2, $3, $4, 'running', $5, $6, $7, $8, $9)

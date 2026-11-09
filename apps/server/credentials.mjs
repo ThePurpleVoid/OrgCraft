@@ -2,14 +2,18 @@
 // to a session whose role is bound to the resource").
 //
 //   GET    /v1/credentials               admin: the list (never a value): name, service, health, last used, who uses it
-//   POST   /v1/credentials               admin + step-up scoped credential:<name>: { name, service, value, teams, label? }
+//   POST   /v1/credentials               admin + step-up scoped credential:<name>: { name, service, value, grants, label? }
 //   POST   /v1/credentials/{id}/test     admin: Test connection, server side, through the outbound pacing
 //   DELETE /v1/credentials/{id}          admin + step-up scoped credential:<name>: removes it and its sealed value
+//   GET    /v1/teams/{team}/systems      viewer: the team's resources and bindings (names only)
+//   PUT    /v1/teams/{team}/systems      admin + step-up scoped systems:<team>: sets them, audited with the diff
 //
 // No route a session token, a host or a person can call ever returns a value. A value leaves the vault only through
 // release(): to the runner's sidecar (secret.get, for a local MCP server) or the gateway (in process, for a remote one),
-// for a session that is live in a running run, whose role the run's frozen roster binds to a resource listing the
-// name, and when the credential is granted to the team. Every release is an audit row, without the value.
+// for a session that is live in a running run, whose role the run's frozen systems bind to a resource listing the
+// name, when that resource is of the credential's service and the credential is granted to that team and resource.
+// The frozen systems come from team_systems, which only an admin sets (with a step-up); never from a run request.
+// Every release is an audit row, without the value.
 import { randomBytes } from 'node:crypto';
 import { Problem, getTeam } from './store.mjs';
 import { seal, unseal } from './vault.mjs';
@@ -24,17 +28,20 @@ const TIERS = ['verified', 'community', 'custom'];
 const LIVE_SESSION = ['starting', 'running', 'idle', 'waiting'];
 const rid = () => `cred_${randomBytes(12).toString('base64url')}`;
 /** The columns a credential is read with everywhere but the vault's own unseal: never `sealed`. */
-const COLS = 'id, name, label, service, auth, teams, created_by, created_at, last_used_at, last_test, removed_at, removed_by';
+const COLS = 'id, name, label, service, auth, grants, created_by, created_at, last_used_at, last_test, removed_at, removed_by';
 const sealName = (id) => `credential/${id}`;
 /** The step-up scope for adding or removing one credential (ADR 0013: the step-up names the change). */
 export const credentialScope = (name) => `credential:${name}`;
+/** The step-up scope for changing a team's systems: what its sessions can reach, and with which secrets. */
+export const systemsScope = (team) => `systems:${team}`;
+const GRANT = /^[a-z0-9][a-z0-9-]{0,62}\/[a-z0-9][a-z0-9_-]{0,59}$/;
 
 /**
  * The systems part of a run's roster (resources.json, frozen at run start like the roles): each resource with its
  * MCP server (a local `command` or a remote `url`), the tools each permission grants, effects, egress, tier and the
  * secret names it needs; and which member is bound to which resource with which permission. Names only, never values.
  */
-export function checkSystems(team, roles) {
+export function checkSystems(team, roles = null) {
   const resources = team.resources ?? [];
   const bindings = team.bindings ?? [];
   if (!Array.isArray(resources) || resources.length > 50) throw new Problem(400, 'team.resources is a list of at most 50 resources');
@@ -75,10 +82,10 @@ export function checkSystems(team, roles) {
     if (r.tier !== undefined && !TIERS.includes(r.tier)) throw new Problem(400, `${at}: tier is ${TIERS.join(', ')}`);
     return { id: r.id, type: r.type, ...(typeof r.name === 'string' ? { name: r.name.slice(0, 80) } : {}), secrets, ...(tools ? { tools } : {}), permissions, effects, egress, tier: r.tier ?? 'custom' };
   });
-  const members = new Set(roles.map((r) => r.slug));
+  const members = roles ? new Set(roles.map((r) => r.slug)) : null;
   const seen = new Set();
   const bound = bindings.map((b) => {
-    if (!b || !SLUG.test(b.role ?? '') || !members.has(b.role)) throw new Problem(400, `binding ${b?.role ?? '?'}: role is a member of the team`);
+    if (!b || !SLUG.test(b.role ?? '') || (members && !members.has(b.role))) throw new Problem(400, `binding ${b?.role ?? '?'}: role is a member of the team`);
     if (!ids.has(b.resource)) throw new Problem(400, `binding ${b.role}: resource ${b.resource} is not one of team.resources`);
     if (!PERMISSIONS.includes(b.permission)) throw new Problem(400, `binding ${b.role} → ${b.resource}: permission is read, write or deploy`);
     const k = `${b.role}\0${b.resource}`;
@@ -87,6 +94,25 @@ export function checkSystems(team, roles) {
     return { role: b.role, resource: b.resource, permission: b.permission };
   });
   return out.length || bound.length ? { resources: out, bindings: bound } : null;
+}
+
+/**
+ * A run's frozen systems from the team's stored ones: the bindings of members in this run only. Null when there are
+ * none. The stored ones were checked when an admin set them.
+ */
+export function freezeSystems(row, roles) {
+  if (!row) return null;
+  const members = new Set(roles.map((r) => r.slug));
+  const bindings = (row.bindings ?? []).filter((b) => members.has(b.role));
+  return row.resources?.length || bindings.length ? { version: row.version, resources: row.resources ?? [], bindings } : null;
+}
+
+/** The resources the frozen systems bind a member to, each with the permission. */
+function boundTo(roster, role) {
+  const sys = roster?.systems;
+  if (!sys) return [];
+  const byId = new Map(sys.resources.map((r) => [r.id, r]));
+  return sys.bindings.filter((b) => b.role === role && byId.has(b.resource)).map((b) => byId.get(b.resource));
 }
 
 /**
@@ -169,8 +195,9 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     return new Map(rows.map((x) => [x.id, x.name]));
   }
 
+  const grantOf = (g) => ({ team: g.slice(0, g.indexOf('/')), resource: g.slice(g.indexOf('/') + 1) });
   const view = (r, names, usedBy) => ({
-    id: r.id, name: r.name, label: r.label ?? r.name, service: r.service, auth: r.auth, teams: r.teams,
+    id: r.id, name: r.name, label: r.label ?? r.name, service: r.service, auth: r.auth, grants: r.grants.map(grantOf),
     createdBy: r.created_by, createdByName: names.get(r.created_by) ?? null, createdAt: new Date(r.created_at).toISOString(),
     lastUsedAt: r.last_used_at ? new Date(r.last_used_at).toISOString() : null,
     health: r.last_test ? { ok: r.last_test.ok, at: r.last_test.at, detail: r.last_test.detail ?? null } : null,
@@ -196,9 +223,10 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     if (typeof b.service !== 'string' || !SERVICE.test(b.service)) throw new Problem(400, 'service names the connector, like slack, github or stripe');
     if (typeof b.value !== 'string' || !b.value || b.value.length > 16 * 1024) throw new Problem(400, 'value is the key itself, at most 16 KB; it is sealed and never shown again');
     if (b.label !== undefined && b.label !== null && (typeof b.label !== 'string' || b.label.length > 80)) throw new Problem(400, 'label is a short name for people');
-    const teams = b.teams ?? [];
-    if (!Array.isArray(teams) || teams.length > 200 || teams.some((t) => typeof t !== 'string')) throw new Problem(400, 'teams lists the teams that may use it');
-    for (const t of teams) await getTeam(db, tenant, t);
+    const asked = b.grants ?? [];
+    if (!Array.isArray(asked) || asked.length > 200 || asked.some((g) => !g || typeof g !== 'object' || !GRANT.test(`${g.team}/${g.resource}`))) throw new Problem(400, 'grants lists where it may be used: [{ team, resource }], the resource id in that team\'s systems');
+    const grants = [...new Set(asked.map((g) => `${g.team}/${g.resource}`))];
+    for (const t of new Set(asked.map((g) => g.team))) await getTeam(db, tenant, t);
     // ADR 0013: adding a way into a system is a capability change; the step-up names this credential.
     await m3.requireStepUp(tenant, who, stepUp, 'Adding a credential', credentialScope(b.name));
     const id = rid();
@@ -206,11 +234,11 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
       const [dupe] = await ctx.q('select id from credentials where name = $1 and removed_at is null', [b.name]);
       if (dupe) throw new Problem(409, `${b.name} is already a credential; remove it first to replace it`, { type: 'already' });
       // The value is sealed in the same insert: a credential is never there without its value (code review sev4).
-      await ctx.q('insert into credentials(id, tenant, name, label, service, auth, teams, created_by, sealed) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
-        [id, tenant, b.name, b.label ?? null, b.service, 'key', [...new Set(teams)], who, seal(key, tenant, sealName(id), b.value)]);
-      await ctx.audit({ actorKind: 'person', actorId: who, action: 'credential', target: id, decision: 'allowed', detail: { op: 'add', name: b.name, service: b.service, teams } });
+      await ctx.q('insert into credentials(id, tenant, name, label, service, auth, grants, created_by, sealed) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+        [id, tenant, b.name, b.label ?? null, b.service, 'key', grants, who, seal(key, tenant, sealName(id), b.value)]);
+      await ctx.audit({ actorKind: 'person', actorId: who, action: 'credential', target: id, decision: 'allowed', detail: { op: 'add', name: b.name, service: b.service, grants } });
     });
-    return { id, name: b.name, service: b.service, teams: [...new Set(teams)] };
+    return { id, name: b.name, service: b.service, grants: grants.map(grantOf) };
   }
 
   /** The one place a value is unsealed: Test connection and release, never a route's answer. */
@@ -259,6 +287,45 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     return { id, removed: true };
   }
 
+  async function getSystems(tenant, team) {
+    await getTeam(db, tenant, team);
+    const [row] = await db.tenant(tenant, ({ q }) => q('select resources, bindings, version, updated_by, updated_at from team_systems where team = $1', [team]));
+    return row ? { resources: row.resources, bindings: row.bindings, version: row.version, updatedBy: row.updated_by, updatedAt: new Date(row.updated_at).toISOString() } : { resources: [], bindings: [], version: 0 };
+  }
+
+  /**
+   * Sets a team's systems (resources.json). Only an admin, with a step-up scoped systems:<team>: a resource's command
+   * and the secret names it gets are the power to read a credential, so this is where that power is granted, and the
+   * audit row records the diff, with every command that receives secrets (security review sev2).
+   */
+  async function putSystems(tenant, team, who, body, stepUp) {
+    await getTeam(db, tenant, team);
+    const next = checkSystems(body ?? {}) ?? { resources: [], bindings: [] };
+    await m3.requireStepUp(tenant, who, stepUp, 'Changing what the team can reach', systemsScope(team));
+    const { result } = await m3.tx(tenant, async (ctx) => {
+      const [prev] = await ctx.q('select resources, bindings, version from team_systems where team = $1 for update', [team]);
+      const was = new Map((prev?.resources ?? []).map((r) => [r.id, JSON.stringify(r)]));
+      const now = new Map(next.resources.map((r) => [r.id, JSON.stringify(r)]));
+      const key = (b) => `${b.role} → ${b.resource} (${b.permission})`;
+      const wasB = new Set((prev?.bindings ?? []).map(key));
+      const nowB = new Set(next.bindings.map(key));
+      const diff = {
+        added: [...now.keys()].filter((k) => !was.has(k)), removed: [...was.keys()].filter((k) => !now.has(k)),
+        changed: [...now.keys()].filter((k) => was.has(k) && was.get(k) !== now.get(k)),
+        bound: [...nowB].filter((k) => !wasB.has(k)), unbound: [...wasB].filter((k) => !nowB.has(k)),
+        // Every command that will be started with secrets: what an admin agreed to run with them.
+        commands: next.resources.filter((r) => r.tools?.command && r.secrets.length).map((r) => ({ id: r.id, command: r.tools.command, args: r.tools.args, secrets: r.secrets })),
+      };
+      const version = (prev?.version ?? 0) + 1;
+      await ctx.q(`insert into team_systems(tenant, team, resources, bindings, version, updated_by, updated_at) values ($1, $2, $3, $4, $5, $6, $7)
+                   on conflict (tenant, team) do update set resources = excluded.resources, bindings = excluded.bindings, version = excluded.version, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+        [tenant, team, JSON.stringify(next.resources), JSON.stringify(next.bindings), version, who, ctx.now]);
+      await ctx.audit({ team, actorKind: 'person', actorId: who, action: 'team.systems', target: team, decision: 'allowed', detail: { version, ...diff } });
+      return { version, ...diff };
+    });
+    return { ...next, ...result };
+  }
+
   /**
    * One value for one session, or null (the caller answers with a nack that says nothing more). `purpose` is sidecar
    * or gateway. Checked here, never from the request: the session is live in a running run, the frozen roster binds its
@@ -276,12 +343,16 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
       if (!s) return deny('no-session');
       if (runner && s.runner !== runner) return deny('not-this-runner');
       if (!LIVE_SESSION.includes(s.state) || s.run_state !== 'running') return deny('not-live');
-      const sys = systemsFor(s.roster, s.role);
-      if (!sys.secrets.includes(name)) return deny('not-bound');
-      if (server && !(sys.mcp[server]?.secrets ?? []).includes(name)) return deny('not-this-server');
-      const [c] = await q('select id, teams from credentials where name = $1 and removed_at is null', [name]);
+      const listing = boundTo(s.roster, s.role).filter((r) => r.secrets.includes(name));
+      if (!listing.length) return deny('not-bound');
+      const here = server ? listing.filter((r) => r.id === server) : listing;
+      if (!here.length) return deny('not-this-server');
+      const [c] = await q('select id, service, grants from credentials where name = $1 and removed_at is null', [name]);
       if (!c) return deny('no-credential');
-      if (!c.teams.includes(s.team)) return deny('not-granted');
+      // Security review sev2: only to a resource of the credential's own service, granted for this team's resource.
+      const ofService = here.filter((r) => r.type === c.service);
+      if (!ofService.length) return deny('wrong-service');
+      if (!ofService.some((r) => c.grants.includes(`${s.team}/${r.id}`))) return deny('not-granted');
       await q('update credentials set last_used_at = now() where id = $1', [c.id]);
       await q("insert into audit(tenant, team, actor_kind, actor_id, session, action, target, decision, rule, detail) values ($1, $2, 'system', 'vault', $3, 'secret.release', $4, 'allowed', $5, $6)",
         [tenant, s.team, session, c.id, purpose, { name, purpose, team: s.team, role: s.role, ...(server ? { server } : {}) }]);
@@ -292,5 +363,5 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     return value ? { name, value } : null;
   }
 
-  return { list, add, test, remove, release };
+  return { list, add, test, remove, release, getSystems, putSystems };
 }
