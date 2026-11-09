@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeRunner, plane, registerRunner } from './helpers.mjs';
 import { IO_DAY_CAP, redactPatterns, taskId } from '../inspector.mjs';
+import * as store from '../store.mjs';
 
 const roster = () => ({
   version: 'abc123', repo: { url: 'https://github.com/example/shop.git', ref: 'main' },
@@ -185,5 +186,41 @@ test('review fix: an event in another team that names this team\'s session gets 
     const r = await runner.request('step.io', { session: s.session, id: io, part: 'output', body: 'cut', truncated: true, bytes: 2 ** 40 });
     assert.equal(r.op, 'ack', JSON.stringify(r.body));
     assert.equal((await p.db.system('select bytes from step_io where id = $1', [io]))[0].bytes, 2 ** 31 - 1);
+  }, { tickMs: 0 });
+});
+
+test('review fix: an event sent through the API names a session in its own words, so it never joins that session\'s task', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const [chat] = await events(p.call, 'chat.message');
+    const s = (await start(runner, 'chief-of-staff')).body;
+    const posted = env(s, 'chief-of-staff', 'report.status', { status: 'working', task: 'Rename the task', session: s.session });
+    const r = await p.call('POST', '/teams/shop/events', { events: [posted] });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const [stored] = (await events(p.call, 'report.status')).filter((e) => e.id === posted.id);
+    assert.deepEqual([stored.task, stored.cause], [undefined, undefined], 'actor.session and data.session from a sender are not trusted');
+    assert.equal((await p.db.system('select title from tasks where id = $1', [chat.task]))[0].title, 'go');
+    // The same event from the runner that runs the session joins it.
+    const ran = env(s, 'chief-of-staff', 'report.heartbeat', { status: 'working' });
+    assert.equal((await runner.request('events', { events: [ran] })).op, 'ack');
+    assert.equal((await events(p.call, 'report.heartbeat')).find((e) => e.id === ran.id).task, chat.task);
+  }, { tickMs: 0 });
+});
+
+test('review fix: a step I/O id another workspace already used is refused, not answered kept', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    await store.ensureTenant(p.db, 'rival');
+    await store.createTeam(p.db, 'rival', { id: 'rivals' });
+    const io = ULID();
+    await p.db.system("insert into step_io(id, tenant, team, session, part, body, bytes, expires_at) values ($1, 'rival', 'rivals', 'ses_r', 'input', 'theirs', 6, now() + interval '1 day')", [io]);
+    const r = await runner.request('step.io', { session: s.session, id: io, part: 'input', body: 'mine' });
+    assert.equal(r.op, 'nack', JSON.stringify(r.body));
+    assert.match(r.body.problem, /taken/);
+    assert.equal((await p.db.system('select count(*)::int as n from step_io_days where session = $1', [s.session]))[0].n, 0, 'and nothing counted toward the day');
+    assert.equal((await p.db.system('select body from step_io where id = $1', [io]))[0].body, 'theirs');
   }, { tickMs: 0 });
 });

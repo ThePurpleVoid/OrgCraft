@@ -801,7 +801,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   async function appendEvents(tenant, team, events) {
     await getTeam(db, tenant, team);
     return tx(tenant, async (ctx) => {
-      const s = await appendIn(ctx.q, tenant, team, events, { project: (qq, x) => project(ctx, x), now: ctx.now });
+      // outside: the sender's actor and data are its own words, so no session it names gives the event a task.
+      const s = await appendIn(ctx.q, tenant, team, events, { project: (qq, x) => project(ctx, x), now: ctx.now, outside: true });
       ctx.stored.push(...s);
       return s;
     });
