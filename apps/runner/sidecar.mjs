@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { DEFAULT_INHERITED_ENV_VARS, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -177,8 +177,12 @@ export async function startSidecar({ session, servers, secretGet, take, named = 
     const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, ...Object.fromEntries(secrets.map((x) => [x.name, x.value])) };
     const client = new Client({ name: 'orgcraft-runner', version: '1' });
     try {
+      // The SDK adds the runner's own HOME, LOGNAME, PATH, SHELL, TERM and USER under ours; `env -u` takes off each
+      // of those we did not set, so the server starts with PATH, HOME and its own secrets only.
+      const strip = DEFAULT_INHERITED_ENV_VARS.filter((k) => !(k in env)).flatMap((k) => ['-u', k]);
+      const cmd = ['env', ...strip, '--', s.command, ...(s.args ?? [])];
       const pre = slot ? asAgent(slot) : [];
-      const transport = new StdioClientTransport({ command: pre[0] ?? s.command, args: [...pre.slice(1), ...(pre.length ? [s.command] : []), ...(s.args ?? [])], env, cwd: home, stderr: 'ignore' });
+      const transport = new StdioClientTransport({ command: pre[0] ?? cmd[0], args: [...pre.slice(1), ...(pre.length ? cmd : cmd.slice(1))], env, cwd: home, stderr: 'ignore' });
       await withTimeout(client.connect(transport), connectTimeoutMs, `${name} did not start`);
       const { tools } = await withTimeout(client.listTools(), connectTimeoutMs, `${name} did not list its tools`);
       live.set(name, { client, tools: tools.filter((t) => NAME_TOOL.test(t?.name ?? '')).map(cleanTool), secrets, home, slot, effects: s.effects ?? {} });
