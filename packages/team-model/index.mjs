@@ -217,6 +217,15 @@ export function extendBriefText(base, extMd) {
     }
     const m = /^\*\*([^*]+):\*\*/.exec(line);
     if (!m) continue;
+    // L11b: "**Name:**" is the seat's own name. It becomes the brief's "# " line and is not kept as a field, so the
+    // role's title (the kit's, or the team's "# " line) stays a separate value.
+    if (m[1].trim().toLowerCase() === 'name') {
+      const name = line.slice(m[0].length).trim();
+      if (!name) continue;
+      const i = b.header.findIndex((l) => /^#\s+/.test(l));
+      if (i >= 0) b.header[i] = `# ${name}`; else b.header.unshift(`# ${name}`);
+      continue;
+    }
     const i = b.header.findIndex((l) => l.startsWith(`**${m[1]}:**`));
     if (i >= 0) b.header[i] = line;
     else {
@@ -272,19 +281,36 @@ function typeBrief(spec, kit, type) {
 }
 
 /** The settings that belong to one seat, not to the job: they never pass from a role's own seat to its other teammates. */
-const SEAT_FIELDS = ['based on', 'reports to', 'pool', 'group'];
+const SEAT_FIELDS = ['name', 'based on', 'reports to', 'pool', 'group'];
 const SEAT_SECTIONS = ['owns (writes)', 'owns', 'hands to'];
 function withoutSeat(extension) {
   if (!extension) return undefined;
   return {
+    // The "# " line of a role's own extension is the role's title (a pack's or the team's), shared by every teammate.
+    ...(extension.title ? { title: extension.title } : {}),
     fields: (extension.fields ?? []).filter((f) => !SEAT_FIELDS.includes(f.name.toLowerCase())),
     sections: (extension.sections ?? []).filter((x) => !SEAT_SECTIONS.includes(x.name.toLowerCase())),
   };
 }
 
-/** The type's title, from its brief's "# " line. */
+/**
+ * The role's title (L11b): the "# " line of the role's own extension (a pack's or the team's title for the job), else
+ * its brief's. A seat's name is a separate field ("**Name:**"), so renaming a seat never changes this.
+ */
 function typeTitle(spec, kit, type) {
-  return briefTitle(typeBrief(spec, kit, type), type);
+  return spec.roles[type]?.extension?.title ?? briefTitle(typeBrief(spec, kit, type), type);
+}
+
+/** The same title from files, for sync: the role's brief and its own .extend.md text, if any. */
+export function roleTitle(typeMd, typeExtensionMd) {
+  return (typeExtensionMd ? parseExtension(typeExtensionMd).title : undefined) ?? briefTitle(typeMd, '');
+}
+
+/** The seat's own name (L11b): the "**Name:**" field, else, for a teammate, its legacy "# " line. Undefined when unnamed. */
+export function seatName(r) {
+  const named = (r?.extension?.fields ?? []).find((f) => f.name.trim().toLowerCase() === 'name')?.value.trim();
+  if (named) return named;
+  return r?.source === 'member' ? r.extension?.title || undefined : undefined;
 }
 /** A brief's "# " title without its "(…)" note, as the Studio shows it: "Chief of staff (project coordinator)" → "Chief of staff". */
 const briefTitle = (md, fallback) => (/^#\s+(.+)$/m.exec(md ?? '')?.[1] ?? fallback).replace(/\s*\(.*\)\s*$/, '').trim();
@@ -302,7 +328,7 @@ function memberBrief(base, r, id, kit, typeExtension) {
   let md = emptyExtension(shared) ? base : applyExtension(base, shared);
   md = emptyExtension(extension) ? md : applyExtension(md, extension);
   const b = splitBrief(md);
-  const title = briefTitle(base, r.type);
+  const title = typeExtension?.title ?? briefTitle(base, r.type);
   const last = b.header.map((l, j) => (l.startsWith('**') ? j : -1)).filter((j) => j >= 0).at(-1);
   b.header.splice(last === undefined ? 1 : last + 1, 0, `**Type:** ${title} (${r.type})`);
   const footer = b.sections.find((x) => key(x.heading).startsWith('every thread'));
@@ -312,6 +338,42 @@ function memberBrief(base, r, id, kit, typeExtension) {
   }
   return joinBrief(b);
 }
+
+/**
+ * A member's brief from files, for sync (bin/agent-team.mjs): the type's brief (kit or project), the type's own
+ * .extend.md text if any, and the member's .extend.md text. The same rules as resolveSpec, one implementation.
+ */
+export function briefOfMember({ typeMd, typeExtensionMd, extensionMd, id, type }) {
+  const typeExtension = typeExtensionMd ? parseExtension(typeExtensionMd) : undefined;
+  return memberBrief(typeMd, { type, extension: parseExtension(extensionMd) }, id, null, typeExtension);
+}
+
+/**
+ * The Hands to section as sync writes it: structured lines name the target ("- Support lead (support-lead): …"), and a
+ * line to a role that is not on this team is left out. Prose lines are kept as they are. `titles` maps installed ids to names.
+ */
+export function renderHandsTo(md, titles, catalog = []) {
+  const b = splitBrief(md);
+  const sec = b.sections.find((x) => key(x.heading) === 'hands to');
+  if (!sec) return md;
+  const installed = [...titles.keys()];
+  const elsewhere = new Set(catalog.filter((x) => !titles.has(x)));
+  const out = [];
+  for (const line of sec.body) {
+    const parsed = handsTo(`## Hands to\n${line}\n`, [...installed, ...elsewhere]).targets[0];
+    if (!parsed) { out.push(line); continue; }
+    // A line to a role this team doesn't have: the kit's wiring is written for the whole catalog. Leave it out.
+    if (elsewhere.has(parsed.to)) continue;
+    const who = parsed.to === 'owner' ? 'Owner (owner)' : `${titles.get(parsed.to)} (${parsed.to})`;
+    out.push(`- ${who}${parsed.what ? `: ${parsed.what}` : ''}`);
+  }
+  if (!out.some((l) => l.trim())) b.sections.splice(b.sections.indexOf(sec), 1);
+  else sec.body = out;
+  return joinBrief(b);
+}
+
+/** Fills {{ROLE}} with each role's own id (kit 0.22 briefs name their own slug that way). */
+export const fillRole = (md, id) => String(md).replaceAll('{{ROLE}}', id);
 
 /** The type a member is based on; a role that is not a member is its own type. */
 export function typeOf(spec, id) {
@@ -343,7 +405,7 @@ export function addMember(spec, kit, { type, title, reportsTo } = {}) {
   if (title !== undefined) checkName(spec, kit, id, title);
   const manager = reportsTo ?? (/^\*\*Reports to:\*\*\s*(\S+)/m.exec(base)?.[1] ?? 'owner');
   const extension = { fields: [{ name: 'Based on', value: type }, { name: 'Reports to', value: manager }], sections: [{ name: 'Owns (writes)', mode: 'replace', text: 'Nothing yet.' }] };
-  if (title !== undefined) extension.title = normName(title);
+  if (title !== undefined) extension.fields.unshift({ name: 'Name', value: normName(title) });
   spec.roles[id] = { source: 'member', type, enabled: true, extension };
   return { spec, id };
 }
@@ -352,15 +414,16 @@ const normName = (name) => String(name ?? '').trim().replace(/\s+/g, ' ');
 const nameKey = (name) => normName(name).toLowerCase();
 const nameError = (message) => Object.assign(new Error(message), { status: 409 });
 
-/** The name people see for a seat: its own title, else its type's, numbered by id when several share it. */
+/** The name people see for a seat: its own name, else its role's title, numbered by id when several share it. */
 export function displayName(spec, kit, id) {
   const r = spec.roles[id];
   if (!r) return id;
-  if (r.extension?.title) return r.extension.title;
+  const own = seatName(r);
+  if (own) return own;
   const type = typeOf(spec, id);
-  const title = r.source === 'member' ? typeTitle(spec, kit, type) : briefTitle(r.brief ?? kit.roles?.[id], id);
+  const title = typeTitle(spec, kit, type);
   // Numbered among the seats the team lists (on, or off but kept), so a visible teammate never says "2" alone.
-  const untitled = Object.keys(spec.roles).filter((x) => typeOf(spec, x) === type && !spec.roles[x].extension?.title && isSeat(spec, x)).sort(byId);
+  const untitled = Object.keys(spec.roles).filter((x) => typeOf(spec, x) === type && !seatName(spec.roles[x]) && isSeat(spec, x)).sort(byId);
   const i = untitled.indexOf(id);
   return i <= 0 ? title : `${title} ${i + 1}`;
 }
@@ -368,7 +431,7 @@ export function displayName(spec, kit, id) {
 /** The seats on the team, on or off: switched on, a teammate of its own, listed as off, or given a name. */
 /** The seats on the team, on or off: switched on, a teammate of its own, listed as off, or given a name. The one
  *  predicate for names (checkName, displayName) and for the Team page's list (listMembers). */
-const isSeat = (spec, id) => { const r = spec.roles[id]; return !!r && r.source !== 'missing' && (r.enabled || r.source === 'member' || !!r.extension?.title || (spec.layout?.exclude ?? []).includes(id)); };
+const isSeat = (spec, id) => { const r = spec.roles[id]; return !!r && r.source !== 'missing' && (r.enabled || r.source === 'member' || !!seatName(r) || (spec.layout?.exclude ?? []).includes(id)); };
 
 function checkName(spec, kit, id, name) {
   const n = normName(name);
@@ -380,12 +443,20 @@ function checkName(spec, kit, id, name) {
   }
 }
 
-/** Renames a seat: its extension's "# " title only. The id, files, bindings, ownership and history stay put. */
+/**
+ * Renames a seat: its extension's "**Name:**" field only (L11b). The role's title (the "# " line of a role's own
+ * extension, or its brief's) is never touched, so the role's other teammates keep their role. The id, files,
+ * bindings, ownership and history stay put. A teammate's legacy "# " name is replaced by the field.
+ */
 export function setDisplayName(spec, id, name, kit) {
   if (!kit?.roles) throw new Error('setDisplayName needs the kit, to compare with the names of kit roles');
   if (!spec.roles[id]) throw new Error(`no role "${id}"`);
   checkName(spec, kit, id, name);
-  ext(spec, id).title = normName(name);
+  const e = ext(spec, id);
+  if (spec.roles[id].source === 'member') delete e.title;
+  const fields = (e.fields ??= []);
+  const f = fields.find((x) => x.name.trim().toLowerCase() === 'name');
+  if (f) f.value = normName(name); else fields.unshift({ name: 'Name', value: normName(name) });
   return spec;
 }
 
@@ -456,9 +527,18 @@ function checkMembers(spec, kit, roles, manager) {
   }
   const roster = Object.keys(spec.roles);
   const handsOf = new Map([...on].map(([slug, r]) => [slug, handsTo(r.md, roster).targets]));
+  // The kit's own wiring names roles a team may not have (a brief is written for the whole catalog); sync leaves
+  // those lines out of the brief. Only a team's own Hands to line to a role that is off is worth a warning.
+  // The same goes for the kit's wiring to a role the team has several of: routing picks by what each one owns.
+  const kitWiring = (slug) => new Set(handsTo(kit.roles?.[typeOf(spec, slug)] ?? '', roster).targets.map((t) => t.to));
+  const ownWiring = (slug) => new Set((spec.roles[slug]?.extension?.sections ?? []).filter((s) => s.name.toLowerCase() === 'hands to')
+    .flatMap((s) => handsTo(`## Hands to\n${s.text}\n`, roster).targets.map((t) => t.to)));
   for (const [slug, targets] of handsOf) {
+    const fromKit = kitWiring(slug);
+    const own = ownWiring(slug);
     for (const t of targets) {
       if (t.to === 'owner' || on.has(t.to) && spec.roles[t.to]?.source === 'member') continue;
+      if (fromKit.has(t.to) && !own.has(t.to)) continue;
       const several = membersOf(spec, t.to).filter((x) => on.has(x));
       if (several.length > 1) {
         const mine = laneOf(slug, manager);
@@ -549,7 +629,7 @@ export function resolveSpec(spec, kit) {
     roles.push({ slug, md, source });
   }
   const installed = new Set(roles.map((r) => r.slug));
-  for (const r of roles) r.md = fitToTeam(r.md, installed);
+  for (const r of roles) r.md = fillRole(fitToTeam(r.md, installed), r.slug);
   return { roles: applyMeetings(applyBindings(roles, spec.resources), spec.meetings), warnings };
 }
 
@@ -860,7 +940,7 @@ export function draftRole(spec, kit, { start = 'blank', from, md: imported, titl
     md = kit.template ?? '# Role title\n\n**Model:** standard\n**Group:** engineering\n**Reports to:** cto\n**Status:** active\n\n## Identity\n\n## Owns (writes)\n\n## Tools\n\n## Wakes on\n\n## Hands to\n\n## Rules\n';
     md = md.replaceAll('Role title', title || 'New agent');
   }
-  md = md.replaceAll(`team-status.sh ${old} `, `team-status.sh ${slug} `).replaceAll(`roles/${old}.md`, `roles/${slug}.md`);
+  md = md.replaceAll(`team-status.sh ${old} `, `team-status.sh ${slug} `).replaceAll(`roles/${old}.md`, `roles/${slug}.md`).replaceAll('{{ROLE}}', slug);
   if (title) md = setBriefTitle(md, title);
   if (group) md = setBriefField(md, 'Group', group);
   if (reportsTo) md = setBriefField(md, 'Reports to', reportsTo);
@@ -1057,7 +1137,7 @@ export function renameRole(spec, from, to, kit) {
   if (!isCustom(r)) throw new Error(`${from} is not a custom agent`);
   if (!SLUG.test(to)) throw new Error(`"${to}" is not a valid slug`);
   if (spec.roles[to] && isCustom(spec.roles[to])) throw new Error(`this team already has an agent called ${to}`);
-  const brief = r.brief.replaceAll(`team-status.sh ${from} `, `team-status.sh ${to} `).replaceAll(`roles/${from}.md`, `roles/${to}.md`);
+  const brief = r.brief.replaceAll(`team-status.sh ${from} `, `team-status.sh ${to} `).replaceAll(`roles/${from}.md`, `roles/${to}.md`).replaceAll('{{ROLE}}', to);
   delete spec.roles[from];
   // A kit role of the old name (the reason for most renames) comes back as the kit's own, switched off.
   if (kit?.roles && from in kit.roles) spec.roles[from] = { source: 'kit', enabled: false };

@@ -57,12 +57,12 @@ Escalations outside business hours wait for the morning.
 | Part | Rule |
 | --- | --- |
 | File name `<id>` | The member id. Matches `SLUG` (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`), at most 48 characters, unique in the team, and **never changed by the Studio**. Picked once by `addMember` (section 3) |
-| `# <name>` | The display name. Free text, 1 to 60 characters after trimming, unique in the team compared case-insensitively with inner spaces collapsed. Optional: without it the name is computed (3.2) |
+| `**Name:** <name>` | The display name (L11b). Free text, 1 to 60 characters after trimming, unique in the team compared case-insensitively with inner spaces collapsed. Optional: without it the name is computed (3.2). A member's legacy `# <name>` line still reads as its name; the Studio writes the field |
 | `**Based on:** <type>` | **New field.** A kit role slug or a project role slug. Only allowed when `<id>` is not itself a kit or project role. The type must not itself be a member (no chains) |
 | `**Pool:** <n>` | **New field**, optional, integer 1 to 10, default 1. "Same job, more hands": n identical sessions of this member, addressed as `<id>#1` … `<id>#n` (the existing board key). Allowed on any role, member or not. Sent as RunCreate `team.roles[].pool` |
 | Other fields and sections | The ordinary extension format, applied on top of the type's brief exactly as today (`append`, or `replace` with ` (replace)` in the heading) |
 
-**A kit or project role that is not a member** can also get a display name the same way: `roles/backend-dev.extend.md` with `# Ana (backend)`. Its id stays `backend-dev`.
+**A kit or project role that is not a member** can also get a display name the same way: `roles/backend-dev.extend.md` with `**Name:** Ana`. Its id stays `backend-dev`. The `# ` line of a role's own extension is **the role's title** (a pack's or the team's name for the job, such as `# Problem-report triager`), not a seat name: every teammate of the role shows it as its role and in its `**Type:**` line, and renaming the role's own seat never changes it (L11b). `Name` is a seat setting, like `Reports to`: it never passes to the role's other teammates.
 
 ### 1.3 `## Hands to`: structured lines (new, additive)
 
@@ -116,9 +116,9 @@ The section stays a normal brief section. Lines are parsed like `## Wakes on`:
 | --- | --- |
 | `typeOf(spec, id)` | `spec.roles[id].type ?? id` |
 | `membersOf(spec, type, { enabledOnly = true })` | Ids whose `typeOf` is `type`, sorted by id |
-| `addMember(spec, kit, { type, title?, reportsTo? })` | Picks the id: `<type>-2`, `-3` … (the first free slug; never a slug of the title, so ids stay predictable). Writes `Based on`, `Reports to` (default: the type's), `## Owns (writes) (replace)` with `Nothing yet.` (a new member never inherits owned areas, so one writer per path holds), and `# <title>` only if `title` was given. Returns `{ spec, id }` |
-| `displayName(spec, kit, id)` | The extension `title`; else the type's title, numbered when several members of the type have no title: the lowest id gets the plain title, the rest "<Type title> 2", "3" … in id order |
-| `setDisplayName(spec, id, name)` | Sets the extension `title`. Throws `CoreError(409, 'Another teammate is already called <name>')` on a duplicate. Never touches the id |
+| `addMember(spec, kit, { type, title?, reportsTo? })` | Picks the id: `<type>-2`, `-3` … (the first free slug; never a slug of the title, so ids stay predictable). Writes `Based on`, `Reports to` (default: the type's), `## Owns (writes) (replace)` with `Nothing yet.` (a new member never inherits owned areas, so one writer per path holds), and `**Name:** <title>` only if `title` was given. Returns `{ spec, id }` |
+| `displayName(spec, kit, id)` | The `Name` field (or a member's legacy `# ` line); else the role's title (its own extension's `# ` line, else its brief's), numbered when several members of the type have no title: the lowest id gets the plain title, the rest "<Type title> 2", "3" … in id order |
+| `setDisplayName(spec, id, name)` | Sets the `Name` field (and drops a member's legacy `# ` name). Never touches the role's title. Throws `CoreError(409, 'Another teammate is already called <name>')` on a duplicate. Never touches the id |
 | `listMembers(spec, kit)` | The Team page's list, section 4 |
 | `handsTo`, `setHandsTo` | Section 1.3 |
 | `renameRole` | Unchanged (changes the slug; CLI only). The Studio never calls it on a member |
@@ -227,7 +227,7 @@ After Publish, the next session of each changed member gets its regenerated brie
 1. Round trip byte-identical on every preset, example, this repo's team and the CoachSpotter fixture.
 2. Two members of one type: two briefs, two agent files, two AGENTS.md rows. Each brief's "Every thread" names its own id; the rest matches the type.
 3. `addMember` on a type with a seat gives `<type>-2`, the computed name "<Type> 2", and `Owns: Nothing yet.`
-4. `setDisplayName` changes only the `# Title` line; duplicate refused; id, ownership, bindings, triggers and canvas untouched.
+4. `setDisplayName` changes only the `Name` field (the role's title stays, for every teammate); duplicate refused; id, ownership, bindings, triggers and canvas untouched.
 5. validate: unknown `Based on`; chain; kit-shadowed id; pin below 0.22; duplicate name; bad `Pool`; orphan; overlap.
 6. `handsTo` parses structured lines and keeps prose; every kit 0.21 brief parses with zero targets and zero problems.
 7. Routing 5.3: each of the seven steps, including refusal text listing both members.
