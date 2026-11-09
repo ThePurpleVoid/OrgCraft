@@ -11,7 +11,7 @@ import { checkMeetingDefs } from './meetings.mjs';
 import { approveScope, factsOf, redact as redactText, riskOf } from './signed.mjs';
 import { checkTriggers } from './triggers.mjs';
 import { halted } from './live.mjs';
-import { coveredBy, declinedBefore, effectHash, ledgerRow, ruleLine } from './ledger.mjs';
+import { coveredBy, declinedBefore, ledgerRow, ruleLine, targetsOf } from './ledger.mjs';
 
 const scrypt = promisify(scryptCb);
 
@@ -553,9 +553,9 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     // Declines stick (AI-10): the same effect on the same target (or the same calls), declined by a person in the last
     // 7 days, is not put in front of anyone again, unless the teammate says what changed. The exact same calls are
     // refused even then: nothing changed.
-    const effect = bound ? effectHash(bound.calls) : null;
+    const targets = bound ? targetsOf(bound.calls) : null;
     const what = typeof changedWhat === 'string' && changedWhat.trim() ? changedWhat.trim().slice(0, 500) : null;
-    const declined = bound && action !== 'accept' ? await declinedBefore(ctx, team, bound.hash, effect) : null;
+    const declined = bound && action !== 'accept' ? await declinedBefore(ctx, team, bound.hash, targets) : null;
     const refuse = declined && (declined.exact || !what);
     // A standing rule the owner made covers it (R11.3 Now), within its limits; never after a decline, never a merge.
     const covered = bound && !declined ? await coveredBy(ctx, team, { action, bound, session }) : null;
@@ -579,8 +579,8 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       options: [{ id: 'approve', label: 'Approve', style: 'primary', stepUp: true }, { id: 'deny', label: 'Deny', style: 'danger', stepUp: false }],
       risk: r, expiresAt, links: links.filter((l) => l && typeof l.url === 'string').slice(0, 20),
     });
-    await ctx.q(`insert into approvals(id, tenant, team, run, session, role, action, call, why, risk, card, expires_at, calls, calls_hash, effect_hash) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-      [apr, ctx.tenant, team, run, session, role, action, JSON.stringify(call), why, r, card.id, expiresAt.toISOString(), bound ? JSON.stringify(bound.calls) : null, bound?.hash ?? null, effect]);
+    await ctx.q(`insert into approvals(id, tenant, team, run, session, role, action, call, why, risk, card, expires_at, calls, calls_hash, effect_targets) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [apr, ctx.tenant, team, run, session, role, action, JSON.stringify(call), why, r, card.id, expiresAt.toISOString(), bound ? JSON.stringify(bound.calls) : null, bound?.hash ?? null, targets]);
     // The calls themselves stay in the approval row (deletable with it), not in the permanent log: the event names the hash.
     const ev = await ctx.emit(team, 'approval.requested', { approval: apr, action, ...(bound ? {} : { call }), why, risk: r, expires: expiresAt.toISOString(), cardId: card.id, session, ...(bound ? { callsHash: bound.hash } : {}) },
       { subject: `approval/${apr}`, ...(run ? { run } : {}), ...(role ? { actor: { kind: 'role', id: role, session, via: 'tool' } } : {}) });
