@@ -546,6 +546,7 @@ paths:
       x-min-role: viewer
       tags: [me]
       summary: Live events for every team I can see, and my cards, as server-sent events; resumes from Last-Event-ID
+      description: Event ids are unique only within a team, so two teams can share one (published-<sha>). Resuming from a shared id replays from the earliest copy, so a client may see an event twice; clients dedupe on (team, id).
       responses: { "200": { description: text/event-stream of envelopes, content: { text/event-stream: {} } } }
   /me/devices:
     get: { x-min-role: viewer, tags: [me], summary: My registered devices, responses: { "200": { description: Devices, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { $ref: "#/components/schemas/Device" } } } } } } } } }
