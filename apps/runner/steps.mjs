@@ -85,7 +85,8 @@ export class Steps {
    * `capture`: all, tools, off (or absent: off). `send(frame)`: sends a step.io frame. `secrets()`: [{ name, value }]
    * known by name. `session`: the session id.
    */
-  constructor({ capture, send, secrets = () => [], session }) {
+  constructor({ capture, send, secrets = () => [], session, effectOf: manifestEffect = () => undefined }) {
+    this.manifestEffect = manifestEffect;
     this.capture = ['all', 'tools'].includes(capture) ? capture : 'off';
     this.send = send;
     this.secrets = secrets;
@@ -128,7 +129,7 @@ export class Steps {
   /** The fields every session.tool for this call carries. */
   fields(step, rule) {
     if (!step) return {};
-    step.effect = effectOf(step.tool, rule);
+    step.effect = (rule && BY_RULE[rule]) || this.manifestEffect(step.tool) || effectOf(step.tool, rule);
     return { call: step.call, effect: step.effect, ...(step.io ? { io: step.io } : {}), ...(step.retryOf ? { retryOf: step.retryOf } : {}) };
   }
 
@@ -142,6 +143,16 @@ export class Steps {
   remember(step, isFailed) {
     this.history.push({ call: step.call, tool: step.tool, hash: step.hash, failed: isFailed });
     if (this.history.length > 20) this.history.shift();
+  }
+
+  /**
+   * The id of an allowed call still waiting for its result, for this tool and input, that has not run yet; it is
+   * marked as run (the sidecar runs only those, each once).
+   */
+  takeCall(tool, input) {
+    const hash = inputHash(tool, input);
+    for (const step of this.pending.values()) if (step.tool === tool && step.hash === hash && !step.taken) { step.taken = true; return step.call; }
+    return null;
   }
 
   /** The call finished: the session.result data, or null for a call this session never decided (a team tool). */

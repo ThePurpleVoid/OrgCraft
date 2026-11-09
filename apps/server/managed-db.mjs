@@ -1,4 +1,4 @@
-// The managed store's refs, change requests and objects in Postgres (migration 015; ADR 0012, spec L9 section 4).
+// The managed store's refs, change requests and objects in Postgres (migration 022; ADR 0012, spec L9 section 4).
 // The same contracts as apps/studio/managed.mjs memoryRefs() and packages/git-store memoryStore(), so
 // managedBackend({ store: pgObjects(db, tenant, team), refs: pgRefs(db, tenant, team) }) is the hosted backend.
 // Every query runs as agent_team_app under the tenant's row-level security.

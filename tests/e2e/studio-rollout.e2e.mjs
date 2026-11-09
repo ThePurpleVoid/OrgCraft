@@ -18,6 +18,7 @@ import { createStudio } from '../../apps/studio/server.mjs';
 import { changeUrl, localRollout, pendingOf } from '../../apps/studio/rollout.mjs';
 import { choiceWords, createRollout, rolloutHtml, sortRoles, stateLine, summaryLine, UNKNOWN_HINT } from '../../apps/studio/public/rollout.js';
 import { context } from '../../tools/report.mjs';
+import { openFromMore } from './team-page.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -163,7 +164,7 @@ test('desktop: one line per role from the reports since the merge, n of m, and t
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`http://127.0.0.1:${s1.address().port}/?t=${s1.launchToken}`);
-  await page.getByRole('button', { name: 'Rollout' }).click();
+  await openFromMore(page, 'Rollout');
   const view = page.locator('#rollout-page');
   await view.getByRole('heading', { name: new RegExp(`^Rollout of ${version.slice(0, 7)}, published \\d+ \\w+ · see the change$`) }).waitFor();
   const line = (slug) => view.locator(`.ro-row[data-role="${slug}"] .ro-state`);

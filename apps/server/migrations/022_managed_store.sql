@@ -6,7 +6,7 @@
 -- tenant-lifetime stores. Objects are content-addressed and never updated or deleted by the app role.
 --
 -- Rollback: drop table standing_exports, managed_objects, change_requests, managed_refs; alter table teams drop column
--- backend; delete from schema_migrations where name = '015_managed_store.sql'.
+-- backend; delete from schema_migrations where name = '022_managed_store.sql'.
 
 alter table teams add column backend text not null default 'github' check (backend in ('github', 'managed', 'local'));
 

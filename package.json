@@ -23,6 +23,7 @@
   "files": [
     "apps/studio/",
     "bin/",
+    "packages/calls/",
     "packages/events/",
     "packages/git-store/",
     "packages/github-app/",

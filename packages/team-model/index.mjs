@@ -433,9 +433,24 @@ export function displayName(spec, kit, id) {
  *  predicate for names (checkName, displayName) and for the Team page's list (listMembers). */
 const isSeat = (spec, id) => { const r = spec.roles[id]; return !!r && r.source !== 'missing' && (r.enabled || r.source === 'member' || !!seatName(r) || (spec.layout?.exclude ?? []).includes(id)); };
 
+/**
+ * A name that people or roles could mistake for an address (security L17, the server's run-start roster check): the
+ * server resolves a message's "to" by member id, then name, then role type, so a name may not equal another seat's
+ * id, a role type on the team, or "owner" (trimmed, spaces collapsed, any case). Its own id is fine. The message, or null.
+ */
+export function addressClash(name, id, ids, types) {
+  const k = nameKey(name);
+  if (k === id) return null;
+  if (k === 'owner' || ids.some((x) => x !== id && x === k) || types.some((t) => t === k)) return `${normName(name)} is already a teammate's id, a role or "owner"; pick another.`;
+  return null;
+}
+
 function checkName(spec, kit, id, name) {
   const n = normName(name);
   if (!n || n.length > 60) throw Object.assign(new Error('A name is 1 to 60 characters'), { status: 400 });
+  const seats = Object.keys(spec.roles).filter((x) => isSeat(spec, x));
+  const clash = addressClash(n, id, seats, [...new Set(seats.map((x) => typeOf(spec, x)))]);
+  if (clash) throw nameError(clash);
   // Names are unique across the team, teammates switched off included, so switching one back on never clashes.
   for (const other of Object.keys(spec.roles)) {
     if (other === id || !isSeat(spec, other)) continue;
@@ -518,8 +533,14 @@ function checkMembers(spec, kit, roles, manager) {
   const pin = pinVersion(spec.kit);
   if (members.length && pin && (pin[0] === 0 && pin[1] < 22)) add('error', `roles/${members[0][0]}.extend.md`, `uses "Based on", which needs kit 0.22 or later; team.json pins ${spec.kit}`);
   const seen = new Map();
+  const onIds = [...on.keys()];
+  const onTypes = [...new Set(onIds.map((x) => typeOf(spec, x)))];
   for (const slug of on.keys()) {
     const k = nameKey(name(slug));
+    // Only a name someone gave (a Name field, or a teammate's own "# " line): a computed name is a role's title, and
+    // a title that matches another role's id must not turn into an error on upgrade (code review L35).
+    const clash = seatName(spec.roles[slug]) ? addressClash(name(slug), slug, onIds, onTypes) : null;
+    if (clash) add('error', `roles/${slug}`, clash);
     if (seen.has(k)) add('error', `roles/${slug}`, `${seen.get(k)} and ${slug} are both called ${name(slug)}; give one of them another name`);
     else seen.set(k, slug);
     const pool = poolOf(on.get(slug).md);
@@ -1682,7 +1703,7 @@ export function meetingEstimate(meeting, roles, prices, { turn = { inputTokens: 
 // (CPO story "team templates", D29 to D36):
 //   template.json   { "schema": "agent-team/team-template@1", "id", "title", "summary", "group",
 //                     "preset" (the base, default "minimal") and optionally "roles" (the exact kit roles to switch on),
-//                     "dormant": [slug], "values": {...}, "extensions": { slug: "<role>.extend.md text" },
+//                     "dormant": [slug], "off": [slug] (on the team, drawn as Off, until switched on), "values": {...}, "extensions": { slug: "<role>.extend.md text" },
 //                     "systems": [{ "type", "name", "for": [slug] }]   suggested, never bound, never secrets
 //                     "areas": [{ "path", "writer", "notes" }]          → ownership.json
 //                     "checks": { gates.json }                          → gates.json
@@ -1723,6 +1744,13 @@ export function templateSpec(files, kit, { project, owner = 'the owner', timezon
     if (!spec.roles[slug]) continue;
     spec.roles[slug].extension = parseExtension(text);
     spec.roles[slug].extensionText = text;
+  }
+  // "off": roles the template lists but starts switched off (team.json excludes them), so the Studio draws them as Off
+  // and switching one on is a one-line team.json change.
+  for (const slug of t.off ?? []) {
+    if (!spec.roles[slug]) continue;
+    spec.roles[slug].enabled = false;
+    spec.layout = { ...(spec.layout ?? {}), exclude: [...new Set([...(spec.layout?.exclude ?? []), slug])] };
   }
   for (const slug of t.dormant ?? []) {
     const r = spec.roles[slug];
@@ -1774,6 +1802,13 @@ export function checkTemplate(files, kit) {
   const agentSlugs = new Set(agents.map((a) => a.slug));
   for (const s of t.roles ?? []) if (!(s in kit.roles) && !agentSlugs.has(s)) add('error', 'template.json', `roles lists "${s}", which is neither a kit role nor one of the template's agents`);
   for (const s of t.dormant ?? []) if (!(s in kit.roles) && !agentSlugs.has(s)) add('error', 'template.json', `dormant lists "${s}", which is not on the team`);
+  if (t.off !== undefined && !Array.isArray(t.off)) add('error', 'template.json', 'off must be a list of role ids');
+  // Code review L34: a template's own agent can start off too; an off role the template doesn't include is a no-op.
+  const onTeam = new Set([...(Array.isArray(t.roles) ? t.roles : kit.presets[t.preset ?? 'minimal'] ?? []), ...agentSlugs]);
+  for (const s of Array.isArray(t.off) ? t.off : []) {
+    if (!(s in kit.roles) && !agentSlugs.has(s)) add('error', 'template.json', `off lists "${s}", which is neither a kit role nor one of the template's agents`);
+    else if (!onTeam.has(s)) add('warning', 'template.json', `off lists "${s}", which the template doesn't put on the team, so it changes nothing`);
+  }
   for (const s of Object.keys(t.extensions ?? {})) if (!(s in kit.roles)) add('error', `extensions/${s}`, 'extends a role the kit does not have');
   for (const s of t.systems ?? []) {
     if (!String(s.type ?? '').trim() || !String(s.name ?? '').trim()) add('error', 'template.json', 'every suggested system needs a type and a name');

@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KIT } from '../../bin/agent-team.mjs';
 import { createStudio } from '../../apps/studio/server.mjs';
+import { openFromMore } from './team-page.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -52,7 +53,7 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   page.on('dialog', (d) => d.accept());
   await page.goto(`${base}/?t=${studio.launchToken}`);
   await page.locator('.lib-role').first().waitFor();
-  await page.getByRole('button', { name: 'Meetings', exact: true }).click();
+  await openFromMore(page, 'Meetings');
   const view = page.locator('#meetings-page');
   // D19: no sample meetings; the definitions wait for a runner.
   await view.getByRole('heading', { name: 'No meetings yet' }).waitFor();
@@ -111,9 +112,10 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   await view.getByText('Saved to the draft. Publish writes it to the team.').waitFor();
   await view.locator('.meeting-row', { hasText: 'Daily standup' }).getByText(/Mon to Fri 09:00 · \d+ roles · written round/).waitFor();
   await page.locator('#publish').click();
+  await page.locator('#files > summary').click();
   await page.locator('#changes summary', { hasText: '.agent-team/meetings.json' }).waitFor();
   await page.locator('#confirm').click();
-  await page.locator('#publish-result', { hasText: 'Committed' }).waitFor();
+  await page.locator('#publish-result', { hasText: /^Saved \d+ changes? in your files/ }).waitFor();
   const file = JSON.parse(readFileSync(join(root, '.agent-team/meetings.json'), 'utf8'));
   const m = file.meetings[0];
   assert.equal(m.id, 'daily-standup');
@@ -129,11 +131,12 @@ test('define a daily standup for the CTO lane, publish it, and read it back unch
   assert.match(readFileSync(join(root, 'docs/team/roles/release-manager.md'), 'utf8'), /^- meeting$/m);
 
   // Criterion 11: reopened, the same meetings with zero diff.
-  await page.locator('#publish-dialog').getByRole('button', { name: 'Close' }).click();
+  await page.locator('#publish-dialog').getByRole('button', { name: 'Keep editing' }).click();
   await page.goto(`${base}/#meetings`);
   await view.locator('.meeting-row', { hasText: 'Daily standup' }).waitFor();
-  await page.locator('#publish').click();
-  await page.getByText('Nothing to publish: the repository already has this team.').waitFor();
+  // Nothing to publish: the button says so and is disabled.
+  await page.locator('#publish', { hasText: 'Nothing to publish' }).waitFor();
+  assert.equal(await page.locator('#publish').isDisabled(), true);
   assert.deepEqual(errors, []);
   await page.close();
 });

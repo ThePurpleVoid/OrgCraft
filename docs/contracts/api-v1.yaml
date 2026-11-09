@@ -823,6 +823,9 @@ components:
                   reportsTo: { type: string, description: A role slug, or owner }
                   areas: { type: array, items: { type: string }, description: Owned paths, sent to the runner in session.start }
                   pool: { type: integer, description: "Most instances, so to: role#instance can be checked" }
+                  type: { type: string, description: "Additive (ADR 0011, L17): the type a member is based on, when it differs from slug. A message's to may name the type; see team-tools.md" }
+                  name: { type: string, maxLength: 60, description: "Additive: the member's display name, for text people read; a message's to may name it" }
+                  handsTo: { type: array, maxItems: 50, items: { type: string }, description: "Additive: the member ids its structured Hands to lists (the drawn wiring, used to route a message to a type with several members; never a firewall)" }
                   model: { type: string }
                   brief: { type: string, description: "The role's brief as text, at most 20 KB; sent to the runner as session.start prompt.brief" }
             meetings:
