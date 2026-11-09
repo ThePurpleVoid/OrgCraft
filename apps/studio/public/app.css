@@ -658,3 +658,14 @@
 @media (max-width: 640px) { .ats .palette { display: none; } }
 @media (max-width: 640px) { .ats .zoom, .ats .mode-hint { display: none; } }
 .ats ul.tree.plain { padding: 8px 16px; }
+
+/* Tooltips and first-time hints (ALL-4) */
+.ats-tip { position: absolute; z-index: 1000; padding: 6px 10px; border-radius: 6px; background: var(--fg, #1f2328); color: var(--bg, #fff); font-size: 13px; line-height: 1.4; pointer-events: none; box-shadow: 0 2px 8px rgb(0 0 0 / .2); }
+.ats-tip[hidden] { display: none; }
+.ats button.info { border: 0; background: none; padding: 0 2px; min-width: 24px; min-height: 24px; color: var(--muted, #59636e); font: inherit; font-size: 13px; cursor: help; }
+.ats button.info:focus-visible { outline: 2px solid var(--accent); border-radius: 50%; }
+.ats [data-tip]:not(button):not(g):not(text) { text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--muted, #59636e); }
+.ats .first-hint { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; margin: 0; padding: 6px 14px; border-bottom: 1px solid var(--line); background: var(--accent-soft, #eef4ff); }
+.ats[data-hints-off~="team"] [data-hint-once="team"], .ats[data-hints-off~="wiring.view"] [data-hint-once="wiring.view"], .ats[data-hints-off~="role.catalog"] [data-hint-once="role.catalog"] { display: none; }
+@media (max-width: 640px) { .ats [data-hint-once="team"] { display: none; } }
+@media (pointer: coarse) { .ats button.info { min-width: 44px; min-height: 44px; } }

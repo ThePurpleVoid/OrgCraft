@@ -131,7 +131,7 @@ test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { 
   // ---- Step 4 (D4): open Backend dev and change it.
   await selectTeammate(page, 'backend-dev');
   const insp = page.locator('#inspector');
-  const markOf = (label) => insp.locator('.field', { has: page.locator(`label:text-is("${label}")`) }).first();
+  const markOf = (label) => insp.locator('.field', { has: page.locator(`label:has-text("${label}")`) }).first();
   // B1.3-2: a name clash says so, and nothing changes.
   await page.locator('#i-name').fill('CTO');
   await page.locator('#i-name').press('Enter');
@@ -165,6 +165,32 @@ test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { 
   assert.equal(await insp.locator('details.section', { has: page.locator('summary', { hasText: /^Rules/ }) }).locator('textarea').inputValue(), 'Every migration has a rollback note.');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 1280, 'nothing cut off sideways (B1.1-11)');
 
+  // ---- ALL-4: tooltips on hover after 400 ms, on focus at once, on tapping ⓘ; Esc closes; the first-time hint once.
+  const tipBox = page.locator('#ats-tip');
+  const pool = markOf('Same job, more hands');
+  await pool.locator('button.info').hover();
+  await page.waitForTimeout(150);
+  assert.equal(await tipBox.isVisible(), false, 'not before 400 ms');
+  await tipBox.getByText('Adds copies of this teammate so more of its work happens at once.').waitFor();
+  await page.mouse.move(5, 5);
+  await tipBox.waitFor({ state: 'hidden' });
+  await page.locator('#i-another').focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await tipBox.getByText('Adds a new teammate with this role, with its own name, manager and systems.').waitFor();
+  assert.match(await page.locator('#i-another').getAttribute('aria-describedby'), /ats-tip/);
+  await page.keyboard.press('Escape');
+  await tipBox.waitFor({ state: 'hidden' });
+  await selectTeammate(page, 'backend-dev');
+  await pool.locator('button.info').click();
+  await tipBox.getByText('Adds copies of this teammate').waitFor();
+  await page.locator('#inspector h2').first().click();
+  await tipBox.waitFor({ state: 'hidden' });
+  const hint = page.locator('[data-hint-once="team"]');
+  await hint.getByText('Drag a role from the left to add a teammate.').waitFor();
+  await hint.getByRole('button', { name: 'Got it' }).click();
+  await hint.waitFor({ state: 'hidden' });
+
   // ---- 360 px (ALL-1, B1.1-12, B1.7): the same draft as a read-only list, top of the org first, no sideways scroll.
   await switchTeammate(page, qaWebManager, false); // a check to show on the list
   await page.setViewportSize({ width: 360, height: 780 });
@@ -178,6 +204,13 @@ test('demo steps 3 and 4 at 1280 px, then the same team as a list at 360 px', { 
   assert.ok(w <= 360, `no sideways scroll (${w}px)`);
   for (const b of await page.locator('#canvas .tree-btn').all()) assert.ok((await b.boundingBox()).height >= 44, 'touch targets are at least 44 px');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'list-phone-light.png') });
+
+  // A dismissed hint stays dismissed after a reload (the draft is not kept yet, so this comes last).
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.reload();
+  await page.locator('.g-card').first().waitFor();
+  assert.equal(await page.locator('[data-hint-once="team"]').isVisible(), false, 'a dismissed hint stays dismissed');
+  assert.match(await page.locator('.ats').getAttribute('data-hints-off'), /\bteam\b/);
 
   assert.deepEqual(errors, []);
   await ctx.close();

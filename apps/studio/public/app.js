@@ -11,6 +11,10 @@ import { createAgentEditor } from './agent-editor.js';
 import { QUIET_S, assess, impactHtml, reapplyFollowUp, inFlightList, planText, popoverHtml, publishable, reasonOf, recommendations, revert, rowOf, staleNote, stateWord, taskOf } from './safety.js';
 import { $, $$, apiUrl, ask, configure, env, feature, paint, request, requestJson, stateEl } from './env.js';
 import { SHELL } from './shell.js';
+import { infoButton, installTips } from './tooltip.js';
+
+/** The glossary tooltip (a function named `tip` is shadowed where the card builds its own hover text). */
+const glossary = (key) => tip(key);
 import { bind, renderAreas, renderChecks, renderSystemInspector, renderSystemsStrip, roleSystemsHtml, wireBindings } from './panels.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -348,12 +352,12 @@ function nodeSvg(r, p, extra = '') {
   if (view.draft.changed.has(r.slug)) extra += ' draft';
   if (look) extra += ' look';
   const tip = three && own ? `${r.title}: ${stateWord(own)}${taskOf(own) ? ` · ${taskOf(own)}` : ''}${own.branch ? ` · branch ${own.branch}` : ''}${own.pr ? ` · PR #${own.pr}` : ''}${hot ? ` · ${hot.map(reasonOf).join(', ')}` : ''}${own.self_reported ? ` · ${SELF_REPORTED}` : ''}` : '';
-  return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${r.off ? ' off' : ''}${extra}" data-slug="${r.slug}" data-node="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}, ${esc(r.off ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle }))}${hot ? `, ${esc(hot.map(reasonOf).join(', '))}, work in progress` : ''}">
+  return `<g class="node${r.slug === selected ? ' selected' : ''}${r.dormant ? ' dormant' : ''}${r.off ? ' off' : ''}${extra}" data-slug="${r.slug}" data-node="${r.slug}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(r.title)}, ${esc(r.off ? t('canvas.off') : t('teammate.subtitle.ai', { role: r.typeTitle }))}${hot ? `, ${esc(hot.map(reasonOf).join(', '))}, work in progress` : ''}${look ? `, ${esc(look.text)}` : ''}">
     <rect class="card" width="${W}" height="${H}"></rect>
     <rect class="stripe" width="4" height="${H - 16}" x="8" y="8" fill="${groupColor(r.group)}"></rect>
     <text class="title" x="20" y="23">${esc(r.title.length > 21 ? r.title.slice(0, 20) + '…' : r.title)}${flag}</text>
-    <text class="meta" x="20" y="41">${esc(tier.length > 28 ? tier.slice(0, 27) + '…' : tier)}</text>
-    ${look ? `<g class="badge-warn" transform="translate(${W - 10},-6)"><circle r="9"></circle><text text-anchor="middle" y="4">!</text><title>${esc(look.text)}</title></g>` : ''}
+    <text class="meta" x="20" y="41"${tier === subtitle ? ` data-tip="${esc(glossary(r.off || !r.enabled ? 'grey.dot' : 'ai.teammate'))}"` : ''}>${esc(tier.length > 28 ? tier.slice(0, 27) + '…' : tier)}</text>
+    ${look ? `<g class="badge-warn" transform="translate(${W - 10},-6)" data-tip="${esc(look.text)}"><circle r="9"></circle><text text-anchor="middle" y="4">!</text></g>` : ''}
     ${three ? `${state ? `<circle class="dot" cx="24" cy="${H - 15}" r="4"></circle><text class="state" x="33" y="${H - 11}">${esc(state.length > 25 ? state.slice(0, 24) + '…' : state)}</text>` : ''}${tip ? `<title>${esc(tip)}</title>` : ''}`
     : `${replaces && !l ? `<title>${esc(view.issues.find((i) => i.where === `roles/${r.slug}` && /replaces the kit/.test(i.message))?.message ?? 'Replaces the kit role of this name on this team')}</title>` : ''}
     ${l ? `<circle class="dot" cx="${W - 14}" cy="16" r="5"></circle>${l.threads > 1 ? `<text class="threads" x="${W - 24}" y="20" text-anchor="end">${l.threads}</text>` : ''}<title>${esc(`${r.title}: ${liveLine(l)}${l.pr ? ` · PR #${l.pr}` : ''}${l.issue ? ` · issue #${l.issue}` : ''}`)}</title>` : ''}`}
@@ -743,16 +747,16 @@ function renderInspector() {
   const head = `<div class="teammate-head"><h2 class="flush">${esc(r.title)}</h2>
       ${r.title !== r.typeTitle ? `<p class="subtitle muted">${esc(r.typeTitle)}</p>` : ''}</div>
     ${nowOnLive(r)}
-    <div class="field"><label for="i-name">${esc(t('inspector.name'))}</label><input id="i-name" maxlength="60" value="${esc(r.title)}" autocomplete="off" aria-describedby="i-name-msg"><span id="i-name-msg" class="field-msg" role="status"></span></div>
-    <div class="field"><span>${esc(t('inspector.role'))}</span><span class="value" data-tip="${esc(tip('role'))}">${esc(r.typeTitle)} <span class="muted">· ${esc(t('catalog.count', { n: seats }))}</span></span></div>
+    <div class="field"><label for="i-name">${esc(t('inspector.name'))} ${infoButton(tip('teammate'), esc)}</label><input id="i-name" maxlength="60" value="${esc(r.title)}" autocomplete="off" aria-describedby="i-name-msg"><span id="i-name-msg" class="field-msg" role="status"></span></div>
+    <div class="field"><span>${esc(t('inspector.role'))} ${infoButton(tip('role'), esc)}</span><span class="value">${esc(r.typeTitle)} <span class="muted">· ${esc(t('catalog.count', { n: seats }))}</span></span></div>
     <p class="row">${r.enabled ? '' : `<span class="pill off">${esc(t('canvas.off'))}</span>`}<button type="button" id="i-enabled" aria-pressed="${!r.enabled}">${esc(r.enabled ? t('canvas.turnoff') : t('canvas.turnon'))}</button></p>
     <div class="field"><label for="i-manager">${esc(t('inspector.reportsto'))} ${mark('Reports to')}</label><select id="i-manager">
       <option value="owner" ${r.reportsTo === 'owner' ? 'selected' : ''}>${esc(spec.values?.OWNER || 'The owner')}</option>
       ${managers.map((m) => `<option value="${m.slug}" ${m.slug === r.reportsTo ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select></div>
     <div class="field"><label for="i-tier">${esc(t('inspector.model'))} ${mark('Model')}</label><select id="i-tier">${TIERS.map((x) => `<option ${x === r.tier ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
-    <div class="field"><label for="i-pool" data-tip="${esc(tip('extra.hands'))}">${esc(t('inspector.hands'))} ${mark('Pool')}</label><input id="i-pool" type="number" min="1" max="10" step="1" value="${Number.isInteger(r.pool) ? r.pool : 1}" inputmode="numeric"></div>
+    <div class="field"><label for="i-pool">${esc(t('inspector.hands'))} ${infoButton(tip('control.same.job.more.hands'), esc)} ${mark('Pool')}</label><input id="i-pool" type="number" min="1" max="10" step="1" value="${Number.isInteger(r.pool) ? r.pool : 1}" inputmode="numeric"></div>
     <p class="row"><button type="button" id="i-wiring" class="primary">${esc(t('teammate.openwiring'))}</button></p>
-    <p class="row"><button type="button" id="i-another">${esc(t('inspector.another'))}</button>${ownProject || (spec.roles[r.type]?.brief !== undefined) ? `<button type="button" id="i-editjob" data-type="${esc(r.type)}">${esc(t('inspector.editjob'))}</button>` : ''}</p>
+    <p class="row"><button type="button" id="i-another" data-tip="${esc(tip('control.add.another.set.up.differently'))}">${esc(t('inspector.another'))}</button>${ownProject || (spec.roles[r.type]?.brief !== undefined) ? `<button type="button" id="i-editjob" data-type="${esc(r.type)}" data-tip="${esc(tip('control.edit.the.job.description'))}">${esc(t('inspector.editjob'))}</button>` : ''}</p>
     <p id="i-editjob-warn" class="notice warn" role="alert" hidden>${esc(t('inspector.editjob.warn', { n: seats }))} <button type="button" class="link" id="i-editjob-go">${esc(t('inspector.editjob'))}</button></p>
     <label class="row"><input type="checkbox" id="i-dormant" ${r.dormant ? 'checked' : ''}> Dormant until a request needs it</label>
     <p class="hint advanced">Id: <code>${esc(r.slug)}</code></p>`;
@@ -1228,6 +1232,7 @@ export function mount(el, opts = {}) {
   el.classList.add('ats');
   if (env.embedded) el.classList.add('ats-embedded');
   el.innerHTML = SHELL;
+  installTips(el, life.signal);
   start();
   return {
     destroy,

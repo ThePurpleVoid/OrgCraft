@@ -6,18 +6,26 @@
 //   node tools/studio-strings.mjs <path to strings-now.md>
 //
 // Keyed tables ("| `key` | String |") become `key`. Tooltip tables ("| Word | Tooltip |") become `tip.<word>`, the
-// word in lower case with dots for spaces and no punctuation ("Badge: Sends" → `tip.badge.sends`).
+// word in lower case with dots for spaces and no punctuation ("Badge: Sends" → `tip.badge.sends`). Control tooltip
+// tables ("| Control | Tooltip |") become `tip.control.<control>`, and the first-time hints ("| Screen | Hint |")
+// `hint.<screen>`, without the words in brackets ("Team (org chart)" → `hint.team`).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const OUT = join(dirname(fileURLToPath(import.meta.url)), '../apps/studio/public/strings.js');
 
+const slug = (k) => k.toLowerCase().replace(/[{}"“”,()]/g, '').replace(/[:/]/g, ' ').trim().replace(/\s+/g, '.');
+
 export function parseStrings(md) {
   const out = {};
+  // The prefix a row of the current table gets: '' for keyed tables, else 'tip.', 'tip.control.' or 'hint.'.
   let tips = false;
+  let bare = false; // T4 and T5 name the thing with words in brackets after it ("Try it (Try a role)"): drop them
   for (const line of md.split('\n')) {
-    if (/^\|\s*(Word|Item)\s*\|\s*Tooltip\s*\|/.test(line)) { tips = true; continue; }
+    if (/^\|\s*(Word|Item)\s*\|\s*Tooltip\s*\|/.test(line)) { tips = 'tip.'; bare = false; continue; }
+    if (/^\|\s*Control\s*\|\s*Tooltip\s*\|/.test(line)) { tips = 'tip.control.'; bare = true; continue; }
+    if (/^\|\s*Screen\s*\|\s*Hint\s*\|/.test(line)) { tips = 'hint.'; bare = true; continue; }
     if (/^\|\s*Key\s*\|/.test(line)) { tips = false; continue; }
     if (/^#/.test(line)) tips = false;
     const cells = /^\|(.+)\|\s*$/.exec(line)?.[1].split(/(?<!\\)\|/).map((c) => c.trim());
@@ -25,7 +33,7 @@ export function parseStrings(md) {
     const [k, v] = cells;
     const key = /^`([^`]+)`$/.exec(k)?.[1];
     if (key && !tips) out[key] = v.replace(/\\\|/g, '|');
-    else if (tips) out[`tip.${k.toLowerCase().replace(/[{}"“”,()]/g, '').replace(/[:/]/g, ' ').trim().replace(/\s+/g, '.')}`] = v;
+    else if (tips) out[`${tips}${slug(bare ? k.replace(/\s*\([^)]*\)/g, '') : k)}`] = v;
   }
   return out;
 }

@@ -9,6 +9,7 @@
 // ctx: { spec(), change(fn), kit, view(), esc, select(slug), close(), setSection(slug, name, mode, text), resolved(slug) }
 import { handsTo, membersOf, typeOf, wakesOn } from './team-model.mjs';
 import { t, tip } from './i18n.js';
+import { hintHtml } from './tooltip.js';
 
 /** Read, Change and Act (the owner's words) for the file's read, write and deploy. */
 export const LEVELS = [['read', 'perm.read'], ['write', 'perm.change'], ['deploy', 'perm.act']];
@@ -89,6 +90,7 @@ export function renderWiring(el, ctx, slug) {
   const detail = open && [...w.triggers, ...w.incoming, ...w.outside, ...w.systems, ...w.handoffs].find((x) => x.key === open.key);
   el.innerHTML = `<div class="wiring" data-wiring="${esc(slug)}">
     <div class="row between wiring-head"><h2 class="flush">${esc(r.title)}</h2><button type="button" id="wiring-close">${esc(t('wiring.back'))}</button></div>
+    ${hintHtml('wiring.view', esc)}
     <p class="hint wiring-explainer">${esc(t('wiring.explainer'))}</p>
     ${warn.length ? `<ul class="plain wiring-warn" role="status">${warn.map((x) => `<li class="warning">${esc(x)}</li>`).join('')}</ul>` : ''}
     <div class="wiring-cols">
