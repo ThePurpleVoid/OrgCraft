@@ -4,6 +4,7 @@
 // pause and stop for the run. The Studio server holds the token; this page only talks to it.
 
 import { apiUrl, ask, askText, requestJson } from './env.js';
+import { t } from './i18n.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -116,7 +117,7 @@ function cardFrom(e) {
   return { id: d.cardId || subjectId(e.subject) || e.id, kind: 'decision', subject: e.subject, version: d.version ?? 1, title: d.question ?? d.title ?? 'A decision', body: d.body ?? '', options: opts, recommendation: rec };
 }
 
-export function createChat({ root, onOpen, runs = true } = {}) {
+export function createChat({ root, onOpen, runs = true, organization = () => '' } = {}) {
   const st = {
     connected: null, error: null, events: [], next: null, cards: new Map(), answers: new Map(), pending: [],
     notes: new Map(), // card id -> note shown above it (changed, step-up)
@@ -171,14 +172,15 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     </dialog>
     <dialog id="stepup-dialog" class="stepup-dialog">
       <form class="dialog" id="stepup-form">
-        <h2>Confirm it is you</h2>
+        <h2>${t('stepup.title')}</h2>
         <p id="stepup-why"></p>
-        <label>Step-up secret <input id="stepup-secret" type="password" autocomplete="current-password" required></label>
-        <p class="hint">The control plane checks it. Neither this page nor the Studio keeps it.</p>
+        <label>${t('stepup.label.interim')} <input id="stepup-secret" type="password" autocomplete="current-password" aria-describedby="stepup-hint" required></label>
+        <p class="hint" id="stepup-hint">${t('stepup.label.interim.hint')}</p>
+        <p class="hint">${t('stepup.why')}</p>
         <p id="stepup-result" class="result error" role="status"></p>
         <div class="dialog-actions">
-          <button id="stepup-cancel" type="button">Cancel</button>
-          <button type="submit" class="primary">Confirm</button>
+          <button id="stepup-cancel" type="button">${t('stepup.cancel')}</button>
+          <button type="submit" class="primary">${t('stepup.button')}</button>
         </div>
       </form>
     </dialog>
@@ -250,7 +252,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}" data-card-id="${esc(card.id)}"${subjectId(card.subject) ? ` data-subject-id="${esc(subjectId(card.subject))}"` : ''}>
       <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtWhen(card.expires))}` : ''}</div>
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
-      ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="Step-up secret" placeholder="Step-up secret" required><button type="submit" class="primary">Confirm</button></form>` : ''}
+      ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="${esc(t('stepup.label.interim'))}" placeholder="${esc(t('stepup.label.interim'))}" required><button type="submit" class="primary">${esc(t('stepup.button'))}</button></form>` : ''}
       <h3>${esc(card.title)}</h3>
       ${boundHtml(card)}
       ${factsHtml(card)}
@@ -468,7 +470,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     for (const b of log.querySelectorAll(`[data-card="${CSS.escape(cardId)}"]`)) b.disabled = true;
     if (secret) {
       const su = await api('/v1/team/step-up', { secret, ...(scope ? { scope } : {}) });
-      if (!su.ok) { st.notes.set(cardId, { kind: 'stepup', option, scope, text: su.status === 401 ? 'That token was not accepted. Try again.' : su.data.error ?? `HTTP ${su.status}` }); return render(); }
+      if (!su.ok) { st.notes.set(cardId, { kind: 'stepup', option, scope, text: t(su.status === 429 ? 'stepup.locked' : 'stepup.failed') }); return render(); }
     }
     const r = await api(`/v1/team/cards/${encodeURIComponent(cardId)}`, { kind: card.kind, subject: card.subject ?? ev?.subject, option, version: card.version, key: newId() });
     if (r.status === 409 && r.data.card) {
@@ -478,10 +480,14 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     } else if (r.status === 401 && /step-up-required$/.test(r.data.type ?? '')) {
       // Until sign-in lands (M4), the proof is the deployment's step-up secret typed in; the Studio server keeps only the
       // short-lived step-up token the control plane gives back.
-      st.notes.set(cardId, { kind: 'stepup', option, scope: typeof r.data.scope === 'string' ? r.data.scope : null, text: 'Confirm it is you: type the step-up secret to answer. The control plane checks it; neither this page nor the Studio keeps it.' });
+      st.notes.set(cardId, { kind: 'stepup', option, scope: typeof r.data.scope === 'string' ? r.data.scope : null, text: t('stepup.body', { action: t('stepup.action.approve', { 'card summary': card.title ?? human(card.kind) }) }) });
     } else if (r.status === 403) {
       st.forbidden.add(cardId);
-      st.notes.set(cardId, { kind: 'error', text: card.kind === 'budget' ? 'Only an admin of this workspace can answer a budget card, since it changes what the team may spend. Ask an admin.' : `Your role cannot answer this card. ${r.data.error ?? ''}`.trim() });
+      // The server's own words go to the console only (CPO); who can answer is the plain default until the server's
+      // role table names the least role per card kind.
+      if (r.data.error) console.info('card refused:', r.data.error);
+      const org = organization() || t('org.fallback');
+      st.notes.set(cardId, { kind: 'error', text: card.kind === 'budget' ? t('card.forbidden.budget', { organization: org }) : t('card.forbidden', { organization: org, 'who can': t('card.forbidden.who') }) });
     } else if (!r.ok) {
       st.notes.set(cardId, { kind: 'error', text: r.data.error ?? `HTTP ${r.status}` });
     } else {
@@ -494,12 +500,12 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     render();
   }
 
-  /** Asks for the step-up secret in a dialog. Resolves true once the Studio server holds a step-up token. */
-  function stepUp(why, scope) {
+  /** Asks for the step-up in a dialog, naming `action` (a stepup.action.* string). Resolves true once the Studio server holds a step-up token. */
+  function stepUp(action, scope) {
     const dlg = $('#stepup-dialog', root);
     const form = $('#stepup-form', root);
     const input = $('#stepup-secret', root);
-    $('#stepup-why', root).textContent = why;
+    $('#stepup-why', root).textContent = t('stepup.body', { action });
     $('#stepup-result', root).textContent = '';
     input.value = '';
     return new Promise((done) => {
@@ -514,7 +520,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
         if (confirm) confirm.disabled = true;
         const r = await api('/v1/team/step-up', { secret, ...(scope ? { scope } : {}) }).finally(() => { if (confirm) confirm.disabled = false; });
         if (r.ok) return finish(true);
-        $('#stepup-result', root).textContent = r.status === 401 ? 'That secret was not accepted. Try again.' : r.data.error ?? `HTTP ${r.status}`;
+        $('#stepup-result', root).textContent = t(r.status === 429 ? 'stepup.locked' : 'stepup.failed');
         input.focus();
       };
       $('#stepup-cancel', root).onclick = () => finish(false);
@@ -552,7 +558,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     st.busy = true; renderRun();
     let b = await api('/v1/team/budget', { perDay, key: newId() });
     if (needsStepUp(b)) {
-      if (!(await stepUp(`Raising the daily cap to ${fmtMoney(perDay, cur)} lets the team spend more today.`))) { st.busy = false; renderRun(); return note('The cap was not changed, so the run is still paused.'); }
+      if (!(await stepUp(t('stepup.action.cap', { from: fmtMoney(st.budget?.perDay ?? 0, cur), to: fmtMoney(perDay, cur) })))) { st.busy = false; renderRun(); return note('The cap was not changed, so the run is still paused.'); }
       b = await api('/v1/team/budget', { perDay, key: newId() });
     }
     st.busy = false;
@@ -567,7 +573,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     st.busy = true; renderRun();
     let r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
     // Resuming needs a recent sign-in, bound to this run (ADR 0013): the control plane names the scope when it asks.
-    if (needsStepUp(r) && await stepUp('Resuming the run lets the team carry on working and spending.', r.data.scope)) r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
+    if (needsStepUp(r) && await stepUp(t('stepup.action.resume.team'), r.data.scope)) r = await api(`/v1/team/run/${action}`, { key: newId(), run: st.run?.id });
     st.busy = false;
     // Kept apart from load errors, which the next load clears: a refused resume (today's cap is spent) must stay visible.
     st.runError = r.ok || needsStepUp(r) ? null : refusal(r);
@@ -616,7 +622,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
       out.textContent = 'Saving the daily cap…';
       let b = await api('/v1/team/budget', { perDay, key: newId() });
       if (needsStepUp(b)) {
-        if (!(await stepUp(`Raising the daily cap to ${fmtMoney(perDay, currency())} lets the team spend more.`))) return fail('The cap was not changed, so the run did not start.');
+        if (!(await stepUp(t('stepup.action.cap', { from: fmtMoney(st.budget?.perDay ?? 0, currency()), to: fmtMoney(perDay, currency()) })))) return fail('The cap was not changed, so the run did not start.');
         b = await api('/v1/team/budget', { perDay, key: newId() });
       }
       if (!b.ok) return fail(b.data.error ?? `HTTP ${b.status}`);
@@ -654,7 +660,7 @@ export function createChat({ root, onOpen, runs = true } = {}) {
     go.disabled = true;
     $('#runner-result', root).textContent = '';
     let r = await api('/v1/team/runners/code', { name });
-    if (needsStepUp(r) && await stepUp('A runner code lets a machine join this team and run its agents.')) r = await api('/v1/team/runners/code', { name });
+    if (needsStepUp(r) && await stepUp(t('stepup.action.runner'))) r = await api('/v1/team/runners/code', { name });
     go.disabled = false;
     if (!r.ok) { $('#runner-result', root).textContent = needsStepUp(r) ? 'No code: confirming it is you was cancelled.' : r.data.error ?? `HTTP ${r.status}`; return; }
     const { code, expires, server } = r.data;

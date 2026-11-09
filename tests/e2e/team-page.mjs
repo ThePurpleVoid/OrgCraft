@@ -29,7 +29,9 @@ export async function switchTeammate(scope, slug, on) {
   const card = scope.locator(`#canvas [data-node="${slug}"]`);
   if (!(await card.count())) {
     if (!on) return;
-    await scope.locator(`#library .cat-role[data-type="${slug}"]`).click();
+    const row = scope.locator(`#library .cat-role[data-type="${slug}"]`).first();
+    if (!(await row.isVisible())) await scope.locator('#library details.browse > summary').click();
+    await row.click();
     return;
   }
   await selectTeammate(scope, slug);
