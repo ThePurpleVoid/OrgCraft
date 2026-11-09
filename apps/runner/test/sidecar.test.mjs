@@ -171,9 +171,12 @@ test('without separate users for local servers, a command server is refused (nev
   }
 });
 
-const canSwitch = process.getuid?.() === 0 && (() => { try { execFileSync('setpriv', ['--version']); return true; } catch { return false; } })();
+// In the runner image (the CI job that fails on any skip) the pool comes from its environment, as in pool.test.mjs.
+const IMAGE = process.env.AGENT_TEAM_SANDBOX_UIDS && process.env.AGENT_TEAM_SANDBOX_EXEC
+  ? { uids: process.env.AGENT_TEAM_SANDBOX_UIDS, gid: Number(process.env.AGENT_TEAM_SANDBOX_GID), exec: process.env.AGENT_TEAM_SANDBOX_EXEC } : null;
+const canSwitch = !!IMAGE || (process.getuid?.() === 0 && (() => { try { execFileSync('setpriv', ['--version']); return true; } catch { return false; } })());
 test('F3 for the sidecar: a local server runs as a user of its own, neither the runner nor the session, and can\'t read the runner\'s environment', { skip: canSwitch ? false : 'needs root and setpriv to switch users (the container image has both)' }, async () => {
-  const { privateDir } = await import('../sandbox.mjs');
+  const { privateDir, parseSlots } = await import('../sandbox.mjs');
   const { bare } = origin();
   const top = mkdtempSync(join(tmpdir(), 'runner-sidecar-'));
   chmodSync(top, 0o711);
@@ -186,7 +189,7 @@ test('F3 for the sidecar: a local server runs as a user of its own, neither the 
     seen.who = JSON.parse(textOf(r.value));
     return {};
   } });
-  const runner = startRunner({ server: cp.url, key: cp.key, root, work: join(top, 'work'), adapter, modelProxy: null, sandbox: { slots: [{ uid: 10120, gid: 10120 }, { uid: 10121, gid: 10121 }], sharedGid: 10010, exec: 'setpriv' } });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, work: join(top, 'work'), adapter, modelProxy: null, sandbox: IMAGE ? { slots: parseSlots(IMAGE.uids).slice(0, 2), sharedGid: IMAGE.gid, exec: IMAGE.exec } : { slots: [{ uid: 10120, gid: 10120 }, { uid: 10121, gid: 10121 }], sharedGid: 10010, exec: 'setpriv' } });
   try {
     await runner.ready;
     cp.start({ role: 'docs-keeper', run: 'run_1', repo: { url: bare }, areas: ['docs/'], tools: { mcp: notes() }, wake: { id: 'ev_w', type: 'chat.message', data: { text: 'go' } } });
@@ -195,7 +198,7 @@ test('F3 for the sidecar: a local server runs as a user of its own, neither the 
     assert.ok(seen.who, `the server answered (${JSON.stringify(cp.events.filter((e) => e.data?.rule === 'sidecar').map((e) => e.data.detail))})`);
     assert.notEqual(seen.who.uid, process.getuid(), 'not the runner\'s uid');
     assert.notEqual(seen.who.uid, s.slot.uid, 'not the session\'s agent user');
-    assert.ok([10120, 10121].includes(seen.who.uid));
+    assert.ok(runner.sessions && [...[...runner.sessions.values()][0].pool.slots].some((x) => x.uid === seen.who.uid), 'a slot of the pool');
     assert.equal(seen.who.peek, 'EACCES', 'the runner\'s environment is closed to it');
     noFailedTurns(cp);
   } finally {
