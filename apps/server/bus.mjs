@@ -17,6 +17,7 @@ import { checkIoRefs, ingestStepIo, projectTask, purgeIo } from './inspector.mjs
 import { memberHeld } from './live.mjs';
 import { cleanChecks, markStale } from './signoffs.mjs';
 import { resolveTo } from './routing.mjs';
+import { systemsFor } from './credentials.mjs';
 import { createCaps } from './caps.mjs';
 
 /** How a message's `to` was resolved (section 5.3), on its event: only when it was not already a member id. */
@@ -34,7 +35,7 @@ const SESSION_STATE = { 'session.started': 'running', 'session.idle': 'idle', 's
 
 const backoff = (attempts) => BACKOFF[Math.min(Math.max(attempts - 1, 0), BACKOFF.length - 1)];
 
-export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null, triggers = null, gateway = null }) {
+export function createBus({ db, m3, runners = () => null, now = () => new Date(), publicUrl = '', log = console, meetingTurnMinutes, installationsFor = null, triggers = null, gateway = null, vault = null }) {
   const reg = () => (typeof runners === 'function' ? runners() : runners);
   const meetings = createMeetings({ db, m3, publicUrl, ...(meetingTurnMinutes ? { turnMinutes: meetingTurnMinutes } : {}) });
   const caps = createCaps({ db, getTeam: async () => {}, now });
@@ -194,12 +195,15 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       await q("update deliveries set state = 'sent', session = $2, attempts = attempts + 1, next_at = now() + make_interval(secs => $3) where id = $1", [d.id, sid, ACK_SECONDS]);
       await q('update sessions set task = $2, cause = $3 where id = $1', [sid, d.task ?? null, wake.id]);
       const roster = run.roster ?? {};
+      const sys = systemsFor(roster, d.role);
       const body = {
         session: sid, run: run.id, team: run.team, teamVersion: run.team_version, role: d.role, instance: d.instance,
         repo: roster.repo ?? null, worktree: { branch, base: roster.repo?.ref ?? 'main' },
         prompt: { brief: role.brief ?? '', memory: s?.checkpoint?.memory ?? null },
-        tools: { url: toolsUrl() ? `${toolsUrl()}/v1/sessions/${sid}/tools` : null },
-        secrets: [], caps: { remainingToday: money.remainingToday, remainingRun: money.remainingRun },
+        // L20: the MCP servers of the member's bound resources and the secret names their servers need; values come
+        // only through secret.get, checked against this same frozen roster.
+        tools: { url: toolsUrl() ? `${toolsUrl()}/v1/sessions/${sid}/tools` : null, ...(Object.keys(sys.mcp).length ? { mcp: sys.mcp } : {}) },
+        secrets: sys.secrets, caps: { remainingToday: money.remainingToday, remainingRun: money.remainingRun },
         areas: role.areas ?? [], roster: (roster.roles ?? []).map((r) => r.slug), frontDoor: roster.frontDoor === d.role, frontDoorRole: roster.frontDoor,
         ...(role.model ? { model: role.model } : {}),
         // ADR 0011 (L17): a teammate's type and display name, for its prompt; it is still addressed by its member id.
@@ -506,6 +510,15 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
   }
 
   const ops = {
+    /**
+     * secret.get (runner/1, L20): one value for a local server in the sidecar. The vault checks everything against the
+     * session's frozen roster and the credential's grant; any refusal is the same nack, so it says nothing.
+     */
+    async 'secret.get'(conn, body) {
+      const got = vault ? await vault.release({ tenant: conn.tenant, session: String(body.session ?? ''), name: body.name, purpose: 'sidecar', runner: conn.runner, server: typeof body.server === 'string' ? body.server : null }) : null;
+      if (!got) throw new Problem(403, 'not released');
+      return got;
+    },
     /** Events the runner key may send, for sessions it runs. A chat.message is the front door's, whatever it says. */
     async events(conn, body) {
       const list = Array.isArray(body.events) ? body.events : null;

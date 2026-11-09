@@ -131,6 +131,8 @@ export function attachRunners(server, { db, ops = {}, welcome = async () => ({})
       conn.seen.set(f.id, run);
       if (conn.seen.size > SEEN) conn.seen.delete(conn.seen.keys().next().value);
       const out = await run;
+      // A released secret is never kept for a resend: the next secret.get asks the vault again (and is audited again).
+      if (f.op === 'secret.get') conn.seen.delete(f.id);
       if (f.op === 'hello' && out.ok) return; // answered with welcome, which refs the hello
       return out.ok ? ack(f.id, out.body) : nack(f.id, out.problem);
 
