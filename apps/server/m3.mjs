@@ -828,7 +828,7 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
 
   return {
     appendIn: appendInTx, onStored: (fn) => listeners.push(fn), hooks,
-    requireStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
+    requireStepUp, useStepUp, appendEvents, tx, mint: (tenant, team, type, data, opts) => mint(tenant, team, type, data, opts), project,
     getBudget, putBudget, startRun, listRuns, controlRun, setRunState,
     createCard, changeCard, getCard, answerCard, requestApproval, decideApproval, readyToTry, previewArrived, checkPreviewed, previewForMerge,
     stepUp, mintStepUp, postChat, getChat, inbox, teamExtras,

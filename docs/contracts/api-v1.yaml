@@ -215,7 +215,7 @@ paths:
     get:
       x-min-role: viewer
       tags: [events]
-      summary: "One task's timeline (N1): steps folded from the log (tool calls with their result, runs of reads as one Read step, asks with their answers, wake-ups, messages), lanes by role, edges (fork, merge, wait) from each event's cause, and focus, the event that set the state. Summaries and io ids only, never a stored input or output"
+      summary: "One task's timeline (N1): steps folded from the log (tool calls with their result, runs of reads as one Read step, asks with their answers, wake-ups, messages), lanes by role, edges (fork, merge, wait) from each event's cause, and focus, the event that set the state. At most the newest 5,000 events, with truncated: true past that. Summaries and io ids only, never a stored input or output"
       responses: { "200": { description: "{ task, lanes: [{ id, instances, status }], steps: [{ lane, kind, at, events, ... }], edges: [{ from, to, kind }], focus }" }, "404": { description: "Not a task of this team in the caller's workspace" } }
   /teams/{team}/io/{io}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: io, in: path, required: true, schema: { type: string, pattern: "^io_[0-9A-Z]{26}$" } } ]
@@ -231,7 +231,7 @@ paths:
     delete:
       x-min-role: admin
       tags: [events]
-      summary: "Delete this team's stored step inputs and outputs early, for example after a privacy request (N1). Needs a step-up token (X-Step-Up). The rows are gone, not hidden; an audit row (step-io.delete) records who and how many. Timelines keep their summaries and show the io as gone (410)"
+      summary: "Delete this team's stored step inputs and outputs early, for example after a privacy request (N1). Needs a step-up token bound to this change (X-Step-Up, minted with scope delete-io:<team>; 401 with that scope otherwise). The rows are gone, not hidden; an audit row (step-io.delete) records who and how many. Timelines keep their summaries and show the io as gone (410)"
       responses: { "200": { description: "{ deleted }" }, "401": { description: "Step-up needed" } }
   /teams/{team}/report-tokens:
     parameters: [ { $ref: "#/components/parameters/team" } ]

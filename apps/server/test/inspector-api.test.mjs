@@ -55,6 +55,7 @@ test('fold: a call pairs with its result, reads in a row are one step, an ask ca
   assert.deepEqual(steps.map((s) => s.kind), ['message', 'woke', 'read', 'tool', 'message', 'woke', 'asked', 'message', 'tool']);
   const read = steps[2];
   assert.deepEqual([read.targets, read.events], [['a.md', 'b'], ['e3', 'e4', 'e5']], 'two reads in a row fold into one Read step');
+  assert.equal(read.ok, true, 'its results passed');
   const bash = steps[3];
   assert.deepEqual([bash.ok, bash.io, bash.out, bash.summary, bash.cost, bash.currency], [false, 'io_IN', 'io_OUT', 'ran npm test · failed', 12, 'usd'], 'the result and the cost land on the call');
   assert.deepEqual([steps[6].answered, steps[6].answer, steps[6].events], [true, 'approved', ['e11', 'e12']]);
@@ -152,14 +153,18 @@ test('step I/O: editors read it with an audit row each time, admins delete it ea
     assert.equal((await p.call('GET', `/teams/shop/io/${ULID()}`)).status, 404);
 
     assert.equal((await p.call('DELETE', '/teams/shop/io')).status, 401, 'step-up first');
+    const unscoped = await p.call('DELETE', '/teams/shop/io', undefined, await p.su());
+    assert.deepEqual([unscoped.status, unscoped.body.scope], [401, 'delete-io:shop'], 'a step-up for anything else does not delete');
+    assert.equal((await p.call('DELETE', '/teams/shop/io', undefined, await p.su('delete-io:other'))).status, 401, 'nor one for another team');
     assert.equal((await p.db.system('select count(*)::int as n from step_io')).at(0).n, 1);
-    const past = await p.call('DELETE', `/teams/shop/io?before=${encodeURIComponent('2020-01-01T00:00:00Z')}`, undefined, await p.su());
+    const past = await p.call('DELETE', `/teams/shop/io?before=${encodeURIComponent('2020-01-01T00:00:00Z')}`, undefined, await p.su('delete-io:shop'));
     assert.deepEqual([past.status, past.body.deleted], [200, 0], 'nothing that old');
-    assert.equal((await p.call('DELETE', '/teams/shop/io?before=soon', undefined, await p.su())).status, 400);
-    const gone = await p.call('DELETE', '/teams/shop/io', undefined, await p.su());
+    assert.equal((await p.call('DELETE', '/teams/shop/io?before=soon', undefined, await p.su('delete-io:shop'))).status, 400);
+    const gone = await p.call('DELETE', '/teams/shop/io', undefined, await p.su('delete-io:shop'));
     assert.deepEqual([gone.status, gone.body.deleted], [200, 1]);
-    const [audit] = await p.db.system("select detail from audit where action = 'step-io.delete' and (detail->>'rows')::int = 1");
+    const [audit] = await p.db.system("select detail, actor_kind from audit where action = 'step-io.delete' and (detail->>'rows')::int = 1");
     assert.ok(audit, 'the delete is audited with its count');
+    assert.match(audit.detail.stepUp, /./, 'and the step-up that allowed it');
     const after = await p.call('GET', `/teams/shop/io/${io}`);
     assert.equal(after.status, 410);
     assert.ok(Date.parse(after.body.expiredAt) > Date.now(), 'when it would have gone');

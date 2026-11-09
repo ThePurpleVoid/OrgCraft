@@ -3,6 +3,7 @@
 // for editors, and an early delete for admins. Session tokens never reach any of it (person routes only), so no
 // agent reads history and outside text stored here is no second way in.
 import { Problem } from './store.mjs';
+import { StepUpRequired } from './m3.mjs';
 
 const PAGE = 50;
 const READS = new Set(['read']);
@@ -37,7 +38,8 @@ export function fold(events, { capture = 'all' } = {}) {
         const last = lastOf.get(e.actor?.session);
         const s = { ...base, kind: 'tool', tool: d.tool, call: d.call ?? null, effect: d.effect ?? null, decision: d.decision, target: cut(d.target, 300), ...(d.io ? { io: d.io } : {}), ...(d.retryOf ? { retryOf: d.retryOf } : {}), ...(d.decision === 'refused' ? { ok: false, why: cut(d.detail ?? d.rule, 300) } : {}) };
         // Consecutive reads by one session, nothing between them: one Read step listing its targets.
-        if (READS.has(d.effect) && d.decision === 'allowed' && last?.kind === 'read' && steps.at(-1) === last) {
+        // Another session's steps in between don't split them: lanes are drawn per role.
+        if (READS.has(d.effect) && d.decision === 'allowed' && last?.kind === 'read') {
           last.targets.push(s.target); last.calls.push(s.call); last.events.push(e.id);
           if (d.call) byCall.set(d.call, last);
           break;
@@ -51,7 +53,7 @@ export function fold(events, { capture = 'all' } = {}) {
         const s = d.call ? byCall.get(d.call) : null;
         if (!s) break;
         s.events.push(e.id);
-        if (s.kind === 'read') { if (d.ok === false) s.ok = false; break; }
+        if (s.kind === 'read') { s.ok = d.ok === false ? false : s.ok ?? true; break; }
         Object.assign(s, { ok: d.ok !== false, durationMs: d.durationMs ?? null, summary: cut(d.summary, 300), ...(d.io ? { out: d.io } : {}), ...(d.outside ? { outside: true } : {}) });
         break;
       }
@@ -103,14 +105,16 @@ export async function stateOf(q, task, events) {
     if (ANSWER[e.type]) asked.delete(`${e.type}:${e.data?.[ANSWER[e.type]]}`);
   }
   if (asked.size) return { state: 'needs-you', focus: [...asked.values()][0].id };
-  const deliveries = await q('select id, event, state, run, role from deliveries where task = $1', [task.id]);
+  const deliveries = await q('select id, event, state, run, role from deliveries where team = $1 and task = $2', [task.team, task.id]);
   const dead = deliveries.find((d) => d.state === 'dead');
   if (dead) return { state: 'failed', focus: dead.event };
   const ended = events.find((e) => e.type === 'session.ended' && !OK_END.has(e.data?.reason));
   if (ended) return { state: 'failed', focus: ended.id };
   const waiting = deliveries.filter((d) => ['pending', 'held'].includes(d.state));
   if (waiting.length) {
-    const [ex] = await q("select id from events where team = $1 and type = 'budget.exhausted' and time >= $2 order by seq desc limit 1", [task.team, task.started_at]);
+    // Only while the budget still holds the run: a day that has rolled over (or a raised cap) resumed it.
+    const [paused] = await q("select id from runs where team = $1 and state = 'paused' and reason = 'budget' limit 1", [task.team]);
+    const [ex] = paused ? await q("select id from events where team = $1 and type = 'budget.exhausted' and time >= $2 order by seq desc limit 1", [task.team, task.started_at]) : [];
     if (ex) return { state: 'out-of-budget', focus: ex.id };
   }
   const runs = [...new Set(deliveries.map((d) => d.run).filter(Boolean))];
@@ -119,18 +123,26 @@ export async function stateOf(q, task, events) {
     if (stopped) return { state: 'stopped', focus: null };
   }
   const blocked = [...events].reverse().find((e) => e.type === 'message.blocked');
-  if (blocked && !events.some((e) => Number(e.seq) > Number(blocked.seq) && e.actor?.kind === 'role' && e.actor.id === blocked.actor?.id && e.type !== 'report.heartbeat')) return { state: 'blocked', focus: blocked.id };
-  if (deliveries.some((d) => ['pending', 'held', 'sent'].includes(d.state))) return { state: 'running', focus: null };
-  const sessions = [...new Set(events.map((e) => e.actor?.session).filter(Boolean))];
-  if (sessions.length) {
-    const [live] = await q("select id from sessions where id = any($1) and task = $2 and state in ('starting', 'running', 'waiting') limit 1", [sessions, task.id]);
-    if (live) return { state: 'running', focus: null };
+  if (blocked) {
+    const [later] = await q("select 1 from events where team = $1 and task = $2 and seq > $3 and actor_kind = 'role' and actor_id = $4 and type <> 'report.heartbeat' limit 1", [task.team, task.id, blocked.seq, blocked.actor?.id ?? '']);
+    if (!later) return { state: 'blocked', focus: blocked.id };
   }
+  if (deliveries.some((d) => ['pending', 'held', 'sent'].includes(d.state))) return { state: 'running', focus: null };
+  const [live] = await q("select id from sessions where team = $1 and task = $2 and state in ('starting', 'running', 'waiting') limit 1", [task.team, task.id]);
+  if (live) return { state: 'running', focus: null };
   return { state: 'done', focus: null };
 }
 
-async function taskEvents(q, team, id) {
-  return (await q('select seq, envelope from events where team = $1 and task = $2 order by seq', [team, id])).map((r) => ({ ...r.envelope, seq: Number(r.seq) }));
+// The event types the state table reads: the list reads only these, so a state costs a few rows, not a whole task.
+const STATE_TYPES = ['approval.requested', 'approval.decided', 'decision.requested', 'decision.answered', 'session.ended', 'message.blocked'];
+// A timeline shows at most this many events (the newest), and says so.
+const TIMELINE_MAX = 5000;
+
+async function taskEvents(q, team, id, { types = null, max = null } = {}) {
+  const rows = types
+    ? await q('select seq, envelope from events where team = $1 and task = $2 and type = any($3) order by seq', [team, id, types])
+    : await q(`select seq, envelope from (select seq, envelope from events where team = $1 and task = $2 order by seq desc${max ? ` limit ${Number(max)}` : ''}) t order by seq`, [team, id]);
+  return rows.map((r) => ({ ...r.envelope, seq: Number(r.seq) }));
 }
 
 const row = (t, s) => ({ id: t.id, title: t.title, state: s.state, startedBy: t.started_by, roles: t.roles, cost: Number(t.cost), currency: t.currency ?? null, startedAt: new Date(t.started_at).toISOString(), lastAt: new Date(t.last_at).toISOString(), workItem: t.work_item ?? null });
@@ -162,7 +174,7 @@ export function createInspector({ db, m3 }) {
       // it fills the page or has looked at ten pages; the cursor then says where to go on from.
       const out = [];
       let at = after, more = false;
-      for (let round = 0; round < 10; round++) {
+      for (let round = 0; round < 4; round++) {
         const args = [team];
         const { where, arg } = filters(args);
         if (at) where.push(`(last_at, id) < (${arg(at.at)}::timestamptz, ${arg(at.id)})`);
@@ -171,7 +183,7 @@ export function createInspector({ db, m3 }) {
         more = rows.length > PAGE;
         for (const [i, t] of page.entries()) {
           at = { at: new Date(t.last_at).toISOString(), id: t.id };
-          const s = await stateOf(q, t, await taskEvents(q, team, t.id));
+          const s = await stateOf(q, t, await taskEvents(q, team, t.id, { types: STATE_TYPES }));
           if (s.state !== t.state || s.focus !== t.focus) await q('update tasks set state = $2, focus = $3 where id = $1', [t.id, s.state, s.focus]);
           if (!p.state || p.state === s.state) out.push(row(t, s));
           if (out.length >= limit) { more = more || i < page.length - 1; break; }
@@ -187,10 +199,11 @@ export function createInspector({ db, m3 }) {
     return db.tenant(tenant, async ({ q }) => {
       const [t] = await q('select * from tasks where team = $1 and id = $2', [team, id]);
       if (!t) throw new Problem(404, `no task ${id} in team ${team}`);
-      const events = await taskEvents(q, team, id);
-      const s = await stateOf(q, t, events);
-      const { steps, lanes, edges } = fold(events);
-      return { task: row(t, s), lanes, steps, edges, focus: s.focus };
+      const s = await stateOf(q, t, await taskEvents(q, team, id, { types: STATE_TYPES }));
+      const events = await taskEvents(q, team, id, { max: TIMELINE_MAX + 1 });
+      const truncated = events.length > TIMELINE_MAX;
+      const { steps, lanes, edges } = fold(truncated ? events.slice(1) : events);
+      return { task: row(t, s), lanes, steps, edges, focus: s.focus, ...(truncated ? { truncated: true } : {}) };
     });
   }
 
@@ -217,11 +230,22 @@ export function createInspector({ db, m3 }) {
   async function remove(tenant, team, before, by, stepUp) {
     const at = before ? new Date(before) : new Date();
     if (Number.isNaN(at.getTime())) throw new Problem(400, 'before is an ISO date and time');
-    await m3.requireStepUp(tenant, by, stepUp, 'Deleting step inputs and outputs');
-    // As the owner: the app role can't delete step I/O; only retention and this route do.
-    const gone = await db.system('delete from step_io where tenant = $1 and team = $2 and created_at < $3 returning id', [tenant, team, at.toISOString()]);
-    await m3.tx(tenant, (ctx) => ctx.audit({ team, actorKind: 'person', actorId: by, action: 'step-io.delete', decision: 'deleted', detail: { rows: gone.length, before: at.toISOString() } }));
-    return { deleted: gone.length };
+    // A step-up bound to this one change (ADR 0013), so a token minted for anything else can't delete in bulk.
+    const scope = `delete-io:${team}`;
+    const { result: stepUpId } = await m3.tx(tenant, async (ctx) => {
+      const used = await m3.useStepUp(ctx, by, stepUp, scope);
+      if (!used) throw new StepUpRequired('Deleting step inputs and outputs', scope);
+      return used;
+    });
+    // As the owner (the app role can't delete step I/O; only retention and this route do), and the audit row in the
+    // same transaction: the rows never go without the record of who took them.
+    const deleted = await db.systemTx(async ({ q }) => {
+      const gone = await q('delete from step_io where tenant = $1 and team = $2 and created_at < $3 returning id', [tenant, team, at.toISOString()]);
+      await q(`insert into audit(tenant, team, actor_kind, actor_id, action, decision, detail) values ($1, $2, 'person', $3, 'step-io.delete', 'deleted', $4)`,
+        [tenant, team, by, JSON.stringify({ rows: gone.length, before: at.toISOString(), stepUp: stepUpId })]);
+      return gone.length;
+    });
+    return { deleted };
   }
 
   return { list, get, read, remove };
