@@ -60,7 +60,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   assert.equal(await page.evaluate(() => document.body.className), '', 'no Studio state on the host body');
   // The Studio's state is on its root, and its own #project is the one inside it.
   assert.equal(await ats.getAttribute('data-page'), 'team');
-  assert.equal(await ats.locator('#project').textContent(), 'Sample app · acme/shop · main');
+  assert.equal(await ats.locator('#project').textContent(), 'Sample app');
 
   // Step 1 features: no Chat page, no Live board; Publish is there.
   assert.equal(await ats.getByRole('button', { name: 'Chat', exact: true }).isVisible(), false);

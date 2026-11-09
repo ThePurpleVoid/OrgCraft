@@ -276,6 +276,16 @@ test('B4.1-3: a support team draws only its own teammates; the rest of the kit s
   await page.locator('#create-dialog').getByRole('button', { name: 'Open the team' }).click();
   await card(page, 'support-lead').waitFor();
   for (const slug of ['cto', 'architect', 'backend-dev', 'qa-web', 'product-manager']) assert.equal(await card(page, slug).count(), 0, `no ${slug} card`);
+  // The pack's own role names everywhere a person reads (CPO ruling): the card, the catalog; ids stay in files.
+  assert.match(await card(page, 'bug-triager').textContent(), /Problem-report triager/);
+  assert.doesNotMatch(await page.locator('#library').textContent(), /Bug triager/);
+  assert.match(await page.locator('#library .cat-role[data-type="bug-triager"]').textContent(), /Problem-report triager/);
+  // The page header names the team only; the files and the version are in the team's settings.
+  assert.equal(await page.locator('#project').textContent(), 'Help desk');
+  const facts = await page.locator('.team-facts').textContent();
+  assert.match(facts, /Files.*help-desk/);
+  assert.match(facts, /VersionOrgCraft \d/);
+  assert.doesNotMatch(facts, /\bKit\b/);
   // They are still in the catalog, folded under "Browse all roles…", and adding one works.
   const browse = page.locator('#library details.browse');
   assert.equal(await browse.locator('.cat-role[data-type="cto"]').count(), 1);

@@ -7,6 +7,7 @@ export const EN = {
   "canvas.changes.one": "1 change not published",
   "canvas.discard": "Discard changes",
   "canvas.discard.confirm": "Discard {n} unpublished changes? This can't be undone.",
+  "canvas.discard.confirm.one": "Discard 1 unpublished change? This can't be undone.",
   "canvas.draft.restored": "Your unpublished changes from {time} are back.",
   "canvas.empty": "Drag a role from the left onto the canvas to add it. Drop it on another role to make it report there.",
   "canvas.fit": "Fit to screen",

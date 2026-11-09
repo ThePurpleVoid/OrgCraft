@@ -77,6 +77,9 @@ const lockedNote = () => (previewing ? 'This is a preview. Use this template to 
 
 // ------------------------------------------------------------------------------------------------ model
 
+/** A role's name as people read it: the title the team's pack gives it, else the kit's (CPO ruling, L10 round 3). */
+const roleName = (type, md = '') => spec.roles[type]?.extension?.title ?? titleOf(spec.roles[type]?.brief ?? S.kit.roles[type] ?? md, type);
+
 function derive() {
   const { roles } = resolveSpec(spec, S.kit);
   const bySlug = new Map(roles.map((r) => [r.slug, r]));
@@ -90,7 +93,7 @@ function derive() {
     return {
       slug, md, enabled: r.enabled, source: r.source, type,
       // ADR 0011: people see the teammate's name; the role it is based on is its subtitle.
-      title: displayName(spec, S.kit, slug), typeTitle: titleOf(spec.roles[type]?.brief ?? S.kit.roles[type] ?? md, type),
+      title: displayName(spec, S.kit, slug), typeTitle: roleName(type, md),
       pool: poolOf(md), model, tier: (/^[a-z]+/i.exec(model)?.[0] ?? '').toLowerCase(),
       group: field(md, 'Group').toLowerCase() || 'other',
       reportsTo: (field(md, 'Reports to').split(/\s/)[0] ?? '').toLowerCase(),
@@ -477,7 +480,7 @@ function renderCanvas() {
     ${edges.join('')}
     <g class="node owner" data-slug="owner" transform="translate(${owner.x},${owner.y})"><rect class="card" width="${W}" height="${H}"></rect>
       <text class="title" x="20" y="23">${esc(spec.values?.OWNER || 'The owner')}</text><text class="meta" x="20" y="41">owner</text></g>
-    ${nodes}</svg>`;
+    ${nodes}</svg>${cards.length ? '' : `<p class="canvas-empty hint pad">${esc(t('canvas.empty'))}</p>`}`;
   if (live?.on) $('#summary').textContent += ` · ${liveSummary()}`;
   renderPopover();
   if (mode === 'flow') {
@@ -652,7 +655,7 @@ function catalogRows() {
   for (const r of view.all) {
     if (r.source === 'member' || r.source === 'missing') continue;
     const md = spec.roles[r.slug]?.brief ?? S.kit.roles[r.slug] ?? r.md;
-    types.set(r.slug, { type: r.slug, title: titleOf(md, r.slug), group: field(md, 'Group').toLowerCase() || 'other', custom: isCustom(spec.roles[r.slug]), count: membersOf(spec, r.slug).length, used: r.enabled || membersOf(spec, r.slug, { enabledOnly: false }).length > 1 || offSeat(r) });
+    types.set(r.slug, { type: r.slug, title: roleName(r.slug, md), group: field(md, 'Group').toLowerCase() || 'other', custom: isCustom(spec.roles[r.slug]), count: membersOf(spec, r.slug).length, used: r.enabled || membersOf(spec, r.slug, { enabledOnly: false }).length > 1 || offSeat(r) });
   }
   return [...types.values()];
 }
@@ -752,9 +755,11 @@ function teamHtml() {
   const from = spec.options?.from ? /^(.+)@(.*)$/.exec(spec.options.from) : null;
   const tpl = from && (S.templates ?? []).find((c) => c.id === from[1]);
   const rows = [
-    ['Project', v.PROJECT_NAME], ['Owner', v.OWNER], ['Time zone', v.TIMEZONE], ['Kit', S.kitVersion],
+    ['Project', v.PROJECT_NAME], ['Owner', v.OWNER], ['Time zone', v.TIMEZONE],
+    // Where it runs: the files and the version, off the page header (CPO ruling); never the word "Kit".
+    ['Files', `${where()}${S.git?.branch ? ` · ${S.git.branch}` : ''}`], ['Version', S.kitVersion && `OrgCraft ${S.kitVersion}`],
     ['Shared rules', rulesLine(teamPacks(spec.options)).replace(/^Shared rules: /, '')],
-    ...(from ? [['Started from', `${tpl?.title ?? from[1]}${from[2] ? ` (kit ${from[2]})` : ''}`]] : []),
+    ...(from ? [['Started from', `${tpl?.title ?? from[1]}${from[2] ? ` (OrgCraft ${from[2]})` : ''}`]] : []),
   ].filter(([, x]) => x);
   return `<h2>Team</h2><dl class="team-facts">${rows.map(([k, x]) => `<dt>${esc(k)}</dt><dd>${esc(x)}</dd>`).join('')}</dl>
     <h2>${esc(t('settings.agentsmd.heading'))}</h2>
@@ -1327,7 +1332,7 @@ function showGallery() {
   stateEl().classList.remove('previewing');
   stateEl().classList.add('no-team');
   stateEl().dataset.page = 'gallery';
-  $('#project').textContent = `${where()}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
+  $('#project').textContent = '';
   gallery ??= createGallery({ root: $('#gallery-page'), ctx: { cards: () => S.templates ?? [], groups: () => S.groups ?? {}, onPick: pickTemplate, onAlmostEmpty: () => useTemplate('almost-empty') } });
   gallery.render();
   showPage('gallery');
@@ -1497,7 +1502,7 @@ function load(initial) {
   undo.length = 0; redo.length = 0;
   sugg = null; selected = null; selectedSystem = null; pop = null; picks = new Map();
   stateEl().classList.toggle('no-team', !!S.noTeam);
-  $('#project').textContent = `${spec.values?.PROJECT_NAME ?? ''} · ${where()}${S.git?.branch ? ` · ${S.git.branch}` : ''}`;
+  $('#project').textContent = [spec.values?.ORGANIZATION, spec.values?.PROJECT_NAME].filter(Boolean).join(' ▸ ');
   if (booted) return;
   booted = true;
   loadFollowUps();
