@@ -420,6 +420,10 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (who.via === 'host' && (!hostMay(m, url.pathname.slice(3)) || req.headers['x-step-up'])) {
       throw new Problem(403, 'not through a host: open this deployment in a top-level window for that', { type: 'forbidden' });
     }
+    // Resuming is interactive only (ADR 0013, x-interactive-only): a host may pause or stop a run, never resume one.
+    if (who.via === 'host' && a === 'runs' && m === 'POST' && b === 'resume') {
+      throw new Problem(403, 'resuming a run is done on this deployment, with your passkey', { type: 'forbidden' });
+    }
     if (who.via === 'host' && a === 'cards' && team && m === 'POST') {
       const card = await m3.getCard(who.tenant ?? tenant, team);
       if (!HOST_CARD_KINDS.has(card.kind)) throw new Problem(403, `a ${card.kind} card is answered on this deployment, not through a host`, { type: 'forbidden' });
@@ -466,7 +470,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       const body = await readJson(req, 16 * 1024);
       // The typed secret is local mode's only (spec section 3): a hosted deployment steps up with a passkey.
       if (!body?.webauthn) throw new Problem(400, 'step up with your passkey: GET /v1/auth/step-up/challenge, then POST { webauthn }', { type: 'step-up-method' });
-      return send(res, 201, await passkeys.stepUp(mustBePerson(who), body.webauthn), {}, { secrets: ['token'] });
+      return send(res, 201, await passkeys.stepUp(mustBePerson(who), body.webauthn, body.scope ?? null), {}, { secrets: ['token'] });
     }
     if (a === 'me' && !b && m === 'GET') return send(res, 200, await passkeys.list(mustBePerson(who)));
     if (a === 'me' && b === 'options' && !c && m === 'GET') return send(res, 200, await passkeys.registrationOptions(mustBePerson(who, { web: true })));
@@ -565,7 +569,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (a === 'auth' && team === 'step-up' && !b && m === 'POST') {
       const body = await readJson(req, 4 * 1024);
       const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
-      return send(res, 201, await m3.stepUp(t, me, body?.secret, { verifier: stepUpVerifier, bearer }), {}, { secrets: ['token'] });
+      return send(res, 201, await m3.stepUp(t, me, body?.secret, { verifier: stepUpVerifier, bearer, scope: body?.scope ?? null }), {}, { secrets: ['token'] });
     }
     if (a === 'runs' && team && b && !c && m === 'POST') return send(res, 200, await did(m3.controlRun(t, team, b, me, { stepUp })));
     if (a === 'approvals' && team && !b && m === 'POST') return send(res, 200, await did(m3.decideApproval(t, team, await readJson(req, 16 * 1024), me, { stepUp })));

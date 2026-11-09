@@ -130,6 +130,10 @@ test('H1: a host may use only the allowlisted routes; every other route in roles
   // And allowlisted ones work: a team the owner made, its chat.
   assert.equal((await b.call('POST', '/teams', { id: 'shop' })).status, 201);
   assert.equal((await h.call('GET', '/teams/shop/chat')).status, 200);
+  // POST /runs/{run}/{action} is allowlisted for pause and stop, but resuming is interactive only (ADR 0013).
+  const resume = await h.call('POST', '/runs/run_x/resume', {});
+  assert.deepEqual([resume.status, resume.body.type], [403, 'forbidden']);
+  assert.notEqual((await h.call('POST', '/runs/run_x/pause', {})).status, 403, 'pause stays open to a host');
 }));
 
 test('H2: a host gets a real consent page; prompt=none before it, deny, and unlinking all refuse', () => issuer(async (p) => {
