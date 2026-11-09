@@ -17,10 +17,11 @@
   <dialog id="passkey-add" class="auth-dialog" aria-labelledby="passkey-add-title">
     <form class="dialog" id="passkey-add-form">
       <h2 id="passkey-add-title">Add a passkey</h2>
-      <p>A passkey is how you confirm it is you before you approve something, raise a budget or change who can do what. It uses this device's fingerprint, face or screen lock.</p>
-      <label>Name <input id="passkey-name" maxlength="60" placeholder="e.g. Work laptop" autocomplete="off"></label>
+      <p id="passkey-add-intro"></p>
+      <label><span id="passkey-name-label">Name</span> <input id="passkey-name" maxlength="60" autocomplete="off" aria-describedby="passkey-name-hint"></label>
+      <p class="hint" id="passkey-name-hint"></p>
       <p class="result error" role="alert" id="passkey-add-result"></p>
-      <div class="dialog-actions"><button type="button" id="passkey-add-cancel">Not now</button><button type="submit" class="primary">Create passkey</button></div>
+      <div class="dialog-actions"><button type="button" id="passkey-add-cancel">Not now</button><button type="submit" class="primary" id="passkey-add-create">Create passkey</button></div>
     </form>
   </dialog>
   <script type="module" src="/account.js"></script>

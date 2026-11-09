@@ -55,6 +55,9 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
   const teams = new Set(['sample-app']);
   const emails = []; // { id, team, person, email, verified, kinds, code, tries, createdAt }
   const codes = []; // { email, code }
+  const recovery = []; // L27: { person, addedBy, addedAt, effectiveAt, removed }
+  const prefs = new Map(); // person -> { timezone, quietHours, digest } (L25, as apps/server/email.mjs prefsView)
+  const deliveries = []; // { team, person, channel, at, event, kind, status, why, to } newest last; a test pushes rows
   const mail = { sink: true }; // false: the team has no email sink yet, so no code is sent
   // Slack (kit #110), in memory: the workspace connection, the people linked, the channels picked, and the
   // states Connect Slack handed out (the "Slack" sign-in in a test comes back with one of them).
@@ -81,6 +84,36 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       const uid = rid('');
       interactions.set(uid, { return: back, state: rid('st_'), expires: Date.now() + 10 * 60_000 });
       return redirect(`/sign-in?interaction=${uid}`);
+    }
+    // L27, the second way in: a passkey alone, for a live sign-in (apps/server/identity.mjs passkeyOptions/passkeyDone).
+    const pks = /^\/oauth\/authorize\/([A-Za-z0-9_-]+)\/passkey$/.exec(p);
+    if (pks) {
+      const it = interactions.get(pks[1]);
+      if (!it || it.expires < Date.now()) return problem(410, 'expired', 'this sign-in has expired; start again');
+      if (req.method === 'GET') {
+        const c = b64u(randomBytes(32));
+        challenges.set(c, { kind: 'sign-in', uid: pks[1], expires: Date.now() + 2 * 60_000 });
+        return send(200, { challenge: c, rpId: new URL(origin).hostname, timeout: 120_000, userVerification: 'required', allowCredentials: [] });
+      }
+      if (req.method === 'POST') {
+        const refuse = () => problem(401, 'passkey-refused', 'that passkey did not sign you in');
+        const cred = (await read()).webauthn;
+        let cd;
+        try { cd = JSON.parse(Buffer.from(cred?.response?.clientDataJSON ?? '', 'base64url').toString()); } catch { return refuse(); }
+        const c = challenges.get(cd?.challenge);
+        if (!c || c.kind !== 'sign-in' || c.uid !== pks[1] || c.expires < Date.now() || cd.type !== 'webauthn.get' || cd.origin !== origin) return refuse();
+        challenges.delete(cd.challenge);
+        const owner = [...passkeys.entries()].find(([, ks]) => ks.some((k) => k.id === cred?.id));
+        const auth = Buffer.from(cred?.response?.authenticatorData ?? '', 'base64url');
+        if (!owner || !(auth.length >= 37 && auth.subarray(0, 32).equals(createHash('sha256').update(new URL(origin).hostname).digest()) && (auth[32] & 0x05) === 0x05)) return refuse();
+        const [login, person] = Object.entries(members).find(([, m]) => m.id === owner[0]) ?? [];
+        if (!person) return refuse();
+        interactions.delete(pks[1]);
+        const sid = randomBytes(32).toString('base64url');
+        sessions.set(sid, { person: { login, ...person }, authTime: Date.now(), amr: ['hwk', 'user'] });
+        log.push({ method: 'SIGN-IN', path: 'passkey', status: 200, person: person.id });
+        return send(200, { location: it.return }, { 'set-cookie': `${COOKIE}=${sid}; HttpOnly; Secure; SameSite=Lax; Path=/` });
+      }
     }
     const inter = /^\/oauth\/interaction\/([A-Za-z0-9_-]+)\/github$/.exec(p);
     if (inter && req.method === 'GET') {
@@ -109,7 +142,8 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       if (!session) return problem(401, 'unauthenticated', 'sign in first');
       const who = session.person;
       const mine = passkeys.get(who.id) ?? [];
-      const stepped = () => { const t = req.headers['x-step-up']; const s = t && stepUps.get(t); if (!s || s.person !== who.id || s.expires < Date.now()) return false; stepUps.delete(t); return true; };
+      // A scoped step-up (ADR 0013) counts only for the change it names; an unscoped one for anything not scoped.
+      const stepped = (scope = null) => { const t = req.headers['x-step-up']; const s = t && stepUps.get(t); if (!s || s.person !== who.id || s.expires < Date.now() || (s.scope ?? null) !== scope) return false; stepUps.delete(t); return true; };
       const challenge = (kind) => { const c = b64u(randomBytes(32)); challenges.set(c, { kind, person: who.id, expires: Date.now() + 2 * 60_000 }); return c; };
       /** The client data a browser signed: its type, a live single-use challenge of this kind, and exactly this origin. */
       const clientData = (cred, kind, type) => {
@@ -124,6 +158,45 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       };
       const rpOk = (authData) => authData && authData.subarray(0, 32).equals(createHash('sha256').update(new URL(origin).hostname).digest());
       const verified = (authData) => (authData[32] & 0x05) === 0x05; // user present and user verified
+
+      // L25: quiet hours and the daily digest, and the team delivery log, as apps/server/email.mjs answers them.
+      if (p === '/v1/me/notifications') {
+        const breakthrough = Object.entries(KINDS).filter(([, k]) => k.breakthrough).map(([id]) => id);
+        const cur = prefs.get(who.id) ?? { timezone: 'UTC', quietHours: null, digest: null };
+        if (req.method === 'GET') return send(200, { ...cur, breakthrough });
+        if (req.method === 'PUT') {
+          const body = await read();
+          const time = (v) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v ?? ''));
+          const next = { ...cur };
+          if ('timezone' in body) { try { new Intl.DateTimeFormat('en', { timeZone: body.timezone }); } catch { return problem(400, 'bad-request', 'timezone is an IANA zone like "America/Los_Angeles"'); } next.timezone = body.timezone; }
+          if ('quietHours' in body) {
+            const q = body.quietHours;
+            if (q !== null && (!time(q?.from) || !time(q?.to) || q.from === q.to)) return problem(400, 'bad-request', 'quietHours needs two different times');
+            next.quietHours = q === null ? null : { from: q.from, to: q.to };
+          }
+          if ('digest' in body) {
+            const d = body.digest;
+            if (d !== null && (!time(d?.at) || (d.kinds ?? []).some((k) => !KINDS[k] || k === 'digest'))) return problem(400, 'bad-request', 'digest is { at, kinds } or null');
+            next.digest = d === null ? null : { at: d.at, kinds: [...new Set(d.kinds ?? cur.digest?.kinds ?? [])] };
+          }
+          prefs.set(who.id, next);
+          return send(200, { ...next, breakthrough });
+        }
+      }
+      const dl = /^\/v1\/teams\/([^/]+)\/notifications\/log$/.exec(p);
+      if (dl && req.method === 'GET') {
+        const [, team] = dl;
+        if (!teams.has(team)) return problem(404, 'not-found', `no team ${team}`);
+        const all = url.searchParams.get('all') === '1';
+        if (all && !(who.workspaces ?? []).some((w) => w.role === 'owner' || w.role === 'admin')) return problem(403, 'forbidden', 'all=1 needs an owner or admin');
+        const n = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
+        const before = url.searchParams.get('before');
+        const rows = deliveries.filter((d) => d.team === team && (all || d.person === who.id) && (!before || +new Date(d.at) < +before)).sort((a, b) => +new Date(b.at) - +new Date(a.at)).slice(0, n);
+        const items = rows.map((d) => ({ channel: d.channel, at: d.at, event: d.event, kind: d.kind, status: d.status, reason: d.reason ?? null, why: d.why ?? null, ...(d.person === who.id ? { to: d.to } : {}),
+          // backend-dev 431701b: everyone's view names each person (name, else login), null if never a member here.
+          ...(all ? { principal: d.person, name: (([l, m]) => (m ? m.name || l : null))(Object.entries(members).find(([, m]) => m.id === d.person) ?? []) } : {}) }));
+        return send(200, { items, next: rows.length === n ? String(+new Date(rows.at(-1).at)) : null });
+      }
 
       // The emails API of kit #101, in memory: the same paths, bodies and refusals as apps/server/server.mjs.
       const em = /^\/v1\/teams\/([^/]+)\/emails(?:\/([^/]+)(\/verify)?)?$/.exec(p);
@@ -249,7 +322,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
           user: { id: b64u(who.id), name: who.login, displayName: who.name ?? who.login },
           pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], timeout: 120_000, attestation: 'none',
           excludeCredentials: mine.map((k) => ({ type: 'public-key', id: k.id })),
-          authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
+          authenticatorSelection: { residentKey: 'required', userVerification: 'required' }, // discoverable, for passkey sign-in (L27)
         });
       }
       if (p === '/v1/me/passkeys' && req.method === 'POST') {
@@ -274,6 +347,60 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
         if (gone) notices.set(who.id, [...(notices.get(who.id) ?? []), { action: 'passkey.removed', at: new Date(Date.now() + 1).toISOString(), passkey: gone.id, name: gone.name }]);
         return send(200, {});
       }
+      // L27: the workspace's members, and recovery owners (apps/server/recovery.mjs, in memory).
+      const roleOf = (m) => m?.workspaces?.[0]?.role ?? null;
+      if (p === '/v1/members' && req.method === 'GET') return send(200, { members: Object.entries(members).map(([login, m]) => ({ id: `mem_${m.id}`, person: m.id, login, name: m.name, role: roleOf(m) })) });
+      const rc = /^\/v1\/recovery(?:\/([^/]+))?$/.exec(p);
+      if (rc) {
+        const role = roleOf(who);
+        if (!['owner', 'admin'].includes(role)) return problem(403, 'forbidden', 'admins only');
+        const byId = (id) => Object.entries(members).find(([, m]) => m.id === id);
+        const view = (r) => {
+          const [login, m] = byId(r.person) ?? [];
+          const keys = (passkeys.get(r.person) ?? []).length;
+          const why = roleOf(m) !== 'owner' ? 'not-owner' : !keys ? 'no-passkey' : r.effectiveAt > Date.now() ? 'pending' : null;
+          return { person: r.person, login, name: m?.name ?? login, methods: ['github', ...(keys ? ['passkey'] : [])], addedBy: r.addedBy, addedAt: new Date(r.addedAt).toISOString(), effectiveAt: new Date(r.effectiveAt).toISOString(), counts: why === null, ...(why ? { why } : {}) };
+        };
+        const live = () => recovery.filter((r) => !r.removed);
+        if (!rc[1] && req.method === 'GET') {
+          const owners = live().map(view);
+          const counted = owners.filter((o) => o.counts).length;
+          const warnings = [...(counted < 2 ? [{ code: 'fewer-than-two', text: 'server text, never shown' }] : []),
+            ...owners.filter((o) => o.why === 'no-passkey' || o.why === 'not-owner').map((o) => ({ code: o.why, person: o.person, text: 'server text, never shown' }))];
+          return send(200, { owners, wanted: 2, warnings });
+        }
+        if (role !== 'owner') return problem(403, 'forbidden', 'only an owner names or removes recovery owners');
+        // The last recovery owner in effect (apps/server/recovery.mjs remove): 409 last-owner unless confirmed, and
+        // then a step-up scoped remove-last-recovery-owner:<person>.
+        const counts = (r) => !r.removed && r.effectiveAt <= Date.now();
+        const lastOne = rc[1] && req.method === 'DELETE' && (() => { const p = decodeURIComponent(rc[1]); const c = recovery.filter(counts); return c.length === 1 && c[0].person === p; })();
+        const rb = await read().catch(() => ({}));
+        const target = rc[1] ? decodeURIComponent(rc[1]) : String(rb?.person ?? '');
+        const tenant = who.workspaces?.[0]?.tenant ?? 'acme';
+        if (lastOne && rb?.confirm !== 'no-recovery') return problem(409, 'last-owner', 'this is the last recovery owner');
+        if (lastOne) {
+          if (!stepped(`remove-last-recovery-owner:${decodeURIComponent(rc[1])}`)) return send(401, { type: 'step-up-required', title: 'Removing the last recovery owner needs a fresh step-up', status: 401, scope: `remove-last-recovery-owner:${decodeURIComponent(rc[1])}` });
+        } else if (!stepped(`recovery:${tenant}_${target}`)) return problem(401, 'step-up-required', 'Naming or removing a recovery owner needs a fresh step-up');
+        if (!rc[1] && req.method === 'POST') {
+          const person = target;
+          const [, m] = byId(person) ?? [];
+          if (!m) return problem(404, 'not-found', 'no such member');
+          if (roleOf(m) !== 'owner') return problem(409, 'not-owner', 'make them an owner first');
+          if (!(passkeys.get(person) ?? []).length) return problem(409, 'no-passkey', 'they need a passkey first');
+          if (live().some((r) => r.person === person)) return problem(409, 'already', 'already a recovery owner');
+          const atOnce = !live().length && person === who.id;
+          const r = { person, addedBy: who.id, addedAt: Date.now(), effectiveAt: atOnce ? Date.now() : Date.now() + 24 * 3600_000, removed: false };
+          recovery.push(r);
+          return send(201, { person, effectiveAt: new Date(r.effectiveAt).toISOString(), pending: !atOnce });
+        }
+        if (rc[1] && req.method === 'DELETE') {
+          const r = live().find((x) => x.person === decodeURIComponent(rc[1]));
+          if (!r) return problem(404, 'not-found', 'not a recovery owner');
+          r.removed = true;
+          if (lastOne) log.push({ method: 'RECOVERY', path: 'removed-last', status: 200, person: r.person });
+          return send(200, { ok: true, ...(lastOne ? { last: true } : {}) });
+        }
+      }
       if (p === '/v1/auth/step-up/challenge' && req.method === 'GET') {
         if (!mine.length) return problem(409, 'no-passkey', 'add a passkey first');
         return send(200, { challenge: challenge('get'), rpId: new URL(origin).hostname, timeout: 120_000, userVerification: 'required', allowCredentials: mine.map((k) => ({ type: 'public-key', id: k.id })) });
@@ -294,7 +421,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
         if (!verified(auth)) return fail('the passkey did not verify the person');
         key.lastUsed = new Date().toISOString();
         const token = rid('su_');
-        stepUps.set(token, { person: who.id, expires: Date.now() + 5 * 60_000 });
+        stepUps.set(token, { person: who.id, expires: Date.now() + 5 * 60_000, scope: typeof body.scope === 'string' ? body.scope : null });
         return send(201, { token, expires: new Date(Date.now() + 5 * 60_000).toISOString() });
       }
       return problem(404, 'not-found', `stub issuer: no ${req.method} ${p}`);
@@ -311,7 +438,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
   // localhost, not 127.0.0.1: WebAuthn needs a domain for rpId, and browsers treat localhost as a secure context.
   origin = `http://localhost:${server.address().port}`;
   return {
-    origin, upstream, sessions, passkeys, stepUps, log, emails, codes, mail, teams, slack,
+    origin, upstream, sessions, passkeys, stepUps, log, emails, codes, mail, teams, slack, recovery, prefs, deliveries,
     /** Ages every session's sign-in, as if it happened `ms` ago. */
     age(ms) { for (const s of sessions.values()) s.authTime -= ms; },
     close: () => { server.closeAllConnections?.(); server.close(); },

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { key, plane } from './helpers.mjs';
 import { drain } from '../sinks.mjs';
-import { composeDigest, createNotifications, digests, flushHeld, inQuiet, localDate, maskEmail, minuteOfDay } from '../email.mjs';
+import { composeDigest, createNotifications, digests, flushHeld, inQuiet, localDate, maskEmail, minuteOfDay, reasonOf } from '../email.mjs';
 import { readSecret } from '../store.mjs';
 
 const PUBLIC = 'https://cp.example';
@@ -102,8 +102,20 @@ test('quiet hours hold what does not break through, the digest sends it once a d
     // Someone else's rows never say where they went, even masked (review sev 3).
     await db.tenant('acme', ({ q }) => q("insert into email_subscriptions(id, tenant, team, principal, email, kinds, verified_at) values ('es_other1', 'acme', 'shop', 'per_otherperson1', 'dana@else.example', '{blocked}', now())"));
     await db.tenant('acme', ({ q }) => q("insert into email_deliveries(tenant, team, subscription, event, kind, status) values ('acme', 'shop', 'es_other1', 'ev_x', 'blocked', 'sent')"));
+    // Everyone's rows name their person (name, else login), and only for people who are or were members of this tenant
+    // (L25 follow-up; a removed member's old rows keep their name).
+    await db.system("insert into people(id, provider, subject, login, name) values ('per_otherperson1', 'github', '424242', 'dana-gh', 'Dana Ruiz')");
+    assert.equal((await call('GET', '/teams/shop/notifications/log?all=1')).body.items.find((r) => r.principal === 'per_otherperson1').name, null, 'not a member: no name');
+    await db.system("insert into members(id, tenant, person, role, removed_at) values ('mem_other1', 'acme', 'per_otherperson1', 'viewer', now())");
     const theirs = (await call('GET', '/teams/shop/notifications/log?all=1')).body.items.find((r) => r.principal === 'per_otherperson1');
     assert.equal(theirs.to, undefined);
+    assert.equal(theirs.name, 'Dana Ruiz');
+    assert.equal(log.items[0].name, undefined, 'my own view carries no names');
+    // A reason code next to the raw why, so the page never shows provider text.
+    assert.deepEqual(log.items.slice(0, 3).map((r) => r.reason), [null, null, null]);
+    await db.tenant('acme', ({ q }) => q("insert into email_deliveries(tenant, team, subscription, event, kind, status, error) values ('acme', 'shop', 'es_other1', 'ev_y', 'blocked', 'skipped', 'no provider key stored as EMAIL_PROVIDER_KEY'), ('acme', 'shop', 'es_other1', 'ev_z', 'blocked', 'failed', 'HTTP 500: down')"));
+    const reasons = Object.fromEntries((await call('GET', '/teams/shop/notifications/log?all=1')).body.items.filter((r) => ['ev_y', 'ev_z'].includes(r.event)).map((r) => [r.event, r.reason]));
+    assert.deepEqual(reasons, { ev_y: 'nochannel', ev_z: 'retry' });
     assert.ok((await call('GET', '/teams/shop/notifications/log?all=1')).body.items.filter((r) => r.principal === 'admin').every((r) => r.to === 'o****@shop.example'));
     // Someone else sees none of these rows.
     const other = await createNotifications({ db }).log('acme', 'shop', 'someone-else');
@@ -125,4 +137,17 @@ test('quiet hours hold what does not break through, the digest sends it once a d
     assert.match(provider.sent.at(-1).text, /Still there\?/);
     assert.equal(await flush(after), 0, 'once');
   }, { publicUrl: PUBLIC, email: { providers: { fake: provider } } });
+});
+
+test('reasonOf: one code per row that did not go out, never the provider text', () => {
+  assert.equal(reasonOf({ channel: 'email', status: 'sent' }), null);
+  assert.equal(reasonOf({ channel: 'email', status: 'held' }), null);
+  assert.equal(reasonOf({ channel: 'slack', status: 'emailed', error: 'channel_not_found' }), null);
+  assert.equal(reasonOf({ channel: 'email', status: 'failed', final: true }), 'final');
+  assert.equal(reasonOf({ channel: 'email', status: 'failed', final: false }), 'retry');
+  assert.equal(reasonOf({ channel: 'email', status: 'skipped', error: 'unknown provider nope' }), 'nochannel');
+  assert.equal(reasonOf({ channel: 'slack', status: 'skipped', error: 'no Slack token stored as SLACK_BOT' }), 'nochannel');
+  assert.equal(reasonOf({ channel: 'slack', status: 'skipped', error: 'the token stored as SLACK_BOT is not a bot token (xoxb-…)' }), 'nochannel');
+  assert.equal(reasonOf({ channel: 'slack', status: 'skipped', error: 'Slack: channel_not_found' }), 'removed');
+  assert.equal(reasonOf({ channel: 'slack', status: 'skipped', error: 'Slack: msg_too_long' }), 'final');
 });

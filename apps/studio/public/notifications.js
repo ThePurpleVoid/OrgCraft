@@ -6,7 +6,109 @@
 //
 // The API (apps/server, kit #101): GET/POST /v1/teams/{team}/emails, POST …/emails/{id}/verify { code },
 // PATCH …/emails/{id} { kinds }, DELETE …/emails/{id}. The page only calls its own origin, with the session cookie.
-import { call, dismissNotices, ensureSignedIn, esc, noticesBanner } from './auth.js';
+import { call, dismissNotices, ensureSignedIn, esc, loadRecovery, noticesBanner, recoveryBanner } from './auth.js';
+import { t } from './i18n.js';
+import { infoButton, installTips } from './tooltip.js';
+
+// ---- quiet hours and the daily digest (L25; GET/PUT /v1/me/notifications)
+
+/** The time zones this browser knows, with `current` first among them if it is missing. */
+export function zones(current) {
+  let all = [];
+  try { all = Intl.supportedValuesOf('timeZone'); } catch { /* an older browser: the current zone only */ }
+  return [...new Set([current, ...all].filter(Boolean))];
+}
+
+/**
+ * The Quiet hours and daily digest section. st: { prefs: { timezone, quietHours, digest, breakthrough }, kinds, device,
+ * notes }. Kinds come from the emails API; digest is not a kind of the digest.
+ */
+export function prefsHtml(st) {
+  const p = st.prefs;
+  if (!p) return '';
+  const n = st.notes.get('prefs');
+  const qh = p.quietHours;
+  const dg = p.digest;
+  const kinds = st.kinds.filter((k) => k.id !== 'digest' && !(p.breakthrough ?? []).includes(k.id));
+  const opts = zones(p.timezone).map((z) => `<option${z === p.timezone ? ' selected' : ''}>${esc(z)}</option>`).join('');
+  return `<section class="n-section" id="prefs" aria-labelledby="prefs-title">
+    <h2 id="prefs-title">${esc(t('notify.quiet.heading'))}</h2>
+    <p class="muted">${esc(t('notify.quiet.explainer'))}</p>
+    <form id="prefs-form" class="stack">
+      <label>${esc(t('notify.tz'))} <select name="timezone">${opts}</select></label>
+      ${st.device && st.device !== p.timezone ? `<p><button type="button" class="link" id="zone-device">${esc(t('notify.zone.device', { zone: st.device }))}</button></p>` : ''}
+      <label class="switch"><input type="checkbox" name="quiet"${qh ? '' : ' checked'}> ${esc(t('notify.quiet.none'))}</label>
+      <div class="row"${qh ? '' : ' hidden'} id="quiet-times"><label>${esc(t('notify.quiet.from'))} <input type="time" name="from" value="${esc(qh?.from ?? '21:00')}"></label><label>${esc(t('notify.quiet.to'))} <input type="time" name="to" value="${esc(qh?.to ?? '07:00')}"></label></div>
+      <p class="hint">${esc(t('notify.breakthrough'))} ${infoButton(t('notify.tip.breakthrough'), esc, t('notify.breakthrough'))}</p>
+      <label class="switch"><input type="checkbox" name="digest"${dg ? '' : ' checked'}> ${esc(t('notify.digest.off'))}</label>
+      <div class="stack"${dg ? '' : ' hidden'} id="digest-opts">
+        <label>${esc(t('notify.digest.at'))} <input type="time" name="at" value="${esc(dg?.at ?? '08:00')}"></label>
+        <fieldset><legend>${esc(t('notify.digest.what'))}</legend><ul class="plain">${kinds.map((k) => `<li><label class="switch"><input type="checkbox" name="dkind" value="${esc(k.id)}"${dg?.kinds?.includes(k.id) ? ' checked' : ''}> ${esc(kindLabel(k.id, k.label))}</label></li>`).join('')}</ul></fieldset>
+      </div>
+      ${n ? `<p class="result ${n.kind === 'error' ? 'error' : 'ok'}" role="${n.kind === 'error' ? 'alert' : 'status'}" tabindex="-1">${esc(n.text)}</p>` : ''}
+      <div class="row"><button type="submit" class="primary">${esc(t('notify.save'))}</button></div>
+    </form>
+  </section>`;
+}
+
+/** A kind in the CPO's words (notify.kind.*), else the server's label. */
+export function kindLabel(id, fallback = id) {
+  const k = `notify.kind.${id}`;
+  return t(k) === k ? fallback ?? '' : t(k);
+}
+
+/** The PUT body from the form: every field, so what is shown is what is saved. */
+export function prefsBody(form) {
+  // The switches read "No quiet hours" and "No daily digest": ticked means off.
+  const quiet = !form.quiet.checked;
+  const digest = !form.digest.checked;
+  return {
+    timezone: form.timezone.value,
+    quietHours: quiet ? { from: form.from.value, to: form.to.value } : null,
+    digest: digest ? { at: form.at.value, kinds: [...form.querySelectorAll('input[name="dkind"]:checked')].map((i) => i.value) } : null,
+  };
+}
+
+// ---- the delivery log (L25; GET /v1/teams/{team}/notifications/log, PRD O6)
+
+/** A row's time, in this browser's zone: today as HH:MM, otherwise with the day. */
+export function when(at, now = new Date()) {
+  const d = new Date(at);
+  if (Number.isNaN(+d)) return '';
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === now.toDateString() ? time : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${time}`;
+}
+
+/** The Delivery log section. st: { log: { items, next, all, error }, owner, kinds }. */
+export function logHtml(st) {
+  const lg = st.log;
+  if (!lg) return '';
+  const label = (id) => kindLabel(id, st.kinds.find((k) => k.id === id)?.label ?? id);
+  const word = (key, fb) => (t(key) === key ? fb : t(key));
+  // Why is always a plain sentence (CPO): held and emailed have one; a provider's own error is never shown.
+  // The server's reason code (backend-dev 431701b) picks the sentence: retry, nochannel and removed have their own;
+  // final (or no code, from an older server) is the per-channel line.
+  const why = (r) => {
+    const ch = t(`notify.channel.${r.channel}`);
+    const own = r.reason && r.reason !== 'final' && (r.status === 'failed' || r.status === 'skipped') ? word(`notify.status.failed.why.${r.reason}`, '') : '';
+    const fin = r.status === 'failed' || (r.status === 'skipped' && r.reason === 'final') ? word(`notify.status.failed.why.${r.channel}`, '') || word('notify.status.failed.why', '') : '';
+    return (own || fin || word(`notify.status.${r.status}.why`, '')).replace('{channel}', ch);
+  };
+  // Who, on everyone's rows only: "You" for your own, a name, or the CPO's words when there is none. Never a raw id.
+  const everyone = !!lg.all;
+  const who = everyone;
+  const whoWord = (r) => (r.principal && r.principal === st.me?.id ? t('notify.log.you') : r.name || t('notify.log.who.unknown'));
+  const head = [t('notify.log.when'), t('notify.log.what'), t('notify.log.where'), ...(who ? [t('notify.log.who')] : []), t('notify.log.status'), t('notify.log.why')];
+  const rows = (lg.items ?? []).map((r) => `<tr class="st-${esc(r.status)}"><td>${esc(when(r.at))}</td><td>${esc(label(r.kind))}</td><td>${esc(t(`notify.channel.${r.channel}`))}${r.to && r.channel === 'email' ? ` <span class="muted">${esc(r.to)}</span>` : ''}</td>${who ? `<td>${esc(whoWord(r))}</td>` : ''}<td>${esc(word(`notify.status.${r.status}`, r.status))}</td><td>${esc(why(r))}</td></tr>`).join('');
+  return `<section class="n-section" id="log" aria-labelledby="log-title">
+    <h2 id="log-title" tabindex="-1">${esc(t('notify.log.heading'))}</h2>
+    <p class="muted">${esc(t('notify.log.explainer'))}</p>
+    ${st.owner ? `<div class="row" role="group" aria-labelledby="log-scope"><span id="log-scope">${esc(t('notify.scope.label'))}</span><button type="button" data-log-all="" aria-pressed="${!everyone}">${esc(t('notify.scope.me'))}</button><button type="button" data-log-all="1" aria-pressed="${everyone}">${esc(t('notify.scope.all'))}</button></div>` : ''}
+    ${lg.error ? `<p class="result error" role="alert">${esc(lg.error)} <button type="button" id="log-retry">${esc(t('action.retry'))}</button></p>` : ''}
+    ${rows ? `<div class="table-wrap" tabindex="0" aria-labelledby="log-title"><table class="log"><thead><tr>${head.map((h) => `<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : lg.error ? '' : `<p class="muted">${esc(t('notify.log.empty'))}</p>`}
+    ${lg.next ? `<button type="button" id="log-older">${esc(t('notify.older'))}</button>` : ''}
+  </section>`;
+}
 
 /** The team in /teams/{team}/notifications, or null. */
 export function teamFromPath(pathname) {
@@ -175,15 +277,18 @@ function start() {
   const root = document.getElementById('notifications');
   const team = teamFromPath(location.pathname);
   const st = { me: null, teamName: team, ready: true, owner: false, kinds: [], emails: [], adding: false, cleared: new Set(), notes: new Map(),
-    slack: null, channels: null, slackCleared: false, addingChannel: false, channelDraft: null, redirectUrl: `${location.origin}/slack/callback` };
+    slack: null, channels: null, slackCleared: false, addingChannel: false, channelDraft: null, redirectUrl: `${location.origin}/slack/callback`,
+    prefs: null, device: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return null; } })(), log: null };
   const base = () => `/v1/teams/${encodeURIComponent(team)}/emails`;
   const slackBase = () => `/v1/teams/${encodeURIComponent(team)}/slack`;
 
   function render() {
-    root.innerHTML = `${noticesBanner(st.me)}
+    root.innerHTML = `${noticesBanner(st.me)}${recoveryBanner(st.rec, st.me)}
       <p class="muted">For ${esc(st.teamName)}. Only you see these settings.</p>
       ${emailsHtml(st)}
-      ${slackHtml(st)}`;
+      ${prefsHtml(st)}
+      ${slackHtml(st)}
+      ${logHtml(st)}`;
     // What was typed in Add a channel survives a re-render (an error), set through the DOM, not markup.
     const add = root.querySelector('#channel-add');
     if (add && st.channelDraft) { add.name.value = st.channelDraft.name; add.channel.value = st.channelDraft.channel; }
@@ -205,7 +310,21 @@ function start() {
     st.ready = r.data.ready !== false;
     st.emails = r.data.emails ?? [];
     await loadSlack();
+    await Promise.all([loadPrefs(), loadLog(false)]);
     render();
+  }
+  async function loadPrefs() {
+    const r = await call('GET', '/v1/me/notifications');
+    st.prefs = r.ok ? r.data : null;
+  }
+  /** The log from the top (more = false) or its next page; all keeps the admin's choice. */
+  async function loadLog(more, all = st.log?.all ?? false) {
+    const q = new URLSearchParams();
+    if (all) q.set('all', '1');
+    if (more && st.log?.next) q.set('before', st.log.next);
+    const r = await call('GET', `/v1/teams/${encodeURIComponent(team)}/notifications/log${q.size ? `?${q}` : ''}`);
+    if (!r.ok) { st.log = { items: more ? st.log?.items ?? [] : [], next: null, all, error: t('notify.log.failed') }; return; }
+    st.log = { items: [...(more ? st.log?.items ?? [] : []), ...(r.data.items ?? [])], next: r.data.next ?? null, all, error: null };
   }
   const say = (key, kind, text) => { st.notes.clear(); if (text) st.notes.set(key, { kind, text }); };
   /** After a code was asked for: sent, or why not (no email sink yet, or no provider key). */
@@ -216,6 +335,17 @@ function start() {
     const form = e.target;
     const button = form.querySelector('button[type="submit"]');
     button.disabled = true;
+    if (form.id === 'prefs-form') {
+      const body = prefsBody(form);
+      if (body.quietHours && body.quietHours.from === body.quietHours.to) { button.disabled = false; say('prefs', 'error', t('notify.quiet.same')); render(); return root.querySelector('#prefs .result')?.focus?.(); }
+      const r = await call('PUT', '/v1/me/notifications', body);
+      button.disabled = false;
+      if (!r.ok) { say('prefs', 'error', t('notify.failed')); return render(); }
+      st.prefs = r.data;
+      say('prefs', 'ok', t('notify.saved'));
+      render();
+      return root.querySelector('#prefs .result')?.focus?.();
+    }
     if (form.id === 'email-add') {
       const r = await call('POST', base(), { email: form.email.value.trim() });
       button.disabled = false;
@@ -256,6 +386,10 @@ function start() {
     const b = e.target.closest('button');
     if (!b) return;
     if (b.id === 'notices-ok') { dismissNotices(st.me); return render(); }
+    if (b.id === 'zone-device') { const sel = root.querySelector('#prefs-form select[name="timezone"]'); if (sel) { if (![...sel.options].some((o) => o.value === st.device)) sel.add(new Option(st.device)); sel.value = st.device; } return; }
+    if (b.dataset.logAll !== undefined) { await loadLog(false, b.dataset.logAll === '1'); render(); return root.querySelector(`[data-log-all="${b.dataset.logAll}"]`)?.focus(); }
+    if (b.id === 'log-retry') { await loadLog(false); render(); return root.querySelector('#log-title')?.focus?.(); }
+    if (b.id === 'log-older') { const n = st.log.items.length; await loadLog(true); render(); return root.querySelectorAll('#log tbody tr')[n]?.querySelector('td')?.setAttribute('tabindex', '-1'), root.querySelectorAll('#log tbody tr')[n]?.querySelector('td')?.focus(); }
     if (b.id === 'email-another') { st.adding = true; say('add', 'ok', ''); render(); return root.querySelector('#email-add input')?.focus(); }
     if (b.dataset.remove) {
       const s = st.emails.find((x) => x.id === b.dataset.remove);
@@ -316,6 +450,9 @@ function start() {
   root.addEventListener('input', (e) => { if (e.target.closest('#channel-add')) keepDraft(); });
 
   root.addEventListener('change', async (e) => {
+    // Quiet hours and the digest: their times show only when they are on (saved with Save).
+    if (e.target.name === 'quiet') { root.querySelector('#quiet-times').hidden = e.target.checked; return; }
+    if (e.target.name === 'digest') { root.querySelector('#digest-opts').hidden = e.target.checked; return; }
     const box = e.target.closest('input[data-kind]');
     if (!box) return;
     if (box.hasAttribute('data-new-channel')) return keepDraft(); // saved with Add the channel
@@ -362,11 +499,13 @@ function start() {
     render();
   }
 
+  installTips(document.body);
   (async () => {
     if (!team) { root.innerHTML = '<p class="result error" role="alert">This page needs a team: open it from a team email or from the Studio.</p>'; return; }
     st.me = await ensureSignedIn();
     if (!st.me) return;
     st.owner = (st.me.workspaces ?? []).some((w) => w.role === 'owner' || w.role === 'admin');
+    st.rec = await loadRecovery(st.me);
     await load();
     // Back from /slack/callback: what happened there.
     let back = null;

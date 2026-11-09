@@ -119,7 +119,7 @@ export function browser(local, { ip = 'browser' } = {}) {
       const first = await b.go(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=${encodeURIComponent(ret)}`);
       if (!first.at?.startsWith(`${ORIGIN}/sign-in?interaction=`)) return first.at;
       const uid = new URL(first.at).searchParams.get('interaction');
-      return (await b.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at;
+      return (await b.go(`${ORIGIN}/oauth/authorize/${uid}/github`)).at;
     },
     call: async (method, path, body, headers = {}) => {
       const res = await b.fetch(`${ORIGIN}/v1${path}`, { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), origin: ORIGIN, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });

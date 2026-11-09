@@ -102,7 +102,10 @@ test('step-up: a slow hash, the bearer token refused, single use, a lockout afte
 test('budget: raising or setting a cap needs step-up, lowering does not, and a run needs a daily cap', async () => {
   await withStepUp(async ({ call }) => {
     await call('POST', '/teams', { id: 'shop' });
-    assert.deepEqual((await call('GET', '/teams/shop/budget')).body, { currency: 'USD', perDay: null, perRun: null, sessions: 3, meetingCap: null, today: { day: new Date().toISOString().slice(0, 10), spent: 0, raised: 0, state: 'ok' } });
+    const day = new Date().toISOString().slice(0, 10);
+    const next = new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString();
+    assert.deepEqual((await call('GET', '/teams/shop/budget')).body, { currency: 'USD', perDay: null, perRun: null, sessions: 3, meetingCap: null, timeZone: 'UTC',
+      today: { day, timeZone: 'UTC', startedAt: `${day}T00:00:00.000Z`, resetsAt: next, spent: 0, raised: 0, state: 'ok' } });
     assert.equal((await call('POST', '/teams/shop/runs', { team: roster() })).status, 409, 'no run without a daily cap');
     const need = await call('PUT', '/teams/shop/budget', { perDay: 1000 });
     assert.equal(need.status, 401);

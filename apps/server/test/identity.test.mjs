@@ -229,7 +229,7 @@ test('apps: exact redirect URIs, PKCE, refresh tokens bound to the device key, a
   const b = browser();
   const first = await b.go(authorize(redirect));
   const uid = new URL(first.at).searchParams.get('interaction');
-  const back = new URL((await b.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at);
+  const back = new URL((await b.go(`${ORIGIN}/oauth/authorize/${uid}/github`)).at);
   assert.equal(back.origin + back.pathname, redirect);
   assert.equal(back.searchParams.get('state'), 'st1');
   const code = back.searchParams.get('code');
@@ -338,7 +338,7 @@ test('a state from another browser, or used twice, does not finish a sign-in', (
   const victim = browser(), attacker = browser();
   const first = await attacker.go(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=/`);
   const uid = new URL(first.at).searchParams.get('interaction');
-  const toGitHub = await attacker.fetch(`${ORIGIN}/oauth/interaction/${uid}/github`);
+  const toGitHub = await attacker.fetch(`${ORIGIN}/oauth/authorize/${uid}/github`);
   const gitHubBack = await fetch(toGitHub.headers.get('location'), { redirect: 'manual' });
   const callback = gitHubBack.headers.get('location');
   // The victim's browser opens the attacker's callback: it has no matching upstream cookie.
@@ -350,6 +350,21 @@ test('a state from another browser, or used twice, does not finish a sign-in', (
   assert.equal((await attacker.go(callback)).at, `${ORIGIN}/sign-in?error=expired`);
   // An unknown interaction goes back to the page as expired.
   assert.equal((await victim.go(`${ORIGIN}/oauth/interaction/nope/github`)).at, `${ORIGIN}/sign-in?error=expired`);
+}));
+
+test('Continue with GitHub is bound to the browser that started the sign-in (security review of L27)', () => issuer(async ({ gh, browser }) => {
+  gh.as = owner;
+  const victim = browser(), attacker = browser();
+  const first = await victim.go(`${ORIGIN}/oauth/authorize?client_id=agent-team-web&return=/`);
+  const uid = new URL(first.at).searchParams.get('interaction');
+  // The attacker learns the victim's uid and tries to finish that sign-in with their own GitHub account.
+  const stolen = await attacker.fetch(`${ORIGIN}/oauth/authorize/${uid}/github`);
+  assert.equal(stolen.headers.get('location'), '/sign-in?error=expired');
+  assert.equal((await attacker.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at, `${ORIGIN}/sign-in?error=expired`, 'the old path too');
+  // The browser that started it goes on to GitHub, by the new path or the old one.
+  assert.match((await victim.fetch(`${ORIGIN}/oauth/authorize/${uid}/github`)).headers.get('location'), /\/login\/oauth\/authorize\?/);
+  const viaOld = await victim.fetch(`${ORIGIN}/oauth/interaction/${uid}/github`);
+  assert.equal(viaOld.headers.get('location'), `/oauth/authorize/${uid}/github`);
 }));
 
 test('local mode is unchanged: without sign-in configured, /oauth is not there and the admin token still works', async () => {
@@ -418,7 +433,7 @@ test('the JWKS has a P-256 and an RSA-2048 key; a first-party ID token is ES256'
   const b = browser({ ip: 'alg' });
   const first = await b.go(`${ORIGIN}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: 'agent-team-ios', redirect_uri: redirect, scope: 'openid', state: 's', nonce: 'n', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' })}`);
   const uid = new URL(first.at).searchParams.get('interaction');
-  const code = new URL((await b.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at).searchParams.get('code');
+  const code = new URL((await b.go(`${ORIGIN}/oauth/authorize/${uid}/github`)).at).searchParams.get('code');
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const dpop = await new SignJWT({ htm: 'POST', htu: `${ORIGIN}/oauth/token`, jti: randomUUID() }).setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: await exportJWK(publicKey) }).setIssuedAt().sign(privateKey);
   const tok = await (await fetch(`${local}/oauth/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', dpop }, body: new URLSearchParams({ client_id: 'agent-team-ios', grant_type: 'authorization_code', code, redirect_uri: redirect, code_verifier: verifier }) })).json();
@@ -450,7 +465,7 @@ test('prompt=consent for a signed-in person finishes without a page or GitHub', 
   };
   const first = await b.go(ask({}));
   const uid = new URL(first.at).searchParams.get('interaction');
-  assert.ok(new URL((await b.go(`${ORIGIN}/oauth/interaction/${uid}/github`)).at).searchParams.get('code'));
+  assert.ok(new URL((await b.go(`${ORIGIN}/oauth/authorize/${uid}/github`)).at).searchParams.get('code'));
   const signIns = gh.issued.length;
 
   // The consent step, taken one redirect at a time: another browser presenting the same uid is refused.

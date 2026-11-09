@@ -706,6 +706,23 @@
 /* The AGENTS.md switch: the whole row is the target (ALL-1). */
 .ats label.row-target { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .ats label.row-target input { width: 20px; height: 20px; flex: none; }
+/* L25: quiet hours, the digest and the delivery log on the Notifications page. */
+.ats #prefs select { max-width: 100%; }
+.ats #prefs fieldset { border: 0; padding: 0; margin: 0; }
+.ats #prefs legend { font-size: 13.5px; color: var(--muted); padding: 0; margin-bottom: 4px; }
+.ats #log .table-wrap { overflow-x: auto; max-width: 100%; }
+.ats #log table.log { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.ats #log table.log th, .ats #log table.log td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.ats #log table.log .hint { margin: 2px 0 0; }
+.ats #log tr.st-failed td:last-child { color: var(--error); }
+.ats #log [data-log-all] { min-height: 36px; color: var(--ink); background: var(--panel); }
+.ats #log [data-log-all][aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+@media (max-width: 640px) { .ats #log [data-log-all], .ats #log-older, .ats #prefs button { min-height: 44px; } }
+/* qa-web L25w: 44 px targets on the hosted Notifications page at phone width. */
+@media (max-width: 640px) {
+  .ats #notifications input:not([type="checkbox"]), .ats #notifications select, .ats #notifications button:not(.info) { min-height: 44px; }
+  .ats .auth-brand a { display: inline-flex; align-items: center; min-height: 44px; }
+}
 
 /* Live overrides (L18): Stop everything in More, and a banner for every live change in force until it is lifted. */
 .ats .stop-all { color: var(--error); font-weight: 600; }
@@ -734,3 +751,17 @@
 .ats #publish-result .cmd { display: block; margin-top: 6px; padding: 6px 8px; background: var(--off); border-radius: 6px; font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; user-select: all; overflow-wrap: anywhere; }
 .ats #advanced > summary, .ats .changes details.generated > summary { cursor: pointer; font-size: 13.5px; color: var(--muted); padding: 4px 0; }
 .ats .changes details.generated > summary { padding: 6px 10px; font-family: inherit; }
+/* L27: the sign-in page's second way in, Security › Recovery owners, and the banner on the hosted pages. */
+.ats .auth-or { display: flex; align-items: center; gap: 8px; color: var(--muted); margin: 4px 0; }
+.ats .auth-or::before, .ats .auth-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+.ats #passkey-signin { width: 100%; min-height: 44px; }
+.ats .auth-card .github { min-height: 44px; }
+.ats .recovery-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ats .recovery-banner p { margin: 4px 0; }
+.ats #recovery .table-wrap { overflow-x: auto; max-width: 100%; }
+.ats #recovery table.recovery { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.ats #recovery table.recovery th, .ats #recovery table.recovery td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.ats #recovery tr.pending td { color: var(--muted); }
+@media (max-width: 640px) { .ats #recovery button, .ats #recovery select, .ats .recovery-banner .button { min-height: 44px; } }
+/* qa-web L27w: 44 px targets on the account page at phone width. */
+@media (max-width: 640px) { .ats #account button, .ats .auth-dialog button, .ats .auth-brand a { min-height: 44px; } .ats .auth-brand a { display: inline-flex; align-items: center; } }

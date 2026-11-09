@@ -26,6 +26,11 @@ export const ROUTES = [
   ['PUT', '/me/notifications', 'viewer'],
   ['POST', '/auth/step-up', 'viewer'],
   ['POST', '/runs/{run}/{action}', 'editor'],
+  // L22: standing rules (an owner's decision in advance; checked again in ledger.mjs) and the approvals ledger.
+  ['GET', '/teams/{team}/standing-rules', 'viewer'],
+  ['POST', '/teams/{team}/standing-rules', 'owner'],
+  ['DELETE', '/teams/{team}/standing-rules/{rule}', 'owner'],
+  ['GET', '/teams/{team}/ledger', 'viewer'],
   ['GET', '/teams/{team}/hooks', 'viewer'],
   ['POST', '/teams/{team}/hooks', 'admin'],
   ['POST', '/teams/{team}/hooks/{hook}/rotate', 'admin'],
@@ -65,6 +70,8 @@ export const ROUTES = [
   ['GET', '/teams/{team}/events/stream', 'viewer'],
   ['POST', '/teams/{team}/stream-tickets', 'viewer'],
   ['GET', '/teams/{team}/budget', 'viewer'],
+  ['GET', '/teams/{team}/caps', 'viewer'],
+  ['GET', '/teams/{team}/estimate', 'viewer'],
   ['PUT', '/teams/{team}/budget', 'admin'],
   ['GET', '/teams/{team}/runs', 'viewer'],
   ['POST', '/teams/{team}/runs', 'editor'],
@@ -85,6 +92,19 @@ export const ROUTES = [
   ['POST', '/teams/{team}/studio/v1/team/publish', 'editor'],
   ['GET', '/teams/{team}/studio/assets/{version}/{name}', 'viewer'],
   ['GET', '/teams/{team}/rollout', 'viewer'],
+  // A managed team's change requests (ADR 0012, changes.mjs): accepting one is an admin's, and widening access needs
+  // step-up on top; closing one is an editor's, like publishing.
+  ['GET', '/teams/{team}/changes', 'viewer'],
+  ['GET', '/teams/{team}/changes/{change}', 'viewer'],
+  ['POST', '/teams/{team}/changes/{change}/accept', 'admin'],
+  ['POST', '/teams/{team}/changes/{change}/close', 'editor'],
+  ['POST', '/teams/{team}/rollback', 'admin'],
+  // The run inspector (N1, L19s-b): the list and the timeline show summaries only; a step's stored input or output is
+  // for editors and every read is audited; deleting it early is an admin's, with step-up.
+  ['GET', '/teams/{team}/tasks', 'viewer'],
+  ['GET', '/teams/{team}/tasks/{task}', 'viewer'],
+  ['GET', '/teams/{team}/io/{io}', 'editor'],
+  ['DELETE', '/teams/{team}/io', 'admin'],
   ['POST', '/teams/{team}/report-tokens', 'admin'],
   ['DELETE', '/teams/{team}/report-tokens/{token}', 'admin'],
   ['GET', '/teams/{team}/sinks', 'admin'],
@@ -120,6 +140,10 @@ export const ROUTES = [
   ['POST', '/me/devices', 'viewer'],
   ['DELETE', '/me/devices/{device}', 'viewer'],
   ['GET', '/members', 'viewer'],
+  // L27: recovery owners. Changing them is an owner's call (checked again in recovery.mjs) with step-up.
+  ['GET', '/recovery', 'admin'],
+  ['POST', '/recovery', 'owner'],
+  ['DELETE', '/recovery/{person}', 'owner'],
   ['PATCH', '/members/{member}', 'admin'],
   ['DELETE', '/members/{member}', 'admin'],
   ['GET', '/invitations', 'admin'],
