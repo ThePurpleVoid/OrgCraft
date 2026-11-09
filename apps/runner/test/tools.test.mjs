@@ -41,6 +41,26 @@ test('bug', () => {
   no('bug', { ...b, severity: 5 }, /severity/);
 });
 
+test('signoff names the version it checked, in full; unverified is a list, empty means none (governance G1, G2)', () => {
+  const s = { to: 'release-manager', issue: 9, testedOn: 'iPhone 15, Safari', walked: 'checkout', result: 'pass', evidence: ['shots/checkout.png'] };
+  const sha = 'a'.repeat(40);
+  assert.equal(ok('signoff', { ...s, version: sha }).versionKind, 'commit', 'a full commit id is a commit');
+  assert.equal(ok('signoff', { ...s, version: 'b'.repeat(64), versionKind: 'commit' }).versionKind, 'commit');
+  assert.deepEqual(ok('signoff', { ...s, version: 'rev 3', versionKind: 'revision', unverified: [] }).unverified, [], 'an empty list is "Unverified: none"');
+  assert.equal(ok('signoff', { ...s, version: 'drf_12@2', versionKind: 'draft' }).versionKind, 'draft');
+  assert.equal(ok('signoff', s).unverified, undefined, 'left out is "not stated", never none');
+  no('signoff', { ...s, version: 'a1b2c3d' }, /versionKind/);
+  no('signoff', { ...s, version: 'a1b2c3d', versionKind: 'commit' }, /full commit id/);
+  no('signoff', { ...s, versionKind: 'draft' }, /needs the version/);
+  no('signoff', { ...s, versionKind: 'branch', version: 'x' }, /versionKind/);
+  no('signoff', { ...s, unverified: ['  '] }, /unverified\.0 is required/);
+  no('signoff', { ...s, unverified: Array(21).fill('x') }, /at most 20/);
+  assert.equal(ok('signoff', { ...s, checks: [{ call: 'call_fake', tool: 'Bash', summary: 'ran npm test · pass' }] }).checks, undefined, 'an agent can\'t supply its own checks');
+  for (const [name, input] of [['report', { status: 'done' }], ['handoff', { to: 'qa-web', task: 'x', changed: 'x', verify: 'x', doneWhen: 'x' }], ['bug', { to: 'qa-web', task: 'x', where: 'x', steps: 'x', expected: 'x', actual: 'x', severity: 3, evidence: ['a.png'] }], ['blocked', { task: 'x', need: 'x', needFrom: 'qa-web', meanwhile: 'x' }]]) {
+    assert.deepEqual(ok(name, { ...input, unverified: ['works on Android (only checked on iPhone)'] }).unverified, ['works on Android (only checked on iPhone)'], name);
+  }
+});
+
 test('signoff: refused without evidence', () => {
   const s = { to: 'release-manager', issue: 3, testedOn: 'Chrome 140, macOS, abc123', walked: 'login', result: 'pass', evidence: ['shots/a.png', 'https://ci.example/run/1'] };
   ok('signoff', s);

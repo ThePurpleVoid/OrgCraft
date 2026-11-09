@@ -323,9 +323,12 @@ export class Session {
       }
     }
     if (name === 'request_approval' && local.input.action === 'accept' && this.proposes()) return this.acceptFlow(local.input);
+    // A sign-off carries the runner's own record of what this session ran and saw succeed (governance G1): the
+    // evidence behind its unverified list. The agent can't write it; the tool's shape has no such field.
+    const input = name === 'signoff' ? { ...local.input, checks: this.steps.checks() } : local.input;
     let r;
     try {
-      r = await this.deps.tools.call(name, local.input);
+      r = await this.deps.tools.call(name, input);
     } catch (e) {
       return { text: `The control plane could not be reached (${e.message}). Nothing was sent; try again shortly.`, isError: true };
     }

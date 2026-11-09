@@ -51,7 +51,7 @@ These are the reports teams on the kit send today. `data` holds the kit report f
 | `report.note` | `note` | `detail`, plus any of the above |
 | `message.handoff`, `message.bug`, `message.signoff`, `message.blocked` | `handoff`, `bug`, `signoff`, `blocked` | `to` (role slug, `#instance` allowed), `task`, `issue`, `pr`, `branch`, `severity` (bug, 1 to 4), `evidence` (links, at most 20), `detail` |
 
-Messages sent with the team tools ([team-tools.md](team-tools.md)) also carry their structured fields in `data`, next to the kit fields and a composed `detail`: `changed`, `verify`, `doneWhen`, `artifact` (handoff); `where`, `steps`, `expected`, `actual`, `build` (bug); `testedOn`, `walked`, `result` (signoff); `need`, `needFrom`, `meanwhile`, `recommendation` (blocked). Readers that only know the kit fields lose nothing they need.
+Messages sent with the team tools ([team-tools.md](team-tools.md)) also carry their structured fields in `data`, next to the kit fields and a composed `detail`: `changed`, `verify`, `doneWhen`, `artifact` (handoff); `where`, `steps`, `expected`, `actual`, `build` (bug); `testedOn`, `walked`, `result`, `version`, `versionKind` (`commit`, `revision`, `draft`) and the runner's `checks` (signoff); `need`, `needFrom`, `meanwhile`, `recommendation` (blocked); and `unverified` on all four and on `report.status` (governance G1: an empty list is none, absent is not stated). Readers that only know the kit fields lose nothing they need.
 
 The mapping is exact in both directions. That is how the webhook sink forwards these events to a board that already exists, such as a team's own `team-report` function, in the old shape with nothing lost.
 

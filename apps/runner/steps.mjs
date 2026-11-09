@@ -10,6 +10,8 @@ import { ulid } from './link.mjs';
 import { PATTERNS } from './secrets.mjs';
 
 export const IO_MAX = 64 * 1024;
+export const CHECKS_MAX = 20;
+const READS_KEPT = 5;
 const READS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebFetch', 'WebSearch', 'TodoRead']);
 const WRITES = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'TodoWrite']);
 const OUTSIDE = new Set(['WebFetch', 'WebSearch']);
@@ -89,6 +91,7 @@ export class Steps {
     this.secrets = secrets;
     this.session = session;
     this.history = []; // the last 20 calls: { call, tool, hash, failed }
+    this.done = []; // the last 20 calls that ran and succeeded: the checks a sign-off carries as evidence
     this.pending = new Map(); // tool_use id (or tool+hash) -> step
     this.text = [];
   }
@@ -116,10 +119,17 @@ export class Steps {
     return step;
   }
 
+  /**
+   * What this session itself ran and saw succeed, newest last: the evidence behind a sign-off's "Unverified: none"
+   * (governance G1, review 2 AI-1). Recorded by the runner from the calls it decided; an agent can't add to it.
+   */
+  checks() { return this.done.map((c) => ({ ...c })); }
+
   /** The fields every session.tool for this call carries. */
   fields(step, rule) {
     if (!step) return {};
-    return { call: step.call, effect: effectOf(step.tool, rule), ...(step.io ? { io: step.io } : {}), ...(step.retryOf ? { retryOf: step.retryOf } : {}) };
+    step.effect = effectOf(step.tool, rule);
+    return { call: step.call, effect: step.effect, ...(step.io ? { io: step.io } : {}), ...(step.retryOf ? { retryOf: step.retryOf } : {}) };
   }
 
   /** The decision: an allowed call waits for its result; a refused one is remembered as failed (for retryOf). */
@@ -144,6 +154,13 @@ export class Steps {
     this.remember(step, !ok);
     const summary = redactNamed(summarize(tool, input, response, ok), this.secrets()).text.slice(0, 300);
     const io = this.io('output', response ?? null, typeof response === 'string' ? 'text/plain' : 'application/json');
+    if (ok) {
+      this.done.push({ call: step.call, tool, ...(step.effect ? { effect: step.effect } : {}), summary, at: new Date().toISOString(), ...(io ? { io } : {}) });
+      // Reads never push out what the session ran or changed: at most READS_KEPT of the kept checks are reads.
+      const isRead = (c) => c.effect === 'read';
+      if (this.done.filter(isRead).length > READS_KEPT) this.done.splice(this.done.findIndex(isRead), 1);
+      if (this.done.length > CHECKS_MAX) this.done.shift();
+    }
     return { call: step.call, tool, ok, durationMs: Date.now() - step.started, summary, ...(io ? { io } : {}), ...(isOutside(tool) ? { outside: true } : {}) };
   }
 
