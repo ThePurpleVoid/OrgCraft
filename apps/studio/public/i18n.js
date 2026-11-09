@@ -6,9 +6,6 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
-  // Code review L22w (asked of the CPO): a rule's line never reads narrower than the rule (security sev 2).
-  'rule.part.with': 'with {fixed}',
-  'rule.part.fields': 'fields: {fields}',
 };
 
 export function t(key, vars = {}) {

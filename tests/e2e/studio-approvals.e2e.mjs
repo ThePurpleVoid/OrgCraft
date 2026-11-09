@@ -28,10 +28,10 @@ const SEND = { kind: 'send.known', tool: 'mcp__mail__send', recipientField: 'to'
 const day = (d) => new Date(Date.now() + d * 86_400_000).toISOString();
 
 test('rule lines, use and ledger lines are the CPO\'s patterns, with unset parts left out and never an id', () => {
-  assert.equal(ruleLine(REFUND), 'Refunds · up to $20.00 each · at most $60.00 per customer a week · in Payments · fields: customer, amount');
+  assert.equal(ruleLine(REFUND), 'Refunds · up to $20.00 each · at most $60.00 per customer a week · in Payments · may include: customer, amount');
   // Never narrower than the rule: fixed values and free fields are on the line too (security sev 2).
-  assert.equal(ruleLine({ ...REFUND, fixed: { reason: 'damaged' }, free: ['note'] }), 'Refunds · up to $20.00 each · at most $60.00 per customer a week · in Payments · with reason "damaged" · fields: customer, amount, note, reason');
-  assert.equal(ruleLine(SEND), 'Messages to people the team has written to before · at most 50 a day · fields: to');
+  assert.equal(ruleLine({ ...REFUND, fixed: { reason: 'damaged' }, free: ['note'] }), 'Refunds · up to $20.00 each · at most $60.00 per customer a week · in Payments · only when reason is "damaged" · may include: customer, amount, note, reason');
+  assert.equal(ruleLine(SEND), 'Messages to people the team has written to before · at most 50 a day · may include: to');
   assert.equal(usedLine({ form: REFUND, used: { n: 2, amount: 3500 } }), 'Used 2 times this week. $25.00 left.');
   assert.equal(usedLine({ form: REFUND, used: { n: 1, amount: 1000 } }), 'Used once this week. $50.00 left.');
   assert.match(usedLine({ form: REFUND, used: { n: 1, amount: 1000 }, resetsAt: '2026-11-16T00:00:00Z' }), /^Used once this week\. \$50\.00 left\. Resets .+\.$/);
@@ -101,10 +101,11 @@ test('the Approvals page: rules with Withdraw, kinds not available yet, the neve
 
   const rules = page.locator('#rules');
   const a = rules.locator('li.rule', { hasText: '#1' });
-  await a.getByText('Refunds · up to $20.00 each · at most $60.00 per customer a week · in Payments · fields: customer, amount').waitFor();
+  await a.getByText('Refunds · up to $20.00 each · at most $60.00 per customer a week · in Payments · may include: customer, amount').waitFor();
   await a.getByText('Decided by You on').waitFor();
   await a.getByText('"small refunds don\'t need me"', { exact: false }).waitFor();
   await a.getByText('Used once this week. $48.00 left.', { exact: false }).waitFor();
+  assert.match(await a.locator('button.info').getAttribute('data-tip'), /^Every detail an action under this rule may carry, named as Payments names them\. Anything not listed makes it ask you\.$/);
   for (const k of ['Replies to customers', 'Merges', 'Tasks that cost more than usual']) await rules.locator('.kinds li', { hasText: k }).getByText('Not available yet').waitFor();
   assert.equal(await rules.locator('.kinds button').count(), 0, 'nothing to pick for a kind not enforced yet');
   await rules.getByRole('heading', { name: "Can't be covered by a standing rule" }).waitFor();
@@ -127,7 +128,7 @@ test('the Approvals page: rules with Withdraw, kinds not available yet, the neve
   await rules.getByText('No standing rules yet. Until you make one, every decision comes to you.').waitFor();
   assert.equal(cp.rules[0].live, false);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'rules-title', 'focus lands on the rules heading');
-  await ledger.getByText(/ · You withdrew standing rule #1: Refunds · up to \$20\.00 each · at most \$60\.00 per customer a week · in Payments · fields: customer, amount$/).waitFor();
+  await ledger.getByText(/ · You withdrew standing rule #1: Refunds · up to \$20\.00 each · at most \$60\.00 per customer a week · in Payments · may include: customer, amount$/).waitFor();
 
   // A phone: one column, no sideways scroll, 44 px targets.
   await page.setViewportSize({ width: 360, height: 780 });

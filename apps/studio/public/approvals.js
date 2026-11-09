@@ -5,6 +5,7 @@
 // (mockup v20, waiting for the owner's sign-off), so this page has no form for it.
 import { requestJson } from './env.js';
 import { t } from './i18n.js';
+import { infoButton } from './tooltip.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmtDay = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleDateString([], { day: 'numeric', month: 'short' }); };
@@ -27,10 +28,13 @@ export function ruleLine(form = {}) {
   const period = form.period ? t(`rule.period.${form.period}`) : null;
   const base = fill(`rule.${form.kind}`, { amount: form.maxEach != null ? money(form.maxEach, form.currency) : null, total: form.total != null ? money(form.total, form.currency) : null, all: form.totalAll != null ? money(form.totalAll, form.currency) : null, system: form.system, channel: form.channel, n: form.n, period });
   // Every field a covered call may carry, so the line never reads narrower than the rule (security sev 2, code review).
-  const fixed = Object.entries(form.fixed ?? {}).map(([k, v]) => `${k} ${JSON.stringify(v)}`);
+  const fixed = Object.entries(form.fixed ?? {}).map(([field, value]) => t('rule.part.with', { field, value: String(value) }));
   const fields = [form.recipientField, form.amountField, form.currencyField, ...(form.free ?? []), ...Object.keys(form.fixed ?? {})].filter(Boolean);
-  return [base, fixed.length ? t('rule.part.with', { fixed: fixed.join(', ') }) : null, fields.length ? t('rule.part.fields', { fields: fields.join(', ') }) : null].filter(Boolean).join(' · ');
+  return [base, ...fixed, fields.length ? t('rule.part.fields', { fields: fields.join(', ') }) : null].filter(Boolean).join(' · ');
 }
+
+/** Where the field names come from, for the fields tooltip: the rule's system, else its channel, else the connector. */
+const systemOf = (f) => f.system || f.channel || (/^mcp__([^_]+(?:_[^_]+)*?)__/.exec(f.tool ?? '')?.[1] ?? '').replace(/[-_]+/g, ' ');
 
 /** A kind's name alone, for the kinds a rule cannot be made for yet: the first part of its line. */
 export const kindName = (kind) => t(`rule.kind.${kind}`);
@@ -61,7 +65,7 @@ export function rulesHtml(data, me, { owner = true } = {}) {
   const live = rules.filter((r) => r.live);
   const gone = rules.filter((r) => !r.live && r.withdrawnAt);
   const row = (r) => `<li class="rule${r.live ? '' : ' gone'}" data-rule="${esc(r.id)}">
-      <p><strong>#${esc(r.number)}</strong> ${esc(ruleLine(r.form))}</p>
+      <p><strong>#${esc(r.number)}</strong> ${esc(ruleLine(r.form))} ${infoButton(t('rule.part.fields.tip', { system: systemOf(r.form ?? {}) }), esc, t('rule.part.fields', { fields: '' }).replace(/:\s*$/, ''))}</p>
       <p class="muted">${esc(t('rule.owner', { person: person(r.createdBy, r.createdByName, me), date: fmtDay(r.createdAt), words: r.words }))}</p>
       ${r.live ? `<p class="hint">${esc(usedLine(r))} ${esc(t('rule.expires', { date: fmtDay(r.expiresAt) }))}</p>${owner ? `<button type="button" data-withdraw="${esc(r.id)}">${esc(t('rule.withdraw'))}</button>` : ''}`
     : `<p class="hint">${esc(t('rule.withdrawn', { person: person(r.withdrawnBy, r.withdrawnByName, me), date: fmtDay(r.withdrawnAt) }))}</p>`}
