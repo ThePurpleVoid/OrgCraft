@@ -284,8 +284,13 @@ export class Session {
       await this.untilStopped(this.deps.online());
       if (this.state === 'stopping' || this.state === 'ended') return;
     }
-    const remaining = this.remaining;
+    let remaining = this.remaining;
     if (remaining !== null && remaining <= 0) { this.stopReason = 'budget'; this.state = 'stopping'; return; }
+    // A spend lease for this turn (R4): what the control plane gives it is the turn's own budget.
+    const granted = await this.leaseFor(remaining);
+    if (this.state === 'stopping' || this.state === 'ended') return;
+    if (granted === 0) { this.stopReason = this.leaseRefused ?? 'budget'; this.state = 'stopping'; return; }
+    if (granted !== null) remaining = remaining === null ? granted : Math.min(remaining, granted);
     this.state = 'working';
     this.cause = message && typeof message === 'object' && typeof message.id === 'string' ? message.id : null;
     this.abort = new AbortController();
@@ -322,10 +327,34 @@ export class Session {
     await this.emit('session.idle', { role: this.role, reason: timedOut ? 'time' : out.stop ?? 'end', ...(out.error ? { detail: `the turn failed: ${out.error}` } : {}) });
   }
 
+  /**
+   * Asks the control plane for a spend lease before a turn (R4, L24s): twice the session's biggest turn so far, and at
+   * least a quarter of what it could spend when its first turn started, never more than it may still spend. Answers
+   * the amount granted, 0 when nothing is left, or null when the control plane gives no leases (it spends as before).
+   * While other sessions hold what is left, it waits for them for up to a minute before it stops for the budget.
+   */
+  async leaseFor(remaining) {
+    if (!this.deps.lease) return null;
+    this.leaseBase ??= remaining;
+    let ask = remaining === null ? undefined : Math.max(1, Math.ceil((this.biggestTurn ?? 0) * 2), Math.ceil((this.leaseBase ?? 0) / 4));
+    if (ask !== undefined && remaining !== null) ask = Math.min(ask, remaining);
+    const every = this.deps.leaseWaitMs ?? 5000;
+    for (let waited = 0; ; waited += every) {
+      const g = await this.deps.lease({ session: this.id, ...(ask === undefined ? {} : { amount: ask }) });
+      if (!g || g.nack || !Number.isFinite(g.amount)) return null;
+      if (g.amount > 0) return g.amount;
+      // The run is paused: the control plane stops this session itself; nothing is spent meanwhile.
+      if (g.reason === 'paused') { this.leaseRefused = 'paused'; return 0; }
+      if (!(g.held > 0) || waited >= 60_000 || this.state === 'stopping' || this.state === 'ended') return 0;
+      await new Promise((r) => { const t = setTimeout(r, every); t.unref?.(); });
+    }
+  }
+
   /** usage.recorded in whole minor units, the fraction carried to the next report (rounded up on the last one). */
   async record(u, { last = false, meeting } = {}) {
     const cost = Number.isFinite(u.costUsd) && u.costUsd > 0 ? u.costUsd * 100 : 0;
     this.spent += cost;
+    this.biggestTurn = Math.max(this.biggestTurn ?? 0, cost);
     const whole = last ? Math.ceil(this.spent - 1e-9) : Math.floor(this.spent + 1e-9);
     const due = whole - this.reported;
     if (!(u.inputTokens || u.outputTokens || due > 0)) { this.steps.forgetText(); return; } // nothing to report; the turn's text is not carried into the next one

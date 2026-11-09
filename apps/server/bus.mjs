@@ -84,8 +84,9 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     if (triggers) await triggers.project(ctx, event);
     if (SESSION_STATE[event.type] && event.actor?.session) {
       await q('update sessions set state = $2, last_seen = now() where id = $1 and state <> $2', [event.actor.session, SESSION_STATE[event.type]]);
-      // An ended session's spend lease ends with it, so what it held is free again (R4).
-      if (event.type === 'session.ended') { await caps.release(q, event.actor.session, ctx.now); ctx.after.push(() => startQueued(ctx.tenant, event.team)); }
+      // A session at rest holds no money: its spend lease ends when it goes idle or ends (R4); the next turn asks again.
+      if (event.type === 'session.ended' || event.type === 'session.idle') await caps.release(q, event.actor.session, ctx.now);
+      if (event.type === 'session.ended') ctx.after.push(() => startQueued(ctx.tenant, event.team));
     }
     if (!['chat.message', 'message.handoff', 'message.bug', 'message.signoff', 'message.blocked', 'decision.answered', 'approval.decided', 'meeting.turn', 'trigger.fired'].includes(event.type)) return;
     const run = await activeRun(q, event.team);
@@ -112,7 +113,7 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
       budget: b ? { sessions: Number(b.sessions) } : null,
       exhausted: Boolean(d?.exhausted_at),
       // What open spend leases hold counts as spent (R4), so a new session is not promised money already given out.
-      remainingToday: perDay === null ? null : Math.max(perDay - Number(d?.spent ?? 0) - Number((await q("select coalesce(sum(greatest(amount - used, 0)), 0) as h from spend_leases where team = (select team from runs where id = $1) and day = $2::date and ended_at is null and expires_at > now()", [run.id, localDay(now(), b?.time_zone ?? 'UTC')]))[0].h), 0),
+      remainingToday: perDay === null ? null : Math.max(perDay - Number(d?.spent ?? 0) - (await caps.held(q, run.team, localDay(now(), b?.time_zone ?? 'UTC'), { at: now() })), 0),
       remainingRun: perRun === Infinity ? null : Math.max(perRun - Math.round(Number(runSpent)), 0),
     };
   }

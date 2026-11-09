@@ -112,7 +112,8 @@ export function createCaps({ db, getTeam, now = () => new Date() }) {
     const runLeft = m.cap === null ? Infinity : m.cap - m.spent - (await held(q, sess.team, day, { run: run.id, at: ctx.now }));
     const ask = want ?? Math.max(1, Math.floor(b.perDay / 20));
     const amount = Math.min(ask, dayLeft, runLeft);
-    if (amount <= 0) return { amount: 0, reason: dayLeft <= runLeft ? 'day' : 'run', day, remainingToday: Math.max(dayLeft, 0) };
+    // `held`: what other sessions' open leases hold. When it is above zero a runner may wait for them to give it back.
+    if (amount <= 0) return { amount: 0, reason: dayLeft <= runLeft ? 'day' : 'run', day, remainingToday: Math.max(dayLeft, 0), held: await held(q, sess.team, day, { at: ctx.now, except: sess.id }) };
     const id = `lse_${ulid()}`;
     const expiresAt = new Date(ctx.now.getTime() + LEASE_SECONDS * 1000);
     await q('insert into spend_leases(id, tenant, team, run, session, day, currency, amount, expires_at) values ($1, $2, $3, $4, $5, $6::date, $7, $8, $9)',
@@ -173,5 +174,5 @@ export function createCaps({ db, getTeam, now = () => new Date() }) {
     });
   }
 
-  return { tree, lease, release, estimate };
+  return { tree, lease, release, estimate, held };
 }

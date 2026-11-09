@@ -83,6 +83,9 @@ test('spend leases (R4): two sessions can\'t both be given the last cent; usage 
     assert.deepEqual([day.leased, day.remaining], [10, 65]);
     const c = await lease(runner, qa);
     assert.equal(c.amount, 5, 'the default ask is a twentieth of the daily cap');
+    // A session at rest holds nothing: going idle ends its lease.
+    assert.equal((await runner.request('events', { events: [{ ...usage(qa, 0), type: 'session.idle', data: { reason: 'end' } }] })).op, 'ack');
+    assert.equal((await p.call('GET', '/teams/shop/caps')).body.caps[0].leased, 0);
     // Bad input and someone else's session are refused.
     assert.equal((await runner.request('spend.lease', { session: qa.session, amount: -1 })).op, 'nack');
     assert.equal((await runner.request('spend.lease', { session: 'ses_nope' })).op, 'nack');
@@ -94,7 +97,7 @@ test('spend leases: an expired lease holds nothing; a paused run and a team with
   await plane(async (p) => {
     const { runner, front, qa } = await team(p);
     assert.equal((await lease(runner, front, 100)).amount, 100);
-    assert.equal((await lease(runner, qa, 1)).amount, 0);
+    assert.deepEqual(await lease(runner, qa, 1), { amount: 0, reason: 'day', day: (await p.call('GET', '/teams/shop/caps')).body.caps[0].day, remainingToday: 0, held: 100 }, 'it says what others hold, so a runner may wait');
     clock += 6 * 60_000;
     assert.equal((await lease(runner, qa, 50)).amount, 50, 'after five minutes the front door\'s lease is gone');
     // The run pauses: nothing more is leased.

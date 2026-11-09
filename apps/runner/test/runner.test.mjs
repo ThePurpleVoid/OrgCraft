@@ -481,3 +481,51 @@ test('a meeting turn: the prompt has the agenda and the replies so far, meeting_
     await cp.close();
   }
 });
+
+test('spend leases (R4, L24s): each turn asks first, spends only what it was given, waits while others hold the rest, and stops when nothing is left', async () => {
+  const { bare, root } = origin();
+  const cp = await fakeControlPlane();
+  const budgets = [];
+  const adapter = stubAdapter({ 'qa-web': async (t) => { budgets.push(t.maxBudgetUsd); return { usage: { inputTokens: 10, outputTokens: 10, costUsd: 0.08 } }; } });
+  const grants = [{ amount: 30 }, { amount: 0, reason: 'day', held: 40 }, { amount: 12 }, { amount: 0, reason: 'day', held: 0 }];
+  cp.lease = () => ({ lease: 'lse_x', currency: 'USD', ...grants.shift() });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter, leaseWaitMs: 20 });
+  try {
+    await runner.ready;
+    const f = cp.start({ role: 'qa-web', run: 'run_l', repo: { url: bare }, caps: { remainingToday: 100 } });
+    await cp.until(() => cp.events.some((e) => e.type === 'session.idle'));
+    assert.deepEqual(cp.leaseAsks[0], { session: f.body.session, amount: 25 }, 'a quarter of what it could spend, on the first turn');
+    assert.ok(Math.abs(budgets[0] - 0.3) < 1e-9, 'the turn spends what it was given, not all that is left');
+    cp.send('session.message', { session: f.body.session, message: 'again' });
+    await cp.until(() => budgets.length === 2);
+    assert.equal(cp.leaseAsks.length, 3, 'refused while another session held the rest, then asked again');
+    assert.equal(cp.leaseAsks[1].amount, 25, 'twice its biggest turn (16) is under a quarter of the start (25)');
+    assert.ok(Math.abs(budgets[1] - 0.12) < 1e-9);
+    cp.send('session.message', { session: f.body.session, message: 'and again' });
+    await cp.until(() => cp.events.some((e) => e.type === 'session.ended'), 15_000);
+    assert.equal(cp.events.find((e) => e.type === 'session.ended').data.reason, 'budget');
+    assert.equal(budgets.length, 2, 'no turn without a lease');
+    noFailedTurns(cp);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
+
+test('spend leases: a control plane without them (no amount in the ack) leaves the session spending as before', async () => {
+  const { bare, root } = origin();
+  const cp = await fakeControlPlane();
+  let budget;
+  const adapter = stubAdapter({ 'qa-web': async (t) => { budget = t.maxBudgetUsd; return { usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.01 } }; } });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  try {
+    await runner.ready;
+    cp.start({ role: 'qa-web', run: 'run_o', repo: { url: bare }, caps: { remainingToday: 50 } });
+    await cp.until(() => cp.events.some((e) => e.type === 'session.idle'));
+    assert.ok(Math.abs(budget - 0.5) < 1e-9);
+    noFailedTurns(cp);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
