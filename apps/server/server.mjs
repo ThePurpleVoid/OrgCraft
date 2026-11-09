@@ -38,8 +38,8 @@ import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, desc
  * packages/events), usage that a subagents or agent-teams integration reports, and the Studio's fast-path
  * team.published (it collapses with the CI's report by id).
  */
-/** B8: the words for a hosted budget in another currency (CPO to review). */
-export const USD_ONLY = 'Budgets are in US dollars for now: set the currency to USD. Other currencies are coming later, and nothing is converted until then.';
+/** B8: the words for a hosted budget in another currency (CPO; the Studio's key is budget.usd.only, strings-now.md §6e). */
+export const USD_ONLY = 'Budgets are in US dollars for now. Enter the amount in USD. Other currencies are coming, and nothing is converted until then.';
 
 export const POSTABLE_EVENTS = Object.freeze({ prefixes: ['report.', 'message.'], types: ['usage.recorded', 'team.published'] });
 export const postable = (type) => POSTABLE_EVENTS.types.includes(type) || POSTABLE_EVENTS.prefixes.some((pre) => type.startsWith(pre) && type.length > pre.length);
