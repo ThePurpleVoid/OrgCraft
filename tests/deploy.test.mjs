@@ -44,12 +44,14 @@ test('the guard flags data-losing statements and nothing in the shipped migratio
   }
 });
 
-test('the site rewrites the API and discovery to one https origin, and nothing else', () => {
+test('the site rewrites the API, sign-in and discovery to one https origin, and nothing else', () => {
   const c = siteConfig('https://api.example.org');
   assert.deepEqual(c.rewrites.map((r) => [r.source, r.destination]), [
     ['/v1', 'https://api.example.org/v1'],
     ['/v1/:path*', 'https://api.example.org/v1/:path*'],
     ['/.well-known/agent-team', 'https://api.example.org/.well-known/agent-team'],
+    ['/oauth/:path*', 'https://api.example.org/oauth/:path*'],
+    ['/.well-known/openid-configuration', 'https://api.example.org/.well-known/openid-configuration'],
   ]);
   assert.equal(c.outputDirectory, 'public');
   assert.equal(c.crons, undefined);
@@ -89,7 +91,7 @@ test('the edge middleware replaces a client x-agent-team-edge with the secret, k
   const file = join(dir, 'middleware.mjs');
   writeFileSync(file, MIDDLEWARE);
   const mw = await import(pathToFileURL(file).href);
-  assert.deepEqual(mw.config.matcher, ['/v1/:path*', '/.well-known/agent-team']);
+  assert.deepEqual(mw.config.matcher, ['/v1/:path*', '/.well-known/agent-team', '/oauth/:path*', '/.well-known/openid-configuration']);
   assert.equal(mw.config.runtime, 'nodejs');
   const req = () => new Request('https://site.example/v1/health?x=1', {
     headers: { host: 'site.example', 'x-agent-team-edge': 'forged', 'x-forwarded-for': '203.0.113.9', authorization: 'Bearer t' },
@@ -119,13 +121,14 @@ test('every path the site rewrites to the control plane runs through the edge mi
   const matcher = MIDDLEWARE.match(/matcher: (\[[^\]]*\])/)[1].replace(/'/g, '"');
   const m = JSON.parse(matcher);
   const covered = (src) => m.some((x) => x === src || (x.endsWith('/:path*') && (src === x.slice(0, -7) || src.startsWith(x.slice(0, -6)))));
-  for (const { source } of siteConfig('https://api.example').rewrites) assert.ok(covered(source), `${source} is rewritten but not in the middleware matcher`);
+  // Every rewrite to the control plane (the Studio's own page rewrites stay on the site), with or without --studio.
+  for (const { source, destination } of siteConfig('https://api.example', { studio: true }).rewrites) if (destination.startsWith('https://api.example/')) assert.ok(covered(source), `${source} is rewritten but not in the middleware matcher`);
 });
 
 test('with the Studio, the site serves the Notifications page and sends every other team link to link.html', async () => {
   const { STUDIO_REWRITES } = await import('../deploy/vercel/build.mjs');
   const c = siteConfig('https://api.example.org', { studio: true });
-  assert.deepEqual(c.rewrites.slice(3), STUDIO_REWRITES, 'after the API rewrites, so /v1 is never shadowed');
+  assert.deepEqual(c.rewrites.slice(5), STUDIO_REWRITES, 'after the API and sign-in rewrites, so /v1 and /oauth are never shadowed');
   for (const r of STUDIO_REWRITES) assert.ok(existsSync(`apps/studio/public${r.destination}`), r.destination);
-  assert.equal(siteConfig('https://api.example.org').rewrites.length, 3, 'the status site has only the API rewrites');
+  assert.equal(siteConfig('https://api.example.org').rewrites.length, 5, 'the status site has only the API and sign-in rewrites');
 });
