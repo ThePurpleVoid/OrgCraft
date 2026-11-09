@@ -91,6 +91,10 @@ export function importLayer(files, kit) {
     const role = { source: own.includes(slug) ? (inKit ? 'project-replaces-kit' : 'project') : inKit ? 'kit' : 'missing', enabled: wanted.has(slug) };
     if (own.includes(slug)) role.brief = files[`roles/${slug}.md`];
     if (extended.includes(slug)) { role.extension = parseExtension(files[`roles/${slug}.extend.md`]); role.extensionText = files[`roles/${slug}.extend.md`]; }
+    // ADR 0011: an extension with "Based on" whose slug is not itself a kit or project role is a member (a teammate
+    // based on that type). Like a project role, it is on unless exclude lists it.
+    const basedOn = role.source === 'missing' && basedOnOf(role.extension);
+    if (basedOn) { role.source = 'member'; role.type = basedOn; role.enabled = !excluded.has(slug); }
     roles[slug] = role;
   }
 
@@ -114,9 +118,10 @@ export function compileLayer(spec, kit) {
   if (!preset) throw new Error(`the kit has no preset "${spec.preset}"`);
   const inPreset = new Set(preset);
   const enabledKit = (slug, r) => r.enabled && (r.source === 'kit' || r.source === 'missing');
+  const isMember = (r) => r.source === 'member';
   let include = Object.entries(spec.roles).filter(([s, r]) => enabledKit(s, r) && !inPreset.has(s)).map(([s]) => s);
   const isOwn = (r) => r.source === 'project' || r.source === 'project-replaces-kit';
-  let exclude = Object.entries(spec.roles).filter(([s, r]) => !r.enabled && (inPreset.has(s) || isOwn(r))).map(([s]) => s);
+  let exclude = Object.entries(spec.roles).filter(([s, r]) => !r.enabled && (inPreset.has(s) || isOwn(r) || isMember(r))).map(([s]) => s);
   // Keep the order the layer had, then add anything new in name order.
   const keepOrder = (list, before = []) => [...before.filter((s) => list.includes(s)), ...list.filter((s) => !before.includes(s)).sort()];
   include = keepOrder(include, spec.layout?.include);
@@ -249,12 +254,270 @@ export function fitToTeam(md, installed) {
   return joinBrief(brief);
 }
 
+// ------------------------------------------------------------------------------------------------ members (ADR 0011)
+//
+// A type is a job description (a kit role or one of the team's own). A member is a seat on the team based on a type:
+// roles/<id>.extend.md with "**Based on:** <type>". Every existing role is a member whose id equals its type, so a
+// team that has no "Based on" line reads, compiles and resolves exactly as before. Spec: plans/n8n/role-instances.md.
+
+/** The type an extension names in "**Based on:**", or ''. */
+export function basedOnOf(extension) {
+  return (extension?.fields ?? []).find((f) => f.name.toLowerCase() === 'based on')?.value.trim().split(/\s/)[0] ?? '';
+}
+
+/** A type's own brief: the team's own role of that slug, else the kit's. Undefined when neither has it. */
+function typeBrief(spec, kit, type) {
+  const t = spec.roles[type];
+  return t && t.brief !== undefined ? t.brief : kit.roles[type];
+}
+
+/** The type's title, from its brief's "# " line. */
+function typeTitle(spec, kit, type) {
+  return briefTitle(typeBrief(spec, kit, type), type);
+}
+/** A brief's "# " title without its "(…)" note, as the Studio shows it: "Chief of staff (project coordinator)" → "Chief of staff". */
+const briefTitle = (md, fallback) => (/^#\s+(.+)$/m.exec(md ?? '')?.[1] ?? fallback).replace(/\s*\(.*\)\s*$/, '').trim();
+
+/**
+ * A member's brief: the type's brief with the member's extension on top. "Based on" becomes a "Type" line, and the
+ * type's slug becomes the member's id in "Every thread, every task" only (the status command and the memory path);
+ * the rest of the brief describes the job in the type's words.
+ */
+function memberBrief(base, r, id, kit) {
+  const extension = { ...r.extension, fields: (r.extension?.fields ?? []).filter((f) => f.name.toLowerCase() !== 'based on') };
+  const md = emptyExtension(extension) ? base : applyExtension(base, extension);
+  const b = splitBrief(md);
+  const title = briefTitle(base, r.type);
+  const last = b.header.map((l, j) => (l.startsWith('**') ? j : -1)).filter((j) => j >= 0).at(-1);
+  b.header.splice(last === undefined ? 1 : last + 1, 0, `**Type:** ${title} (${r.type})`);
+  const footer = b.sections.find((x) => key(x.heading).startsWith('every thread'));
+  if (footer) {
+    const own = new RegExp(`(^|[\\s\`/(])${r.type.replace(/[-]/g, '\\-')}(?=$|[\\s\`.)])`, 'g');
+    footer.body = footer.body.map((l) => l.replaceAll('{{ROLE}}', id).replace(own, `$1${id}`));
+  }
+  return joinBrief(b);
+}
+
+/** The type a member is based on; a role that is not a member is its own type. */
+export function typeOf(spec, id) {
+  const r = spec.roles[id];
+  return r?.source === 'member' ? r.type : id;
+}
+
+/** The ids of the seats of `type` (only those switched on unless `enabledOnly` is false), sorted by id. */
+export function membersOf(spec, type, { enabledOnly = true } = {}) {
+  return Object.keys(spec.roles)
+    .filter((id) => typeOf(spec, id) === type && (!enabledOnly || spec.roles[id].enabled))
+    .sort(byId);
+}
+const byId = (a, b) => a.localeCompare(b, 'en', { numeric: true });
+
+/**
+ * A new teammate based on `type`: roles/<type>-<n>.extend.md, n the first free from 2. It names its type, reports
+ * where the type does unless `reportsTo` says otherwise, and owns nothing yet (one writer per path). The name is
+ * written only when given; otherwise displayName computes one. Returns { spec, id }.
+ */
+export function addMember(spec, kit, { type, title, reportsTo } = {}) {
+  if (spec.roles[type]?.source === 'member') throw new Error(`${type} is a teammate, not a role; base the new teammate on ${spec.roles[type].type}`);
+  const base = typeBrief(spec, kit, type);
+  if (base === undefined) throw new Error(`"${type}" is neither a kit role nor one of the team's own`);
+  let n = 2;
+  while (spec.roles[`${type}-${n}`] || (kit.roles && `${type}-${n}` in kit.roles)) n++;
+  const id = `${type}-${n}`;
+  if (id.length > 48) throw new Error(`the id ${id} would be longer than 48 characters`);
+  if (title !== undefined) checkName(spec, kit, id, title);
+  const manager = reportsTo ?? (/^\*\*Reports to:\*\*\s*(\S+)/m.exec(base)?.[1] ?? 'owner');
+  const extension = { fields: [{ name: 'Based on', value: type }, { name: 'Reports to', value: manager }], sections: [{ name: 'Owns (writes)', mode: 'replace', text: 'Nothing yet.' }] };
+  if (title !== undefined) extension.title = normName(title);
+  spec.roles[id] = { source: 'member', type, enabled: true, extension };
+  return { spec, id };
+}
+
+const normName = (name) => String(name ?? '').trim().replace(/\s+/g, ' ');
+const nameKey = (name) => normName(name).toLowerCase();
+const nameError = (message) => Object.assign(new Error(message), { status: 409 });
+
+/** The name people see for a seat: its own title, else its type's, numbered by id when several share it. */
+export function displayName(spec, kit, id) {
+  const r = spec.roles[id];
+  if (!r) return id;
+  if (r.extension?.title) return r.extension.title;
+  const type = typeOf(spec, id);
+  const title = r.source === 'member' ? typeTitle(spec, kit, type) : briefTitle(r.brief ?? kit.roles?.[id], id);
+  const untitled = Object.keys(spec.roles).filter((x) => typeOf(spec, x) === type && !spec.roles[x].extension?.title && (x === type ? spec.roles[x].source !== 'missing' : true)).sort(byId);
+  const i = untitled.indexOf(id);
+  return i <= 0 ? title : `${title} ${i + 1}`;
+}
+
+function checkName(spec, kit, id, name) {
+  const n = normName(name);
+  if (!n || n.length > 60) throw Object.assign(new Error('A name is 1 to 60 characters'), { status: 400 });
+  for (const other of Object.keys(spec.roles)) {
+    if (other === id || !spec.roles[other].enabled) continue;
+    if (nameKey(displayName(spec, kit, other)) === nameKey(n)) throw nameError(`Another teammate is already called ${displayName(spec, kit, other)}`);
+  }
+}
+
+/** Renames a seat: its extension's "# " title only. The id, files, bindings, ownership and history stay put. */
+export function setDisplayName(spec, id, name, kit = { roles: {} }) {
+  if (!spec.roles[id]) throw new Error(`no role "${id}"`);
+  checkName(spec, kit, id, name);
+  ext(spec, id).title = normName(name);
+  return spec;
+}
+
+/**
+ * The structured lines of "## Hands to": { targets: [{ to, what }], text: [lines], problems: [] }. A line
+ * "- <target>: <what>" (or "- <target>") is structured when the target is a seat id or role slug in `roster` (on or
+ * off), or "owner". Every other line is prose, kept in order.
+ */
+export function handsTo(md, roster = []) {
+  const known = new Set([...roster, 'owner']);
+  const targets = [];
+  const text = [];
+  const problems = [];
+  for (const line of bullets(briefSection(md, 'hands to'))) {
+    const m = /^[-*]\s*([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\s*(?::\s*(.*))?$/.exec(line);
+    if (!m || !known.has(m[1])) { text.push(line); continue; }
+    const what = (m[2] ?? '').trim();
+    if (what.length > 200) { problems.push({ line, message: 'what is handed over is longer than 200 characters' }); continue; }
+    targets.push(what ? { to: m[1], what } : { to: m[1] });
+  }
+  return { targets, text, problems };
+}
+
+/** Writes "## Hands to" from { targets, text }: structured lines first, then the prose as it was. */
+export function setHandsTo(md, { targets = [], text = [] } = {}) {
+  const lines = [
+    ...targets.filter((t) => t?.to && SLUG.test(t.to)).map((t) => (t.what ? `- ${t.to}: ${String(t.what).trim().slice(0, 200)}` : `- ${t.to}`)),
+    ...text.map((l) => String(l)).filter((l) => l.trim()),
+  ];
+  return setBriefSection(md, 'Hands to', lines.join('\n'), '## Hands to');
+}
+
+/** The kit version a pin names ("…#v0.22.0" → [0, 22, 0]), or null when it names none. */
+const pinVersion = (kit) => { const m = /#v?(\d+)\.(\d+)\.(\d+)/.exec(String(kit ?? '')); return m ? m.slice(1).map(Number) : null; };
+
+/** The executive a seat's lane hangs from: the role it reports up to that reports to the team's top role. */
+function laneOf(id, manager) {
+  const chain = [id];
+  for (let m = manager.get(id); m && m !== 'owner' && manager.has(m) && !chain.includes(m); m = manager.get(m)) chain.push(m);
+  return chain.length >= 2 ? chain.at(-2) : id;
+}
+
+/** ADR 0011 checks: types, chains, shadowing, the kit pin, names, Pool, Hands to, orphans and overlaps. */
+function checkMembers(spec, kit, roles, manager) {
+  const out = [];
+  const add = (level, where, message) => out.push({ level, where, message });
+  const on = new Map(roles.map((r) => [r.slug, r]));
+  const name = (id) => displayName(spec, kit, id);
+  const members = Object.entries(spec.roles).filter(([, r]) => r.source === 'member');
+  for (const [id, r] of Object.entries(spec.roles)) {
+    const based = basedOnOf(r.extension);
+    if (based && r.source !== 'member' && based !== id) add('error', `roles/${id}.extend.md`, `${id} is ${r.source === 'kit' ? 'a kit role' : 'one of the team\'s own roles'}, so it can't be based on ${based}; pick another id for the teammate`);
+  }
+  for (const [id, r] of members) {
+    const where = `roles/${id}.extend.md`;
+    if (spec.roles[r.type]?.source === 'member') add('error', where, `is based on ${r.type}, which is a teammate, not a role; base it on ${spec.roles[r.type].type}`);
+    else if (typeBrief(spec, kit, r.type) === undefined) add('error', where, `is based on "${r.type}", which is neither a kit role nor one of the team's own`);
+  }
+  const pin = pinVersion(spec.kit);
+  if (members.length && pin && (pin[0] === 0 && pin[1] < 22)) add('error', `roles/${members[0][0]}.extend.md`, `uses "Based on", which needs kit 0.22 or later; team.json pins ${spec.kit}`);
+  const seen = new Map();
+  for (const slug of on.keys()) {
+    const k = nameKey(name(slug));
+    if (seen.has(k)) add('error', `roles/${slug}`, `${seen.get(k)} and ${slug} are both called ${name(slug)}; give one of them another name`);
+    else seen.set(k, slug);
+    const pool = poolOf(on.get(slug).md);
+    if (!(Number.isInteger(pool) && pool >= 1 && pool <= 10)) add('error', `roles/${slug}`, `Pool must be a whole number from 1 to 10 (it says "${field(on.get(slug).md, 'Pool')}")`);
+  }
+  const roster = Object.keys(spec.roles);
+  const handsOf = new Map([...on].map(([slug, r]) => [slug, handsTo(r.md, roster).targets]));
+  for (const [slug, targets] of handsOf) {
+    for (const t of targets) {
+      if (t.to === 'owner' || on.has(t.to) && spec.roles[t.to]?.source === 'member') continue;
+      const several = membersOf(spec, t.to).filter((x) => on.has(x));
+      if (several.length > 1) {
+        const mine = laneOf(slug, manager);
+        if (several.filter((x) => laneOf(x, manager) === mine).length !== 1) add('warning', `roles/${slug}`, `${name(slug)} hands to ${t.to}: pick which ${typeTitle(spec, kit, t.to)}`);
+      } else if (!on.has(t.to)) add('warning', `roles/${slug}`, `${name(slug)} hands to ${t.to}, which is off`);
+    }
+  }
+  const handedTo = new Set([...handsOf.values()].flat().map((t) => t.to));
+  const met = new Set((spec.meetings?.meetings ?? []).flatMap((m) => [...(m.attendees?.roles ?? []), ...(m.facilitator ? [m.facilitator] : [])]));
+  const triggered = new Set((spec.triggers?.triggers ?? spec.triggers ?? []).map?.((t) => t.to) ?? []);
+  for (const [id, r] of members) {
+    if (!on.has(id)) continue;
+    const md = on.get(id).md;
+    const reached = handedTo.has(id) || handedTo.has(r.type) && membersOf(spec, r.type).filter((x) => on.has(x)).length === 1;
+    if (!reached && !wakesOn(md).triggers.length && !met.has(id) && !triggered.has(id)) add('warning', `roles/${id}.extend.md`, `Nobody hands work to ${name(id)}, and nothing wakes them`);
+  }
+  const bindingsOf = (id) => (spec.resources?.bindings ?? []).filter((b) => b.role === id).map((b) => `${b.resource}:${b.permission}`).sort().join(',');
+  // Owning nothing: no "Owns" text beyond "Nothing…", and no ownership.json row.
+  const ownsNothing = (id) => /^(nothing\b.*)?$/is.test(briefSection(on.get(id).md, 'owns').trim()) && !(spec.ownership?.rows ?? []).some((x) => x.writer === id);
+  const types = new Set([...on.keys()].map((id) => typeOf(spec, id)));
+  for (const type of types) {
+    const seats = membersOf(spec, type).filter((x) => on.has(x));
+    for (let i = 0; i < seats.length; i++) for (let j = i + 1; j < seats.length; j++) {
+      const [a, b] = [seats[i], seats[j]];
+      if (manager.get(a) === manager.get(b) && bindingsOf(a) === bindingsOf(b) && ownsNothing(a) && ownsNothing(b)) add('warning', `roles/${b}`, `${name(a)} and ${name(b)} do the same job in the same lane; use Pool instead`);
+    }
+  }
+  return out;
+}
+
+/**
+ * The Team page's list (GET /v1/team "members" and "catalog"), computed from the spec, never stored.
+ * members: one per seat, on or off. catalog: every role a teammate can be based on, with how many are on.
+ */
+export function listMembers(spec, kit) {
+  const { roles } = resolveSpec(spec, kit);
+  const md = new Map(roles.map((r) => [r.slug, r.md]));
+  const manager = new Map(roles.map((r) => [r.slug, (field(r.md, 'Reports to').split(/\s/)[0] ?? '').toLowerCase()]));
+  const issues = validate(spec, kit);
+  const roster = Object.keys(spec.roles);
+  const members = Object.entries(spec.roles)
+    .filter(([id, r]) => r.enabled || r.source === 'member' || r.extension?.title)
+    .filter(([id, r]) => r.source !== 'missing')
+    .sort(([a], [b]) => byId(a, b))
+    .map(([id, r]) => {
+      const brief = md.get(id) ?? (r.source === 'member' ? (typeBrief(spec, kit, r.type) !== undefined ? memberBrief(typeBrief(spec, kit, r.type), r, id, kit) : '') : applyIfAny(r.brief ?? kit.roles[id] ?? '', r.extension));
+      const type = typeOf(spec, id);
+      const h = handsTo(brief, roster);
+      return {
+        id, name: displayName(spec, kit, id), type, typeTitle: typeTitle(spec, kit, type), source: r.source, enabled: !!r.enabled,
+        reportsTo: (field(brief, 'Reports to').split(/\s/)[0] ?? '').toLowerCase(), lane: md.has(id) ? laneOf(id, manager) : '',
+        pool: poolOf(brief), owns: ownsPaths(brief).paths.filter((p) => p.mode === 'writes').map((p) => p.path),
+        handsTo: h.targets, handsToNotes: h.text, wakesOn: wakesOn(brief).triggers,
+        bindings: (spec.resources?.bindings ?? []).filter((b) => b.role === id).map((b) => ({ resource: b.resource, permission: b.permission })),
+        model: (/^[a-z]+/i.exec(field(brief, 'Model'))?.[0] ?? '').toLowerCase(),
+        problems: issues.filter((i) => i.where === `roles/${id}` || i.where === `roles/${id}.extend.md`).map((i) => ({ level: i.level, message: i.message })),
+      };
+    });
+  const typeSlugs = new Set([...Object.keys(kit.roles ?? {}), ...Object.entries(spec.roles).filter(([, r]) => r.brief !== undefined).map(([s]) => s)]);
+  const catalog = [...typeSlugs].sort().map((type) => ({
+    type, title: typeTitle(spec, kit, type), source: spec.roles[type]?.brief !== undefined ? (type in (kit.roles ?? {}) ? 'project-replaces-kit' : 'project') : 'kit',
+    count: membersOf(spec, type).length,
+  }));
+  return { members, catalog };
+}
+const applyIfAny = (md, extension) => (emptyExtension(extension) ? md : applyExtension(md, extension));
+
+/** "Pool: n" (same job, more hands): 1 when absent; NaN when the field is not a whole number. */
+export const poolOf = (md) => { const v = field(md, 'Pool'); return v === '' ? 1 : /^\d+$/.test(v) ? Number(v) : NaN; };
+
 /** The briefs the team ends up with: what sync would write to docs/team/roles/ (before placeholders are filled). */
 export function resolveSpec(spec, kit) {
   const roles = [];
   const warnings = [];
   for (const [slug, r] of Object.entries(spec.roles).sort(([a], [b]) => a.localeCompare(b))) {
     if (!r.enabled) { if (!emptyExtension(r.extension)) warnings.push(`${slug} has changes but is switched off`); continue; }
+    if (r.source === 'member') {
+      const base = typeBrief(spec, kit, r.type);
+      if (base === undefined) { warnings.push(`${slug} is based on "${r.type}", which is neither a kit role nor one of the team's own`); continue; }
+      roles.push({ slug, md: memberBrief(base, r, slug, kit), source: `member of ${r.type}`, type: r.type });
+      continue;
+    }
     let md = r.brief ?? kit.roles[slug];
     if (md === undefined) { warnings.push(`role "${slug}" is switched on but neither the kit nor the project has it`); continue; }
     let source = r.brief !== undefined ? (slug in kit.roles ? 'project (replaces kit)' : 'project') : 'kit';
@@ -460,6 +723,7 @@ export function validate(spec, kit, { dailyCapUsd = spec.options?.budgets?.daily
     for (const s of steps) if (s.pool && spec.gates.pools && !(s.pool in spec.gates.pools)) add('warning', `gates/${target}`, `"${s.name}" uses pool "${s.pool}", which gates.json does not size`);
   }
   for (const i of checkCustomRoles(spec, kit, installed)) add(i.level, i.where, i.message);
+  for (const i of checkMembers(spec, kit, roles, manager)) add(i.level, i.where, i.message);
   for (const i of checkMeetings(spec.meetings, roles, { dailyCapUsd })) add(i.level, i.where, i.message);
   for (const [slug, r] of installed) if (!isCustom(spec.roles[slug])) for (const i of checkBriefData(slug, r.md)) add(i.level, i.where, i.message);
   // No secrets anywhere in the team's text.
