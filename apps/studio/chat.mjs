@@ -47,6 +47,8 @@ export function chatSource(env = process.env) {
     team,
     where: `${server}/v1/teams/${t}`,
     Upstream,
+    /** The rollout of the team version the control plane last heard was published (team.published). */
+    rollout: () => call('GET', `/teams/${t}/rollout`),
     /** One held meeting (a link to its minutes names it): { definition, title, … }. */
     meeting: (id) => call('GET', `/teams/${t}/meetings/${encodeURIComponent(id)}`),
     /** A page of the chat, newest last. `before` is the opaque cursor the control plane gave. */
