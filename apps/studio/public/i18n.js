@@ -6,6 +6,8 @@ import { EN } from './strings.js';
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
   'nav.meetings': 'Meetings',
+  // Code review L22w: the fields tooltip when a rule names no system, channel or connector (asked of the CPO).
+  'rule.part.system.fallback': 'the connected system',
 };
 
 export function t(key, vars = {}) {
