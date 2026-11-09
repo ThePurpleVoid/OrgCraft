@@ -1,5 +1,5 @@
 {
-  "kit": "github:PurpleGiragge/Agent-Team-Kit#v0.21.0",
+  "kit": "github:ThePurpleVoid/OrgCraft#v0.21.0",
   "preset": "minimal",
   "include": [
     "cpo",
