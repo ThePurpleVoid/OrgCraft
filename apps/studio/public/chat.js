@@ -286,8 +286,13 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   function doItHtml(p) {
     if (!p.covered.length) return `<p class="muted doit-none">${esc(t('card.doit.none'))}</p>`;
     const letters = p.covered.map((c) => c.data.letter);
-    const covers = p.all === 1 ? t('card.doit.single') : p.held.length ? t('card.doit.covers', { list: andList(letters), other: andList(p.held.map((c) => c.data.letter)) }) : t('card.doit.covers', { list: andList(letters), other: '' }).split(/(?<=\.)\s+/)[0];
-    const acts = p.covered.some((c) => Array.isArray(c.data?.facts) && c.data.facts.length) ? ` ${t('card.doit.acts')}` : '';
+    // A passkey is mentioned only when one will be asked: some covered ask is bound to signed calls.
+    const bound = p.covered.some((c) => c.data?.callsHash || (Array.isArray(c.data?.facts) && c.data.facts.length));
+    const held = p.held.map((c) => c.data.letter);
+    const covers = p.all === 1 ? t(bound ? 'card.doit.single' : 'card.doit.single.nopasskey')
+      : !held.length ? t('card.doit.covers.all', { list: andList(letters) })
+      : t(held.length > 1 ? 'card.doit.covers.many' : 'card.doit.covers', { list: andList(letters), other: andList(held) });
+    const acts = bound ? ` ${t('card.doit.acts')}` : '';
     return `<div class="doit"><button type="button" class="primary big" id="doit" data-tip="${esc(t('tip.control.do.it'))}" ${st.busy ? 'disabled' : ''}>${esc(t('card.doit'))}<small class="doitcov">${esc(covers + acts)}</small></button></div>`;
   }
   async function doIt() {

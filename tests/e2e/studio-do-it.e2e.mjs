@@ -60,7 +60,7 @@ test('Do it covers the asks it can, leaves a held one open, and sends each card 
   // The control shows once, on the newest ask, and says what it covers and what needs the person first.
   assert.equal(await page.locator('#doit').count(), 1);
   assert.equal(await page.locator('[data-card-id="card_D"] #doit').count(), 1);
-  assert.equal(await page.locator('#doit .doitcov').textContent(), 'Covers A and B. C and D needs you to do something first.');
+  assert.equal(await page.locator('#doit .doitcov').textContent(), 'Covers A and B. C and D need you to do something first.');
   await page.locator('#doit').click();
   await page.locator('[data-card-id="card_A"] .answer').waitFor();
   await page.locator('[data-card-id="card_B"] .answer').waitFor();
@@ -96,6 +96,7 @@ test('an ask that changed since it was shown: nothing is approved, the page says
   ask(cp, 'B');
   await go();
   await page.locator('#doit').waitFor();
+  assert.equal(await page.locator('#doit .doitcov').textContent(), 'Covers A and B.', 'nothing left over, no passkey: neither is mentioned');
   // B changes while the page still shows version 1 (its card.updated is held back).
   cp.bump('card_B', { title: 'web-dev asks to send report B, now to everyone' }, { silent: true });
   await page.locator('#doit').click();
