@@ -11,7 +11,8 @@
 // for a session that is live in a running run, whose role the run's frozen roster binds to a resource listing the
 // name, and when the credential is granted to the team. Every release is an audit row, without the value.
 import { randomBytes } from 'node:crypto';
-import { Problem, getTeam, putSecret, readSecret } from './store.mjs';
+import { Problem, getTeam } from './store.mjs';
+import { seal, unseal } from './vault.mjs';
 
 const NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SERVICE = /^[a-z0-9][a-z0-9.-]{0,39}$/;
@@ -22,6 +23,9 @@ const EFFECTS = ['read', 'write', 'send', 'destructive', 'payment', 'deploy'];
 const TIERS = ['verified', 'community', 'custom'];
 const LIVE_SESSION = ['starting', 'running', 'idle', 'waiting'];
 const rid = () => `cred_${randomBytes(12).toString('base64url')}`;
+/** The columns a credential is read with everywhere but the vault's own unseal: never `sealed`. */
+const COLS = 'id, name, label, service, auth, teams, created_by, created_at, last_used_at, last_test, removed_at, removed_by';
+const sealName = (id) => `credential/${id}`;
 /** The step-up scope for adding or removing one credential (ADR 0013: the step-up names the change). */
 export const credentialScope = (name) => `credential:${name}`;
 
@@ -153,7 +157,7 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
 
   async function list(tenant) {
     const [rows, uses] = await db.tenant(tenant, async ({ q }) => [
-      await q('select * from credentials where removed_at is null order by name'),
+      await q(`select ${COLS} from credentials where removed_at is null order by name`),
       // Who used each one in the last 30 days: from the release audit, never from what anyone claims.
       await q(`select target as id, detail->>'team' as team, detail->>'role' as role, max(at) as at from audit
         where action = 'secret.release' and decision = 'allowed' and at > now() - interval '30 days' group by 1, 2, 3 order by 4 desc`),
@@ -179,16 +183,22 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     await m3.tx(tenant, async (ctx) => {
       const [dupe] = await ctx.q('select id from credentials where name = $1 and removed_at is null', [b.name]);
       if (dupe) throw new Problem(409, `${b.name} is already a credential; remove it first to replace it`, { type: 'already' });
-      await ctx.q('insert into credentials(id, tenant, name, label, service, auth, teams, created_by) values ($1, $2, $3, $4, $5, $6, $7, $8)',
-        [id, tenant, b.name, b.label ?? null, b.service, 'key', [...new Set(teams)], who]);
+      // The value is sealed in the same insert: a credential is never there without its value (code review sev4).
+      await ctx.q('insert into credentials(id, tenant, name, label, service, auth, teams, created_by, sealed) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+        [id, tenant, b.name, b.label ?? null, b.service, 'key', [...new Set(teams)], who, seal(key, tenant, sealName(id), b.value)]);
       await ctx.audit({ actorKind: 'person', actorId: who, action: 'credential', target: id, decision: 'allowed', detail: { op: 'add', name: b.name, service: b.service, teams } });
     });
-    await putSecret(db, key, tenant, b.name, b.value);
     return { id, name: b.name, service: b.service, teams: [...new Set(teams)] };
   }
 
+  /** The one place a value is unsealed: Test connection and release, never a route's answer. */
+  async function valueOf(tenant, id) {
+    const [row] = await db.tenant(tenant, ({ q }) => q('select sealed from credentials where id = $1 and removed_at is null', [id]));
+    return row?.sealed ? unseal(key, tenant, sealName(id), row.sealed) : null;
+  }
+
   async function one(tenant, id) {
-    const [r] = await db.tenant(tenant, ({ q }) => q('select * from credentials where id = $1 and removed_at is null', [id]));
+    const [r] = await db.tenant(tenant, ({ q }) => q(`select ${COLS} from credentials where id = $1 and removed_at is null`, [id]));
     if (!r) throw new Problem(404, 'no such credential');
     return r;
   }
@@ -201,7 +211,7 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     let result;
     if (!probe) result = { ok: null, detail: 'no test for this service yet' };
     else {
-      const value = await readSecret(db, key, tenant, r.name);
+      const value = await valueOf(tenant, id);
       if (!value) result = { ok: false, detail: 'no value stored' };
       else {
         try { result = await probe(value, (url, init) => out(url, init, { tenant, key: `test:${id}:${Math.floor(at.getTime() / 60_000)}` })); } catch (e) { result = { ok: false, detail: String(e.name === 'TimeoutError' ? 'timed out' : 'could not reach the service').slice(0, 80) }; }
@@ -219,9 +229,9 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     const r = await one(tenant, id);
     await m3.requireStepUp(tenant, who, stepUp, 'Removing a credential', credentialScope(r.name));
     await m3.tx(tenant, async (ctx) => {
-      const gone = await ctx.q('update credentials set removed_at = $2, removed_by = $3 where id = $1 and removed_at is null returning id', [id, ctx.now, who]);
+      // The sealed value goes with it; the sinks' secrets are never touched (code review sev3).
+      const gone = await ctx.q('update credentials set removed_at = $2, removed_by = $3, sealed = null where id = $1 and removed_at is null returning id', [id, ctx.now, who]);
       if (!gone.length) throw new Problem(404, 'no such credential');
-      await ctx.q('delete from secrets where name = $1', [r.name]);
       await ctx.audit({ actorKind: 'person', actorId: who, action: 'credential', target: id, decision: 'allowed', detail: { op: 'remove', name: r.name } });
     });
     return { id, removed: true };
@@ -256,7 +266,7 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
       return c;
     });
     if (!found) return null;
-    const value = await readSecret(db, key, tenant, name);
+    const value = await valueOf(tenant, found.id);
     return value ? { name, value } : null;
   }
 

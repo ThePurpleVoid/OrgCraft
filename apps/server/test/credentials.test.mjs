@@ -36,6 +36,8 @@ test('Add a credential needs an admin and a step-up scoped to its name; nothing 
   const slack = fakeSlack();
   await plane(async ({ call, su, db }) => {
     await call('POST', '/teams', { id: 'shop' });
+    // A sink's secret of the same name (the Slack notifications token) is never replaced or deleted by a credential.
+    assert.equal((await call('PUT', '/secrets/SLACK_BOT_TOKEN', { value: 'sink-token' }, await su())).status, 200);
     const body = { name: 'SLACK_BOT_TOKEN', label: 'Shop Slack', service: 'slack', value: VALUE, teams: ['shop'] };
     const none = await call('POST', '/credentials', body);
     assert.equal(none.status, 401, 'no step-up');
@@ -72,14 +74,19 @@ test('Add a credential needs an admin and a step-up scoped to its name; nothing 
     noValue(audit);
     const events = await db.system('select * from events');
     noValue(events);
-    const [sealed] = await db.system("select * from secrets where name = 'SLACK_BOT_TOKEN'");
+    const [sealed] = await db.system("select sealed from credentials where name = 'SLACK_BOT_TOKEN'");
+    assert.match(sealed.sealed, /^v1\./);
     noValue(sealed);
+    assert.equal((await db.system("select sealed from secrets where name = 'SLACK_BOT_TOKEN'")).length, 1, 'the sink secret is still its own row');
 
     const rm = await call('DELETE', `/credentials/${c.id}`);
     assert.equal(rm.status, 401, 'removing needs a step-up');
     assert.equal((await call('DELETE', `/credentials/${c.id}`, undefined, await su('credential:SLACK_BOT_TOKEN'))).status, 200);
     assert.deepEqual((await call('GET', '/credentials')).body.credentials, []);
-    assert.equal((await db.system("select count(*)::int as n from secrets where name = 'SLACK_BOT_TOKEN'"))[0].n, 0, 'the sealed value is gone');
+    assert.equal((await db.system("select sealed from credentials where name = 'SLACK_BOT_TOKEN'"))[0].sealed, null, 'the sealed value is gone');
+    const { readSecret } = await import('../store.mjs');
+    const { key } = await import('./helpers.mjs');
+    assert.equal(await readSecret(db, key, 'acme', 'SLACK_BOT_TOKEN'), 'sink-token', 'the sink\'s token is untouched');
   }, { vaultOptions: { fetch: slack.fetch } });
 });
 
