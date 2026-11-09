@@ -8,6 +8,8 @@ const MEETING = /^mtg_[A-Za-z0-9_-]{1,60}$/;
 const MAX = 4000;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const ROLE = /^[a-z0-9][a-z0-9-]*(#[A-Za-z0-9._-]+)?$/;
+/** A teammate's display name, which `to` may also be (team-json-0.22 section 5.3). */
+const NAME = /^[\p{L}\p{N}][\p{L}\p{N} .'’-]{0,59}$/u;
 const STATUSES = ['idle', 'working', 'waiting', 'blocked', 'review', 'done'];
 const FULL_SHA = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
 const VERSION_KINDS = ['commit', 'revision', 'draft'];
@@ -42,7 +44,7 @@ function fields(input, problems) {
   };
   const role = (k, { need = false } = {}) => {
     const v = text(k, { need, max: 200 });
-    if (v !== undefined && !ROLE.test(v)) problems.push(`${k} must be a role slug, such as web-dev or code-reviewer#57`);
+    if (v !== undefined && !ROLE.test(v) && !NAME.test(v)) problems.push(`${k} must be a teammate's id, name or role, such as web-dev, Maya or code-reviewer#57`);
     return v;
   };
   // Governance G1: what the sender passes on without having checked it. [] is "none"; left out is "not stated".
@@ -209,13 +211,22 @@ export function checkTool(name, input, ctx) {
     }
     default: break;
   }
-  // Messages go to another role of this team version, never to the caller.
-  for (const target of [out.to, name === 'blocked' && out.needFrom && out.needFrom !== 'owner' ? out.needFrom : null].filter(Boolean)) {
-    const base = target.split('#')[0];
-    if (base === ctx.role) problems.push('a message goes to another role, never to yourself');
+  // Messages go to another teammate of this team version, never to the caller. With `ctx.resolve` (the server, L17),
+  // `to` may be an id, a name or a role, and is resolved to one member id here (section 5.3); it never picks silently.
+  let routed = null;
+  for (const k of ['to', ...(name === 'blocked' && out.needFrom && out.needFrom !== 'owner' ? ['needFrom'] : [])]) {
+    if (!out[k]) continue;
+    if (ctx.resolve) {
+      const r = ctx.resolve(out[k], out);
+      if (r.problem) { problems.push(r.problem); continue; }
+      if (k === 'to') routed = { to: r.to, how: r.how, asked: out[k], ...(r.offWiring ? { offWiring: true } : {}) };
+      out[k] = r.to;
+    }
+    const base = out[k].split('#')[0];
+    if (base === ctx.role) problems.push('a message goes to another teammate, never to yourself');
     else if (ctx.roster?.length && !ctx.roster.includes(base)) problems.push(`${base} is not a role on this team (roles: ${ctx.roster.join(', ')})`);
   }
-  return problems.length ? { problems: [...new Set(problems)] } : { input: clean(out) };
+  return problems.length ? { problems: [...new Set(problems)] } : { input: clean(out), ...(routed ? { routed } : {}) };
 }
 
 /** The kit's composed `detail` for a message, so sinks forward something readable to a team's own board. */

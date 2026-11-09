@@ -98,17 +98,18 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   // Edit and Publish through the host's API base.
   await switchTeammate(ats, 'release-manager', false);
   await ats.locator('#publish').click();
+  await ats.locator('#files > summary').click();
   const dlg = ats.locator('#publish-dialog');
-  await dlg.getByText("Writes the team's files on a new branch and opens a pull request.").waitFor();
+  await dlg.getByText("Opens a change for review. Teammates pick it up once it's approved.").waitFor();
   await dlg.locator('#changes summary').first().waitFor();
-  const go = dlg.getByRole('button', { name: 'Open a pull request' });
+  const go = dlg.locator('#confirm');
   assert.equal(await go.isVisible(), true);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'embedded-publish-light.png') });
   await go.click();
   // The handler opened a pull request on (fake) GitHub; the page links to it, in a new tab with no opener.
-  const result = dlg.locator('#publish-result', { hasText: /Opened a pull request for \d+ files? on agent-team\// });
+  const result = dlg.locator('#publish-result', { hasText: /^Sent for review\. See the change$/ });
   await result.waitFor();
-  const link = result.getByRole('link', { name: '#1' });
+  const link = result.getByRole('link', { name: 'See the change' });
   assert.equal(await link.getAttribute('href'), 'https://github.com/acme/shop/pull/1');
   assert.equal(await link.getAttribute('target'), '_blank');
   assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
@@ -127,7 +128,7 @@ test('mounted in a host page under a strict CSP: scoped, in memory, step 1 featu
   assert.ok(sent.length && sent.every((p) => p.startsWith('/api/agent-team/studio/v1/')), sent.join(', '));
 
   // destroy(): nothing of the Studio is left, and it mounts again.
-  await dlg.getByRole('button', { name: 'Close' }).click();
+  await dlg.getByRole('button', { name: 'Keep editing' }).click();
   await page.evaluate(() => window.studio.destroy());
   assert.equal(await page.locator('#team').innerHTML(), '');
   assert.equal(await page.evaluate(() => document.getElementById('team').className), '');

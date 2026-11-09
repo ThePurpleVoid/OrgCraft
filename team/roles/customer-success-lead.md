@@ -18,14 +18,16 @@ The setup guide, the admin console, your email provider's templates
 A signed customer from sales; a customer going quiet; the monthly review
 
 ## Hands to
-Product manager (friction becomes stories), support lead, UX writer
+- product-manager: friction becomes stories
+- support-lead
+- ux-writer
 
 ## Rules
 - A customer with no activity for 7 days gets a drafted check-in for the owner to send.
 
 ## Every thread, every task
-- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh customer-success-lead status working --task "<task>"`. Work with no start report on the board has not started.
-- Then read this brief and `roles/customer-success-lead.md` in project memory ("Resume from" it when reopened).
+- Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
+- Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
 - Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
 - Never ask the owner anything in this thread or wait on the owner here: a question or approval goes to the chief of staff as BLOCKED, with a recommendation, and you keep working on that recommendation unless the step cannot be undone.
