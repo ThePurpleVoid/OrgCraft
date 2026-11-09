@@ -16,7 +16,7 @@ export const SHELL = `
     <button type="button" data-page="team" aria-pressed="true" aria-current="page" data-tip="${attr(tip('team'))}">${t('nav.team')}</button>
     <button type="button" data-page="chat" aria-pressed="false">${t('nav.chat')}</button>
     <span class="more-wrap"><button type="button" id="more-btn" class="more-btn" aria-haspopup="true" aria-expanded="false" aria-controls="more-menu">${t('nav.more')}</button>
-      <span id="more-menu" class="more-menu" hidden><button type="button" data-page="meetings" aria-pressed="false">${t('nav.meetings')}</button></span></span>
+      <span id="more-menu" class="more-menu" hidden><button type="button" data-page="meetings" aria-pressed="false">${t('nav.meetings')}</button><button type="button" data-page="rollout" aria-pressed="false">${t('rollout.title')}</button></span></span>
   </nav>
   <div class="bar-actions team-only">
     <span id="checks" class="pill" role="status"></span>
@@ -63,6 +63,7 @@ export const SHELL = `
 <section id="gallery-page" class="gallery-page gallery-only" aria-label="Start a team"></section>
 <section id="meetings-page" class="meetings-page meetings-only" aria-label="Meetings"></section>
 <section id="chat-page" class="chat-page chat-only" aria-label="Chat with the chief of staff"></section>
+<section id="rollout-page" class="rollout-page rollout-only" aria-label="Rollout of the published team" aria-live="polite"></section>
 <dialog id="publish-dialog">
   <form method="dialog" class="dialog">
     <h2>Publish the team</h2>

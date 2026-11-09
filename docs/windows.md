@@ -4,13 +4,13 @@ Everything that keeps the team in sync and on the board runs on Node alone:
 
 | Job | Command | Needs |
 | --- | --- | --- |
-| Set up, sync, check | `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.21.0 init` then `node scripts/agent-team/sync.mjs [check]` | Node 18+, git |
+| Set up, sync, check | `npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 init` then `node scripts/agent-team/sync.mjs [check]` | Node 18+, git |
 | Report to the board | `node scripts/agent-team/report.mjs web-dev status working --task "Login page"` | Node |
 | Automatic reports | the Claude Code hooks (`"hooks": true`) | Node |
 | See the board | `node scripts/agent-team/dashboard.mjs` | Node |
 | Merge gate | `node scripts/agent-team/merge-gate.mjs web` (targets in `.agent-team/gates.json`) | Node |
 | Hardware locks | `node scripts/agent-team/with-lock.mjs build -- npm run build` | Node |
-| Smoke test | `npx --yes github:PurpleGiragge/Agent-Team-Kit#v0.21.0 doctor` | Node |
+| Smoke test | `npx --yes github:ThePurpleVoid/OrgCraft#v0.21.1 doctor` | Node |
 
 `report.mjs` takes exactly the arguments of `team-status.sh` and writes the same event, so a brief's `team-status.sh` line works with `node scripts/agent-team/report.mjs` in its place. On a machine with bash but no `jq`, `team-status.sh` hands over to `report.mjs` by itself.
 

@@ -5,6 +5,7 @@ import { t, tip } from './i18n.js';
 import { drawLines, renderWiring, wireWiring } from './wiring.js';
 import { createChat } from './chat.js';
 import { createMeetings } from './meetings.js';
+import { createRollout } from './rollout.js';
 import { createGallery, rolesLine, rulesLine } from './gallery.js';
 import { exportPack, imported, isCustom, openNewAgent, switchOnRefusal } from './agents.js';
 import { createAgentEditor } from './agent-editor.js';
@@ -46,6 +47,7 @@ let sugg = null; // owned area and check suggestions from the repository
 let scale = 1;
 let live = null; // { on, source, where, board, error, es } when the live board is shown
 let chat = null; // the chief-of-staff chat, made the first time it is opened
+let rolloutView = null; // the rollout page, made the first time it is opened
 let meetings = null; // the Meetings view, made the first time it is opened
 let prices = null; // packages/model-prices/prices.json, for meeting estimates
 let editor = null; // the custom agent editor (agent-editor.js)
@@ -996,7 +998,10 @@ async function ours(work) {
 
 /** The roles on in the draft, for hand-off targets (criterion 10: never one that is off). */
 const onRoles = () => view.team.map((r) => ({ slug: r.slug, title: r.title }));
-const roleTitle = (slug) => view.bySlug.get(slug)?.title ?? slug;
+// A deep link straight to the Rollout page arrives before anything has rendered the team, so build it here if needed.
+const roleTitle = (slug) => (view ??= derive()).bySlug.get(slug)?.title ?? slug;
+/** The rollout page reads the board and the repository through the local Studio's server; an embedded Studio has neither yet. */
+const rolloutOn = () => !env.embedded && feature('live', S.features);
 const managerOfRole = (slug) => view.bySlug.get(slug)?.reportsTo ?? '';
 
 /** The impact step and the commit message it adds (criteria 8 and 9). */
@@ -1152,16 +1157,20 @@ function showPage(p) {
 async function setPage(raw) {
   if (!spec) return showGallery();
   const { page: asked, params } = parsePage(raw);
-  const p = (asked === 'meetings' || (asked === 'chat' && !S.noTeam && feature('chat', S.features))) && !previewing ? asked : 'team';
+  const p = (asked === 'meetings' || (asked === 'chat' && !S.noTeam && feature('chat', S.features)) || (asked === 'rollout' && !S.noTeam && rolloutOn())) && !previewing ? asked : 'team';
   if (meetings?.dirty && stateEl().dataset.page === 'meetings' && p !== 'meetings' && !(await ask('Discard the changes to this meeting?', { ok: 'Discard', cancel: 'Keep editing' }))) { if (env.urlState) history.replaceState(null, '', '#meetings'); return; }
   stateEl().dataset.page = p;
   for (const b of $$('#pages [data-page]')) { b.setAttribute('aria-pressed', String(b.dataset.page === p)); if (b.dataset.page === p) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
-  $('#more-btn')?.classList.toggle('current', p === 'meetings');
+  $('#more-btn')?.classList.toggle('current', p === 'meetings' || p === 'rollout');
   // ALL-3: one h1 per screen, the page's name (the gallery has its own).
   const title = $(`#pages [data-page="${p}"]`)?.textContent.trim();
   if (title && $('#page-title')) $('#page-title').textContent = title;
   closeMore();
-  if (p === 'chat') {
+  if (p !== 'rollout') rolloutView?.close();
+  if (p === 'rollout') {
+    rolloutView ??= createRollout({ root: $('#rollout-page'), titleOf: roleTitle, apiUrl });
+    rolloutView.open();
+  } else if (p === 'chat') {
     chat ??= createChat({ root: $('#chat-page'), runs: feature('runs', S.features) });
     if (params.has('card') || params.has('budget')) chat.focus({ card: params.get('card'), budget: params.has('budget') });
     chat.open();
@@ -1197,6 +1206,7 @@ const meetingsCtx = {
 /** What the host turned off, and what the server does not offer, as classes the stylesheet hides by. */
 function applyFeatures() {
   for (const f of ['publish', 'chat', 'runs', 'live']) stateEl().classList.toggle(`no-${f}`, !feature(f, S.features));
+  stateEl().classList.toggle('no-rollout', !rolloutOn());
 }
 
 /** The view a failed start shows, inside the Studio's own root (never the host's body). */
@@ -1260,12 +1270,13 @@ function destroy() {
   boardStream?.close(); boardStream = null;
   live?.es?.close(); live = null;
   chat?.close?.();
+  rolloutView?.close();
   clearTimeout(flashTimer); clearTimeout(flowTimer); flowTimer = null;
   const el = env.root;
   el.innerHTML = '';
-  el.classList.remove('ats', 'ats-embedded', 'small', 'no-team', 'previewing', 'editing', 'no-publish', 'no-chat', 'no-runs', 'no-live');
+  el.classList.remove('ats', 'ats-embedded', 'small', 'no-team', 'previewing', 'editing', 'no-publish', 'no-chat', 'no-runs', 'no-live', 'no-rollout');
   delete el.dataset.page; delete el.dataset.mode;
-  S = spec = selected = selectedSystem = view = sugg = chat = meetings = editor = gallery = previewing = made = published = board = pop = null;
+  S = spec = selected = selectedSystem = view = sugg = chat = rolloutView = meetings = editor = gallery = previewing = made = published = board = pop = null;
   query = ''; undo.length = 0; redo.length = 0; zoom = 'fit'; mode = 'org'; scale = 1; page = 'team'; initialPage = null;
   flow = { key: '', edges: [], unresolved: [] }; picks = new Map(); followUps = []; booted = false; lastEdit = { key: '', at: 0 };
 }

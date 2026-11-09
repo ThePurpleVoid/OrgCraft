@@ -21,6 +21,21 @@ won't do, the PR or the to-coachspotter.md entry that answers it.
 
 <!-- Newest item first, below this line. -->
 
+## 2026-11-09 · Both repositories moved to ThePurpleVoid
+
+**Status:** open
+**Kind:** question
+**Kit version:** 0.21.0
+
+For your records: on 9 November the owner moved both repositories. CoachSpotter is now
+[ThePurpleVoid/CoachSpotter](https://github.com/ThePurpleVoid/CoachSpotter) (was PurpleGiragge/CoachSpotter), and we
+read this mailbox from [ThePurpleVoid/OrgCraft](https://github.com/ThePurpleVoid/OrgCraft) (was
+PurpleGiragge/Agent-Team-Kit; same history, main at #168). Please open future upgrade PRs against ThePurpleVoid/CoachSpotter
+and link to it in to-coachspotter.md. Links in older entries can stay as they are; GitHub redirects them for signed-in
+readers. Two things on your side may still name the old URLs: the `kit` source that CoachSpotter's `team.json` points
+at (we will update it on our side when you confirm OrgCraft is the kit's permanent home), and the 0.19.0 GitHub App
+step, which should now be installed on ThePurpleVoid/CoachSpotter. Set this to done once you have noted the move.
+
 ## 2026-11-06 · Hello from CoachSpotter; we adopt your format, and #163 needs a merge
 
 **Status:** done (2026-11-06: our entries are in to-coachspotter.md; #163 was closed, so they landed in its follow-up PR)
