@@ -19,6 +19,8 @@ import * as store from './store.mjs';
 import { attachRunners } from './runners.mjs';
 import { createM3 } from './m3.mjs';
 import { createBus } from './bus.mjs';
+import { createInspector } from './inspector-api.mjs';
+import { createTriggers } from './triggers.mjs';
 import { createLive } from './live.mjs';
 import { createPasskeys } from './passkeys.mjs';
 import { createMembers } from './members.mjs';
@@ -120,12 +122,14 @@ export function createControlPlane(opts) {
   const m3 = opts.m3 ?? createM3({ db: opts.db, now: opts.now, publicUrl: opts.publicUrl });
   let runners = null;
   // The bus: what wakes whom, and sending it to runners (m3-design sections 2 to 4, 7).
-  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl, meetingTurnMinutes: opts.meetingTurnMinutes,
+  // Triggers (N2, L21): webhooks, schedules and events inside the team that wake a teammate.
+  const triggers = opts.triggers ?? createTriggers({ db: opts.db, key: opts.key, m3, publicUrl: opts.publicUrl, ...(opts.now ? { now: opts.now } : {}) });
+  const bus = createBus({ db: opts.db, m3, runners: () => runners, now: opts.now, publicUrl: opts.publicUrl, meetingTurnMinutes: opts.meetingTurnMinutes, triggers,
     installationsFor: opts.installationsFor ?? (opts.identity?.installations?.enabled ? (tn, url) => opts.identity.installations.forRepo(tn, url) : null) });
   wireBus(m3, bus);
   // Runners connect here over a WebSocket (runner-protocol.md).
   runners = attachRunners(server, { db: opts.db, ops: bus.ops, welcome: bus.welcome, onLost: bus.onLost, ...(opts.serverVersion ? { version: opts.serverVersion } : {}), ...(opts.runnerOptions ?? {}) });
-  const handler = createHandler({ ...opts, runners, m3, bus });
+  const handler = createHandler({ ...opts, runners, m3, bus, triggers });
   server.on('request', handler);
   // The tick runs in-process every 15 s; a deployment can also call POST /v1/internal/tick from a cron.
   const tickMs = opts.tickMs ?? 15_000;
@@ -144,10 +148,11 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, triggers: givenTriggers = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
+  const inspector = createInspector({ db, m3 });
   const passkeys = identity ? createPasskeys({ db, m3, origin: identity.origin, now }) : null;
   const members = identity ? createMembers({ db, lookup: identity.lookup, endSessions: (p) => identity.endSessions(p), requireStepUp: passkeys.requireStepUp, now }) : null;
   const emailProviders = emailOpts.providers ?? PROVIDERS;
@@ -194,8 +199,10 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     audit: (row) => m3.tx(row.tenant, (ctx) => ctx.audit({ team: row.team, actorKind: row.actorId ? 'person' : 'system', actorId: row.actorId ?? 'control-plane', action: row.action, target: row.target, decision: row.decision, rule: row.rule ?? null, detail: row.detail ?? null })),
   } : null);
   let tickMisses = [];
-  const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl, installationsFor: installations ? (tn, url) => installations.forRepo(tn, url) : null });
+  const triggers = givenTriggers ?? createTriggers({ db, key, m3, publicUrl, now });
+  const bus = givenBus ?? createBus({ db, m3, runners: () => runners, now, publicUrl, triggers, installationsFor: installations ? (tn, url) => installations.forRepo(tn, url) : null });
   if (!givenBus) wireBus(m3, bus);
+  m3.hooks.drainTriggers = (tn, tm) => triggers.drain(tn, tm);
   const overrides = createLive({ db, m3 });
   // Every write of the m3 module and the bus reaches the live streams and the sinks once it commits.
   m3.onStored((stored) => { const byTeam = new Map(); for (const x of stored) byTeam.set(x.event.team, [...(byTeam.get(x.event.team) ?? []), x]); for (const [tm, xs] of byTeam) appended(tm, xs); });
@@ -440,6 +447,13 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     }
 
     // GitHub's webhook for the deployment's App (github.mjs): signed with GITHUB_WEBHOOK_SECRET, no other credential.
+    // A trigger's webhook (N2, L21): the hook's own signature is the only credential. Nothing is written for an
+    // unknown hook, a bad signature or a flood; the answer never echoes the body.
+    if (a === 'hooks' && team && !b && m === 'POST') {
+      const raw = await readRaw(req, 256 * 1024);
+      const r = await triggers.receive(team, raw, req.headers);
+      return send(res, r.status, r.body, r.headers ?? {});
+    }
     if (a === 'github' && team === 'webhook' && !b && m === 'POST') {
       if (!identity?.installations?.enabled) throw new Problem(404, 'not found');
       return send(res, 200, await identity.installations.webhook(await readRaw(req, 1024 * 1024), req.headers));
@@ -665,6 +679,21 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (m === 'GET') return send(res, 200, { teams: await store.listTeams(db, t) });
       if (m === 'POST') return send(res, 201, await store.createTeam(db, t, (await readJson(req, 16 * 1024)) ?? {}));
     }
+    // Hooks and triggers (N2, L21).
+    if (a === 'teams' && team && b === 'hooks') {
+      const d = parts[5];
+      if (!c && m === 'GET') return send(res, 200, await triggers.listHooks(t, team));
+      if (!c && m === 'POST') return send(res, 201, await triggers.createHook(t, team, (await readJson(req, 4 * 1024)) ?? {}, me, stepUp), {}, { secrets: ['secret'] });
+      if (c && d === 'rotate' && !parts[6] && m === 'POST') return send(res, 200, await triggers.rotateHook(t, team, c, me, stepUp), {}, { secrets: ['secret'] });
+      if (c && !d && m === 'DELETE') return send(res, 200, await triggers.revokeHook(t, team, c, me, stepUp));
+      throw new Problem(404, 'not found');
+    }
+    if (a === 'teams' && team && b === 'triggers') {
+      const d = parts[5];
+      if (c === 'test' && !d && m === 'POST') return send(res, 200, triggers.test((await readJson(req, 64 * 1024)) ?? {}));
+      if (c && d === 'history' && !parts[6] && m === 'GET') return send(res, 200, await triggers.history(t, team, c, Object.fromEntries(url.searchParams)));
+      throw new Problem(404, 'not found');
+    }
     // Live overrides (L18): emergency controls as control-plane state, never Git. Stopping is one tap; lifting needs
     // a step-up scoped to the one change (a host never sends one, so a host can stop but never lift).
     if (a === 'live' && team === 'stop-everything' && !b && m === 'POST') return send(res, 200, await overrides.stopEverywhere(t, me, { reason: ((await readJson(req, 4 * 1024)) ?? {}).reason ?? null }));
@@ -702,6 +731,10 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'events' && c === 'stream' && m === 'GET') return stream(req, res, t, team, url);
       if (b === 'budget' && !c && m === 'GET') return send(res, 200, await m3.getBudget(t, team));
       if (b === 'budget' && !c && m === 'PUT') return send(res, 200, await did(m3.putBudget(t, team, await readJson(req, 16 * 1024), me, { stepUp })));
+      if (b === 'tasks' && !c && m === 'GET') { await store.getTeam(db, t, team); return send(res, 200, await inspector.list(t, team, Object.fromEntries(url.searchParams))); }
+      if (b === 'tasks' && c && !parts[5] && m === 'GET') return send(res, 200, await inspector.get(t, team, c));
+      if (b === 'io' && c && !parts[5] && m === 'GET') return send(res, 200, await inspector.read(t, team, c, me));
+      if (b === 'io' && !c && m === 'DELETE') { await store.getTeam(db, t, team); return send(res, 200, await inspector.remove(t, team, url.searchParams.get('before'), me, stepUp)); }
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
       if (b === 'runs' && !c && m === 'POST') {
         const body = (await readJson(req, MAX_BODY)) ?? {};
