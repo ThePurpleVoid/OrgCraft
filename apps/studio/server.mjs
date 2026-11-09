@@ -315,7 +315,8 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           // The team as the page read it (embed spec 4, like the hosted handler): if someone published since, from
           // another window or the command line, this would silently undo their change. The page says reload.
           const head = gitState(root).head?.sha ?? null;
-          if (typeof input.base === 'string' && input.base !== head) throw new HttpError(409, 'the team changed since this page read it; reload', { type: 'stale' });
+          // base null: the page read a team with no history yet; someone publishing first is stale too (code-reviewer nit).
+          if ((typeof input.base === 'string' || input.base === null) && input.base !== head) throw new HttpError(409, 'the team changed since this page read it; reload', { type: 'stale' });
           return send(res, 200, publish(root, input.spec, { branch: input.branch, message: input.message, pr: input.pr === true }, env));
         }
         if (url.pathname === '/v1/team/graph') return send(res, 200, graph(input.spec));

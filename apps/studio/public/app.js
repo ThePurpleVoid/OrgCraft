@@ -1031,6 +1031,8 @@ function diff(a, b) {
 async function api(path, body) {
   // The handler reads the team at the commit the page read (embed spec 4): preview, suggestions and publish send it.
   if (body && S?.git?.head?.sha && /^\/v1\/team\/(preview|suggestions|publish)$/.test(path)) body = { base: S.git.head.sha, ...body };
+  // Locally, a team with no history yet publishes against "nothing", so a first publish elsewhere is caught.
+  else if (body && S?.git && !env.embedded && path === '/v1/team/publish') body = { base: null, ...body };
   const { res, data } = await ours(async () => {
     const res = await requestJson(path, body);
     let data = {};
