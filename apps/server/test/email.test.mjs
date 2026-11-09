@@ -140,7 +140,7 @@ test('nothing is sent before verification and opt-in; the code expires in 15 min
     const verify = provider.sent.at(-1);
     assert.equal(verify.to, 'owner@shop.example');
     assert.equal(verify.apiKey, 're_test_key');
-    assert.match(verify.subject, /^Your code for Agent Team Studio: \d{6}$/);
+    assert.match(verify.subject, /^Your code for OrgCraft Studio: \d{6}$/);
     assert.match(verify.text, /It expires in 15 minutes\./);
     assert.doesNotMatch(verify.text, /https?:/, 'the verification email has no link');
     const code = /(\d{6})$/.exec(verify.subject)[1];

@@ -20,8 +20,13 @@ const RISKS = ['low', 'medium', 'high'];
 
 /** A step-up is needed: 401 with problem type step-up-required (clients.md section 3), never a silent approval. */
 export class StepUpRequired extends Problem {
-  constructor(what) { super(401, `${what} needs a fresh step-up: POST /v1/auth/step-up, then send x-step-up`, { type: 'step-up-required' }); }
+  /** `scope`, when set, is what the step-up must be bound to: POST /v1/auth/step-up with { scope } (ADR 0013). */
+  constructor(what, scope = null) {
+    super(401, `${what} needs a fresh step-up${scope ? ` for ${scope}` : ''}: POST /v1/auth/step-up${scope ? ` with { scope: "${scope}" }` : ''}, then send x-step-up`, { type: 'step-up-required', ...(scope ? { body: { scope } } : {}) });
+  }
 }
+/** A step-up scope: a short name for one change, e.g. resume:run_123. */
+export const STEP_UP_SCOPE = /^[a-z][a-z-]{0,30}:[A-Za-z0-9_-]{1,120}$/;
 
 let lastMs = 0, counter = 0;
 /** Event ids we mint sort by time (events.md): milliseconds in base 36, a counter, then randomness. */
@@ -345,7 +350,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     return (await db.tenant(tenant, ({ q }) => q(`select ${RUN_COLS} from runs where team = $1 order by started_at desc limit 100`, [team]))).map(runView);
   }
 
-  /** pause, resume or stop. Resuming a run the budget paused needs step-up (issue #28 D4); pause and stop never do. */
+  /**
+   * pause, resume or stop. Resuming needs step-up whoever paused the run (ADR 0013: stopping stays cheap, resuming does
+   * not; issue #28 D4 had it for the budget's pauses only); pause and stop never do.
+   */
   async function controlRun(tenant, rid, action, by, { stepUp = null } = {}) {
     if (!['pause', 'resume', 'stop'].includes(action)) throw new Problem(404, 'the actions are pause, resume and stop');
     return tx(tenant, async (ctx) => {
@@ -368,9 +376,9 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       if (r.state !== 'paused') throw new Problem(409, `the run is ${r.state}`);
       // Whoever paused it, nothing resumes while today's budget is spent (issue #28 U2).
       if ((await today(ctx.q, r.team, ctx.now)).state === 'exhausted') throw new Problem(409, "today's budget is spent; raise it (the budget card) or wait for tomorrow", { type: 'budget-exhausted' });
-      if (r.reason === 'budget' && !(await useStepUp(ctx, by, stepUp))) throw new StepUpRequired('Resuming a run the budget paused');
+      if (!(await useStepUp(ctx, by, stepUp, `resume:${rid}`))) throw new StepUpRequired(r.reason === 'budget' ? 'Resuming a run the budget paused' : 'Resuming a paused run', `resume:${rid}`);
       const row = await setRunState(ctx, r.team, rid, 'running', 'owner', actor);
-      await ctx.audit({ team: r.team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'resume', stepUp: r.reason === 'budget' } });
+      await ctx.audit({ team: r.team, actorKind: 'person', actorId: by, action: 'run', target: rid, decision: 'allowed', detail: { op: 'resume', stepUp: true, pausedBy: r.reason } });
       return runView(row);
     });
   }
@@ -560,11 +568,16 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
   // ---- Step-up (section 4; issue #28 D3, D5) ------------------------------------------------------------------------
 
   /** Consumes a step-up token for `by`: its id when valid (it then cannot be used again), else null. */
-  async function useStepUp(ctx, by, token) {
+  /**
+   * Spends a step-up token. A token bound to a scope is spent only on that scope; a route that passes `scope` also
+   * refuses a token without one (ADR 0013: the step-up is bound to the change). A refused token stays unspent.
+   */
+  async function useStepUp(ctx, by, token, scope = null) {
     const [tid, secret] = String(token ?? '').split('.');
     if (!tid || !secret) return null;
-    const [row] = await ctx.q("select id, hash from step_up_tokens where id = $1 and principal = $2 and used_at is null and expires_at > now() for update", [tid, by]);
+    const [row] = await ctx.q("select id, hash, scope from step_up_tokens where id = $1 and principal = $2 and used_at is null and expires_at > now() for update", [tid, by]);
     if (!row) return null;
+    if ((row.scope ?? null) !== scope) return null;
     const x = Buffer.from(row.hash, 'hex'), y = Buffer.from(sha(secret), 'hex');
     if (x.length !== y.length || !timingSafeEqual(x, y)) return null;
     await ctx.q('update step_up_tokens set used_at = now() where id = $1', [tid]);
@@ -575,9 +588,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
    * POST /v1/auth/step-up. `verifier` checks the typed secret (a slow hash). Five wrong tries in 15 minutes lock the
    * tenant out with 429, each audited. The token is single use, bound to the person, and kept only as a hash.
    */
-  async function stepUp(tenant, by, secret, { verifier, bearer }) {
+  async function stepUp(tenant, by, secret, { verifier, bearer, scope = null }) {
     if (!verifier) throw new Problem(401, 'step-up is not set up on this server (AGENT_TEAM_STEP_UP_SECRET_HASH), so nothing that needs it can be done', { type: 'step-up-required' });
     if (typeof secret !== 'string' || !secret || secret.length > 1024) throw new Problem(400, 'send { secret }');
+    if (scope !== null && (typeof scope !== 'string' || !STEP_UP_SCOPE.test(scope))) throw new Problem(400, 'scope names one change, like resume:<run id>');
     // One slow check per tenant at a time on this instance; the others wait their turn by retrying (issue #28 U1).
     if (checking.has(tenant)) throw new Problem(429, 'a step-up check is already running; try again in a moment');
     checking.add(tenant);
@@ -607,20 +621,20 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
     } finally {
       checking.delete(tenant);
     }
-    return mintStepUp(tenant, by, { method: 'secret' });
+    return mintStepUp(tenant, by, { method: 'secret' }, scope);
   }
 
   /** A single-use su_ token for `by` in `tenant`, 5 minutes, kept only as a hash; minted after a proof of presence
    *  (the local step-up secret, or a passkey assertion in passkeys.mjs). Never from a session alone (K2). */
-  async function mintStepUp(tenant, by, detail = {}) {
+  async function mintStepUp(tenant, by, detail = {}, scope = null) {
     const tid = id('su');
     const raw = randomBytes(24).toString('base64url');
     const expires = new Date(Date.now() + STEP_UP_MINUTES * 60_000);
     await db.tenant(tenant, async ({ q }) => {
-      await q('insert into step_up_tokens(id, tenant, principal, hash, expires_at) values ($1, $2, $3, $4, $5)', [tid, tenant, by, sha(raw), expires.toISOString()]);
-      await q("insert into audit(tenant, actor_kind, actor_id, action, target, decision, detail) values ($1, 'person', $2, 'step-up', $3, 'allowed', $4)", [tenant, by, tid, JSON.stringify(detail)]);
+      await q('insert into step_up_tokens(id, tenant, principal, hash, expires_at, scope) values ($1, $2, $3, $4, $5, $6)', [tid, tenant, by, sha(raw), expires.toISOString(), scope]);
+      await q("insert into audit(tenant, actor_kind, actor_id, action, target, decision, detail) values ($1, 'person', $2, 'step-up', $3, 'allowed', $4)", [tenant, by, tid, JSON.stringify({ ...detail, ...(scope ? { scope } : {}) })]);
     });
-    return { token: `${tid}.${raw}`, expires: expires.toISOString() };
+    return { token: `${tid}.${raw}`, expires: expires.toISOString(), ...(scope ? { scope } : {}) };
   }
 
   // ---- Chat (section 5) ---------------------------------------------------------------------------------------------

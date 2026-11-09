@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The same as sync.sh, for machines without bash (Windows): regenerates this repository's agent team from
-// .agent-team/ with the Agent Team Kit version pinned in .agent-team/team.json ("kit").
+// .agent-team/ with the OrgCraft version pinned in .agent-team/team.json ("kit").
 //
 //   node scripts/agent-team/sync.mjs [sync|check|roles|doctor]
 //

@@ -27,7 +27,7 @@ export function compareUrl(remote, base, branch) {
 export function pullRequestText(message, commit) {
   const [title, ...rest] = String(message ?? '').trim().split('\n');
   const body = rest.join('\n').trim();
-  return { title: title.trim() || 'Update the agent team (Agent Team Studio)', body: `${body ? `${body}\n\n` : ''}Published from Agent Team Studio${commit ? ` (commit ${commit})` : ''}.` };
+  return { title: title.trim() || 'Update the agent team (OrgCraft Studio)', body: `${body ? `${body}\n\n` : ''}Published from OrgCraft Studio${commit ? ` (commit ${commit})` : ''}.` };
 }
 
 /** What the Studio can do with a published branch on this machine: { remote, gh, base }. */

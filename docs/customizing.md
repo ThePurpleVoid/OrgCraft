@@ -271,7 +271,7 @@ What `published` sends:
 
 ## Improve the kit for everyone
 
-If a change would help every team (a better rule, a script fix, a new generic role), open a pull request on Agent Team Kit instead of keeping it in your overlay. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+If a change would help every team (a better rule, a script fix, a new generic role), open a pull request on OrgCraft instead of keeping it in your overlay. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Ownership, gates and systems as data (optional)
 

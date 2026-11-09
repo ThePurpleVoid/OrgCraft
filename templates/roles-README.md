@@ -1,6 +1,6 @@
 # Project roles
 
-This folder is this repository's layer on top of the Agent Team Kit roles. After any change here, run
+This folder is this repository's layer on top of the OrgCraft roles. After any change here, run
 `scripts/agent-team/sync.sh` and commit the regenerated `docs/team/roles/` with it.
 
 | File | Effect |

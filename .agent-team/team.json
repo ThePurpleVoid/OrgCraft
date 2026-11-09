@@ -1,5 +1,5 @@
 {
-  "kit": "github:ThePurpleVoid/OrgCraft#v0.21.0",
+  "kit": "github:ThePurpleVoid/OrgCraft#v0.21.1",
   "preset": "minimal",
   "include": [
     "cpo",
@@ -14,7 +14,7 @@
   ],
   "exclude": [],
   "values": {
-    "PROJECT_NAME": "Agent Team Kit",
+    "PROJECT_NAME": "OrgCraft",
     "OWNER": "the owner",
     "TIMEZONE": "America/Los_Angeles",
     "DIGEST_TIME": "07:00"
