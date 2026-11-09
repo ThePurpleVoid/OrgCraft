@@ -339,8 +339,9 @@ paths:
         - { name: run, in: path, required: true, schema: { type: string } }
         - { name: action, in: path, required: true, schema: { enum: [pause, resume, stop] } }
         - { $ref: "#/components/parameters/stepUp" }
-      description: Pause and stop never need step-up. Resuming does, whoever paused the run (ADR 0013; before, only after a budget pause)
-      responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required)" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
+      x-interactive-only: [resume]
+      description: "Pause and stop never need step-up. Resuming does, whoever paused the run, with a step-up bound to scope resume:<run> (ADR 0013; before, only after a budget pause). Resume is interactive only: a host's token may pause or stop, never resume (403)"
+      responses: { "200": { description: Done }, "401": { description: "Step-up required (problem type step-up-required); the body's scope names what to step up for" }, "403": { description: "Resume through a host" }, "409": { description: "Not resumable: the run is not paused, or today's budget is spent (problem type budget-exhausted)" } }
   /teams/{team}/chat:
     parameters: [ { $ref: "#/components/parameters/team" } ]
     get:
@@ -484,8 +485,8 @@ paths:
       x-min-role: viewer
       tags: [me]
       summary: "A single-use step-up token (su_, 5 minutes), bound to the person and the tenant. Only ever minted from a proof that the person is present now: on a hosted deployment a passkey assertion with user verification ({ webauthn }, after GET /auth/step-up/challenge); in local mode the typed step-up secret ({ secret }; the deployment holds only its scrypt hash, AGENT_TEAM_STEP_UP_SECRET_HASH). A hosted deployment refuses { secret } (400, problem type step-up-method). A sign-in, however recent, is never a step-up. Five failures in 15 minutes lock it (429)"
-      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { webauthn: { type: object, description: "AuthenticationResponseJSON (WebAuthn Level 3)" }, secret: { type: string, writeOnly: true, description: Local mode only } } } } } }
-      responses: { "201": { description: The step-up token, content: { application/json: { schema: { type: object, properties: { token: { type: string }, expires: { type: string, format: date-time } } } } } }, "401": { $ref: "#/components/responses/Problem" }, "429": { description: Too many wrong secrets; locked for 15 minutes } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { webauthn: { type: object, description: "AuthenticationResponseJSON (WebAuthn Level 3)" }, secret: { type: string, writeOnly: true, description: Local mode only }, scope: { type: string, maxLength: 200, pattern: "^[a-z][a-z-]{0,30}:[A-Za-z0-9_-]{1,120}$", description: "Binds the token to one change (ADR 0013), named by the step-up-required answer, e.g. resume:<run id>. A bound token is spent only on that change; a route that names a scope refuses a token without it" } } } } } }
+      responses: { "201": { description: The step-up token, content: { application/json: { schema: { type: object, properties: { token: { type: string }, expires: { type: string, format: date-time }, scope: { type: string } } } } } }, "401": { $ref: "#/components/responses/Problem" }, "429": { description: Too many wrong secrets; locked for 15 minutes } }
   /auth/step-up/challenge:
     get:
       tags: [me]

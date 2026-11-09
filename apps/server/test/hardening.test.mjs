@@ -14,8 +14,8 @@ const roster = () => ({ version: 'abc123', roles: [
 ] });
 const usage = (team, id, cost, run) => envelope('acme', team, id, 'usage.recorded', { inputTokens: 1, outputTokens: 1, cost, currency: 'USD' }, run ? { run } : {});
 const withStepUp = (fn, extra = {}) => plane(fn, { stepUpVerifier: verifier, ...extra });
-async function stepUp(call) {
-  const r = await call('POST', '/auth/step-up', { secret: SECRET });
+async function stepUp(call, scope) {
+  const r = await call('POST', '/auth/step-up', { secret: SECRET, ...(scope ? { scope } : {}) });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   return { ...auth, 'x-step-up': r.body.token };
 }
@@ -28,26 +28,42 @@ async function running(call, budget = { perDay: 1000 }, caps) {
 }
 const runOf = async (call) => (await call('GET', '/teams/shop/runs')).body.runs[0];
 
-test('ADR 0013: resuming a run a person paused needs step-up; pausing and stopping never do', async () => {
+test('ADR 0013: resuming a run a person paused needs step-up bound to that run; pausing and stopping never do', async () => {
   await withStepUp(async ({ call, db }) => {
     const run = await running(call, { perDay: 1000 });
     assert.equal((await call('POST', `/runs/${run.id}/pause`)).status, 200, 'pause is one tap');
     const bare = await call('POST', `/runs/${run.id}/resume`);
-    assert.deepEqual([bare.status, bare.body.type], [401, 'step-up-required']);
-    assert.match(bare.body.detail ?? bare.body.title ?? '', /Resuming a paused run/);
+    assert.deepEqual([bare.status, bare.body.type, bare.body.scope], [401, 'step-up-required', `resume:${run.id}`], 'the answer names the scope to step up for');
+    assert.match(bare.body.error, /Resuming a paused run/);
+    // A step-up not bound to this resume is refused, and stays unspent.
+    const loose = await stepUp(call);
+    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, loose)).status, 401, 'an unscoped step-up cannot resume');
+    const other = await stepUp(call, 'resume:run_someone_else');
+    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, other)).status, 401, 'a step-up for another run cannot resume this one');
+    assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 2000 }, loose)).status, 200, 'the refused unscoped token was not spent');
+    assert.equal((await call('POST', '/auth/step-up', { secret: SECRET, scope: 'Resume everything!' })).status, 400, 'a scope names one change');
     assert.equal((await runOf(call)).state, 'paused', 'refused, so still paused');
-    const ok = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call));
-    assert.equal(ok.status, 200);
+    const token = await stepUp(call, `resume:${run.id}`);
+    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, token)).status, 200);
     assert.equal((await runOf(call)).state, 'running');
     const [a] = await db.system("select detail from audit where action = 'run' and detail->>'op' = 'resume'");
-    assert.equal(a.detail.stepUp, true);
-    // A used step-up token does not resume a second time.
-    assert.equal((await call('POST', `/runs/${run.id}/pause`)).status, 200);
-    const token = await stepUp(call);
-    assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, token)).status, 200);
+    assert.deepEqual([a.detail.stepUp, a.detail.pausedBy], [true, 'owner']);
+    // Single use: the same token does not resume a second time.
     assert.equal((await call('POST', `/runs/${run.id}/pause`)).status, 200);
     assert.equal((await call('POST', `/runs/${run.id}/resume`, undefined, token)).status, 401, 'single use');
     assert.equal((await call('POST', `/runs/${run.id}/stop`)).status, 200, 'stop is one tap');
+  });
+});
+
+test('ADR 0013: a person\'s pause is never lifted by the day rolling over', async () => {
+  await withStepUp(async ({ call, db, server }) => {
+    const run = await running(call, { perDay: 1000 });
+    assert.equal((await call('POST', `/runs/${run.id}/pause`)).status, 200);
+    // Even with a resume date in the past (as a budget pause answered "tomorrow" would have), the tick leaves it.
+    await db.system("update runs set resume_on = (now() - interval '2 days')::date where id = $1", [run.id]);
+    await server.bus.tick();
+    const r = await runOf(call);
+    assert.deepEqual([r.state, r.reason], ['paused', 'owner']);
   });
 });
 
@@ -57,7 +73,7 @@ test('U2: an owner-paused run cannot resume past a spent day, and usage on a spe
     assert.equal((await call('POST', `/runs/${run.id}/pause`)).status, 200);
     await call('POST', '/teams/shop/events', { events: [usage('shop', 'u1', 100, run.id)] });
     assert.equal((await call('GET', '/teams/shop/budget')).body.today.state, 'exhausted');
-    const r = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call));
+    const r = await call('POST', `/runs/${run.id}/resume`, undefined, await stepUp(call, `resume:${run.id}`));
     assert.equal(r.status, 409, 'the owner paused it, but today is spent: no resume, with or without step-up');
     assert.equal((await runOf(call)).state, 'paused');
     // However a run came to be running on a spent day, the next usage pauses it.

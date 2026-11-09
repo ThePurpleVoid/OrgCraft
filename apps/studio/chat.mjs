@@ -71,12 +71,13 @@ export function chatSource(env = process.env) {
       return { summary: line, run: run && { id: run.id, state: run.state ?? run.status ?? line?.run ?? null } };
     },
     /** Proves a recent sign-in. Until OIDC (M4) the proof is the step-up secret the person types; it is passed on, not kept. */
-    async stepUp(secret) {
-      const r = await call('POST', '/auth/step-up', { secret });
+    async stepUp(secret, scope) {
+      // A scope binds the step-up to one change (ADR 0013): the control plane names it when it asks, e.g. resume:<run>.
+      const r = await call('POST', '/auth/step-up', { secret, ...(typeof scope === 'string' && scope ? { scope } : {}) });
       stepUp = { token: r.token, expires: r.expires ?? new Date(Date.now() + 5 * 60_000).toISOString() };
       return { ok: true, expires: stepUp.expires };
     },
-    /** Pause and stop never need step-up. Resuming a run the budget paused does, so a resume spends one if there is one. */
+    /** Pause and stop never need step-up. Resuming does (ADR 0013), so a resume spends one if there is one. */
     async control(action, key, runId) {
       if (!['pause', 'resume', 'stop'].includes(action)) throw new Upstream(400, { error: 'pause, resume or stop' });
       const run = typeof runId === 'string' && runId ? { id: runId } : await currentRun();
