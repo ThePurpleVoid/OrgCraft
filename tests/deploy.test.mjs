@@ -37,7 +37,7 @@ test('the guard flags data-losing statements and nothing in the shipped migratio
   ].join('\n'));
   assert.deepEqual(flagged.map((x) => x.trim().split(/\s+/).slice(0, 3).join(' ')), [
     'alter table events', 'drop table sinks;', 'truncate events;', 'delete from secrets', 'alter table teams', 'alter table events',
-    'drop materialized view', 'drop schema s', 'drop type mood;', 'drop sequence s;',
+    'drop policy p', 'drop materialized view', 'drop schema s', 'drop type mood;', 'drop sequence s;',
   ]);
   for (const f of readdirSync('apps/server/migrations').filter((n) => n.endsWith('.sql'))) {
     assert.deepEqual(destructiveStatements(readFileSync(`apps/server/migrations/${f}`, 'utf8')), [], f);
