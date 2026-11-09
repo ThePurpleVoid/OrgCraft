@@ -206,3 +206,16 @@ test('systemsCapability: permissions, effects, egress and tier in the server\'s 
   // A seat may not make these on its own system.
   assert.equal((await import('../packages/team-model/index.mjs')).selfCapability([one({ egress: ['x.example'] })], 'support').length, 1);
 });
+
+test('systemsCapability: an unknown field changing widens, a name or key order does not (canonical compare)', async () => {
+  const { systemsCapability } = await import('../packages/team-model/index.mjs');
+  const r = { id: 'pay', type: 'stripe', config: { a: 1, b: 2 }, tools: { command: 'npx', args: ['s'] }, secrets: [] };
+  const before = { resources: [r], bindings: [{ role: 'ops', resource: 'pay', permission: 'read' }] };
+  const after = (x) => systemsCapability(before, { ...before, resources: [x] });
+  assert.deepEqual(after({ ...r, name: 'Payments', config: { b: 2, a: 1 }, tools: { args: ['s'], command: 'npx' } }), []);
+  assert.deepEqual(after({ ...r, config: undefined }).map((x) => x.kind), ['resource-widened'], 'any settings change is listed, even a removal (settings are not ranked)');
+  const odd = after({ ...r, sandbox: 'off' });
+  assert.deepEqual([odd[0].kind, odd[0].subject], ['resource-widened', 'ops']);
+  assert.match(odd[0].detail, /changes its settings/);
+  assert.equal(after({ ...r, tools: { command: 'npx', args: ['s', '--all'] } })[0].command, true);
+});
