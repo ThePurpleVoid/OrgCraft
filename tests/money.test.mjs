@@ -13,3 +13,10 @@ test('USD has 2 decimals, JPY none, KWD and BHD three; unknown codes are not kno
 test('the Studio page reads amounts the same way', () => {
   for (const [m, c] of [[2500, 'JPY'], [2500, 'KWD'], [2050, 'USD'], [2000, 'USD']]) assert.equal(pageMoney(m, c).replace(/\s/g, ' '), formatMinor(m, c, []).replace(/\s/g, ' '), `${m} ${c}`);
 });
+
+test('one copy: the page serves the same module the server imports, and reads a rule by its pinned exponent', async () => {
+  const page = await import('../apps/studio/public/money.mjs');
+  assert.equal(page.formatMinor, formatMinor);
+  assert.equal(pageMoney(2000, 'USD', 0), '$2,000');
+  assert.equal(pageMoney(2000, 'USD'), '$20');
+});

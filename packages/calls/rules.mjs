@@ -6,7 +6,7 @@
 /** A rule the form cannot be: `status` is the HTTP status the server answers with, `type` its problem type. */
 import { formatMinor, knownCurrency, minorDigits } from './money.mjs';
 
-export { formatMinor, minorDigits };
+export { formatMinor, knownCurrency, minorDigits };
 
 export class RuleError extends Error {
   constructor(status, message, { type = null } = {}) { super(message); this.name = 'RuleError'; this.status = status; this.type = type; }
@@ -25,7 +25,7 @@ export const FIELD = /^[A-Za-z0-9_]{1,64}$/;
  * Fields a rule may never leave free, at creation as well as in a draft (security L22m sev 2): who or where else the
  * call goes or pays from. Free, any value would do, so a rule for one known recipient could bcc or pay out anywhere.
  */
-export const NEVER_FREE = /^(cc|bcc|reply_?to|to_.*|to(address|email|number|phone)|destination.*|account.*|iban|wallet.*|address.*|payment_?method.*|source.*|customer.*|email.*|phone.*|url|.*_url|webhook.*|recipients?.*|payee.*)$/i;
+export const NEVER_FREE = /^(cc|bcc|cc_.*|bcc_.*|reply_?to|from|sender.*|forward.*|redirect.*|callback.*|beneficiary.*|bank.*|routing.*|payout.*|transfer.*|to_.*|to(address|email|number|phone)|destination.*|account.*|iban|wallet.*|address.*|payment_?method.*|source.*|customer.*|email.*|phone.*|url|.*_url|webhook.*|recipients?.*|payee.*)$/i;
 /** Content fields a draft leaves free (security L22m): what is said, not who it goes to; refunds also the charge. */
 export const CONTENT = /^(subject|body|text|message|html|memo|description|notes?|reason|reference|title|idempotency_?key|idempotencyKey)$/i;
 export const CONTENT_REFUND = /^(charge|charge_?id|chargeId|payment_?intent|paymentIntent|payment_intent_id)$/i;
@@ -54,13 +54,18 @@ export function ruleForm(body = {}) {
   // The call must say its currency, and it is always compared with the rule's (code review sev 3): a money rule with
   // no currency field would take any currency as the rule's.
   if (typeof body.currencyField !== 'string' || !FIELD.test(body.currencyField)) throw new RuleError(400, 'currencyField is the input field with the currency, compared with the rule\'s on every call');
+  // The exponent is pinned in the rule (CTO, security L22mu): its line and every check read amounts by the exponent the
+  // owner confirmed. Only the ISO one is taken; a provider's own unit (2 decimals for ISK or HUF on some payment APIs)
+  // is refused, never converted.
+  const exponent = minorDigits(body.currency);
+  if (body.exponent !== undefined && body.exponent !== null && body.exponent !== exponent) throw new RuleError(400, `exponent for ${body.currency} is ${exponent} (ISO 4217): amounts in another unit are refused, never converted`, { type: 'rule-exponent' });
   const maxEach = int(body.maxEach, 'maxEach');
   const total = int(body.total, 'total');
   if (total < maxEach) throw new RuleError(400, 'total per period is at least maxEach');
   // Refunds may also have a total across all customers (CPO ruling; off by default).
   const all = kind === 'refund' && body.all !== undefined && body.all !== null ? int(body.all, 'all') : null;
   if (all !== null && all < maxEach) throw new RuleError(400, 'all (the total across all customers per period) is at least maxEach');
-  return { ...form, amountField: body.amountField, currency: body.currency, currencyField: body.currencyField, maxEach, total, ...(all !== null ? { all } : {}), system: label(body.system, 'system') };
+  return { ...form, amountField: body.amountField, currency: body.currency, exponent, currencyField: body.currencyField, maxEach, total, ...(all !== null ? { all } : {}), system: label(body.system, 'system') };
 }
 
 /**
@@ -96,7 +101,7 @@ export function fieldName(field) {
 /** The one line a rule reads as (CPO §6b patterns), for the ledger and the list. Parts that are not set are left out. */
 export function ruleLine(form) {
   // "$20", or "$20.50" when there are cents (strings-now rule.* examples).
-  const money = (minor) => formatMinor(minor, form.currency ?? 'USD');
+  const money = (minor) => formatMinor(minor, form.currency ?? 'USD', 'en-US', form.exponent ?? minorDigits(form.currency ?? 'USD'));
   const parts = {
     refund: ['Refunds', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} per customer a ${form.period}`, form.all && `at most ${money(form.all)} a ${form.period} in all`, form.system && `in ${form.system}`],
     'pay.known': ['Payments to people you\'ve paid before', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} a ${form.period}`, form.system && `in ${form.system}`],

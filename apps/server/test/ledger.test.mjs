@@ -44,6 +44,11 @@ test('rule forms: the fixed list, a limit per period, never deleting or going li
   // An unknown code is refused: there is no exponent to read its amounts by.
   assert.throws(() => ruleForm({ ...RULE, currency: 'XYZ' }), /known three-letter ISO 4217 code/);
   assert.throws(() => ruleForm({ ...RULE, currency: 'usd' }), /ISO 4217/);
+  // The exponent is pinned in the form (so in its hash, its line and every check): only the ISO one is taken; a
+  // provider's own unit (2 decimals for ISK on some payment APIs) is refused, never converted (security L22mu).
+  assert.deepEqual([ruleForm(RULE).exponent, ruleForm({ ...RULE, currency: 'JPY' }).exponent, ruleForm({ ...RULE, currency: 'KWD', exponent: 3 }).exponent], [2, 0, 3]);
+  assert.throws(() => ruleForm({ ...RULE, currency: 'ISK', exponent: 2 }), (e) => e.type === 'rule-exponent' && /ISK is 0/.test(e.message));
+  assert.match(ruleLine({ ...ruleForm(RULE), exponent: 0 }), /up to \$2,000 each/, 'the line reads by the pinned exponent');
   assert.throws(() => ruleForm({ ...RULE, tool: 'mcp__shop__delete_order' }), /never cover deleting/);
   assert.throws(() => ruleForm({ ...RULE, tool: 'mcp__site__deploy' }), /going live/);
   assert.throws(() => ruleForm({ ...RULE, kind: 'merge' }), /not enforced yet/);
@@ -75,6 +80,11 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
     assert.equal((await ask(p, s, [refund('cus_dana', 1500)])).card.state, 'answered', '12 + 15 = 27 of 30');
     assert.equal((await ask(p, s, [refund('cus_dana', 400)])).card.state, 'open', '27 + 4 is over 30 for Dana this week');
     assert.equal((await ask(p, s, [refund('cus_eli', 400)])).card.state, 'answered', 'per customer');
+    // The exponent is pinned in the rule (CTO, security L22mu): one the server no longer reads the currency by is never
+    // converted, the rule just stops covering calls and a person is asked.
+    await p.db.tenant('acme', ({ q }) => q("update standing_rules set spec = jsonb_set(spec, '{exponent}', '3') where id = $1", [made.body.id]));
+    assert.equal((await ask(p, s, [refund('cus_fay', 100)])).card.state, 'open', 'a rule pinned to another exponent covers nothing');
+    await p.db.tenant('acme', ({ q }) => q("update standing_rules set spec = jsonb_set(spec, '{exponent}', '2') where id = $1", [made.body.id]));
 
     const rules = (await p.call('GET', '/teams/shop/standing-rules')).body;
     assert.deepEqual(rules.rules.map((r) => [r.number, r.line, r.words, r.used.n, r.used.amount]), [[1, 'Refunds · up to $20 each · at most $30 per customer a week · in Payments · may include: customer, amount, currency', 'small refunds don\'t need me', 3, 3100]]);
@@ -337,7 +347,7 @@ test('a draft fixes the other target fields to the approved values and leaves on
   const charge = draftForm('refund', [{ tool: 'mcp__payments__refund', input: { customer: 'cus_a', amount: 500, currency: 'USD', charge: 'ch_1' } }], no);
   assert.deepEqual([charge.fixed, charge.free], [{}, ['charge']]);
   // And at creation, not just in a draft: a free bcc, destination or source is refused whatever the client sends.
-  for (const k of ['bcc', 'cc', 'reply_to', 'destination', 'source', 'account_id', 'iban', 'webhook_url', 'payment_method'])
+  for (const k of ['bcc', 'cc', 'reply_to', 'destination', 'source', 'account_id', 'iban', 'webhook_url', 'payment_method', 'from', 'sender_email', 'forward_to', 'redirect_url', 'callback', 'beneficiary_id', 'bank_account', 'routing_number', 'payout_account', 'transfer_group', 'cc_list', 'bcc_emails'])
     assert.throws(() => ruleForm({ ...RULE, free: [k] }), (e) => e.type === 'rule-never-free', k);
   assert.doesNotThrow(() => ruleForm({ ...RULE, free: ['note', 'total_items'] }));
 });

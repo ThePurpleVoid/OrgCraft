@@ -16,7 +16,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { canonical } from '../../packages/calls/index.mjs';
 import { Problem, getTeam } from './store.mjs';
 import { redact as redactText } from './signed.mjs';
-import { CONTENT, CONTENT_REFUND, KINDS, NEVER, NEVER_FREE, NEVER_TOOL, PERIODS, RuleError, int as intCore, formatMinor, minorDigits, ruleForm as ruleFormCore, ruleLine } from '../../packages/calls/rules.mjs';
+import { CONTENT, CONTENT_REFUND, KINDS, NEVER, NEVER_FREE, NEVER_TOOL, PERIODS, RuleError, int as intCore, formatMinor, knownCurrency, minorDigits, ruleForm as ruleFormCore, ruleLine } from '../../packages/calls/rules.mjs';
 
 export { KINDS, NEVER, PERIODS, ruleLine };
 
@@ -59,7 +59,7 @@ export const ruleScope = (form, days = 30) => `rule:${sha(`rule/2\n${canonical({
  * currency; fixed and free fields only from the call's own other fields. Limits, period, days and labels are the owner's.
  */
 export function fromDraft(form, d) {
-  for (const k of ['kind', 'tool', 'recipientField', 'amountField', 'currencyField', 'currency']) if ((form[k] ?? null) !== (d[k] ?? null)) return false;
+  for (const k of ['kind', 'tool', 'recipientField', 'amountField', 'currencyField', 'currency', 'exponent']) if ((form[k] ?? null) !== (d[k] ?? null)) return false;
   // A field the draft fixed stays fixed to the approved value, or is left out (narrower); never moved to free (code
   // review L22m sev 3). A free field may be left free, fixed to a value, or left out.
   const draftFixed = d.fixed ?? {};
@@ -75,7 +75,7 @@ export function fromDraft(form, d) {
  */
 export function effectWords(form, input) {
   const to = String(input?.[form.recipientField] ?? '').slice(0, 120);
-  const amount = form.amountField ? formatMinor(input[form.amountField], form.currency) : null;
+  const amount = form.amountField ? formatMinor(input[form.amountField], form.currency, 'en-US', form.exponent ?? undefined) : null;
   const what = { refund: `Refunds ${amount} to ${to}`, 'pay.known': `Pays ${amount} to ${to}`, 'send.known': `Sends a message to ${to}` }[form.kind];
   const where = form.system ?? form.channel;
   return redactText([what, where && `in ${where}`].filter(Boolean).join(' · '));
@@ -111,9 +111,12 @@ export function draftForm(action, calls, no) {
     const amountField = AMOUNT.find((k) => Number.isSafeInteger(input[k]) && input[k] > 0);
     const currencyField = ['currency', 'currency_code', 'currencyCode'].find((k) => typeof input[k] === 'string' && /^[A-Za-z]{3}$/.test(input[k]));
     if (!amountField || !currencyField) no('no-amount', 'the call does not say its amount and currency in fields a rule can use');
-    const unit = 10 ** minorDigits(input[currencyField].toUpperCase());
+    const currency = input[currencyField].toUpperCase();
+    if (!knownCurrency(currency)) no('no-amount', 'the call\'s currency is not a known ISO 4217 code');
+    const exponent = minorDigits(currency);
+    const unit = 10 ** exponent;
     const maxEach = Math.ceil(input[amountField] / unit) * unit;
-    form = { ...form, amountField, currencyField, currency: input[currencyField].toUpperCase(), maxEach, total: maxEach * 3, system };
+    form = { ...form, amountField, currencyField, currency, exponent, maxEach, total: maxEach * 3, system };
     used.add(amountField); used.add(currencyField);
   }
   // Fields that name who or where else it goes (cc, bcc, destination, source, account ...) keep the approved value as
@@ -197,6 +200,9 @@ export async function coveredBy(ctx, team, { action, bound, session }) {
         amount = c.input?.[f.amountField];
         const cur = f.currencyField ? String(c.input?.[f.currencyField] ?? '').toUpperCase() : f.currency;
         if (!Number.isSafeInteger(amount) || amount < 0 || amount > f.maxEach || cur !== f.currency) { ok = false; break; }
+        // A rule read by another exponent than its currency has here never covers a call (CTO): refused, not converted.
+        // Rules made before the exponent was pinned read by the ISO one.
+        if (f.exponent !== undefined && f.exponent !== minorDigits(f.currency)) { ok = false; break; }
       }
       if (f.kind !== 'refund' && !(await known(ctx.q, team, rule.id, f.tool, f.recipientField, recipient))) { ok = false; break; }
       uses.push({ amount, recipient });
