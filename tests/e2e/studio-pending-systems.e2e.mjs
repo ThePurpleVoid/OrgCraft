@@ -214,7 +214,7 @@ test('on a phone: Escape on the passkey goes back to Switch on now, which is 44p
   assert.equal((await post(page, '/v1/team/systems/pending/apply', { sha: s.pending.sha, contentHash: s.pending.contentHash })).status, 200);
   const applied = cp.applied.length;
   await on.click();
-  await line.getByText('These system changes are already switched on.').waitFor();
+  await line.getByText('These system changes are already switched on. Nothing else to do.').waitFor();
   assert.equal(cp.applied.length, applied, 'nothing applied twice');
   assert.deepEqual(errors, []);
   await page.close();

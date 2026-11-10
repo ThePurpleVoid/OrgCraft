@@ -454,6 +454,7 @@ export const EN = {
   "stop.resumed.you.member": "You resumed {teammate} at {time}.",
   "switcher.org": "{organization}",
   "switcher.teams": "Teams in {organization}",
+  "systems.already": "These system changes are already switched on. Nothing else to do.",
   "systems.dropped.closed": "The system changes were dropped because the change was closed without being approved.",
   "systems.dropped.expired": "The system changes were dropped because they weren't switched on within {days} days. Publish again to send them.",
   "systems.dropped.merged-different": "The system changes were dropped because the change that was accepted has different system changes from the ones you confirmed. Check them and publish again.",
