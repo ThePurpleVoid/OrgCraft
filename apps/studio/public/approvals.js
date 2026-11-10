@@ -6,6 +6,7 @@
 import { requestJson } from './env.js';
 import { t } from './i18n.js';
 import { infoButton } from './tooltip.js';
+import { formatMinor } from './money.mjs';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmtDay = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleDateString([], { day: 'numeric', month: 'short' }); };
@@ -18,15 +19,11 @@ export function fill(key, vars) {
     .map((p) => p.replace(/\{([^}]+)\}/g, (_, k) => vars[k])).join(' · ');
 }
 
-/** Minor units in the rule's currency: 2000 USD is "$20.00". */
-export const money = (minor, currency = 'USD') => {
-  // "$20", or "$20.50" when there are cents (CPO §6b; the server says the same).
-  // By the currency's own exponent (code review L22m): USD 2 decimals, JPY none, KWD three.
-  try {
-    const d = new Intl.NumberFormat([], { style: 'currency', currency }).resolvedOptions().maximumFractionDigits;
-    const whole = minor % 10 ** d === 0;
-    return new Intl.NumberFormat([], { style: 'currency', currency, ...(whole ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : { minimumFractionDigits: d, maximumFractionDigits: d }) }).format(minor / 10 ** d);
-  } catch { return `${minor} ${currency}`; }
+/** Minor units in the rule's currency: 2000 USD is "$20", 2050 is "$20.50" (CPO §6b; the server says the same). */
+// One copy for page and server (packages/calls/money.mjs, code review L22m): by the rule's pinned exponent when it has
+// one (security L22mu), otherwise the currency's own ISO 4217 one.
+export const money = (minor, currency = 'USD', exponent) => {
+  try { return formatMinor(minor, currency, [], exponent ?? undefined); } catch { return `${minor} ${currency}`; }
 };
 
 /** Every input field a covered call may carry: the recipient, amount and currency fields, the free ones, the fixed ones. */
@@ -47,7 +44,7 @@ export function ruleLine(form = {}, { marked = false } = {}) {
 }
 function ruleLineMarked(form) {
   const period = form.period ? t(`rule.period.${form.period}`) : null;
-  const base = fill(`rule.${form.kind}`, { amount: form.maxEach != null ? money(form.maxEach, form.currency) : null, total: form.total != null ? money(form.total, form.currency) : null, all: form.all != null ? money(form.all, form.currency) : null, system: form.system, channel: form.channel, n: form.n, period });
+  const base = fill(`rule.${form.kind}`, { amount: form.maxEach != null ? money(form.maxEach, form.currency, form.exponent) : null, total: form.total != null ? money(form.total, form.currency, form.exponent) : null, all: form.all != null ? money(form.all, form.currency, form.exponent) : null, system: form.system, channel: form.channel, n: form.n, period });
   // Every field a covered call may carry, so the line never reads narrower than the rule (security sev 2, code review).
   const fixed = Object.entries(form.fixed ?? {}).map(([field, value]) => t('rule.part.with', { field: mark(field), value: String(value) }));
   const fields = fieldsOf(form);
@@ -73,7 +70,7 @@ const person = (id, name, me) => (id && me && id === me ? t('notify.log.you') : 
 export function usedLine(r) {
   const f = r.form ?? {};
   const n = r.used?.n ?? 0;
-  const left = f.amountField ? money(Math.max(0, (f.total ?? 0) - (r.used?.amount ?? 0)), f.currency) : String(Math.max(0, (f.n ?? 0) - n));
+  const left = f.amountField ? money(Math.max(0, (f.total ?? 0) - (r.used?.amount ?? 0)), f.currency, f.exponent) : String(Math.max(0, (f.n ?? 0) - n));
   const thisPeriod = t(`rule.this.${f.period}`);
   const resets = r.used?.resetsAt ?? r.resetsAt;
   let line = t(n === 1 ? 'rule.used.one' : 'rule.used', { n, 'this period': thisPeriod, left, reset: resets ? fmtAt(resets) : '\u0000' });

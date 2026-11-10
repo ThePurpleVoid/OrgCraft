@@ -6,6 +6,7 @@
 import { apiUrl, ask, askText, requestJson } from './env.js';
 import { t } from './i18n.js';
 import { personWord, ruleLine } from './approvals.js';
+import { minorDigits as isoDigits } from './money.mjs';
 import { applyPending, droppedLine, readyLine, readyTip, sendSystems, waitingParts, showItems, systemsState } from './systems.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -71,7 +72,7 @@ export const fmtWhen = (iso, now = new Date()) => {
 };
 /** Minor units per major unit for a currency: 100 for USD, 1 for JPY, 1000 for KWD (ISO 4217, as Intl knows it). */
 export function minorDigits(currency) {
-  try { return new Intl.NumberFormat('en', { style: 'currency', currency: currency || 'USD' }).resolvedOptions().maximumFractionDigits; } catch { return 2; }
+  try { return isoDigits(currency || 'USD'); } catch { return 2; }
 }
 const fmtMoney = (minor, currency) => {
   if (typeof minor !== 'number') return '';

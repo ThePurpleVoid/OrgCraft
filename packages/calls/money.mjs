@@ -16,9 +16,12 @@ export function minorDigits(currency) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits;
 }
 
-/** Whole minor units as money, without decimals when there are none: $20, $20.50, ¥2,500, KWD 2.500. */
-export function formatMinor(minor, currency = 'USD', locale = 'en-US') {
-  const d = minorDigits(currency);
+/**
+ * Whole minor units as money, without decimals when there are none: $20, $20.50, ¥2,500, KWD 2.500. `digits` is a
+ * rule's pinned exponent (security L22mu): the line reads by the exponent the owner confirmed, not this runtime's ICU.
+ */
+export function formatMinor(minor, currency = 'USD', locale = 'en-US', digits = minorDigits(currency)) {
+  const d = digits;
   const n = Number(minor ?? 0);
   const whole = n % 10 ** d === 0;
   return new Intl.NumberFormat(locale, { style: 'currency', currency, ...(whole ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : { minimumFractionDigits: d, maximumFractionDigits: d }) }).format(n / 10 ** d);

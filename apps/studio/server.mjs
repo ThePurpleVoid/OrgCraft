@@ -122,6 +122,7 @@ function systemsNames(root, here, there, pending = null) {
 const PUBLIC = join(HERE, 'public');
 const MODEL = join(KIT, 'packages/team-model/index.mjs');
 const PRICES = join(KIT, 'packages/model-prices/prices.json');
+const MONEY = join(KIT, 'packages/calls/money.mjs');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' };
 /** What a publish commits: the layer and everything sync generates from it. */
 const PUBLISHED = ['.agent-team', 'docs/team', 'scripts/agent-team', '.claude', 'AGENTS.md'];
@@ -521,9 +522,9 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           res.writeHead(302, { location: to, 'cache-control': 'no-store' });
           return res.end();
         }
-        // The kit's model and its price table (meeting estimates) are served next to the page.
-        const file = url.pathname === '/team-model.mjs' ? MODEL : url.pathname === '/model-prices.json' ? PRICES : join(PUBLIC, url.pathname === '/' ? 'index.html' : url.pathname.slice(1));
-        if (!file.startsWith(PUBLIC) && file !== MODEL && file !== PRICES) throw new HttpError(404, 'not found');
+        // The kit's model, its price table (meeting estimates) and money by minor units are served next to the page.
+        const file = url.pathname === '/team-model.mjs' ? MODEL : url.pathname === '/model-prices.json' ? PRICES : url.pathname === '/money.mjs' ? MONEY : join(PUBLIC, url.pathname === '/' ? 'index.html' : url.pathname.slice(1));
+        if (!file.startsWith(PUBLIC) && file !== MODEL && file !== PRICES && file !== MONEY) throw new HttpError(404, 'not found');
         if (!existsSync(file)) throw new HttpError(404, 'not found');
         res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
         return res.end(req.method === 'HEAD' ? undefined : readFileSync(file));

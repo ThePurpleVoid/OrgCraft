@@ -113,6 +113,10 @@
       "path": "packages/team-model/index.mjs",
       "type": "text/javascript; charset=utf-8"
     },
+    "money.mjs": {
+      "path": "packages/calls/money.mjs",
+      "type": "text/javascript; charset=utf-8"
+    },
     "model-prices.json": {
       "path": "packages/model-prices/prices.json",
       "type": "application/json; charset=utf-8"
