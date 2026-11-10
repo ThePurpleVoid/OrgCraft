@@ -15,7 +15,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { canonical } from '../../packages/calls/index.mjs';
 import { Problem, getTeam } from './store.mjs';
-import { CONTENT, CONTENT_REFUND, KINDS, NEVER, NEVER_FREE, NEVER_TOOL, PERIODS, RuleError, int as intCore, minorDigits, ruleForm as ruleFormCore, ruleLine } from '../../packages/calls/rules.mjs';
+import { redact as redactText } from './signed.mjs';
+import { CONTENT, CONTENT_REFUND, KINDS, NEVER, NEVER_FREE, NEVER_TOOL, PERIODS, RuleError, int as intCore, formatMinor, minorDigits, ruleForm as ruleFormCore, ruleLine } from '../../packages/calls/rules.mjs';
 
 export { KINDS, NEVER, PERIODS, ruleLine };
 
@@ -65,6 +66,19 @@ export function fromDraft(form, d) {
   const draftFree = new Set(d.free ?? []);
   for (const [k, v] of Object.entries(form.fixed ?? {})) if (k in draftFixed ? draftFixed[k] !== v : !draftFree.has(k)) return false;
   return (form.free ?? []).every((k) => draftFree.has(k));
+}
+
+/**
+ * What the approved call did, in words (web-dev, strings like the card's facts): "Refunds $24.90 to cus_dana · in
+ * Payments", "Pays $9 to acct_bob · in Payments", "Sends a message to ann@shop.example · in Email". Built by the
+ * server from the call and its draft, redacted like the card's facts; `call` keeps the exact fact.
+ */
+export function effectWords(form, input) {
+  const to = String(input?.[form.recipientField] ?? '').slice(0, 120);
+  const amount = form.amountField ? formatMinor(input[form.amountField], form.currency) : null;
+  const what = { refund: `Refunds ${amount} to ${to}`, 'pay.known': `Pays ${amount} to ${to}`, 'send.known': `Sends a message to ${to}` }[form.kind];
+  const where = form.system ?? form.channel;
+  return redactText([what, where && `in ${where}`].filter(Boolean).join(' · '));
 }
 
 /** Why an approval cannot become a standing rule (rule-draft's 409 reason). */
@@ -356,7 +370,8 @@ export function createLedger({ db, m3, now = () => new Date() }) {
     const { a, draft: form, made } = await approvedDraft(tenant, team, apr);
     const facts = a.card?.data?.facts;
     const names = await namesOf(tenant, [a.decided_by]);
-    return { approval: a.id, letter: a.card?.data?.letter ?? null, effect: Array.isArray(facts) && facts[0]?.text ? String(facts[0].text) : a.card?.title ?? null,
+    return { approval: a.id, letter: a.card?.data?.letter ?? null, effect: effectWords(form, a.calls[0].input),
+      call: Array.isArray(facts) && facts[0]?.text ? String(facts[0].text) : a.card?.title ?? null,
       approvedBy: { id: a.decided_by, name: nameIn(names, a.decided_by) }, made: made ? { id: made.id, number: made.number } : null, form, line: ruleLine(form) };
   }
 
@@ -368,7 +383,14 @@ export function createLedger({ db, m3, now = () => new Date() }) {
     const person = a.state === 'approved' && a.decided_by && !/^rule:/.test(a.decided_by) && !['ledger', 'changed'].includes(a.decided_by);
     if (!person) no('not-approved', 'only an ask a person approved can become a standing rule');
     const [made] = await madeFrom(tenant, team, a.id);
-    return { a, draft: draftForm(a.action, a.calls, no), made: made ?? null };
+    const form = draftForm(a.action, a.calls, no);
+    // The system as the team names it (web-dev): the resource's name, else its id read as a word ("payments" -> "Payments").
+    const server = form.tool.split('__')[1];
+    const [sys] = await db.tenant(tenant, ({ q }) => q('select resources from team_systems where team = $1', [team]));
+    const res = (sys?.resources ?? []).find((r) => r.id === server);
+    const shown = (res?.name ?? server.replace(/[_-]+/g, ' ').replace(/^./, (c) => c.toUpperCase())).slice(0, 80);
+    const draft = { ...form, ...(form.kind === 'send.known' ? { channel: shown } : { system: shown }) };
+    return { a, draft, made: made ?? null };
   }
 
   async function withdraw(tenant, team, rule, who) {

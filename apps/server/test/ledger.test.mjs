@@ -267,10 +267,12 @@ test('Make this a standing rule: a draft from one approved call, no wider than i
     await approve(a);
     d = await p.call('GET', `/teams/shop/approvals/${a.approval}/rule-draft`);
     assert.equal(d.status, 200, JSON.stringify(d.body));
-    assert.deepEqual(d.body.form, ruleForm({ kind: 'refund', tool: 'mcp__payments__refund', recipientField: 'customer', amountField: 'amount', currencyField: 'currency', currency: 'USD', maxEach: 1300, total: 3900, period: 'week', system: 'payments', fixed: {}, free: ['reason'] }));
+    assert.deepEqual(d.body.form, ruleForm({ kind: 'refund', tool: 'mcp__payments__refund', recipientField: 'customer', amountField: 'amount', currencyField: 'currency', currency: 'USD', maxEach: 1300, total: 3900, period: 'week', system: 'Payments', fixed: {}, free: ['reason'] }));
     assert.equal(d.body.line, ruleLine(d.body.form));
     assert.equal(d.body.approval, a.approval);
-    assert.equal(typeof d.body.effect, 'string');
+    // The effect in words, the system as the team names it (web-dev); the exact fact stays in `call`.
+    assert.equal(d.body.effect, 'Refunds $12.50 to cus_dana · in Payments');
+    assert.match(d.body.call, /^mcp__payments__refund \{/);
     // The draft, made as is, is a rule (the owner's words and the scoped step-up as always), and says its number.
     const made = await p.call('POST', '/teams/shop/standing-rules', { ...d.body.form, approval: a.approval, words: 'late refunds are fine' }, await p.su(ruleScope(d.body.form)));
     assert.deepEqual([made.status, made.body.number], [201, 1]);
@@ -312,12 +314,13 @@ test('Make this a standing rule: a draft from one approved call, no wider than i
 });
 
 test('a draft fixes the other target fields to the approved values and leaves only content free (code review L22m sev 3)', async () => {
-  const { draftForm, fromDraft } = await import('../ledger.mjs');
+  const { draftForm, effectWords, fromDraft } = await import('../ledger.mjs');
   const no = (reason) => { throw new Error(reason); };
   // A message to a known `to` with a bcc: later messages may not bcc anyone else.
   const mail = draftForm('outbound-message', [{ tool: 'mcp__mail__send', input: { to: 'ann@shop.example', bcc: 'me@evil.example', subject: 'Your order', body: 'On its way' } }], no);
   assert.deepEqual([mail.fixed, mail.free], [{ bcc: 'me@evil.example' }, ['body', 'subject']]);
   assert.match(ruleLine(mail), /only when bcc is "me@evil.example"/);
+  assert.equal(effectWords({ ...mail, channel: 'Email' }, { to: 'ann@shop.example' }), 'Sends a message to ann@shop.example · in Email');
   // A refund with a destination: later refunds may not route anywhere else.
   const refund = draftForm('refund', [{ tool: 'mcp__payments__refund', input: { customer: 'cus_a', amount: 500, currency: 'USD', destination: 'acct_1', reason: 'late' } }], no);
   assert.deepEqual([refund.fixed, refund.free], [{ destination: 'acct_1' }, ['reason']]);
