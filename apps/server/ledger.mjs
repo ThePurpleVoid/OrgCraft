@@ -59,8 +59,12 @@ export const ruleScope = (form, days = 30) => `rule:${sha(`rule/2\n${canonical({
  */
 export function fromDraft(form, d) {
   for (const k of ['kind', 'tool', 'recipientField', 'amountField', 'currencyField', 'currency']) if ((form[k] ?? null) !== (d[k] ?? null)) return false;
-  const callFields = new Set(d.free ?? []);
-  return [...Object.keys(form.fixed ?? {}), ...(form.free ?? [])].every((k) => callFields.has(k));
+  // A field the draft fixed stays fixed to the approved value, or is left out (narrower); never moved to free (code
+  // review L22m sev 3). A free field may be left free, fixed to a value, or left out.
+  const draftFixed = d.fixed ?? {};
+  const draftFree = new Set(d.free ?? []);
+  for (const [k, v] of Object.entries(form.fixed ?? {})) if (k in draftFixed ? draftFixed[k] !== v : !draftFree.has(k)) return false;
+  return (form.free ?? []).every((k) => draftFree.has(k));
 }
 
 /** Why an approval cannot become a standing rule (rule-draft's 409 reason). */
@@ -71,7 +75,8 @@ const AMOUNT = ['amount', 'amount_cents', 'amountCents', 'amount_minor', 'value'
 /**
  * The draft form for one signed call (rule-draft): the kind from the action class (a refund tool or action is a
  * refund, other payments pay.known, messages send.known), the recipient, amount and currency fields by their usual
- * names, every other plain field free (so the rule is no wider than the call), and the defaults: a week, maxEach the
+ * names, other target fields fixed to the approved value and content fields free (so the rule is no wider than the
+ * call), and the defaults: a week, maxEach the
  * amount rounded up to a whole unit, total three times that, 50 messages. `no(reason, why)` throws the 409.
  */
 export function draftForm(action, calls, no) {
@@ -97,8 +102,14 @@ export function draftForm(action, calls, no) {
     form = { ...form, amountField, currencyField, currency: input[currencyField].toUpperCase(), maxEach, total: maxEach * 3, system };
     used.add(amountField); used.add(currencyField);
   }
-  const free = Object.keys(input).filter((k) => !used.has(k) && /^[A-Za-z0-9_]{1,64}$/.test(k)).slice(0, 20);
-  try { return ruleForm({ ...form, fixed: {}, free }); } catch (e) { return no(e.type === 'rule-never' ? 'never' : 'kind-later', e.message); }
+  // Fields that name who or where else it goes (cc, bcc, destination, account, *_id: the ledger's TARGET) keep the
+  // approved value as `fixed` (code review L22m sev 3): a rule from one message to a known `to` must not let later ones
+  // bcc anyone, nor a refund route to another destination. Only content fields (subject, body, note ...) stay free.
+  const other = Object.keys(input).filter((k) => !used.has(k) && /^[A-Za-z0-9_]{1,64}$/.test(k));
+  const fixed = Object.fromEntries(other.filter((k) => TARGET.test(k) && input[k] !== null).map((k) => [k, input[k]]));
+  const free = other.filter((k) => !TARGET.test(k));
+  if (other.length > 20 || Object.keys(fixed).length > 20) no('nested', 'the call carries more fields than a rule can name');
+  try { return ruleForm({ ...form, fixed, free }); } catch (e) { return no(e.type === 'rule-never' ? 'never' : 'kind-later', e.message); }
 }
 
 /** Has this teammate read outside text (a trigger's outside block) since a person last decided for its session? */

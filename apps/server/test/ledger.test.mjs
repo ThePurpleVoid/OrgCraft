@@ -310,3 +310,21 @@ test('Make this a standing rule: a draft from one approved call, no wider than i
     assert.match(y.line, /up to ¥1,234 each/);
   });
 });
+
+test('a draft fixes the other target fields to the approved values and leaves only content free (code review L22m sev 3)', async () => {
+  const { draftForm, fromDraft } = await import('../ledger.mjs');
+  const no = (reason) => { throw new Error(reason); };
+  // A message to a known `to` with a bcc: later messages may not bcc anyone else.
+  const mail = draftForm('outbound-message', [{ tool: 'mcp__mail__send', input: { to: 'ann@shop.example', bcc: 'me@evil.example', subject: 'Your order', body: 'On its way' } }], no);
+  assert.deepEqual([mail.fixed, mail.free], [{ bcc: 'me@evil.example' }, ['body', 'subject']]);
+  assert.match(ruleLine(mail), /only when bcc is "me@evil.example"/);
+  // A refund with a destination: later refunds may not route anywhere else.
+  const refund = draftForm('refund', [{ tool: 'mcp__payments__refund', input: { customer: 'cus_a', amount: 500, currency: 'USD', destination: 'acct_1', reason: 'late' } }], no);
+  assert.deepEqual([refund.fixed, refund.free], [{ destination: 'acct_1' }, ['reason']]);
+  // The draft as is, a free field fixed or left out, a fixed field left out: no wider.
+  for (const narrower of [mail, { ...mail, free: ['body'] }, { ...mail, fixed: { ...mail.fixed, subject: 'Your order' }, free: ['body'] }, { ...mail, fixed: {} }]) assert.ok(fromDraft(narrower, mail), JSON.stringify(narrower));
+  // Moving a fixed field to free, or fixing it to another value, is wider.
+  assert.ok(!fromDraft({ ...mail, fixed: {}, free: [...mail.free, 'bcc'] }, mail));
+  assert.ok(!fromDraft({ ...mail, fixed: { bcc: 'other@evil.example' } }, mail));
+  assert.ok(!fromDraft({ ...refund, fixed: {}, free: ['destination', 'reason'] }, refund));
+});
