@@ -92,6 +92,7 @@ test('the owner makes a refund rule from an approved card: limits, words, the qu
   await save.click();
   const dlg = page.locator('#stepup-dialog');
   await dlg.locator('#stepup-why', { hasText: 'Make standing rule: Refunds · up to $25 each · at most $60 per customer a month' }).waitFor();
+  assert.deepEqual(await dlg.locator('.stepup-items li').allTextContents(), ['Ends after 14 days'], 'the passkey covers how long it lasts');
   assert.equal(cp.rules.length, 0, 'nothing made before the passkey');
   await dlg.locator('#stepup-secret').fill(cp.stepUpSecret);
   await dlg.locator('button[type="submit"]').click();

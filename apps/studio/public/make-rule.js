@@ -4,7 +4,7 @@
 // period, how long it lasts and their own words; the line the ledger will quote is drawn from the same form, word for
 // word, as they type. Making it needs a passkey scoped to that exact rule (the control plane names the scope).
 import { t } from './i18n.js';
-import { ledgerLine, ruleLine } from './approvals.js';
+import { exponentOf, ledgerLine, ruleLine } from './approvals.js';
 
 /** The kinds a rule can be made for now; any other kind shows no button at all (CPO). */
 export const ENFORCED = ['refund', 'pay.known', 'send.known'];
@@ -14,23 +14,30 @@ const PERIODS = ['day', 'week', 'month'];
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
-const major = (minor) => (minor % 100 === 0 ? String(minor / 100) : (minor / 100).toFixed(2));
-/** "25" or "25.50" in the rule's currency to minor units; null when it isn't an amount above zero. */
-export function toMinor(text) {
-  const m = /^\s*(\d{1,9})(?:[.,](\d{1,2}))?\s*$/.exec(String(text ?? ''));
+/** Minor units as the owner types them: 2500 USD is "25", 2550 USD "25.50", 2500 JPY "2500", 2500 KWD "2.5". */
+export const major = (minor, currency = 'USD') => {
+  const e = exponentOf(currency);
+  const unit = 10 ** e;
+  return minor % unit === 0 ? String(minor / unit) : (minor / unit).toFixed(e);
+};
+/** What the owner typed, in the rule's currency, to minor units; null when it isn't an amount above zero. */
+export function toMinor(text, currency = 'USD') {
+  const e = exponentOf(currency);
+  const m = (e ? new RegExp(`^\\s*(\\d{1,9})(?:[.,](\\d{1,${e}}))?\\s*$`) : /^\s*(\d{1,12})\s*$/).exec(String(text ?? ''));
   if (!m) return null;
-  const v = Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0') || 0);
-  return v > 0 ? v : null;
+  const v = Number(m[1]) * 10 ** e + Number((m[2] ?? '').padEnd(e, '0') || 0);
+  return v > 0 && Number.isSafeInteger(v) ? v : null;
 }
 const whole = (text, max) => { const m = /^\s*(\d{1,6})\s*$/.exec(String(text ?? '')); const v = m ? Number(m[1]) : NaN; return v >= 1 && v <= max ? v : null; };
 
 /** The sheet's starting values from the control plane's draft: its defaults, the all-customers total ticked at 10× each. */
 export function initial(draft) {
   const f = draft.form ?? {};
-  const each = f.maxEach ?? 100;
+  const cur = f.currency ?? 'USD';
+  const each = f.maxEach ?? 10 ** exponentOf(cur);
   return {
     draft, period: PERIODS.includes(f.period) ? f.period : 'week', days: '30', words: '',
-    each: major(each), total: major(f.total ?? each * 3), allOn: f.kind === 'refund', all: major(f.all ?? each * 10), n: String(f.n ?? 50),
+    each: major(each, cur), total: major(f.total ?? each * 3, cur), allOn: f.kind === 'refund', all: major(f.all ?? each * 10, cur), n: String(f.n ?? 50),
     busy: false, result: null,
   };
 }
@@ -46,9 +53,9 @@ export function formOf(s) {
     if (n === null) errors.push('rule.make.err.amount');
     form.n = n ?? 0;
   } else {
-    const each = toMinor(s.each);
-    const total = toMinor(s.total);
-    const all = f.kind === 'refund' && s.allOn ? toMinor(s.all) : null;
+    const each = toMinor(s.each, f.currency);
+    const total = toMinor(s.total, f.currency);
+    const all = f.kind === 'refund' && s.allOn ? toMinor(s.all, f.currency) : null;
     if (each === null || total === null || (f.kind === 'refund' && s.allOn && all === null)) errors.push('rule.make.err.amount');
     if (each !== null && total !== null && total < each) errors.push('rule.make.err.total');
     if (all !== null && total !== null && all < total) errors.push('rule.make.err.all');
@@ -124,7 +131,8 @@ export async function makeRule({ api, stepUp, s }) {
   const body = { ...form, words, days, key: `rule-${Date.now().toString(36)}` };
   let r = await api('/v1/team/standing-rules', body);
   if (r.status === 401 && /step-up-required$/.test(r.data?.type ?? '')) {
-    if (!(await stepUp(t('stepup.action.rule.add', { 'rule line': ruleLine(form) }), r.data.scope ?? null, []))) return { kind: 'cancelled', text: t('rule.make.cancelled', { letter: s.draft.letter ?? '' }) };
+    // The passkey dialog says how long it lasts too (security L22m low).
+    if (!(await stepUp(t('stepup.action.rule.add', { 'rule line': ruleLine(form) }), r.data.scope ?? null, [t('rule.make.days', { input: days })]))) return { kind: 'cancelled', text: t('rule.make.cancelled', { letter: s.draft.letter ?? '' }) };
     r = await api('/v1/team/standing-rules', body);
   }
   if (r.ok && r.data?.id) {

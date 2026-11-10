@@ -18,10 +18,16 @@ export function fill(key, vars) {
     .map((p) => p.replace(/\{([^}]+)\}/g, (_, k) => vars[k])).join(' · ');
 }
 
-/** Minor units in the rule's currency: 2000 USD is "$20.00". */
+/** How many minor-unit digits a currency has: 2 for USD, 0 for JPY, 3 for KWD (code review L22m sev3). */
+export function exponentOf(currency = 'USD') {
+  try { return new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits; } catch { return 2; }
+}
+
+/** Minor units in the rule's currency: 2000 USD is "$20", 2000 JPY is "¥2,000", 2000 KWD is "KWD 2". */
 export const money = (minor, currency = 'USD') => {
+  const unit = 10 ** exponentOf(currency);
   // "$20", or "$20.50" when there are cents (CPO §6b; the server says the same).
-  try { return new Intl.NumberFormat([], { style: 'currency', currency, ...(minor % 100 === 0 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}) }).format(minor / 100); } catch { return `${minor / 100} ${currency}`; }
+  try { return new Intl.NumberFormat([], { style: 'currency', currency, ...(minor % unit === 0 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}) }).format(minor / unit); } catch { return `${minor / unit} ${currency}`; }
 };
 
 /** Every input field a covered call may carry: the recipient, amount and currency fields, the free ones, the fixed ones. */
