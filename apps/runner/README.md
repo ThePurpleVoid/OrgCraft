@@ -148,7 +148,8 @@ may be under someone else's control.
   (`modelproxy.mjs`). The runner key and the
   session's tool token never enter it.
 - **No pushing.** The session's environment holds nothing that can push. The runner pushes at checkpoints, with its
-  own credential (`AGENT_TEAM_RUNNER_GITCONFIG`, a token that can push branches but not the default branch), and only
+  own credential (`AGENT_TEAM_RUNNER_GITCONFIG`, a token that can push branches but not the default branch; the file
+  must be `0600` and owned by the runner or root, so write it with `umask 077`), and only
   after it has checked every commit since the base it recorded when the session started (paths touched in any
   commit, the lines each commit adds, and the commit messages) against the owned areas and the secret scan, and
   refused symlinks that leave the copy (`worktree.mjs`, `secrets.mjs`). If git cannot read that history, nothing

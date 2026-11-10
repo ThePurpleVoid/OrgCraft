@@ -10,7 +10,8 @@
 # One volume at /data holds the runner's folder (/data/runner, 0700) and the sessions' (/data/work); entrypoint.sh
 # sets their owners and modes at every start, then drops to the runner user.
 # Push credential: mount a git config with a credential helper for a token that can push branches only (never the
-# default branch), and point AGENT_TEAM_RUNNER_GITCONFIG at it (inside /data/runner).
+# default branch), and point AGENT_TEAM_RUNNER_GITCONFIG at it (inside /data/runner). It must be mode 0600 and owned by
+# the runner user or root (write it with umask 077), or the runner refuses to start (exit 2).
 # The switch to `agent` uses a copy of setpriv that only the runner's group can run, carrying only the capabilities
 # to change uid and gid. Do not run the container with no-new-privileges: that disables those file capabilities,
 # and sessions then fail to start (closed, not open).
