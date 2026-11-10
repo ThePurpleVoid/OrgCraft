@@ -786,3 +786,9 @@
 @media (max-width: 640px) { .ats #recovery button, .ats #recovery select, .ats .recovery-banner .button { min-height: 44px; } }
 /* qa-web L27w: 44 px targets on the account page at phone width. */
 @media (max-width: 640px) { .ats #account button, .ats .auth-dialog button, .ats .auth-brand a { min-height: 44px; } .ats .auth-brand a { display: inline-flex; align-items: center; } }
+
+/* L40b: the systems line's controls are tapped from a phone (qa-web L40b P2). */
+@media (max-width: 640px) {
+  .ats #start-systems button.link, .ats #run-systems button.link, .ats #start-systems a, .ats #run-systems a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; }
+  .ats #start-systems button.info, .ats #run-systems button.info { min-width: 44px; min-height: 44px; }
+}

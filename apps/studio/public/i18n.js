@@ -5,6 +5,7 @@ import { EN } from './strings.js';
 // Words the Studio needs that the strings file does not have yet. Each one is asked of the CPO; when the strings
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
+  'systems.already': 'These system changes are already switched on.',
 };
 
 export function t(key, vars = {}) {

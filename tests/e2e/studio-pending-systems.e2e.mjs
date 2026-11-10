@@ -183,3 +183,39 @@ test('Send them now from a branch whose change is still open waits for it; a pur
   assert.deepEqual(errors, []);
   await page.close();
 });
+
+test('on a phone: Escape on the passkey goes back to Switch on now, which is 44px; switched on elsewhere reads as already on', { skip }, async () => {
+  const page = await browser.newPage({ viewport: { width: 360, height: 780 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${base}/?t=${studio.launchToken}`);
+  writeFileSync(join(root, '.agent-team/resources.json'), JSON.stringify({ resources: [{ id: 'drive', type: 'mcp', name: 'Shared drive', config: {}, secrets: ['DRIVE_TOKEN'] }], bindings: [{ role: ROLE, resource: 'drive', permission: 'read' }] }, null, 2) + '\n');
+  execFileSync('git', ['-C', root, 'commit', '-qam', 'back to read']);
+  await sendPending(page, 9);
+  let line = await openStart(page);
+  const link = line.getByRole('link', { name: 'See the change' });
+  await link.waitFor();
+  for (const el of [link, line.locator('button.info')]) assert.ok((await el.boundingBox()).height >= 44, 'tappable on a phone (qa-web P2)');
+  cp.readyPending();
+  await page.reload();
+  line = await openStart(page);
+  const on = line.getByRole('button', { name: 'Switch on now' });
+  await on.waitFor();
+  for (const el of [on, line.locator('button.info')]) assert.ok((await el.boundingBox()).height >= 44, 'tappable on a phone (qa-web P2)');
+  await on.click();
+  await page.locator('#stepup-dialog #stepup-why').waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.activeElement?.id === 'start-systems-switchon');
+
+  // Another window switches the set on; this one then taps Switch on now.
+  const s = await state(page);
+  const other = await post(page, '/v1/team/systems/pending/apply', { sha: s.pending.sha, contentHash: s.pending.contentHash });
+  if (other.status === 401) assert.equal((await post(page, '/v1/team/step-up', { secret: cp.stepUpSecret, scope: other.scope })).status, 200);
+  assert.equal((await post(page, '/v1/team/systems/pending/apply', { sha: s.pending.sha, contentHash: s.pending.contentHash })).status, 200);
+  const applied = cp.applied.length;
+  await on.click();
+  await line.getByText('These system changes are already switched on.').waitFor();
+  assert.equal(cp.applied.length, applied, 'nothing applied twice');
+  assert.deepEqual(errors, []);
+  await page.close();
+});

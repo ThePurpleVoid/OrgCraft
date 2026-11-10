@@ -564,6 +564,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     if (!s || s.connected === false) return null;
     if (s === 'sending') return [t('start.systems.sending')];
     if (s.result === 'done' && (s.inSync || !s.pending)) return [t(running ? 'run.systems.sent' : 'publish.systems.done')];
+    if (s.result === 'already') return [t('systems.already')];
     const p = s.pending?.ours ? s.pending : null;
     if (p?.ready) {
       if (s.result === 'failed') return [`${t('start.systems.failed')} `, button('switchon', t('systems.switchon'), switchOn)];
@@ -584,12 +585,15 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     st[key] = 'sending'; renderRun(); renderSystems();
     const result = await applyPending({ stepUp, state: was });
     const fresh = await systemsState();
-    st[key] = fresh ? { ...fresh, result: result === 'cancelled' ? null : result } : was;
+    // Switched on from another window meanwhile: say so, not "dropped… publish again" (qa-web L40b P4).
+    const outcome = result === 'dropped' && fresh?.inSync ? 'already' : result;
+    st[key] = fresh ? { ...fresh, result: outcome === 'cancelled' ? null : outcome } : was;
     if (key === 'runSystems') st.runSystemsAt = Date.now();
     renderRun(); renderSystems();
     const el = $(key === 'runSystems' ? '#run-systems' : '#start-systems', root);
     el.tabIndex = -1;
-    if (!el.hidden) (el.querySelector('button') ?? el).focus();
+    // Back on Switch on now when it is still there (Escape on the passkey), never on the ⓘ (qa-web L40b P3).
+    if (!el.hidden) (el.querySelector('[id$="-switchon"]') ?? el.querySelector('button:not(.info)') ?? el).focus();
   }
   async function sendRunSystems() {
     const was = st.runSystems;
