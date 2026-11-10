@@ -189,10 +189,17 @@ test('runner ops: pace answers a wait, effect.begin and effect.end keep a replay
     assert.equal((await runner.request('effect.end', { session: s.session, key: 'sha256-abcdef0123', ok: true, result: { id: 'm1' } })).op, 'ack');
     const b2 = await runner.request('effect.begin', { session: s.session, key: 'sha256-abcdef0123', tool: 'mcp__mail__send', callHash: 'c1' });
     assert.deepEqual(b2.body, { state: 'repeat', result: { id: 'm1' } });
+    // Bracketed by the clock before and after, never by a margin: a slow machine takes as long as it takes between the
+    // report and the read (FLAKE-gov: a 1 s margin failed on CI).
+    const beforeReport = Date.now();
     const rep = await runner.request('governor.report', { session: s.session, provider: 'model', retryAfterMs: 20_000, reason: 'overloaded' });
+    const afterReport = Date.now();
     assert.equal(rep.op, 'ack');
     const [held] = await p.db.system("select blocked_until from governor_buckets where key = 'tenant:acme:model'");
-    assert.ok(Date.parse(held.blocked_until) - Date.now() > 19_000, 'its own share is held for what the provider said');
+    // A Date from the driver: getTime() keeps the milliseconds, which Date.parse(String(date)) drops (part of the old
+    // flake: up to 999 ms of the 1 s margin went there).
+    const heldUntil = new Date(held.blocked_until).getTime();
+    assert.ok(heldUntil >= beforeReport + 20_000 && heldUntil <= afterReport + 20_000, `its own share is held for what the provider said (20 s from the report): ${held.blocked_until}`);
     const [shared] = await p.db.system("select blocked_until from governor_buckets where key = 'model:shared'");
     assert.equal(shared?.blocked_until ?? null, null, 'one tenant\'s runner never holds the shared key');
     // A paced call never holds the runner's other requests (they run one at a time per connection): the ack says how
@@ -202,9 +209,12 @@ test('runner ops: pace answers a wait, effect.begin and effect.end keep a replay
       runner.request('pace', { session: s.session, provider: 'model' }),
       runner.request('effect.begin', { session: s.session, key: 'sha256-behindpace', tool: 'mcp__mail__send' }),
     ]);
-    assert.ok(slow.body.waitMs > 19_000, JSON.stringify(slow.body));
+    const t1 = Date.now();
+    // The wait is what is left of the hold when the pace was answered, between t0 and t1, whatever the machine's speed.
+    assert.ok(slow.body.waitMs >= heldUntil - t1 - 5 && slow.body.waitMs <= heldUntil - t0 + 5, `${JSON.stringify(slow.body)}, hold ends in ${heldUntil - t0} ms`);
     assert.equal(other.body.state, 'first');
-    assert.ok(Date.now() - t0 < 2000, `both answered at once (${Date.now() - t0} ms)`);
+    // "At once" against the 20 s hold: a pace that blocked the connection would take the whole hold.
+    assert.ok(t1 - t0 < heldUntil - t1, `both answered without waiting out the hold (${t1 - t0} ms)`);
   }, { tickMs: 0, gatewayLimits: LIMITS });
 });
 
