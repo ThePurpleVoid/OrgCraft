@@ -207,7 +207,8 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     if (p === `/v1/teams/${team}/standing-rules` && req.method === 'POST') {
       const body = await read(req);
       const { words, days = 30, ...form } = body;
-      const scope = `rule:${createHash('sha256').update(JSON.stringify(form)).digest('hex')}`;
+      // Scoped to the form and how long it lasts, as backend-dev/rule-draft does (security L22m low).
+      const scope = `rule:${createHash('sha256').update(JSON.stringify({ form, days })).digest('hex')}`;
       if (!stepped(req, scope)) return send(res, 401, { type: 'step-up-required', title: 'Making a standing rule needs a recent sign-in', status: 401, scope });
       rulePosts.push(body);
       if (ruleRefuse) return send(res, ruleRefuse[0], ruleRefuse[1]);
