@@ -61,6 +61,10 @@
       "path": "apps/studio/public/meetings.js",
       "type": "text/javascript; charset=utf-8"
     },
+    "money.mjs": {
+      "path": "apps/studio/public/money.mjs",
+      "type": "text/javascript; charset=utf-8"
+    },
     "notifications.js": {
       "path": "apps/studio/public/notifications.js",
       "type": "text/javascript; charset=utf-8"
@@ -111,10 +115,6 @@
     },
     "team-model.mjs": {
       "path": "packages/team-model/index.mjs",
-      "type": "text/javascript; charset=utf-8"
-    },
-    "money.mjs": {
-      "path": "packages/calls/money.mjs",
       "type": "text/javascript; charset=utf-8"
     },
     "model-prices.json": {

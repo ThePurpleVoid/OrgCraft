@@ -75,7 +75,7 @@ export function fromDraft(form, d) {
  */
 export function effectWords(form, input) {
   const to = String(input?.[form.recipientField] ?? '').slice(0, 120);
-  const amount = form.amountField ? formatMinor(input[form.amountField], form.currency) : null;
+  const amount = form.amountField ? formatMinor(input[form.amountField], form.currency, 'en-US', form.exponent ?? undefined) : null;
   const what = { refund: `Refunds ${amount} to ${to}`, 'pay.known': `Pays ${amount} to ${to}`, 'send.known': `Sends a message to ${to}` }[form.kind];
   const where = form.system ?? form.channel;
   return redactText([what, where && `in ${where}`].filter(Boolean).join(' · '));
