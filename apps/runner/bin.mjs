@@ -21,7 +21,8 @@
 //   AGENT_TEAM_RUNNER_ADAPTER=dryrun with AGENT_TEAM_DRYRUN_CONTROL=<folder>  the dry run's scripted fake model
 //                    (adapters/dryrun.mjs; refused with a model key set)
 //   AGENT_TEAM_RUNNER_GITCONFIG  a git config with the runner's push credential (a helper for a token that can push
-//                            branches but not the default branch); sessions never see it
+//                            branches but not the default branch); sessions never see it. Mode 0600, owned by the
+//                            runner's user or root, or the runner refuses to start (exit 2)
 //
 //   AGENT_TEAM_SANDBOX_UID, AGENT_TEAM_SANDBOX_GID, AGENT_TEAM_SANDBOX_EXEC
 //                            run every session as this user and group, switched with this setpriv (the Dockerfile
