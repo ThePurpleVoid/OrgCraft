@@ -487,7 +487,14 @@ paths:
       parameters: [ { $ref: "#/components/parameters/stepUp" } ]
       x-interactive-only: [add]
       summary: "Make a standing rule: { kind, tool (mcp__server__tool), recipientField, period (day | week | month), words (the owner's own, 3 to 2,000 characters, kept exactly), days (1 to 90, default 30) } plus, for refund and pay.known, { amountField, currency, currencyField (required: the call's currency is always compared), maxEach, total (minor units, per calendar period in the team's zone), system? } and for refund an optional all (the total across all customers per period) and for send.known { n, channel? }; any kind may add fixed { field: value } (at most 20; the call must carry exactly that value) and free [field] (at most 20; any plain value). A covered call carries no other input field and nothing nested. Every rule has a limit per period. pay.known and send.known cover only recipients the team has paid or written to before; no rule covers a tool that deletes or goes live, a merge, or a teammate's next ask after it read outside text. The step-up is scoped to the rule: rule:<sha256 of its form>. A ledger row keeps the words"
-      responses: { "201": { description: "{ id, form, line, hash, expiresAt }" }, "400": { description: Not a valid rule }, "401": { description: Step-up required }, "403": { description: Not an owner }, "422": { description: "rule-never (deletes or goes live) or rule-kind-later" } }
+      responses: { "201": { description: "{ id, number (the rule's number, as in the list and the ledger), form, line, hash, expiresAt }" }, "400": { description: Not a valid rule }, "401": { description: Step-up required }, "403": { description: Not an owner }, "422": { description: "rule-never (deletes or goes live) or rule-kind-later" } }
+  /teams/{team}/approvals/{approval}/rule-draft:
+    parameters: [ { $ref: "#/components/parameters/team" }, { name: approval, in: path, required: true, schema: { type: string } } ]
+    get:
+      x-min-role: owner
+      tags: [approvals]
+      summary: "Make this a standing rule (L22 web): a draft form from one approval a person approved, no wider than its signed call: kind from the action (a refund, other payments pay.known, messages send.known), the recipient, amount and currency fields by their usual names, every other plain field free, a week, maxEach the amount rounded up to a whole unit, total three times that, n 50, system or channel the tool's server. { approval, letter, effect, form, line }. Make it with POST standing-rules (the owner's words and a step-up scoped rule:<hash>)"
+      responses: { "200": { description: The draft }, "403": { description: Not an owner }, "404": { description: No such approval }, "409": { description: "rule-not-possible with reason: not-approved, unbound, many-calls, never, kind-later, no-recipient, no-amount or nested" } }
   /teams/{team}/standing-rules/{rule}:
     parameters: [ { $ref: "#/components/parameters/team" }, { name: rule, in: path, required: true, schema: { type: string } } ]
     delete:
