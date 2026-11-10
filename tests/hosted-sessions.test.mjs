@@ -13,7 +13,7 @@ const walk = (dir) => readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).is
 
 test('no shipped brief or protocol tells a hosted session to call gh', () => {
   const GH = /(^|[^\w-])`?gh`?(?![\w-])/;
-  const ok = (l) => /outside a hosted session|never call gh there|never in a hosted session/i.test(l) || /Never call `gh`/.test(l);
+  const ok = (l) => /outside a hosted session|never call gh there|in a hosted session, its report/i.test(l) || /Never call `gh`/.test(l);
   for (const file of walk(join(KIT, 'team'))) {
     for (const [i, line] of readFileSync(file, 'utf8').split('\n').entries()) {
       if (GH.test(line)) assert.ok(ok(line), `${relative(KIT, file)}:${i + 1} names gh without saying it is not for hosted sessions: ${line}`);

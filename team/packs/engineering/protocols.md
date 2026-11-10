@@ -1,7 +1,7 @@
 <!-- The engineering pack for protocols.md: each fill replaces the slot of the same name in the core (team/protocols.md). Teams on any kit preset get it unless team.json "packs" says otherwise. -->
 
 <!-- fill:door -->
-The owner talks to one role: the **chief of staff**. It logs a task for every request (an issue where it has gh, never in a hosted session) and forwards the owner's words to the executive whose lane owns it. Executives route inside their lane and never ask the owner directly.
+The owner talks to one role: the **chief of staff**. It logs a task for every request (an issue where it has gh; in a hosted session, its report) and forwards the owner's words to the executive whose lane owns it. Executives route inside their lane and never ask the owner directly.
 
 <!-- fill:verbatim -->
 The owner's message travels down the tree **verbatim**, quoted, with its task id. Every brief starts with that quote. Interpretation goes underneath, labelled as the writer's. Nobody paraphrases the owner on the way down.

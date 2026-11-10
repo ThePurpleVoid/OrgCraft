@@ -4,7 +4,7 @@ The rules every role follows. Role briefs hold only what is specific to the role
 
 ## The one door and the dilution rule
 
-The owner talks to one role: the **chief of staff**. It logs a task for every request (an issue where it has gh, never in a hosted session) and forwards the owner's words to the executive whose lane owns it. Executives route inside their lane and never ask the owner directly.
+The owner talks to one role: the **chief of staff**. It logs a task for every request (an issue where it has gh; in a hosted session, its report) and forwards the owner's words to the executive whose lane owns it. Executives route inside their lane and never ask the owner directly.
 
 **The owner's channel** is wherever the owner talks to the chief of staff. Usually the chief of staff is the project's coordinator and the channel is the main project chat. When the host already has a coordinator of its own, the chief of staff runs as a thread instead: the owner's channel is then the coordinator's chat, the coordinator relays the owner's words to the chief of staff verbatim, and the chief of staff dispatches by asking the coordinator to open or wake role threads (or by messaging threads directly where the host allows it). Everything else in these protocols is the same in both modes.
 
