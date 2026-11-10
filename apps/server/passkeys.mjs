@@ -34,13 +34,19 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
   const rpID = new URL(origin).hostname;
 
   const challenges = {
-    put: (kind, person, challenge) => db.system('insert into oidc_store(model, id_hash, payload, expires_at) values ($1, $2, $3, $4)',
-      ['WebAuthn', sha(challenge), { kind, person }, new Date(Date.now() + CHALLENGE_SECONDS * 1000)]),
+    put: (kind, person, challenge, scope = null) => db.system('insert into oidc_store(model, id_hash, payload, expires_at) values ($1, $2, $3, $4)',
+      ['WebAuthn', sha(challenge), { kind, person, ...(scope ? { scope } : {}) }, new Date(Date.now() + CHALLENGE_SECONDS * 1000)]),
     /** Single use: a challenge is gone the moment anyone presents it, right or wrong. */
     take: async (kind, person, challenge) => {
       if (typeof challenge !== 'string' || !challenge || challenge.length > 200) return false;
       const [r] = await db.system("delete from oidc_store where model = 'WebAuthn' and id_hash = $1 and expires_at > now() returning payload", [sha(challenge)]);
       return !!r && r.payload.kind === kind && r.payload.person === person;
+    },
+    /** As take, for a step-up: the payload (with the scope it was asked for), or null. */
+    takeStepUp: async (person, challenge) => {
+      if (typeof challenge !== 'string' || !challenge || challenge.length > 200) return null;
+      const [r] = await db.system("delete from oidc_store where model = 'WebAuthn' and id_hash = $1 and expires_at > now() returning payload", [sha(challenge)]);
+      return r && r.payload.kind === 'step-up' && r.payload.person === person ? r.payload : null;
     },
   };
   const challengeOf = (cred) => {
@@ -108,12 +114,17 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
     return { ok: true };
   }
 
-  async function challenge(who) {
+  /**
+   * A step-up challenge, bound to the one change it is for (`scope`, L22 open item): the passkey signs this challenge,
+   * and the token it buys carries exactly that scope, so an assertion made for one change never buys another.
+   */
+  async function challenge(who, scope = null) {
+    if (scope !== null && (typeof scope !== 'string' || !STEP_UP_SCOPE.test(scope))) throw new Problem(400, 'scope names one change, like resume:<run id>');
     const keys = await mine(who.principal);
     if (!keys.length) throw new Problem(409, 'add a passkey first: step-up needs one', { type: 'no-passkey' });
     const options = await generateAuthenticationOptions({ rpID, userVerification: 'required', allowCredentials: keys.map((k) => ({ id: k.credential_id })), timeout: CHALLENGE_SECONDS * 1000 });
-    await challenges.put('step-up', who.principal, options.challenge);
-    return options;
+    await challenges.put('step-up', who.principal, options.challenge, scope);
+    return { ...options, ...(scope ? { scope } : {}) };
   }
 
   /**
@@ -138,7 +149,10 @@ export function createPasskeys({ db, m3, origin, rpName = 'Agent Team', now = ()
       throw new Problem(status, `step-up failed: ${why}`, { type: 'step-up-failed' });
     };
     const ch = challengeOf(assertion);
-    if (!(await challenges.take('step-up', who.principal, ch))) return fail('that challenge is unknown, used or expired');
+    const asked = await challenges.takeStepUp(who.principal, ch);
+    if (!asked) return fail('that challenge is unknown, used or expired');
+    // The scope is the one the challenge was made for: asking for a challenge with one scope and minting another is refused.
+    if ((asked.scope ?? null) !== scope) return fail(scope ? `that challenge was not for ${scope}; ask for a challenge with this scope` : 'that challenge was for one change; send its scope');
     const [key] = await db.system('select id, credential_id, public_key, sign_count from passkeys where person = $1 and credential_id = $2', [who.principal, String(assertion?.id ?? '')]);
     if (!key) return fail('that is not one of your passkeys');
     let out;
