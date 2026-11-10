@@ -10,6 +10,7 @@ import { startRunner } from '../runner.mjs';
 import { stubAdapter } from '../adapters/stub.mjs';
 import { fakeControlPlane } from './fake-control-plane.mjs';
 import { brief, noFailedTurns, origin, sh } from './helpers.mjs';
+import { localProposals } from '../proposals.mjs';
 
 const OWNER = '  Add a line to the docs saying who to ask about releases. 🚀\n';
 
@@ -572,12 +573,12 @@ test('F-B5: a push the remote refuses (a read-only deploy key) is a loud BLOCKED
       writeFileSync(join(t.cwd, 'notes.txt'), 'done\n');
       seen.handoff = await t.call('handoff', { to: 'cto', task: 'api cleanup', changed: 'notes.txt', verify: 'read notes.txt', doneWhen: 'it says done' });
       seen.again = await t.call('signoff', { to: 'cto', issue: 9, testedOn: 'node 22, linux, HEAD', walked: 'read notes.txt', result: 'pass', evidence: ['notes.txt'] });
-      seen.merge = await t.call('request_approval', { action: 'merge-local-pr', call: 'merge team/backend-dev branch to main as local PR', why: 'the runner cannot push' });
+      seen.accept = await t.call('request_approval', { action: 'accept', call: 'merge api/b5', why: 'ready to merge' });
       seen.blocked = await t.call('blocked', { to: 'cto', task: 'api cleanup', detail: 'push refused', need: 'a deploy key with write access', needFrom: 'owner', recommendation: 'turn on write access for the deploy key', meanwhile: 'waiting' });
       return {};
     },
   });
-  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter, proposals: localProposals() });
   try {
     await runner.ready;
     cp.start({ role: 'backend-dev', run: 'run_b5', repo: { url: bare }, worktree: 'api/b5', areas: ['notes.txt'], roster: ['cto', 'backend-dev'] });
@@ -585,9 +586,10 @@ test('F-B5: a push the remote refuses (a read-only deploy key) is a loud BLOCKED
     assert.equal(seen.handoff.isError, true);
     assert.match(seen.handoff.text, /^BLOCKED: the branch api\/b5 was not pushed: .*read only.*Do not merge, push or ask for a merge any other way/);
     assert.match(seen.again.text, /^BLOCKED:/);
-    assert.equal(seen.merge.isError, true);
-    assert.match(seen.merge.text, /^BLOCKED: a merge is asked for only with request_approval action accept/);
-    assert.equal(cp.approvals.length, 0, 'no card was made for a merge some other way');
+    assert.match(seen.handoff.text, /the owner has been told/, 'a notice went out');
+    assert.equal(seen.accept.isError, true);
+    assert.match(seen.accept.text, /^BLOCKED: the branch api\/b5 was not pushed/, 'the accept fails loudly');
+    assert.equal(cp.approvals.length, 0, 'no card was made');
     assert.ok(!seen.blocked.isError, `blocked still goes through so the role can say so: ${seen.blocked.text}`);
     assert.ok(cp.toolCalls.some((c) => c.tool === 'blocked'));
     assert.ok(!cp.toolCalls.some((c) => c.tool === 'handoff' || c.tool === 'signoff'), 'nothing was handed on as if it were pushed');
@@ -600,4 +602,39 @@ test('F-B5: a push the remote refuses (a read-only deploy key) is a loud BLOCKED
     await runner.close();
     await cp.close();
   }
+});
+
+test('F-B5: a merge ask is not a word filter: any team may ask about a merger; a dropped connection is BLOCKED and tells nobody', async () => {
+  const ASKS = [
+    { action: 'merge-records', call: 'merge duplicate customer records', why: 'two rows for one customer' },
+    { action: 'publish-post', call: 'publish merger announcement post', why: 'ready' },
+    { action: 'pay-invoice', call: 'pay Merge Labs invoice', why: 'due Friday' },
+  ];
+  const run = async ({ branch, calls, hook = null, areas = [], proposals = localProposals() }) => {
+    const { bare, root } = origin();
+    if (hook) { writeFileSync(join(bare, 'hooks', 'pre-receive'), hook); chmodSync(join(bare, 'hooks', 'pre-receive'), 0o755); }
+    const cp = await fakeControlPlane();
+    const out = [];
+    const adapter = stubAdapter({ 'backend-dev': async (t) => { if (hook) writeFileSync(join(t.cwd, 'notes.txt'), 'x\n'); for (const c of calls) out.push(await t.call(c.tool ?? 'request_approval', c.args ?? c)); return {}; } });
+    const runner = startRunner({ server: cp.url, key: cp.key, root, adapter, proposals });
+    try {
+      await runner.ready;
+      cp.start({ role: 'backend-dev', run: 'run_m', repo: { url: bare }, ...(branch ? { worktree: 'api/m' } : {}), areas, roster: ['cto', 'backend-dev'] });
+      await cp.until(() => cp.events.some((e) => e.type === 'session.idle')).catch((e) => { throw new Error(`${e.message} ${JSON.stringify(cp.events.map((x) => x.data))}`); });
+      return { out, cp };
+    } finally { await runner.close(); await cp.close(); }
+  };
+  // A session that proposes (a branch of its own and a GitHub-style connector), one on the base, and one with no
+  // proposal connector at all (the nearest the runner has to a team without a code repository: it needs repo.url).
+  for (const shape of [{ branch: true }, { branch: false }, { branch: true, proposals: null }]) {
+    const { out, cp } = await run({ ...shape, calls: ASKS });
+    assert.ok(out.every((r) => !r.isError), `${JSON.stringify(shape)}: ${out.map((r) => r.text).join(' | ')}`);
+    assert.equal(cp.approvals.length, ASKS.length, `${JSON.stringify(shape)}: one card each`);
+  }
+  // A push that failed on the way (the remote hung up): BLOCKED for the session, try again later; no record, nobody told.
+  const flaky = await run({ branch: true, areas: ['notes.txt'], hook: '#!/bin/sh\necho "fatal: the remote end hung up unexpectedly" >&2\nexit 1\n',
+    calls: [{ tool: 'handoff', args: { to: 'cto', task: 't', changed: 'notes.txt', verify: 'v', doneWhen: 'd' } }] });
+  assert.match(flaky.out[0].text, /^BLOCKED: .*Nothing was pushed, opened or merged\. .*try again later/);
+  assert.doesNotMatch(flaky.out[0].text, /owner has been told/);
+  assert.equal(flaky.cp.events.filter((e) => e.type === 'proposal.failed').length, 0, 'not the owner\'s to fix');
 });

@@ -8,9 +8,9 @@ import { join } from 'node:path';
 import { meetingAttendees, ownsPaths } from '../../packages/team-model/index.mjs';
 import { modelChoice, tierWord } from '../../packages/model-prices/index.mjs';
 import { loadPrices } from '../../packages/model-prices/node.mjs';
+import { parseBrief } from '../../tools/briefs.mjs';
 
 const PRICES = loadPrices();
-import { parseBrief } from '../../tools/briefs.mjs';
 
 const BRIEF_MAX = 20_000; // bytes: the control plane refuses a longer brief
 const SUMMARY_MAX = 2_000;
