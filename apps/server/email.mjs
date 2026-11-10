@@ -9,6 +9,7 @@
 // - Links are signed with a key derived from the master key. A Studio link expires (7 days, approvals 24 hours) and
 //   goes through /v1/email/link, which redirects into the Studio, where sign-in and step-up apply. An unsubscribe
 //   link turns off one kind for one team, with no sign-in.
+import { minorDigits } from '../../packages/calls/money.mjs';
 import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 import { safeReturn } from '../studio/public/auth.js';
 import { Problem, getTeam, id as newId } from './store.mjs';
@@ -109,10 +110,12 @@ export function outside(text, max = 120) {
   return one.length > max ? `${one.slice(0, max - 1).trimEnd()}…` : one;
 }
 
-/** Minor units as money: 425 USD -> "$4.25"; other currencies by their code. */
+/** Minor units as money, by the currency's own exponent: 425 USD -> "$4.25", 425 JPY -> "¥425". */
 export function money(minor, currency = 'USD') {
-  const n = Number(minor ?? 0) / 100;
-  try { return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(n); } catch { return `${n.toFixed(2)} ${currency}`; }
+  try {
+    const d = minorDigits(currency);
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency, minimumFractionDigits: d, maximumFractionDigits: d }).format(Number(minor ?? 0) / 10 ** d);
+  } catch { return `${Number(minor ?? 0)} ${currency} (minor units)`; }
 }
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
