@@ -82,8 +82,8 @@ test('one bound ask: one passkey for the set, scoped to it', { skip }, async () 
   const { cp, page, go } = await chat();
   ask(cp, 'A', { data: { facts: [{ text: 'send email to client@example.com: Launch posts' }], callsHash: 'h1' } });
   await go();
-  await page.locator('#doit .doitcov', { hasText: 'Takes the recommended answer. Confirm with your passkey.' }).waitFor();
-  assert.match(await page.locator('#doit .doitcov').textContent(), /The passkey shows each payment and send\./);
+  await page.locator('#doit .doitcov', { hasText: 'Takes the recommended answer.' }).waitFor();
+  assert.match(await page.locator('#doit .doitcov').textContent(), /The confirmation lists each payment and send\./);
   await page.locator('#doit').click();
   const dlg = page.locator('#stepup-dialog');
   await dlg.locator('#stepup-why').waitFor();

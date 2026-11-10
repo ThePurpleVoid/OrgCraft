@@ -87,8 +87,8 @@ test('against the real control plane: chat, cards, an approval with step-up, a s
   await dlg.getByLabel('Daily cap').fill('10');
   await dlg.getByRole('button', { name: 'Start', exact: true }).click();
   const su = page.locator('#stepup-dialog');
-  await su.getByLabel('Confirmation code').fill(SECRET);
-  await su.getByRole('button', { name: 'Use passkey' }).click();
+  await su.getByLabel('Approval passphrase', { exact: true }).fill(SECRET);
+  await su.getByRole('button', { name: 'Confirm', exact: true }).click();
   // The real server starts the run (its roster check passes on the published team); no runner picks it up yet.
   await page.locator('#run-state', { hasText: 'Running' }).waitFor();
   await page.getByText('A run started').waitFor();
@@ -127,11 +127,11 @@ test('against the real control plane: chat, cards, an approval with step-up, a s
   await approval.locator('summary', { hasText: 'commit c0ffee1' }).click();
   await approval.locator('.bound .sha', { hasText: sha }).waitFor();
   await approval.getByRole('button', { name: 'Approve' }).click();
-  await approval.getByLabel('Confirmation code').fill('not the secret');
-  await approval.getByRole('button', { name: 'Use passkey' }).click();
-  await approval.getByText("That didn't work").waitFor();
-  await approval.getByLabel('Confirmation code').fill(SECRET);
-  await approval.getByRole('button', { name: 'Use passkey' }).click();
+  await approval.getByLabel('Approval passphrase', { exact: true }).fill('not the secret');
+  await approval.getByRole('button', { name: 'Confirm', exact: true }).click();
+  await approval.getByText("That passphrase didn't match").waitFor();
+  await approval.getByLabel('Approval passphrase', { exact: true }).fill(SECRET);
+  await approval.getByRole('button', { name: 'Confirm', exact: true }).click();
   await approval.locator('.answer', { hasText: 'Approve' }).waitFor();
 
   // Spending the whole cap pauses the run and posts a budget card; "Add half again" needs step-up and resumes.
@@ -146,8 +146,8 @@ test('against the real control plane: chat, cards, an approval with step-up, a s
   await page.locator('.result.error', { hasText: "Today's budget is spent, so the run can't resume yet. Raise the cap for today to resume it now" }).waitFor();
   assert.equal(await page.getByText("today's budget is spent;").count(), 0, 'not the server\'s own wording');
   await budget.getByRole('button', { name: 'Add half again' }).click();
-  await budget.getByLabel('Confirmation code').fill(SECRET);
-  await budget.getByRole('button', { name: 'Use passkey' }).click();
+  await budget.getByLabel('Approval passphrase', { exact: true }).fill(SECRET);
+  await budget.getByRole('button', { name: 'Confirm', exact: true }).click();
   await budget.locator('.answer', { hasText: 'Add half again' }).waitFor();
   await page.locator('#run-state', { hasText: 'Running' }).waitFor();
   await page.getByText("Today's budget is spent, so the run can't resume").waitFor({ state: 'detached' }); // the refusal goes once the run is going
@@ -168,8 +168,8 @@ test('Add a runner: a code after step-up, shown once, that registers a runner on
   await dlg.getByLabel('Name for the machine').fill("Dana's Mac mini");
   await dlg.getByRole('button', { name: 'Get a code' }).click();
   const su = page.locator('#stepup-dialog');
-  await su.getByLabel('Confirmation code').fill(SECRET);
-  await su.getByRole('button', { name: 'Use passkey' }).click();
+  await su.getByLabel('Approval passphrase', { exact: true }).fill(SECRET);
+  await su.getByRole('button', { name: 'Confirm', exact: true }).click();
   const code = (await dlg.getByLabel('Runner code').textContent()).trim();
   assert.match(code, /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
   const cmd = await dlg.locator('#runner-cmd').textContent();

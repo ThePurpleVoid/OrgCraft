@@ -82,8 +82,8 @@ test('the first send: the dialog lists all the control plane gains, then the sys
   assert.ok(listed.some((l) => /New system: Shared drive/.test(l)), listed.join(' | '));
   assert.ok(listed.some((l) => /Shared drive/.test(l) && /Change/.test(l) && !/New system/.test(l)), listed.join(' | '));
   assert.equal(cp.systemsPuts.length, 0, 'nothing is set before the step-up');
-  await dlg.getByLabel('Confirmation code').fill(cp.stepUpSecret);
-  await dlg.getByRole('button', { name: 'Use passkey' }).click();
+  await dlg.getByLabel('Approval passphrase', { exact: true }).fill(cp.stepUpSecret);
+  await dlg.getByRole('button', { name: 'Confirm', exact: true }).click();
   await page.locator('#publish-result .systems-result', { hasText: 'Your systems are updated' }).waitFor();
   assert.equal(cp.systemsPuts.length, 1);
   assert.equal(cp.systemsPuts[0].expect, 0, 'sent against the version it was compared with');
@@ -130,8 +130,8 @@ test('cancelling the step-up: the team is published, the systems are not, and Se
   const before = cp.systemsPuts.length;
   await line.getByRole('button', { name: 'Send the system changes' }).click();
   const dlg = page.locator('#live-stepup');
-  await dlg.getByLabel('Confirmation code').fill(cp.stepUpSecret);
-  await dlg.getByRole('button', { name: 'Use passkey' }).click();
+  await dlg.getByLabel('Approval passphrase', { exact: true }).fill(cp.stepUpSecret);
+  await dlg.getByRole('button', { name: 'Confirm', exact: true }).click();
   await page.locator('#publish-result .systems-result', { hasText: 'Your systems are updated' }).waitFor();
   assert.equal(cp.systemsPuts.length, before + 1);
   assert.equal(cp.systems.bindings[0].permission, 'deploy');
@@ -155,8 +155,8 @@ test('the control plane behind HEAD: an unrelated publish lists the earlier wide
   assert.equal(listed.length, 1, listed.join(' | '));
   assert.match(listed[0], /Shared drive/);
   assert.match(listed[0], /Read/);
-  await dlg.getByLabel('Confirmation code').fill(cp.stepUpSecret);
-  await dlg.getByRole('button', { name: 'Use passkey' }).click();
+  await dlg.getByLabel('Approval passphrase', { exact: true }).fill(cp.stepUpSecret);
+  await dlg.getByRole('button', { name: 'Confirm', exact: true }).click();
   await page.locator('#publish-result .systems-result', { hasText: 'Your systems are updated' }).waitFor();
   assert.equal(cp.systems.bindings[0].permission, 'deploy');
 
