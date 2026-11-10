@@ -324,11 +324,15 @@ async function managedRoute(req, url, chat) {
   }
   if (req.method !== 'POST' || (change && !change[2]) || (!change && url.pathname === '/v1/team')) return null;
   const origin = req.headers.origin;
-  if (origin && new URL(origin).host !== req.headers.host) throw new HttpError(403, 'cross-origin request refused');
+  let host = null;
+  try { host = origin ? new URL(origin).host : null; } catch { host = ''; } // "Origin: null" and the like: refused
+  if (origin && host !== req.headers.host) throw new HttpError(403, 'cross-origin request refused');
   if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) throw new HttpError(415, 'send JSON');
   let body = '';
   for await (const chunk of req) { body += chunk; if (body.length > 5_000_000) throw new HttpError(413, 'too large'); }
-  const input = JSON.parse(body || '{}');
+  let input;
+  try { input = JSON.parse(body || '{}'); } catch { throw new HttpError(400, 'the body is not valid JSON'); }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'send a JSON object');
   const key = typeof input.key === 'string' ? input.key.slice(0, 80) : undefined;
   if (change) {
     const words = typeof input.words === 'string' ? input.words.slice(0, 2000) : undefined;

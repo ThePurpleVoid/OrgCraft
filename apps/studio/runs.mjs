@@ -89,7 +89,8 @@ export function workRepoOf(root) {
 export function teamFrom({ version, paths, read }) {
   const slugsOf = paths.filter((p) => /^docs\/team\/roles\/[a-z0-9-]+\.md$/.test(p) && !/README\.md$/.test(p)).map((p) => p.slice(p.lastIndexOf('/') + 1, -3));
   if (!slugsOf.length) throw new RunRefused('publish first: there are no role briefs in docs/team/roles');
-  const json = (path) => { const t = read(path); if (t === null || t === undefined) return null; try { return JSON.parse(t); } catch { return null; } };
+  // A missing file is null; one that does not parse refuses the run, as before the shared parser (code review L31w).
+  const json = (path) => { const t = read(path); if (t === null || t === undefined) return null; try { return JSON.parse(t); } catch { throw new RunRefused(`${path} in the published team is not valid JSON; fix it and publish again`); } };
   const own = json('.agent-team/ownership.json');
   const ownership = own ? own.rows ?? [] : null;
   const mds = slugsOf.map((slug) => ({ slug, md: read(`docs/team/roles/${slug}.md`) ?? '' }));

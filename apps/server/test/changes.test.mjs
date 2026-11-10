@@ -258,3 +258,12 @@ test('a managed team runs on its accepted version: the request names only where 
     assert.equal(row.roster.roles.length, plan.roles);
   }, { publicUrl: ORIGIN });
 });
+
+test('teamFrom refuses a published ownership.json or team.json that does not parse (code review L31w)', async () => {
+  const { teamFrom } = await import('../../studio/runs.mjs');
+  const brief = '# Chief of staff\n\n**Reports to:** owner\n';
+  const read = (bad) => (p) => (p === 'docs/team/roles/chief-of-staff.md' ? brief : p === bad ? '{nope' : null);
+  const paths = ['docs/team/roles/chief-of-staff.md'];
+  assert.equal(teamFrom({ version: 'a'.repeat(40), paths, read: read(null) }).roles[0].slug, 'chief-of-staff');
+  for (const bad of ['.agent-team/ownership.json', '.agent-team/team.json']) assert.throws(() => teamFrom({ version: 'a'.repeat(40), paths, read: read(bad) }), new RegExp(`${bad.replace(/\./g, '\\.')} in the published team is not valid JSON`));
+});

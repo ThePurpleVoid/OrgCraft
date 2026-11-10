@@ -65,6 +65,10 @@ test('a managed team starts empty, publishes a change request and goes live when
   assert.ok(!live.body.noTeam);
   const [published] = await h.db.system("select envelope from events where team = 'dry-run' and type = 'team.published'");
   assert.deepEqual([published.envelope.data.version, published.envelope.data.via], [pub.body.commit, 'managed']);
+  // A bad Origin or body is refused, not a 500 (code review L31w).
+  const raw = async (headers, body) => (await fetch(`${h.studio}/v1/team/preview`, { method: 'POST', headers: { cookie, 'content-type': 'application/json', ...headers }, body })).status;
+  assert.equal(await raw({ origin: 'null' }, '{}'), 403);
+  assert.equal(await raw({}, '{not json'), 400);
   // Routes that are not a managed team's are refused, not passed through.
   assert.equal((await studio('POST', '/v1/team/changes/1/merge', {})).status, 404);
 });

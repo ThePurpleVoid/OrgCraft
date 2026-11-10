@@ -224,6 +224,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     const byPath = new Map(files.map((f) => [f.path, f.content]));
     let roster;
     try { roster = teamFrom({ version: main, paths: [...byPath.keys()], read: (p) => byPath.get(p) ?? null }); } catch (e) { if (e instanceof RunRefused) throw new Problem(409, e.message, { type: 'not-published' }); throw e; }
+    // repo is checked downstream like any run's (m3 checkRoster: URL form, no credentials).
     return { ...roster, ...(asked.repo !== undefined ? { repo: asked.repo } : {}) };
   }
   const hostedStudio = createHostedStudio(studioOrigin ? {
