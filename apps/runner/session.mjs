@@ -3,7 +3,7 @@
 // (session.*, usage.recorded, report.heartbeat, and the front door's chat.message) go out through `emit`; role
 // messages go through the team tool server, so the control plane mints them (docs/product/m3-design.md).
 import { callOf, hashCalls, parseCalls, replay } from './calls.mjs';
-import { tierModel } from '../../packages/model-prices/index.mjs';
+import { modelChoice, tierModel, tierWord } from '../../packages/model-prices/index.mjs';
 import { loadPrices } from '../../packages/model-prices/node.mjs';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -162,9 +162,20 @@ export class Session {
     this.frontDoor = body.frontDoor ?? /\*\*Reports to:\*\*\s*owner\b/i.test(brief);
   }
 
+  /**
+   * The model id this session runs on (F-B2): `model` from the control plane is a tier word (mapped through the
+   * runner's tiers and the price table) or a model id the table lists; without one, the brief's Model line's tier
+   * word, else standard. Anything else is null, and the session refuses its turns before spending anything.
+   */
   get model() {
-    const tier = (/\*\*Model:\*\*\s*([a-z]+)/i.exec(this.body.prompt?.brief ?? '') ?? [])[1]?.toLowerCase();
-    return this.body.model ?? tierModel(this.body.tier ?? tier, PRICES, this.deps.tiers);
+    const asked = this.body.model ?? this.body.tier;
+    if (asked !== undefined && asked !== null) {
+      const c = modelChoice(asked, PRICES);
+      if (!c) return null;
+      return c.model ?? tierModel(c.tier, PRICES, this.deps.tiers);
+    }
+    const line = (/\*\*Model:\*\*\s*([^\n]*)/i.exec(this.body.prompt?.brief ?? '') ?? [])[1];
+    return tierModel(tierWord(line) ?? 'standard', PRICES, this.deps.tiers);
   }
 
   /** What this session may still spend, in minor units: the smaller of today's and the run's remaining budget. */
@@ -283,6 +294,12 @@ export class Session {
     if (this.deps.online) {
       await this.untilStopped(this.deps.online());
       if (this.state === 'stopping' || this.state === 'ended') return;
+    }
+    // F-B2: a model this runner can't name is refused here, before a lease or a call; the notice is the session's,
+    // never a chat reply.
+    if (!this.model) {
+      await this.emit('session.idle', { role: this.role, reason: 'error', detail: `the turn was not run: the model ${JSON.stringify(String(this.body.model ?? this.body.tier).slice(0, 60))} is not a tier (deep, standard, routine, light) or a model in the price table. Nothing was spent.` });
+      return;
     }
     let remaining = this.remaining;
     if (remaining !== null && remaining <= 0) { this.stopReason = 'budget'; this.state = 'stopping'; return; }
