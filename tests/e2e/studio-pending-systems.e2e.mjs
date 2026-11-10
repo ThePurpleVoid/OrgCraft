@@ -83,7 +83,7 @@ test('a pending set waits, the code host reports it accepted, and Switch on now 
   assert.equal(s.pending.ready, false);
   let line = await openStart(page);
   await line.getByText('The system changes are waiting for the change to be approved.').waitFor();
-  assert.equal(await line.getByRole('link', { name: 'see the change' }).getAttribute('href'), 'https://github.com/example/sample-app/pull/7');
+  assert.equal(await line.getByRole('link', { name: 'See the change' }).getAttribute('href'), 'https://github.com/example/sample-app/pull/7');
   assert.match(await line.locator('button.info').getAttribute('data-tip'), /^This team was published as a change for review \(see the change\)\./);
   assert.equal(await line.getByRole('button', { name: 'Switch on now' }).count(), 0, 'nothing to switch on until the change is accepted');
 

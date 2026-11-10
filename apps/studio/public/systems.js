@@ -93,7 +93,7 @@ export const readyTip = () => tipButton(t('systems.ready.tip'));
 /** The waiting line's parts: the line, its ⓘ, and a link to the change when the code host gives one. */
 export function waitingParts(url) {
   const label = t('systems.waiting.link');
-  const parts = [`${t('systems.waiting')} `, tipButton(t('systems.waiting.tip', { change: label }))];
+  const parts = [`${t('systems.waiting')} `, tipButton(t('systems.waiting.tip', { change: label.charAt(0).toLocaleLowerCase() + label.slice(1) }))];
   if (/^https:\/\//.test(url ?? '')) { const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = label; parts.push(' ', a); }
   return parts;
 }
