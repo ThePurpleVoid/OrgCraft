@@ -90,8 +90,10 @@ export function tipButton(text) {
 }
 /** The ⓘ beside the ready line: the report comes from the team's own checks, which OrgCraft does not vouch for. */
 export const readyTip = () => tipButton(t('systems.ready.tip'));
-/** The waiting line's parts: the line, its ⓘ, and a link to the change when the code host gives one. */
-export function waitingParts(url) {
+/** The waiting line's parts: the line, its ⓘ, and a link to the change (`pr`) when the code host gives one. */
+export function waitingParts(url, pr = null) {
+  // No change open for review (no PR, closed, gh unknown, detached HEAD): say so, with no link (CPO §5a).
+  if (!pr) return [`${t('systems.waiting.nochange')} `, tipButton(t('systems.waiting.nochange.tip'))];
   const label = t('systems.waiting.link');
   const parts = [`${t('systems.waiting')} `, tipButton(t('systems.waiting.tip', { change: label.charAt(0).toLocaleLowerCase() + label.slice(1) }))];
   if (/^https:\/\//.test(url ?? '')) { const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = label; parts.push(' ', a); }

@@ -170,6 +170,13 @@ test('Send them now from a pushed branch waits (open PR with its number; none, c
     assert.deepEqual(cp.systemsPuts.at(-1).pending, { sha: head }, `${why}: waits, with no PR number`);
     assert.equal(cp.systems.version, before, `${why}: nothing applied`);
   }
+  // With no change open, the plan says to send it for review, and has no link to a change.
+  await page.reload();
+  const nochange = await openStart(page);
+  await nochange.getByText('The system changes are waiting. Send your published change for review', { exact: false }).waitFor();
+  assert.equal(await nochange.getByRole('link').count(), 0);
+  assert.match(await nochange.locator('button.info').getAttribute('data-tip'), /no change is open for review yet/);
+  await page.keyboard.press('Escape');
 
   // A detached HEAD waits too, with no PR number, so detaching can't skip review.
   cp.dropPending('withdrawn');

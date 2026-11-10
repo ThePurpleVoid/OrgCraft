@@ -570,7 +570,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       if (s.result === 'failed') return [`${t('start.systems.failed')} `, button('switchon', t('systems.switchon'), switchOn)];
       return [`${readyLine()} `, readyTip(), ' ', button('switchon', t('systems.switchon'), switchOn)];
     }
-    if (p) return waitingParts(p.url);
+    if (p) return waitingParts(p.url, p.pr);
     if (s.result === 'dropped') return [droppedLine('base-moved')];
     if (s.inSync) return null;
     const parts = [`${t(s.result === 'failed' ? 'start.systems.failed' : running ? 'run.systems.behind' : 'start.systems.behind')} `, button('send', t('start.systems.send'), send)];

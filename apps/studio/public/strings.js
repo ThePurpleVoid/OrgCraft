@@ -466,6 +466,8 @@ export const EN = {
   "systems.switchon": "Switch on now",
   "systems.waiting": "The system changes are waiting for the change to be approved.",
   "systems.waiting.link": "See the change",
+  "systems.waiting.nochange": "The system changes are waiting. Send your published change for review, and they can be switched on once it's accepted.",
+  "systems.waiting.nochange.tip": "Your team was saved in your files, but no change is open for review yet. Its system changes wait until one is opened and accepted, so nothing anyone hasn't reviewed can widen your team's access.",
   "systems.waiting.tip": "This team was published as a change for review ({change}). Its system changes wait until the change is accepted, so nothing anyone hasn't reviewed can widen your team's access.",
   "team.start": "Start the team",
   "team.state.paused": "Paused",
