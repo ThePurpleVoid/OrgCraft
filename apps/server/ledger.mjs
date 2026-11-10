@@ -14,6 +14,7 @@
 //   GET    /v1/teams/{team}/ledger                  newest first, { items, next }
 import { createHash, randomBytes } from 'node:crypto';
 import { canonical } from '../../packages/calls/index.mjs';
+import { formatMinor, knownCurrency } from '../../packages/calls/money.mjs';
 import { Problem, getTeam } from './store.mjs';
 
 /** Calendar periods in the team's time zone (CPO ruling): a day from midnight, a week from Monday, a month from the 1st. */
@@ -50,7 +51,7 @@ export function ruleForm(body = {}) {
     return { ...form, n: int(body.n, 'n', { max: 10_000 }), channel: label(body.channel, 'channel') };
   }
   if (typeof body.amountField !== 'string' || !FIELD.test(body.amountField)) throw new Problem(400, 'amountField is the input field with the amount, in minor units');
-  if (typeof body.currency !== 'string' || !/^[A-Z]{3}$/.test(body.currency)) throw new Problem(400, 'currency is a three-letter code, like USD');
+  if (!knownCurrency(body.currency)) throw new Problem(400, 'currency is a known three-letter ISO 4217 code, like USD; amounts are whole minor units of it (cents, yen, fils)');
   // The call must say its currency, and it is always compared with the rule's (code review sev 3): a money rule with
   // no currency field would take any currency as the rule's.
   if (typeof body.currencyField !== 'string' || !FIELD.test(body.currencyField)) throw new Problem(400, 'currencyField is the input field with the currency, compared with the rule\'s on every call');
@@ -110,7 +111,8 @@ export const formHash = (form) => sha(`rule/1\n${canonical(form)}`);
 /** The one line a rule reads as (CPO §6b patterns), for the ledger and the list. Parts that are not set are left out. */
 export function ruleLine(form) {
   // "$20", or "$20.50" when there are cents (strings-now rule.* examples).
-  const money = (minor) => new Intl.NumberFormat('en-US', { style: 'currency', currency: form.currency ?? 'USD', ...(minor % 100 === 0 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}) }).format(minor / 100);
+  // By the currency's own exponent (code review L22m): "$20", "$20.50", "¥2,500", "KWD 2.500".
+  const money = (minor) => formatMinor(minor, form.currency ?? 'USD');
   const parts = {
     refund: ['Refunds', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} per customer a ${form.period}`, form.all && `at most ${money(form.all)} a ${form.period} in all`, form.system && `in ${form.system}`],
     'pay.known': ['Payments to people you\'ve paid before', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} a ${form.period}`, form.system && `in ${form.system}`],
