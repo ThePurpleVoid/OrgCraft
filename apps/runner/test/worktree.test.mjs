@@ -114,6 +114,10 @@ test('F-B1: git over ssh uses the operator\'s sshCommand (deploy key, known_host
   const config = join(dir, 'gitconfig');
   // The entrypoint's own gitconfig, as it writes it in the image.
   writeFileSync(config, `[core]\n\tsshCommand = ${operator} -i /data/runner/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/app/apps/runner/known_hosts\n`);
+  chmodSync(config, 0o644);
+  assert.throws(() => useGitConfig(config), /must be mode 0600 and owned by the runner's user or root \(it is 644/, 'a config others could write is refused at start');
+  assert.equal(effectiveSshCommand(), 'ssh');
+  chmodSync(config, 0o600);
   const repo = join(dir, 'repo');
   execFileSync('git', ['init', '--quiet', '-b', 'main', repo]);
   execFileSync('git', ['config', 'core.sshCommand', planted], { cwd: repo });
@@ -127,7 +131,7 @@ test('F-B1: git over ssh uses the operator\'s sshCommand (deploy key, known_host
     // No operator config: plain ssh, still never the repository's.
     useGitConfig(join(dir, 'missing'));
     assert.equal(effectiveSshCommand(), 'ssh');
-    writeFileSync(join(dir, 'empty'), '[user]\n\tname = runner\n');
+    writeFileSync(join(dir, 'empty'), '[user]\n\tname = runner\n', { mode: 0o600 });
     useGitConfig(join(dir, 'empty'));
     assert.equal(effectiveSshCommand(), 'ssh', 'an operator config without sshCommand: plain ssh');
     assert.equal(existsSync(join(dir, 'calls.log')), true);

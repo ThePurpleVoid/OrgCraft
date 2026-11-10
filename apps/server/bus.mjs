@@ -516,6 +516,31 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
     return s;
   }
 
+  /**
+   * The remote's words, quoted and defanged: a self-hosted remote controls them, and they reach the owner's email in the
+   * system's voice, so no link in them may be clickable (no scheme, no www., no host name a mail client links).
+   */
+  function remoteSaid(text) {
+    return String(text).slice(0, 400).replace(/["\u201c\u201d]/g, "'").replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/\b([a-z][a-z0-9+.-]*):\/\//gi, '$1[:]//')
+      .replace(/\bwww\./gi, 'www[.]')
+      .replace(/@/g, '[at]')
+      .replace(/\b([a-z0-9-]*[a-z][a-z0-9-]*)\.(?=[a-z][a-z0-9-]*\b)/gi, '$1[.]');
+  }
+
+  async function blockedForOwner(ctx, sess, d) {
+    const [run] = await ctx.q('select roster from runs where id = $1', [sess.run]);
+    const front = run?.roster?.frontDoor ?? null;
+    if (!front) return;
+    const what = d.reason === 'push' ? `push ${d.branch ?? 'its branch'}` : d.reason === 'open' ? `open a pull request for ${d.branch ?? 'its branch'}` : `use the GitHub App for ${d.branch ?? 'its branch'} (${d.phase ?? 'write'})`;
+    await ctx.emit(sess.team, 'message.blocked', {
+      to: front, task: `${sess.role}: ${what}`,
+      detail: `BLOCKED: the runner could not ${what}.${d.detail ? ` The remote said: "${remoteSaid(d.detail)}"` : ''}`,
+      need: d.reason === 'push' ? 'a deploy key with write access, or a branch rule that lets the runner push' : d.reason === 'installation' ? 'the GitHub App installed on this repository and bound to this workspace' : 'the GitHub App able to open pull requests on this repository',
+      needFrom: 'owner', meanwhile: 'nothing was pushed, opened or merged; the work stays committed on the runner',
+    }, { actor: { kind: 'system', id: 'control-plane' }, subject: `session/${sess.id}` });
+  }
+
   const ops = {
     /**
      * secret.get (runner/1, L20): one value for a local server in the sidecar. The vault checks everything against the
@@ -556,6 +581,10 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
               [conn.tenant, sess.team, env.id, 'role', sess.role, String(env.data.text ?? ''), env.data.replyTo ?? null, env.time]);
           }
           if (e.type === 'proposal.failed' && e.data?.reason === 'head-moved' && e.data?.approval) await supersedeApproval(ctx, sess, e.data);
+          // F-B5: a push, a pull request or a binding the provider refused is the owner's to see, in the control
+          // plane's own words: a BLOCKED to the front door (and the owner's blocked email), which no session can
+          // turn into a merge request of its own.
+          if (e.type === 'proposal.failed' && ['push', 'open', 'installation'].includes(e.data?.reason)) await blockedForOwner(ctx, sess, e.data);
           return out;
         });
         stored.push(...s);

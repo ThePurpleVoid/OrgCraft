@@ -56,7 +56,7 @@ Once, before the first start (the owner checklist, part A, made these):
 
 ```sh
 mkdir -p ~/.agent-team/runner-secrets && chmod 700 ~/.agent-team/runner-secrets
-ssh-keygen -t ed25519 -f ~/.agent-team/runner-secrets/runner-deploy-key -N ""   # paste only the .pub as a deploy key
+ssh-keygen -t ed25519 -f ~/.agent-team/runner-secrets/runner-deploy-key -N ""   # paste only the .pub as a deploy key, with "Allow write access" ticked
 # the merger GitHub App: install it only on the team's own repositories, with Contents and Pull requests
 # read and write, Metadata read and (for the Ready to try preview link) Deployments read, and nothing else.
 # Its private key, downloaded from GitHub, saved as:
@@ -111,6 +111,14 @@ never trust on first use). To replace a key later: `docker run --rm -v ~/.agent-
 -v agent-team-runner:/data agent-team-runner true`, then `docker restart agent-team-runner`. Mount only
 `runner-secrets`, never all of `~/.agent-team`: that also holds the control plane's data. Do not add
 `--security-opt no-new-privileges` (the sandbox needs its file capabilities).
+
+The runner's git uses exactly that git config's `core.sshCommand` (the deploy key, `IdentitiesOnly`, strict host key
+checking against the image's `known_hosts`); a repository's own config can never change it, and the runner refuses
+to start when the config is not `0600` and owned by the runner or root. **The deploy key needs write access**:
+without it every push is refused. When the remote refuses a push (a read-only key, a branch rule) or the pull request
+can't be opened, nothing is pushed, opened or merged: the session is told `BLOCKED` with GitHub's own words, the
+control plane sends the front door a BLOCKED for you (and the "A role is blocked" email if it is on), and no other
+way to merge is offered. Fix the key or the rule, then ask the team to try again.
 
 - `AGENT_TEAM_SERVER` is not needed after `register`: the server is kept with the key in the volume.
 - With the merger app's key and `AGENT_TEAM_MERGER_APP_ID`, the runner opens each session's pull request after its

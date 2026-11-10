@@ -313,7 +313,7 @@ test('#28 installation binding in a session: no push, proposal or merge for a re
     const o = cp.start({ role: 'web-dev', run: 'run_7', repo: { url: bare, installations: [7] }, worktree: 'web/7-out', areas: ['form.txt'] });
     await cp.until(() => results.length === 1);
     assert.ok(results[0].isError);
-    assert.match(results[0].text, /could not be pushed.*502/);
+    assert.match(results[0].text, /^BLOCKED: the branch web\/7-out was not pushed: .*502.*Nothing was pushed, opened or merged\. Do not merge/, 'an outage: blocked, and not said to have told the owner');
     cp.send('session.stop', { session: o.body.session, mode: 'finish-step', reason: 'owner' });
     await cp.until(() => cp.events.some((e) => e.type === 'session.ended'));
     const out = cp.events.find((e) => e.type === 'session.ended').data;
@@ -328,7 +328,7 @@ test('#28 installation binding in a session: no push, proposal or merge for a re
     const a = cp.start({ role: 'web-dev', run: 'run_7', repo: { url: bare, installations: [8] }, worktree: 'web/7-form', areas: ['form.txt'] });
     await cp.until(() => results.length === 1 && cp.events.some((e) => e.type === 'proposal.failed'));
     assert.ok(results[0].isError);
-    assert.match(results[0].text, /could not be pushed/);
+    assert.match(results[0].text, /^BLOCKED: the branch web\/7-form was not pushed: .*the owner has been told/);
     const failed = cp.events.find((e) => e.type === 'proposal.failed');
     assert.deepEqual([failed.data.reason, failed.data.phase, failed.data.branch], ['installation', 'push', 'web/7-form']);
     assert.match(failed.data.detail, /not bound/);

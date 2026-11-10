@@ -6,8 +6,11 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { meetingAttendees, ownsPaths } from '../../packages/team-model/index.mjs';
-import { tierWord } from '../../packages/model-prices/index.mjs';
+import { modelChoice, tierWord } from '../../packages/model-prices/index.mjs';
+import { loadPrices } from '../../packages/model-prices/node.mjs';
 import { parseBrief } from '../../tools/briefs.mjs';
+
+const PRICES = loadPrices();
 
 const BRIEF_MAX = 20_000; // bytes: the control plane refuses a longer brief
 const SUMMARY_MAX = 2_000;
@@ -99,7 +102,7 @@ export function teamFrom({ version, paths, read }) {
     const b = parseBrief(slug, md);
     const areas = ownership ? ownership.filter((r) => r.writer === slug).flatMap((r) => String(r.path).split(/,\s*/)) : ownsPaths(md).paths.filter((x) => x.mode === 'writes').map((x) => x.path);
     // The brief's Model line is words for people ("deep (high effort)"): only its tier word goes to the run (F-B2).
-    const tier = tierWord(b.model);
+    const tier = tierWord(b.model) ?? modelChoice(String(b.model ?? '').trim(), PRICES)?.model ?? null;
     return { slug, reportsTo: b.reportsTo, areas: [...new Set(areas.map((a) => a.replace(/`/g, '').trim()).filter(Boolean))], ...(tier ? { model: tier } : {}), status: b.status, brief: cut(md, BRIEF_MAX, '\n\n(cut to fit a run)') };
   });
   const slugs = new Set(roles.map((r) => r.slug));

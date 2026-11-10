@@ -13,7 +13,7 @@
 //   - no secret is in the changes (file names and content), the same scan the memory file gets (R4).
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { owns } from './policy.mjs';
@@ -37,6 +37,14 @@ export function useGitConfig(path) {
   gitGlobal = path && existsSync(path) ? path : '/dev/null';
   sshCommand = 'ssh';
   if (gitGlobal === '/dev/null') return;
+  // It names the command every push runs, so only the runner (or root) may write it: 0600, owned by either
+  // (security on LT-FB: a session under the runner's uid must not be able to plant one for the next start).
+  const st = statSync(gitGlobal);
+  const me = process.getuid?.() ?? 0;
+  if ((st.mode & 0o077) !== 0 || (st.uid !== me && st.uid !== 0)) {
+    gitGlobal = '/dev/null';
+    throw new Error(`${path} must be mode 0600 and owned by the runner's user or root (it is ${(st.mode & 0o777).toString(8)}, uid ${st.uid}); fix it and start again`);
+  }
   let own = '';
   try {
     own = execFileSync('git', ['config', '--file', gitGlobal, '--get', 'core.sshCommand'], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }, encoding: 'utf8' }).trim();
@@ -404,6 +412,17 @@ export async function checkpoint({ cwd, branch, role, reason, areas = [], secret
     // `changes`: the paths the branch changes against its base (none: there is nothing to propose yet).
     return { commit, pushed: true, changes: h.names.length, held, ...(held.length ? { error: `left uncommitted, outside the owned areas: ${held.slice(0, 10).join(', ')}` } : {}) };
   } catch (e) {
-    return { commit, pushed: false, held, error: String(e.stderr || e.message).trim().split('\n').pop() };
+    return { commit, pushed: false, held, error: pushError(e) };
   }
+}
+
+/**
+ * Why git refused a push, in a line people can act on (F-B5): the remote's own ERROR or rejection lines (a read-only
+ * deploy key, a protected branch, host key verification) first, then git's last line. At most 400 characters.
+ */
+export function pushError(e) {
+  const lines = String(e?.stderr || e?.message || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const telling = lines.filter((l) => /^(remote:\s*)?(error|fatal)\b|rejected|read.only|denied|verification failed|protected/i.test(l) && !/^error: failed to push some refs/i.test(l));
+  const last = lines.at(-1) ?? 'git push failed';
+  return [...new Set([...telling.slice(0, 3), last])].join(' ').slice(0, 400);
 }
