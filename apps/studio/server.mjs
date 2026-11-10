@@ -19,13 +19,13 @@ import { parseBrief } from '../../tools/briefs.mjs';
 import { graphFrom } from '../../tools/roster-graph.mjs';
 import { hostGuard } from '../../tools/hosts.mjs';
 import { ownershipFromMarkdown, suggestAreas, suggestChecks } from './suggest.mjs';
-import { loadKit, loadTemplates } from '../../packages/team-model/node.mjs';
+import { canonicalSystemsHash, loadKit, loadTemplates } from '../../packages/team-model/node.mjs';
 import * as core from './core.mjs';
 import { liveSource } from './live.mjs';
 import { changeUrl, localRollout, pendingOf } from './rollout.mjs';
 import { chatSource } from './chat.mjs';
 import { runRequest, RunRefused } from './runs.mjs';
-import { openPullRequest, prSupport, pullRequestText } from './pr.mjs';
+import { openChangeRequest, openPullRequest, reviewUrl, prSupport, pullRequestText } from './pr.mjs';
 import { linkHash, resolveMeeting } from './public/links.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -34,9 +34,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * The systems as published: .agent-team/resources.json at HEAD, as { resources, bindings }, or null when the published
  * team has none. Read from Git, so a draft on the canvas or an uncommitted edit is never what the control plane gets.
  */
-export function publishedSystems(root) {
+export function publishedSystems(root, rev = 'HEAD') {
   let text;
-  try { text = execFileSync('git', ['-C', root, 'show', 'HEAD:.agent-team/resources.json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return null; }
+  try { text = execFileSync('git', ['-C', root, 'show', `${rev}:.agent-team/resources.json`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return null; }
   let json;
   try { json = JSON.parse(text); } catch { return null; }
   return { resources: Array.isArray(json?.resources) ? json.resources : [], bindings: Array.isArray(json?.bindings) ? json.bindings : [] };
@@ -75,7 +75,22 @@ export async function systemsPlan(root, chat) {
   const there = await chat.systems();
   const here = publishedSystems(root) ?? { resources: [], bindings: [] };
   const inSync = sameSystems(here, there);
-  return { connected: true, version: there.version ?? 0, inSync, items: inSync ? [] : systemsCapability(there, here), lost: inSync ? [] : systemsLost(there, here), names: systemsNames(root, here, there), hash: systemsHash(here), here };
+  // L40b: a set waiting for its change to be accepted. `ours` when it is what HEAD publishes (same content hash), so
+  // the page says it is waiting, or ready to switch on, instead of offering to send it again. What switching it on
+  // would change is the control plane's current systems against the pending set.
+  const p = there.pending ?? null;
+  const pending = p ? {
+    sha: p.sha, pr: p.pr ?? null, url: Number.isInteger(p.pr) && p.pr > 0 ? changeUrl(root, { pr: p.pr }) : null, openUrl: Number.isInteger(p.pr) && p.pr > 0 ? null : reviewUrl(root), contentHash: p.contentHash, ready: !!p.ready, expiresAt: p.expiresAt ?? null,
+    ours: p.contentHash === canonicalSystemsHash(here),
+    items: systemsCapability(there, p), lost: systemsLost(there, p),
+  } : null;
+  return { connected: true, version: there.version ?? 0, inSync, items: inSync ? [] : systemsCapability(there, here), lost: inSync ? [] : systemsLost(there, here), names: systemsNames(root, here, there, p), hash: systemsHash(here), pending, codeHost: codeHost(root), here };
+}
+
+/** Who the "{code host}" in "… reports that the change was accepted" is: named from the origin remote, never vouched for. */
+export function codeHost(root) {
+  const url = tryGit(root, 'remote', 'get-url', 'origin');
+  return /github/i.test(url) ? 'GitHub' : /gitlab/i.test(url) ? 'GitLab' : /bitbucket/i.test(url) ? 'Bitbucket' : null;
 }
 
 /**
@@ -97,8 +112,8 @@ export function systemsLost(there, here) {
 }
 
 /** People's words for the ids a systems list names: teammates by name, systems by name (never ids on screen). */
-function systemsNames(root, here, there) {
-  const systems = Object.fromEntries([...(there?.resources ?? []), ...(here?.resources ?? [])].map((r) => [r.id, r.name || r.id]));
+function systemsNames(root, here, there, pending = null) {
+  const systems = Object.fromEntries([...(there?.resources ?? []), ...(pending?.resources ?? []), ...(here?.resources ?? [])].map((r) => [r.id, r.name || r.id]));
   let roles = {};
   try { roles = Object.fromEntries((state(root).members ?? []).map((m) => [m.id, m.name])); } catch { /* the names fall back to the page's */ }
   return { roles, systems };
@@ -362,7 +377,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       // Who is signed in to the control plane, so a page can say "You" for this person's own answers (L39).
       if (req.method === 'GET' && url.pathname === '/v1/team/me') {
         if (!chat.connected) return send(res, 200, { connected: false });
-        return relay(res, async () => { const me = await chat.me(); return { connected: true, id: me?.id ?? me?.person?.id ?? null }; });
+        return relay(res, async () => { const me = await chat.me(); return { connected: true, id: me?.id ?? me?.person?.id ?? null, codeHost: codeHost(root) }; });
       }
       if (req.method === 'GET' && url.pathname === '/v1/team/approvals') {
         if (!chat.connected) return send(res, 200, { connected: false });
@@ -465,9 +480,23 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           // A refusal here drops any held step-up: it was given for the set shown, and must not carry over to the next
           // one (security review L40w sev3).
           if (!Number.isInteger(input.version) || typeof input.hash !== 'string') { chat.dropStepUp(); throw new HttpError(400, 'send the version and hash from GET /v1/team/systems'); }
-          const here = publishedSystems(root) ?? { resources: [], bindings: [] };
+          // The commit is read once and its systems read from it, so the sha a pending set is bound to and the content
+          // sent can't drift apart (security review L40b-web nit).
+          const sha = git(root, 'rev-parse', 'HEAD');
+          const here = publishedSystems(root, sha) ?? { resources: [], bindings: [] };
           if (systemsHash(here) !== input.hash) { chat.dropStepUp(); throw new HttpError(409, 'the published systems changed since they were shown', { type: 'systems-moved' }); }
-          return relay(res, () => chat.setSystems({ ...here, expect: input.version }, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
+          // PR mode (L40b): bound to the commit the pull request carries, applied only when the owner switches it on.
+          // A plain send from a branch whose change request is still open waits too (CTO ruling): systems nobody has
+          // reviewed must not widen a team's access. A purely local branch, or the default branch, sends directly.
+          const open = input.pending === true ? null : openChangeRequest(root, env);
+          const pr = input.pending === true ? (Number.isInteger(input.pr) && input.pr > 0 ? input.pr : null) : open ? open.pr : undefined;
+          const pending = pr === undefined ? null : { sha, ...(pr ? { pr } : {}) };
+          return relay(res, () => chat.setSystems({ ...here, expect: input.version, ...(pending ? { pending } : {}) }, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
+        }
+        // L40b: switch on a pending set, the one shown (its commit and content hash), behind a fresh systems step-up.
+        if (url.pathname === '/v1/team/systems/pending/apply') {
+          if (!/^[0-9a-f]{40}$/.test(String(input.sha ?? '')) || !/^[0-9a-f]{64}$/.test(String(input.contentHash ?? ''))) { chat.dropStepUp(); throw new HttpError(400, 'send the sha and contentHash of the pending change shown'); }
+          return relay(res, () => chat.applyPending({ sha: input.sha, contentHash: input.contentHash }));
         }
         const withdraw = /^\/v1\/team\/standing-rules\/([^/]+)\/withdraw$/.exec(url.pathname);
         if (withdraw) return relay(res, () => chat.withdrawRule(decodeURIComponent(withdraw[1])));
