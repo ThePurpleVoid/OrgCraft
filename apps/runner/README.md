@@ -72,6 +72,13 @@ node deploy/server/step-up-hash.mjs > ~/.agent-team/step-up.hash && chmod 600 ~/
 AGENT_TEAM_STEP_UP_SECRET_HASH="$(cat ~/.agent-team/step-up.hash)" \
   node apps/server/bin.mjs                # http://127.0.0.1:4849, data in ~/.agent-team/server
 #    (Without the hash, a local server makes its own passphrase in ~/.agent-team/server/step-up.secret.)
+#    For the team to push and open pull requests, name the merger app's installation (local mode only; the server
+#    refuses it beside DATABASE_URL or sign-in). Its id is the number at the end of the installation's settings page,
+#    github.com/settings/installations/<id> (not the App ID). Optionally narrow it to the team's repositories. The
+#    runner still checks with GitHub before every push and merge that the repository is under this installation:
+#      AGENT_TEAM_GITHUB_INSTALLATION_ID=<id> AGENT_TEAM_GITHUB_REPOS=<owner>/<repo> \
+#      AGENT_TEAM_STEP_UP_SECRET_HASH="$(cat ~/.agent-team/step-up.hash)" node apps/server/bin.mjs
+#    The server prints "GitHub installation (set by the operator): <id>". Keep it on 127.0.0.1 (the default).
 T=$(cat ~/.agent-team/server/admin.token)
 curl -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"id":"my-team"}' localhost:4849/v1/teams
 AGENT_TEAM_SERVER=http://127.0.0.1:4849 AGENT_TEAM_SERVER_TOKEN="$T" AGENT_TEAM_SERVER_TEAM=my-team \

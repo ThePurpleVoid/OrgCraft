@@ -565,3 +565,22 @@ test('session.start carries repo.installations, the GitHub App installations the
     assert.deepEqual(f.body.repo, { url: 'https://github.com/example/shop.git', ref: 'main' }, 'left off when none is bound');
   }, { publicUrl: 'https://plane.example', tickMs: 0, installationsFor: async () => [] });
 });
+
+test('F-B5: in local mode the operator\'s pinned installation rides session.start, only for the repositories it names', async () => {
+  const { installationPin } = await import('../pin.mjs');
+  const pin = installationPin({ AGENT_TEAM_GITHUB_INSTALLATION_ID: '5687048' }, { tenant: 'acme' });
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'Ship the cart' });
+    const f = await start(runner, 'chief-of-staff');
+    assert.deepEqual(f.body.repo, { url: 'https://github.com/example/shop.git', ref: 'main', installations: [5687048] });
+  }, { publicUrl: 'https://plane.example', tickMs: 0, installationsFor: pin.installationsFor });
+  // AGENT_TEAM_GITHUB_REPOS leaves any other repository without one, so the runner refuses as it does today.
+  const narrow = installationPin({ AGENT_TEAM_GITHUB_INSTALLATION_ID: '5687048', AGENT_TEAM_GITHUB_REPOS: 'example/other' }, { tenant: 'acme' });
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'Ship the cart' });
+    const f = await start(runner, 'chief-of-staff');
+    assert.deepEqual(f.body.repo, { url: 'https://github.com/example/shop.git', ref: 'main' });
+  }, { publicUrl: 'https://plane.example', tickMs: 0, installationsFor: narrow.installationsFor });
+});
