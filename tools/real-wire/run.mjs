@@ -26,7 +26,7 @@
 //   node tools/real-wire/run.mjs --fake
 import { execFileSync, spawn } from 'node:child_process';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -104,6 +104,18 @@ export async function realWire(o = {}) {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
   const cleanups = [];
   let plane, db;
+  // Teardown runs once: at the end, or on Ctrl-C / SIGTERM (at the passphrase prompt or mid-run), so no copy of a key,
+  // no container holding the model key and no volume holding the deploy key is left behind (security on RW).
+  let tornDown = null;
+  const teardown = () => (tornDown ??= (async () => {
+    try { plane?.runners?.closeAll?.(); plane?.closeAllConnections?.(); plane?.close(); } catch { /* closed */ }
+    try { await db?.close?.(); } catch { /* closed */ }
+    for (const c of cleanups.reverse()) { try { await c(); } catch { /* best effort */ } }
+  })());
+  const onSignal = (sig) => { log(`${sig}: stopping and removing everything this test started`); teardown().finally(() => { rmSync(work, { recursive: true, force: true }); process.exit(130); }); };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  cleanups.push(() => { process.off('SIGINT', onSignal); process.off('SIGTERM', onSignal); });
 
   try {
     // ---- the world: real secrets and GitHub, or the fake ----
@@ -133,6 +145,8 @@ export async function realWire(o = {}) {
       for (const f of ['runner-deploy-key', 'readonly-deploy-key', 'merger-app.pem']) if (!existsSync(join(secrets, f))) throw new Error(`missing ${join(secrets, f)} (plans/setup-day/sandbox-repo.md, step 2 and 3)`);
       if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set in this shell; the runner needs it for the model');
       appKey = readFileSync(join(secrets, 'merger-app.pem'), 'utf8');
+      // Key copies an earlier run left (killed with SIGKILL, say): removed before anything starts.
+      for (const d of readdirSync(join(secrets, '..'))) if (d.startsWith('.real-wire-keys-')) rmSync(join(secrets, '..', d), { recursive: true, force: true });
       api = 'https://api.github.com';
     }
     const { githubApp } = await import(pathToFileURL(join(KIT, 'packages/github-app/index.mjs')));
@@ -335,9 +349,7 @@ export async function realWire(o = {}) {
   } catch (e) {
     row('the test ran to the end', false, e.message);
   } finally {
-    try { plane?.runners?.closeAll?.(); plane?.closeAllConnections?.(); plane?.close(); } catch { /* closed */ }
-    try { await db?.close?.(); } catch { /* closed */ }
-    for (const c of cleanups.reverse()) { try { await c(); } catch { /* best effort */ } }
+    await teardown();
   }
 
   // ---- 7. the table ----

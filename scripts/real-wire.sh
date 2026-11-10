@@ -28,6 +28,10 @@ done
 [ -n "${ANTHROPIC_API_KEY:-}" ] || fail "ANTHROPIC_API_KEY is not set in this shell"
 command -v docker >/dev/null || fail "docker is not installed"
 docker info >/dev/null 2>&1 || fail "Docker is not running (open Docker Desktop)"
+# Whatever an earlier run left (killed before its own cleanup): the test container, its volume, copied keys.
+docker rm -f orgcraft-real-wire >/dev/null 2>&1 || true
+docker volume rm orgcraft-real-wire >/dev/null 2>&1 || true
+rm -rf "$SECRETS"/../.real-wire-keys-*
 if [ -z "${REAL_WIRE_NO_BUILD:-}" ]; then
   echo "real-wire: building the runner image from this checkout"
   docker build -q -f apps/runner/Dockerfile -t agent-team-runner . >/dev/null
