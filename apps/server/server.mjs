@@ -815,7 +815,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'run-plan' && !c && m === 'GET') {
         try {
           const r = await managedRoster(t, team, { from: 'managed' });
-          return send(res, 200, { ok: true, version: r.version, summary: r.summary, roles: r.roles.length, frontDoor: r.roles.find((x) => x.reportsTo === 'owner').slug });
+          return send(res, 200, { ok: true, version: r.version, summary: r.summary, roles: r.roles.length, frontDoor: r.roles.find((x) => x.reportsTo === 'owner')?.slug ?? null });
         } catch (e) { if (e instanceof Problem && e.status === 409) return send(res, 200, { ok: false, error: e.message, type: e.type }); throw e; }
       }
       if (b === 'runs' && !c && m === 'POST') {
