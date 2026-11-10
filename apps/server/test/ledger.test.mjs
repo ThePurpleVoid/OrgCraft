@@ -267,10 +267,12 @@ test('Make this a standing rule: a draft from one approved call, no wider than i
     await approve(a);
     d = await p.call('GET', `/teams/shop/approvals/${a.approval}/rule-draft`);
     assert.equal(d.status, 200, JSON.stringify(d.body));
-    assert.deepEqual(d.body.form, ruleForm({ kind: 'refund', tool: 'mcp__payments__refund', recipientField: 'customer', amountField: 'amount', currencyField: 'currency', currency: 'USD', maxEach: 1300, total: 3900, period: 'week', system: 'payments', fixed: {}, free: ['reason'] }));
+    assert.deepEqual(d.body.form, ruleForm({ kind: 'refund', tool: 'mcp__payments__refund', recipientField: 'customer', amountField: 'amount', currencyField: 'currency', currency: 'USD', maxEach: 1300, total: 3900, period: 'week', system: 'Payments', fixed: {}, free: ['reason'] }));
     assert.equal(d.body.line, ruleLine(d.body.form));
     assert.equal(d.body.approval, a.approval);
-    assert.equal(typeof d.body.effect, 'string');
+    // The effect in words, the system as the team names it (web-dev); the exact fact stays in `call`.
+    assert.equal(d.body.effect, 'Refunds $12.50 to cus_dana · in Payments');
+    assert.match(d.body.call, /^mcp__payments__refund \{/);
     // The draft, made as is, is a rule (the owner's words and the scoped step-up as always), and says its number.
     const made = await p.call('POST', '/teams/shop/standing-rules', { ...d.body.form, approval: a.approval, words: 'late refunds are fine' }, await p.su(ruleScope(d.body.form)));
     assert.deepEqual([made.status, made.body.number], [201, 1]);
@@ -309,4 +311,33 @@ test('Make this a standing rule: a draft from one approved call, no wider than i
     assert.deepEqual([y.form.maxEach, y.form.total], [1234, 3702]);
     assert.match(y.line, /up to ¥1,234 each/);
   });
+});
+
+test('a draft fixes the other target fields to the approved values and leaves only content free (code review L22m sev 3)', async () => {
+  const { draftForm, effectWords, fromDraft } = await import('../ledger.mjs');
+  const no = (reason) => { throw new Error(reason); };
+  // A message to a known `to` with a bcc: later messages may not bcc anyone else.
+  const mail = draftForm('outbound-message', [{ tool: 'mcp__mail__send', input: { to: 'ann@shop.example', bcc: 'me@evil.example', subject: 'Your order', body: 'On its way' } }], no);
+  assert.deepEqual([mail.fixed, mail.free], [{ bcc: 'me@evil.example' }, ['body', 'subject']]);
+  assert.match(ruleLine(mail), /only when bcc is "me@evil.example"/);
+  assert.equal(effectWords({ ...mail, channel: 'Email' }, { to: 'ann@shop.example' }), 'Sends a message to ann@shop.example · in Email');
+  // A refund with a destination: later refunds may not route anywhere else.
+  const refund = draftForm('refund', [{ tool: 'mcp__payments__refund', input: { customer: 'cus_a', amount: 500, currency: 'USD', destination: 'acct_1', reason: 'late' } }], no);
+  assert.deepEqual([refund.fixed, refund.free], [{ destination: 'acct_1' }, ['reason']]);
+  // The draft as is, a free field fixed or left out, a fixed field left out: no wider.
+  for (const narrower of [mail, { ...mail, free: ['body'] }, { ...mail, fixed: { ...mail.fixed, subject: 'Your order' }, free: ['body'] }, { ...mail, fixed: {} }]) assert.ok(fromDraft(narrower, mail), JSON.stringify(narrower));
+  // Moving a fixed field to free, or fixing it to another value, is wider.
+  assert.ok(!fromDraft({ ...mail, fixed: {}, free: [...mail.free, 'bcc'] }, mail));
+  assert.ok(!fromDraft({ ...mail, fixed: { bcc: 'other@evil.example' } }, mail));
+  assert.ok(!fromDraft({ ...refund, fixed: {}, free: ['destination', 'reason'] }, refund));
+  // Free is an allowlist of content (security L22m sev 2): a payment's source account and any unknown field keep the
+  // approved value; a refund may leave its charge free.
+  const pay = draftForm('payment', [{ tool: 'mcp__payments__pay', input: { payee: 'acct_bob', amount: 900, currency: 'USD', source: 'acct_ours', memo: 'May', priority: 'high' } }], no);
+  assert.deepEqual([pay.recipientField, pay.fixed, pay.free], ['payee', { priority: 'high', source: 'acct_ours' }, ['memo']]);
+  const charge = draftForm('refund', [{ tool: 'mcp__payments__refund', input: { customer: 'cus_a', amount: 500, currency: 'USD', charge: 'ch_1' } }], no);
+  assert.deepEqual([charge.fixed, charge.free], [{}, ['charge']]);
+  // And at creation, not just in a draft: a free bcc, destination or source is refused whatever the client sends.
+  for (const k of ['bcc', 'cc', 'reply_to', 'destination', 'source', 'account_id', 'iban', 'webhook_url', 'payment_method'])
+    assert.throws(() => ruleForm({ ...RULE, free: [k] }), (e) => e.type === 'rule-never-free', k);
+  assert.doesNotThrow(() => ruleForm({ ...RULE, free: ['note', 'total_items'] }));
 });

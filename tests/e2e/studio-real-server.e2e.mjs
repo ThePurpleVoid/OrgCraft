@@ -223,7 +223,7 @@ test('against the real control plane: systems sent behind a scoped step-up, and 
 test('against the real control plane: Make this a standing rule from an approved refund, its number, and one per approval (L22)', { skip }, async () => {
   const { hashCalls, callOf } = await import('../../packages/calls/index.mjs');
   const { boundCalls } = await import('../../apps/server/signed.mjs');
-  const calls = [{ tool: 'mcp__payments__refund', input: { amount: 2490, currency: 'USD', customer: 'cus_dana', reason: 'cracked mug' } }];
+  const calls = [{ tool: 'mcp__payments__refund', input: { amount: 2490, currency: 'USD', customer: 'cus_dana', order_id: 'ord_77', reason: 'cracked mug' } }];
   const bound = boundCalls(calls, hashCalls(calls.map((c) => callOf(c.tool, c.input))));
   const { result: apr } = await role.approval({ action: 'payment', call: { command: JSON.stringify(calls) }, why: 'The mug arrived cracked.', role: 'chief-of-staff', bound });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -239,7 +239,11 @@ test('against the real control plane: Make this a standing rule from an approved
   // The real rule-draft: the button, then the sheet from the exact call, made behind a step-up scoped to it and its days.
   await card.getByRole('button', { name: 'Make this a standing rule' }).click();
   const sheet = card.locator('.mkrule');
-  await sheet.getByText(/which you approved: /).waitFor();
+  // The effect in words, and the who-and-where fields fixed to the approved values (security L22m sev2): never free.
+  await sheet.getByText(/which you approved: Refunds \$24\.90 to cus_dana · in Payments/).waitFor();
+  const quote = await sheet.locator('.mr-quote').textContent();
+  assert.match(quote, /order id is "?ord_77"?/, quote);
+  assert.match(quote, /in Payments/, quote);
   await sheet.getByLabel('In your own words, why the team doesn\'t need to ask you for this').fill('cracked mugs are fine to refund');
   await sheet.getByRole('button', { name: 'Make the rule with your passkey' }).click();
   const su = page.locator('#stepup-dialog');

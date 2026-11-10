@@ -15,7 +15,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { canonical } from '../../packages/calls/index.mjs';
 import { Problem, getTeam } from './store.mjs';
-import { KINDS, NEVER, NEVER_TOOL, PERIODS, RuleError, int as intCore, minorDigits, ruleForm as ruleFormCore, ruleLine } from '../../packages/calls/rules.mjs';
+import { redact as redactText } from './signed.mjs';
+import { CONTENT, CONTENT_REFUND, KINDS, NEVER, NEVER_FREE, NEVER_TOOL, PERIODS, RuleError, int as intCore, formatMinor, minorDigits, ruleForm as ruleFormCore, ruleLine } from '../../packages/calls/rules.mjs';
 
 export { KINDS, NEVER, PERIODS, ruleLine };
 
@@ -59,8 +60,25 @@ export const ruleScope = (form, days = 30) => `rule:${sha(`rule/2\n${canonical({
  */
 export function fromDraft(form, d) {
   for (const k of ['kind', 'tool', 'recipientField', 'amountField', 'currencyField', 'currency']) if ((form[k] ?? null) !== (d[k] ?? null)) return false;
-  const callFields = new Set(d.free ?? []);
-  return [...Object.keys(form.fixed ?? {}), ...(form.free ?? [])].every((k) => callFields.has(k));
+  // A field the draft fixed stays fixed to the approved value, or is left out (narrower); never moved to free (code
+  // review L22m sev 3). A free field may be left free, fixed to a value, or left out.
+  const draftFixed = d.fixed ?? {};
+  const draftFree = new Set(d.free ?? []);
+  for (const [k, v] of Object.entries(form.fixed ?? {})) if (k in draftFixed ? draftFixed[k] !== v : !draftFree.has(k)) return false;
+  return (form.free ?? []).every((k) => draftFree.has(k));
+}
+
+/**
+ * What the approved call did, in words (web-dev, strings like the card's facts): "Refunds $24.90 to cus_dana · in
+ * Payments", "Pays $9 to acct_bob · in Payments", "Sends a message to ann@shop.example · in Email". Built by the
+ * server from the call and its draft, redacted like the card's facts; `call` keeps the exact fact.
+ */
+export function effectWords(form, input) {
+  const to = String(input?.[form.recipientField] ?? '').slice(0, 120);
+  const amount = form.amountField ? formatMinor(input[form.amountField], form.currency) : null;
+  const what = { refund: `Refunds ${amount} to ${to}`, 'pay.known': `Pays ${amount} to ${to}`, 'send.known': `Sends a message to ${to}` }[form.kind];
+  const where = form.system ?? form.channel;
+  return redactText([what, where && `in ${where}`].filter(Boolean).join(' · '));
 }
 
 /** Why an approval cannot become a standing rule (rule-draft's 409 reason). */
@@ -71,7 +89,8 @@ const AMOUNT = ['amount', 'amount_cents', 'amountCents', 'amount_minor', 'value'
 /**
  * The draft form for one signed call (rule-draft): the kind from the action class (a refund tool or action is a
  * refund, other payments pay.known, messages send.known), the recipient, amount and currency fields by their usual
- * names, every other plain field free (so the rule is no wider than the call), and the defaults: a week, maxEach the
+ * names, other target fields fixed to the approved value and content fields free (so the rule is no wider than the
+ * call), and the defaults: a week, maxEach the
  * amount rounded up to a whole unit, total three times that, 50 messages. `no(reason, why)` throws the 409.
  */
 export function draftForm(action, calls, no) {
@@ -97,8 +116,17 @@ export function draftForm(action, calls, no) {
     form = { ...form, amountField, currencyField, currency: input[currencyField].toUpperCase(), maxEach, total: maxEach * 3, system };
     used.add(amountField); used.add(currencyField);
   }
-  const free = Object.keys(input).filter((k) => !used.has(k) && /^[A-Za-z0-9_]{1,64}$/.test(k)).slice(0, 20);
-  try { return ruleForm({ ...form, fixed: {}, free }); } catch (e) { return no(e.type === 'rule-never' ? 'never' : 'kind-later', e.message); }
+  // Fields that name who or where else it goes (cc, bcc, destination, source, account ...) keep the approved value as
+  // `fixed` (code review L22m sev 3): a rule from one message to a known `to` must not let later ones bcc anyone, nor a
+  // refund route to another destination. Only content fields (subject, body, note ...) stay free.
+  const other = Object.keys(input).filter((k) => !used.has(k) && /^[A-Za-z0-9_]{1,64}$/.test(k));
+  // Security L22m sev 2: free is an allowlist of content fields; every other field keeps its approved value.
+  const content = (k) => !NEVER_FREE.test(k) && (CONTENT.test(k) || (kind === 'refund' && CONTENT_REFUND.test(k)));
+  const free = other.filter(content);
+  const fixed = Object.fromEntries(other.filter((k) => !content(k) && input[k] !== null).map((k) => [k, input[k]]));
+  if (Object.values(fixed).some((v) => !(typeof v === 'string' ? v.length <= 200 : Number.isSafeInteger(v) || typeof v === 'boolean'))) no('nested', 'the call carries a value a rule cannot hold exactly');
+  if (other.length > 20 || Object.keys(fixed).length > 20) no('nested', 'the call carries more fields than a rule can name');
+  try { return ruleForm({ ...form, fixed, free }); } catch (e) { return no(e.type === 'rule-never' ? 'never' : e.status === 400 ? 'nested' : 'kind-later', e.message); }
 }
 
 /** Has this teammate read outside text (a trigger's outside block) since a person last decided for its session? */
@@ -342,7 +370,8 @@ export function createLedger({ db, m3, now = () => new Date() }) {
     const { a, draft: form, made } = await approvedDraft(tenant, team, apr);
     const facts = a.card?.data?.facts;
     const names = await namesOf(tenant, [a.decided_by]);
-    return { approval: a.id, letter: a.card?.data?.letter ?? null, effect: Array.isArray(facts) && facts[0]?.text ? String(facts[0].text) : a.card?.title ?? null,
+    return { approval: a.id, letter: a.card?.data?.letter ?? null, effect: effectWords(form, a.calls[0].input),
+      call: Array.isArray(facts) && facts[0]?.text ? String(facts[0].text) : a.card?.title ?? null,
       approvedBy: { id: a.decided_by, name: nameIn(names, a.decided_by) }, made: made ? { id: made.id, number: made.number } : null, form, line: ruleLine(form) };
   }
 
@@ -354,7 +383,14 @@ export function createLedger({ db, m3, now = () => new Date() }) {
     const person = a.state === 'approved' && a.decided_by && !/^rule:/.test(a.decided_by) && !['ledger', 'changed'].includes(a.decided_by);
     if (!person) no('not-approved', 'only an ask a person approved can become a standing rule');
     const [made] = await madeFrom(tenant, team, a.id);
-    return { a, draft: draftForm(a.action, a.calls, no), made: made ?? null };
+    const form = draftForm(a.action, a.calls, no);
+    // The system as the team names it (web-dev): the resource's name, else its id read as a word ("payments" -> "Payments").
+    const server = form.tool.split('__')[1];
+    const [sys] = await db.tenant(tenant, ({ q }) => q('select resources from team_systems where team = $1', [team]));
+    const res = (sys?.resources ?? []).find((r) => r.id === server);
+    const shown = (res?.name ?? server.replace(/[_-]+/g, ' ').replace(/^./, (c) => c.toUpperCase())).slice(0, 80);
+    const draft = { ...form, ...(form.kind === 'send.known' ? { channel: shown } : { system: shown }) };
+    return { a, draft, made: made ?? null };
   }
 
   async function withdraw(tenant, team, rule, who) {
