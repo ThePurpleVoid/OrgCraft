@@ -13,6 +13,9 @@
 //      a message.blocked for the owner in the control plane's voice, no card, nothing pushed
 //   7. a pass/fail table in evidence/real-wire/<time>.md, and everything stopped and removed
 //
+// The runner container reaches this control plane (on 127.0.0.1) at host.docker.internal, which only Docker Desktop
+// (the owner's Mac) forwards to the host's loopback; on Linux Docker it would need another address.
+//
 // It refuses any repository but ThePurpleVoid/orgcraft-sandbox. `--fake` runs the same harness here, with the model
 // stubbed (a scripted chief of staff), a faithful fake of GitHub's REST API backed by a bare repository (the app's
 // JWT, installation lookup and tokens, pull requests, a squash merge pinned to the head) and the runner in this
