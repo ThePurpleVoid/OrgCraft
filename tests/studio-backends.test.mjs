@@ -447,3 +447,16 @@ test('ADR 0013 rule 2: preview and publish carry the capability diff, and the pu
   assert.equal(core.capabilitySection([]), '');
   assert.equal(core.capabilitySection([{ kind: 'binding-added', detail: 'x gets `db` @here' }]), "### Widens access\n\n- x gets 'db' &#64;here (`binding-added`)");
 });
+
+test('the publish audit line is written before the answer: a host logger that takes its time is awaited (FLAKE-gov)', async () => {
+  const r = repos();
+  let written = false;
+  const m = await mounted(r.bare, { handler: { logger: async (e) => { if (e.event === 'agent-team-studio.publish') { await new Promise((ok) => setTimeout(ok, 150)); written = true; } } } });
+  try {
+    const { spec, base } = (await m.call('GET', '/v1/team')).body;
+    spec.values = { ...spec.values, PROJECT_NAME: 'Shop online' };
+    const pub = await m.call('POST', '/v1/team/publish', { spec, base, message: 'Rename the project' });
+    assert.equal(pub.status, 200, JSON.stringify(pub.body));
+    assert.equal(written, true, 'the audit line was written before the publish answered');
+  } finally { await m.gh.close(); }
+});

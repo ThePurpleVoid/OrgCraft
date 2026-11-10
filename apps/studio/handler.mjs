@@ -60,7 +60,8 @@ const BRANCH = /^[A-Za-z0-9._/-]{1,100}$/;
  *   getInstallationToken({ repo, permissions }) → { token, permissions, repositories } as GitHub minted it (E3, S7)
  *   branchPrefix         every Studio branch starts with it (default "agent-team/", E4)
  *   limiter(key, { limit, windowSeconds }) → true to allow (optional; a shared store, S6, E8)
- *   logger(entry)        the host's logger for the audit line (E9); default console.info
+ *   logger(entry)        the host's logger for the audit line (E9); default console.info. It may return a promise:
+ *                        the publish line is awaited before the answer
  *   tmpRoot              the folder publishes are planned in (default the system temp folder)
  *   cache                a blobCache() to share across handlers of one customer (default: one per handler)
  *   api, fetch           GitHub's API and fetch (tests use a fake)
@@ -336,7 +337,9 @@ export function createStudioHandler(opts = {}) {
       // The managed backend keeps these on the change request (spec 4.3); the GitHub one ignores them.
       by: { id: user.id, name: user.name }, needsCode: p.needsCode, checks: { issues: p.issues.length }, capability: p.capability ?? [],
     });
-    try { logger({ event: 'agent-team-studio.publish', user: user.id, branch: out.branch, commit: out.commit, pr: out.pr?.url ?? null, files: out.files.length, ...(user.via ? { via: user.via } : {}) }); } catch { /* the host's logger */ }
+    // Awaited: a host whose logger writes the audit row (the control plane's audit table) has it written before the
+    // answer goes out, so whoever reads the audit after a publish finds it (FLAKE-gov: it raced the response).
+    try { await logger({ event: 'agent-team-studio.publish', user: user.id, branch: out.branch, commit: out.commit, pr: out.pr?.url ?? null, files: out.files.length, ...(user.via ? { via: user.via } : {}) }); } catch { /* the host's logger */ }
     return json(200, { branch: out.branch, commit: out.commit, files: out.files, pr: out.pr, commands: p.commands });
   }
 
