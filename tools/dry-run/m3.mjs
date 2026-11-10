@@ -159,7 +159,7 @@ export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), por
     const vol = `m3-dry-run-${randomBytes(4).toString('hex')}`;
     const run = (...cmd) => ['run', '--rm', '--network', 'host', '-v', `${vol}:/data`, '-v', `${dir}:${dir}`, '-e', 'AGENT_TEAM_RUNNER_ADAPTER', '-e', 'AGENT_TEAM_DRYRUN_CONTROL', '-e', 'AGENT_TEAM_PROPOSALS', '-e', 'AGENT_TEAM_RUNNER_GITCONFIG=/data/runner/gitconfig', image, ...cmd];
     // The runner's git trusts the folder it does not own (the bare repository, made by this user).
-    execFileSync('docker', ['run', '--rm', '-v', `${vol}:/data`, image, 'sh', '-c', `printf '[safe]\\n\\tdirectory = *\\n' > /data/runner/gitconfig`], { stdio: 'inherit' });
+    execFileSync('docker', ['run', '--rm', '-v', `${vol}:/data`, image, 'sh', '-c', `umask 077 && printf '[safe]\\n\\tdirectory = *\\n' > /data/runner/gitconfig`], { stdio: 'inherit' });
     await runChild('docker', run('node', 'apps/runner/bin.mjs', 'register', '--server', cp, '--code', code, '--name', 'dry-run'), { env });
     // The registration and the runner's own state live in the volume, so a restart is the same runner.
     launch = () => { const c = spawn('docker', ['run', '--name', vol, ...run('node', 'apps/runner/bin.mjs', 'start').slice(1)], { env, stdio: ['ignore', 'inherit', 'inherit'] }); c.dockerName = vol; return c; };
