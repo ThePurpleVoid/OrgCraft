@@ -13,10 +13,12 @@ const ENV = { GIT_AUTHOR_NAME: 'Studio App', GIT_AUTHOR_EMAIL: 'app@example.com'
 /**
  * Starts the fake. `bare` is a bare repository (the "GitHub" copy). Options: `token` the installation token it accepts,
  * `latency` ms per call, `repos` what GET /installation/repositories lists, `permissions` what a minted token gets,
- * `installation` the id GET /repos/{repo}/installation answers.
+ * `installation` the id GET /repos/{repo}/installation answers, `appLogin` who a pull request it opens is by (an app's
+ * installation token opens it as `<slug>[bot]`). Pull requests answer GET, list by state and merge (a squash pinned to
+ * the head named), as GitHub does.
  * Returns { url, calls, close, git, pulls, setLatency }.
  */
-export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, installation = 77, token = 'ghs_fake', latency = 0, repos = null, permissions = null, appKey = null } = {}) {
+export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, installation = 77, token = 'ghs_fake', latency = 0, repos = null, permissions = null, appKey = null, appLogin = 'studio-app[bot]' } = {}) {
   const git = (args, opts = {}) => execFileSync('git', ['--git-dir', bare, ...args], { encoding: 'utf8', env: { ...process.env, ...ENV, ...(opts.env ?? {}) }, input: opts.input, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   const calls = [];
   const pulls = [];
@@ -105,16 +107,39 @@ export async function fakeGitHub({ bare, repo = 'acme/shop', id = 4242, installa
         return json(res, 201, { ref: body.ref, object: { sha: body.sha } });
       }
       if ((m = /^\/git\/refs\/heads\/(.+)$/.exec(p)) && req.method === 'DELETE') { git(['update-ref', '-d', `refs/heads/${m[1]}`]); return json(res, 204); }
+      // Pull requests, as GitHub answers them: the head is the branch's tip now; a merge names the head it expects.
+      const tip = (b) => { try { return git(['rev-parse', '--verify', '--quiet', `refs/heads/${b}`]); } catch { return ''; } };
+      const shown = (x) => ({ ...x, head: { ref: x.head, sha: x.state === 'open' ? tip(x.head) : x.headSha }, base: { ref: x.base } });
       if (p === '/pulls' && req.method === 'POST') {
+        if (!tip(body.head)) return json(res, 422, { message: 'Validation Failed', errors: [{ field: 'head', code: 'invalid' }] });
         if (pulls.some((x) => x.head === body.head && x.state === 'open')) return json(res, 422, { message: 'A pull request already exists' });
-        const pr = { number: pulls.length + 1, html_url: `https://github.com/${repo}/pull/${pulls.length + 1}`, state: 'open', merged_at: null, ...body };
+        const pr = { number: pulls.length + 1, html_url: `https://github.com/${repo}/pull/${pulls.length + 1}`, state: 'open', merged_at: null, user: { login: appLogin, type: 'Bot' }, ...body };
         pulls.push(pr);
-        return json(res, 201, pr);
+        return json(res, 201, shown(pr));
       }
       if (p === '/pulls' && req.method === 'GET') {
         const headQ = url.searchParams.get('head')?.split(':')[1];
-        return json(res, 200, pulls.filter((x) => x.head === headQ));
+        const state = url.searchParams.get('state') ?? 'open';
+        return json(res, 200, pulls.filter((x) => x.head === headQ && (state === 'all' || x.state === state)).map(shown));
       }
+      if ((m = /^\/pulls\/(\d+)$/.exec(p)) && req.method === 'GET') {
+        const pr = pulls.find((x) => x.number === Number(m[1]));
+        return pr ? json(res, 200, shown(pr)) : json(res, 404, { message: 'Not Found' });
+      }
+      if ((m = /^\/pulls\/(\d+)\/merge$/.exec(p)) && req.method === 'PUT') {
+        const pr = pulls.find((x) => x.number === Number(m[1]));
+        if (!pr) return json(res, 404, { message: 'Not Found' });
+        if (pr.state !== 'open') return json(res, 405, { message: 'Pull Request is not mergeable' });
+        const head = tip(pr.head), baseSha = tip(pr.base);
+        if (body?.sha && body.sha !== head) return json(res, 409, { message: 'Head branch was modified. Review and try the merge again.' });
+        // A squash: the head's tree as one commit on the base (the base must be in the head's history, else a conflict).
+        try { git(['merge-base', '--is-ancestor', baseSha, head]); } catch { return json(res, 405, { message: 'Pull Request is not mergeable: merge conflict' }); }
+        const sha = git(['commit-tree', `${head}^{tree}`, '-p', baseSha, '-m', `${pr.title} (#${pr.number})`]);
+        git(['update-ref', `refs/heads/${pr.base}`, sha, baseSha]);
+        Object.assign(pr, { state: 'closed', merged: true, merged_at: new Date().toISOString(), headSha: head, mergeSha: sha });
+        return json(res, 200, { sha, merged: true, message: 'Pull Request successfully merged' });
+      }
+      if (p.startsWith('/deployments') && req.method === 'GET') return json(res, 200, []);
       return json(res, 404, { message: 'Not Found' });
     } catch (e) {
       return json(res, 500, { message: e.message.split('\n')[0] });

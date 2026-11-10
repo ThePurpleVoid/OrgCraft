@@ -33,7 +33,9 @@
     "scripts/*.sh",
     "team/",
     "templates/",
-    "tools/"
+    "tools/",
+    "!scripts/real-wire.sh",
+    "!tools/real-wire/"
   ],
   "engines": {
     "node": ">=18"
