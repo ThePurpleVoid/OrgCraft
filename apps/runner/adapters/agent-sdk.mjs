@@ -103,12 +103,19 @@ export function agentSdkAdapter({ effort, settingSources = [], executable, sdk: 
         for await (const m of q) {
           if (m.type === 'system' && m.subtype === 'init' && m.session_id) resume = m.session_id;
           // Each completed assistant text block (the front door's replies go to the chat; see session.say).
+          // A provider error (a model that does not exist, an auth or billing failure) comes as an assistant message with
+          // `error` set: it is the session's failure, never the role's reply, so it is not said in the chat (F-B2).
+          if (m.type === 'assistant' && m.error) {
+            stop = 'error';
+            error = `provider: ${m.error}: ${(m.message?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join(' ').slice(0, 300)}`;
+            continue;
+          }
           if (m.type === 'assistant' && !m.parent_tool_use_id) for (const c of m.message?.content ?? []) if (c.type === 'text' && c.text) await o.onText?.(c.text);
           if (m.type === 'result') {
             resume = m.session_id ?? resume;
             usage = { inputTokens: (m.usage?.input_tokens ?? 0) + (m.usage?.cache_read_input_tokens ?? 0) + (m.usage?.cache_creation_input_tokens ?? 0), outputTokens: m.usage?.output_tokens ?? 0, costUsd: turnCost(o.model, m) };
-            if (m.subtype === 'success') result = m.result ?? '';
-            else { stop = m.subtype === 'error_max_budget_usd' ? 'budget' : 'error'; error = m.subtype; }
+            if (m.subtype === 'success' && stop !== 'error') result = m.result ?? '';
+            else if (m.subtype !== 'success') { stop = m.subtype === 'error_max_budget_usd' ? 'budget' : 'error'; error = m.subtype; }
           }
         }
       } catch (e) {

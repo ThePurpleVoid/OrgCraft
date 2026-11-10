@@ -15,6 +15,10 @@ import { expirePending, freezeSystems } from './credentials.mjs';
 import { checkTriggers } from './triggers.mjs';
 import { halted } from './live.mjs';
 import { coveredBy, declinedBefore, ledgerRow, ruleLine, targetsOf } from './ledger.mjs';
+import { modelChoice, TIERS } from '../../packages/model-prices/index.mjs';
+import { loadPrices } from '../../packages/model-prices/node.mjs';
+
+const PRICES = loadPrices();
 
 const scrypt = promisify(scryptCb);
 
@@ -309,8 +313,10 @@ export function createM3({ db, now, publicUrl = '', hooks = {} }) {
       // ADR 0011 (additive): the type a member is based on, its display name, and its structured Hands to (member ids).
       if (r.type !== undefined && r.type !== null && !SLUG.test(r.type)) throw new Problem(400, `role ${r.slug}: type is a role slug`);
       if (r.name !== undefined && r.name !== null && (typeof r.name !== 'string' || !r.name.trim() || r.name.length > 60)) throw new Problem(400, `role ${r.slug}: name is text of at most 60 characters`);
+      // F-B2: a role's model is a tier word or a model id in the price table, never a brief's words.
+      if (r.model !== undefined && r.model !== null && !modelChoice(r.model, PRICES)) throw new Problem(400, `role ${r.slug}: model is a tier (${TIERS.join(', ')}) or a model id in the price table, not ${JSON.stringify(String(r.model).slice(0, 60))}`);
       if (r.handsTo !== undefined && r.handsTo !== null && (!Array.isArray(r.handsTo) || r.handsTo.length > 50 || r.handsTo.some((x) => typeof x !== 'string' || !SLUG.test(x)))) throw new Problem(400, `role ${r.slug}: handsTo is a list of at most 50 member ids`);
-      return { slug: r.slug, reportsTo: r.reportsTo, areas, ...(r.type && r.type !== r.slug ? { type: r.type } : {}), ...(r.name ? { name: r.name.trim() } : {}), ...(r.handsTo?.length ? { handsTo: r.handsTo } : {}), ...(r.pool ? { pool: r.pool } : {}), ...(typeof r.model === 'string' ? { model: r.model.slice(0, 100) } : {}), ...(r.brief ? { brief: r.brief } : {}) };
+      return { slug: r.slug, reportsTo: r.reportsTo, areas, ...(r.type && r.type !== r.slug ? { type: r.type } : {}), ...(r.name ? { name: r.name.trim() } : {}), ...(r.handsTo?.length ? { handsTo: r.handsTo } : {}), ...(r.pool ? { pool: r.pool } : {}), ...(typeof r.model === 'string' ? { model: r.model } : {}), ...(r.brief ? { brief: r.brief } : {}) };
     });
     // A display name may not be another teammate's id, a role type or "owner", nor another's name: `to` resolves ids,
     // then names, then types (L17), so a clash would let a name catch messages meant for someone else (security L17).

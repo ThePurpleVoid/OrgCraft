@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkpoint, git, outOfArea, prepare, release, restart } from '../worktree.mjs';
+import { checkpoint, effectiveSshCommand, git, outOfArea, prepare, release, restart, useGitConfig } from '../worktree.mjs';
 
 function origin() {
   const dir = mkdtempSync(join(tmpdir(), 'wt-'));
@@ -104,4 +104,34 @@ test('restart onto the new base only when everything was merged and nothing is l
   assert.equal(await restart(w.cwd, saved.commit), main);
   assert.equal(await git(w.cwd, 'rev-parse', 'HEAD'), main);
   release(w.cwd, 's9');
+});
+
+test('F-B1: git over ssh uses the operator\'s sshCommand (deploy key, known_hosts), never plain ssh and never the repository\'s', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wt-ssh-'));
+  // Stand-ins for ssh: each records how it was called and fails, as a host that is not there would.
+  const fake = (name) => { const f = join(dir, name); writeFileSync(f, `#!/bin/sh\necho "$0 $*" >> ${join(dir, 'calls.log')}\nexit 255\n`); chmodSync(f, 0o755); return f; };
+  const operator = fake('operator-ssh'), planted = fake('planted-ssh');
+  const config = join(dir, 'gitconfig');
+  // The entrypoint's own gitconfig, as it writes it in the image.
+  writeFileSync(config, `[core]\n\tsshCommand = ${operator} -i /data/runner/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/app/apps/runner/known_hosts\n`);
+  const repo = join(dir, 'repo');
+  execFileSync('git', ['init', '--quiet', '-b', 'main', repo]);
+  execFileSync('git', ['config', 'core.sshCommand', planted], { cwd: repo });
+  try {
+    useGitConfig(config);
+    assert.match(effectiveSshCommand(), /-i \/data\/runner\/deploy-key .*StrictHostKeyChecking=yes .*UserKnownHostsFile=\/app\/apps\/runner\/known_hosts/);
+    await assert.rejects(git(repo, 'ls-remote', 'ssh://git@example.invalid/o/r.git'));
+    const calls = readFileSync(join(dir, 'calls.log'), 'utf8');
+    assert.match(calls, /operator-ssh -i \/data\/runner\/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=\/app\/apps\/runner\/known_hosts .*example\.invalid/, 'git ran the operator\'s ssh with the deploy key');
+    assert.doesNotMatch(calls, /planted-ssh/, 'the repository\'s own sshCommand is never used');
+    // No operator config: plain ssh, still never the repository's.
+    useGitConfig(join(dir, 'missing'));
+    assert.equal(effectiveSshCommand(), 'ssh');
+    writeFileSync(join(dir, 'empty'), '[user]\n\tname = runner\n');
+    useGitConfig(join(dir, 'empty'));
+    assert.equal(effectiveSshCommand(), 'ssh', 'an operator config without sshCommand: plain ssh');
+    assert.equal(existsSync(join(dir, 'calls.log')), true);
+  } finally {
+    useGitConfig(null);
+  }
 });

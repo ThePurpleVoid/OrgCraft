@@ -13,6 +13,26 @@
 export const PRICES_SCHEMA = 'agent-team/model-prices@1';
 export const TIERS = ['deep', 'standard', 'routine', 'light'];
 
+/**
+ * The tier a brief's **Model:** line names: its first word, when that word is a tier ("deep (high effort)" → deep).
+ * Anything else is null. A brief's words are never a model id (F-B2).
+ */
+export function tierWord(text) {
+  const w = (/^\s*([A-Za-z]+)/.exec(String(text ?? '')) ?? [])[1]?.toLowerCase();
+  return TIERS.includes(w) ? w : null;
+}
+
+/**
+ * What a role's `model` may be on the wire (F-B2): a tier word, or a model id the price table lists. Answers
+ * { tier } or { model }, or null for anything else, which is refused before anything is spent.
+ */
+export function modelChoice(value, table) {
+  if (typeof value !== 'string') return null;
+  if (TIERS.includes(value)) return { tier: value };
+  if (table?.models && Object.hasOwn(table.models, value)) return { model: value };
+  return null;
+}
+
 /** The model a tier runs on: an override first, then the table; an unknown tier runs as standard. */
 export function tierModel(tier, table, overrides = {}) {
   const map = { ...table.tiers, ...overrides };

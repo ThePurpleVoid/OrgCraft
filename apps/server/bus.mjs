@@ -19,6 +19,11 @@ import { cleanChecks, markStale } from './signoffs.mjs';
 import { resolveTo } from './routing.mjs';
 import { systemsFor } from './credentials.mjs';
 import { createCaps } from './caps.mjs';
+import { modelChoice, tierWord } from '../../packages/model-prices/index.mjs';
+import { loadPrices } from '../../packages/model-prices/node.mjs';
+
+const PRICES = loadPrices();
+const sendModel = (m) => (typeof m !== 'string' ? null : modelChoice(m, PRICES) ? m : tierWord(m));
 
 /** How a message's `to` was resolved (section 5.3), on its event: only when it was not already a member id. */
 const routedFields = (r) => (!r ? {} : { ...(r.how !== 'id' ? { toAsked: r.asked, routedBy: r.how } : {}), ...(r.offWiring ? { offWiring: true } : {}) });
@@ -205,7 +210,9 @@ export function createBus({ db, m3, runners = () => null, now = () => new Date()
         tools: { url: toolsUrl() ? `${toolsUrl()}/v1/sessions/${sid}/tools` : null, ...(Object.keys(sys.mcp).length ? { mcp: sys.mcp } : {}) },
         secrets: sys.secrets, caps: { remainingToday: money.remainingToday, remainingRun: money.remainingRun },
         areas: role.areas ?? [], roster: (roster.roles ?? []).map((r) => r.slug), frontDoor: roster.frontDoor === d.role, frontDoorRole: roster.frontDoor,
-        ...(role.model ? { model: role.model } : {}),
+        // F-B2: a tier word or a priced model id only. A run frozen before the fix may hold a brief's words: its tier
+        // word goes, or nothing (the runner then reads the brief's tier).
+        ...(sendModel(role.model) ? { model: sendModel(role.model) } : {}),
         // ADR 0011 (L17): a teammate's type and display name, for its prompt; it is still addressed by its member id.
         ...(role.type ? { type: role.type } : {}), ...(role.name ? { name: role.name } : {}),
         wake, ...(outside ? { outside } : {}), resume: Boolean(s), ...(s?.checkpoint ? { checkpoint: s.checkpoint } : {}),
