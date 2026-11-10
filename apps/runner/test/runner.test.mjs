@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { chmodSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { checkEvent } from '../../../packages/events/index.mjs';
 import { startRunner } from '../runner.mjs';
@@ -554,6 +554,48 @@ test('spend leases: a failing or silent control plane is asked again, then the s
     await cp.until(() => budgets.length === 2);
     assert.ok(Math.abs(budgets[1] - 0.4) < 1e-9, 'an older control plane: the session spends as before');
     assert.ok(g);
+  } finally {
+    await runner.close();
+    await cp.close();
+  }
+});
+
+test('F-B5: a push the remote refuses (a read-only deploy key) is a loud BLOCKED: recorded once, nothing handed on as pushed, no merge asked another way', async () => {
+  const { bare, root } = origin();
+  // The remote refuses every push, the way GitHub answers a read-only deploy key.
+  writeFileSync(join(bare, 'hooks', 'pre-receive'), '#!/bin/sh\necho "ERROR: The key you are authenticating with has been marked as read only." >&2\nexit 1\n');
+  chmodSync(join(bare, 'hooks', 'pre-receive'), 0o755);
+  const cp = await fakeControlPlane();
+  const seen = {};
+  const adapter = stubAdapter({
+    'backend-dev': async (t) => {
+      writeFileSync(join(t.cwd, 'notes.txt'), 'done\n');
+      seen.handoff = await t.call('handoff', { to: 'cto', task: 'api cleanup', changed: 'notes.txt', verify: 'read notes.txt', doneWhen: 'it says done' });
+      seen.again = await t.call('signoff', { to: 'cto', issue: 9, testedOn: 'node 22, linux, HEAD', walked: 'read notes.txt', result: 'pass', evidence: ['notes.txt'] });
+      seen.merge = await t.call('request_approval', { action: 'merge-local-pr', call: 'merge team/backend-dev branch to main as local PR', why: 'the runner cannot push' });
+      seen.blocked = await t.call('blocked', { to: 'cto', task: 'api cleanup', detail: 'push refused', need: 'a deploy key with write access', needFrom: 'owner', recommendation: 'turn on write access for the deploy key', meanwhile: 'waiting' });
+      return {};
+    },
+  });
+  const runner = startRunner({ server: cp.url, key: cp.key, root, adapter });
+  try {
+    await runner.ready;
+    cp.start({ role: 'backend-dev', run: 'run_b5', repo: { url: bare }, worktree: 'api/b5', areas: ['notes.txt'], roster: ['cto', 'backend-dev'] });
+    await cp.until(() => cp.events.some((e) => e.type === 'session.idle'));
+    assert.equal(seen.handoff.isError, true);
+    assert.match(seen.handoff.text, /^BLOCKED: the branch api\/b5 was not pushed: .*read only.*Do not merge, push or ask for a merge any other way/);
+    assert.match(seen.again.text, /^BLOCKED:/);
+    assert.equal(seen.merge.isError, true);
+    assert.match(seen.merge.text, /^BLOCKED: a merge is asked for only with request_approval action accept/);
+    assert.equal(cp.approvals.length, 0, 'no card was made for a merge some other way');
+    assert.ok(!seen.blocked.isError, `blocked still goes through so the role can say so: ${seen.blocked.text}`);
+    assert.ok(cp.toolCalls.some((c) => c.tool === 'blocked'));
+    assert.ok(!cp.toolCalls.some((c) => c.tool === 'handoff' || c.tool === 'signoff'), 'nothing was handed on as if it were pushed');
+    const failed = cp.events.filter((e) => e.type === 'proposal.failed');
+    assert.equal(failed.length, 1, 'recorded once, however often it is tried');
+    assert.deepEqual([failed[0].data.reason, failed[0].data.phase, failed[0].data.branch], ['push', 'push', 'api/b5']);
+    assert.match(failed[0].data.detail, /read only/);
+    assert.throws(() => sh(bare, 'rev-parse', '--verify', 'refs/heads/api/b5'), 'nothing reached the remote');
   } finally {
     await runner.close();
     await cp.close();

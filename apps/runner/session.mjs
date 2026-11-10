@@ -27,6 +27,12 @@ export const DEFAULT_TIERS = { ...PRICES.tiers };
 const PASS_ENV = ['PATH', 'LANG', 'LC_ALL', 'TZ', 'TERM', 'SHELL', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE'];
 /** Tools whose message the next role acts on: the branch is checkpointed and pushed first, so it is there. */
 const PUSH_FIRST = new Set(['handoff', 'bug', 'signoff', 'blocked']);
+/** A request_approval that asks a person to merge, push or open a pull request by hand (F-B5). */
+const MERGE_ASK = /\b(merg\w*|pull request|local pr|push(?:ed|ing)? to (?:main|the base))\b/i;
+/** What a session is told when its work can't reach the repository: one shape it can't soften into a request. */
+function blockedText(why, told = true) {
+  return `BLOCKED: ${why}. Nothing was pushed, opened or merged${told ? ', and the owner has been told' : ''}. Do not merge, push or ask for a merge any other way; send \`blocked\` to your manager with this text and wait${told ? '' : ', or try again later if the provider was down'}.`;
+}
 // How many times one accept asks again because the pull request's head moved after an approval.
 const MAX_REASKS = 3;
 const HEARTBEAT_MS = 5 * 60_000;
@@ -175,7 +181,8 @@ export class Session {
       return c.model ?? tierModel(c.tier, PRICES, this.deps.tiers);
     }
     const line = (/\*\*Model:\*\*\s*([^\n]*)/i.exec(this.body.prompt?.brief ?? '') ?? [])[1];
-    return tierModel(tierWord(line) ?? 'standard', PRICES, this.deps.tiers);
+    const id = modelChoice(String(line ?? '').trim().split(/\s+/)[0], PRICES)?.model;
+    return id ?? tierModel(tierWord(line) ?? 'standard', PRICES, this.deps.tiers);
   }
 
   /** What this session may still spend, in minor units: the smaller of today's and the run's remaining budget. */
@@ -246,7 +253,7 @@ export class Session {
       checkpoint = { commit: String(b.checkpoint.commit), found: await onBranch(this.copy.cwd, b.checkpoint.commit) };
       if (!checkpoint.found) this.resumeNote = `Note: your last checkpoint (${checkpoint.commit}) is not on ${this.copy.branch ?? 'this checkout'}; you are at ${this.copy.head}. Check what is missing before you go on.`;
     }
-    await this.emit('session.started', { role: this.role, instance: b.instance ?? null, worktree: this.copy.cwd, branch: this.copy.branch, model: { provider: 'anthropic', name: this.model }, reason: b.resume ? 'resumed' : 'started', ...(checkpoint ? { checkpoint } : {}) });
+    await this.emit('session.started', { role: this.role, instance: b.instance ?? null, worktree: this.copy.cwd, branch: this.copy.branch, ...(this.model ? { model: { provider: 'anthropic', name: this.model } } : {}), reason: b.resume ? 'resumed' : 'started', ...(checkpoint ? { checkpoint } : {}) });
     this.state = 'idle';
     this.deliver(b.wake ?? null, { first: true });
   }
@@ -406,8 +413,20 @@ export class Session {
         await this.emit('session.tool', { tool: `team.${name}`, decision: 'refused', rule: saved.refused.rule, detail: saved.error });
         return { text: `Not sent: ${saved.error}. Fix that first (undo or move the change, or send a request to the path's owner), then send the ${name} again.`, isError: true };
       }
+      // F-B5: work that could not be pushed is not handed on as if it were. Only `blocked` goes through, so the
+      // role can say so; the owner already sees the BLOCKED from the control plane.
+      if (saved.blocked && name !== 'blocked') {
+        await this.emit('session.tool', { tool: `team.${name}`, decision: 'refused', rule: 'blocked-push', detail: saved.blocked.slice(0, 500) });
+        return { text: blockedText(saved.blocked, saved.told), isError: true };
+      }
     }
     if (name === 'request_approval' && local.input.action === 'accept' && this.proposes()) return this.acceptFlow(local.input);
+    // F-B5: a merge is asked for only as action accept, which the runner binds to its pull request and head. A card
+    // that asks a person to merge some other way (a "local PR", a branch by name) is refused, never shown.
+    if (name === 'request_approval' && local.input.action !== 'accept' && MERGE_ASK.test(`${local.input.action} ${local.input.call ?? ''}`)) {
+      await this.emit('session.tool', { tool: 'team.request_approval', decision: 'refused', rule: 'merge-via-accept', detail: String(local.input.action).slice(0, 100) });
+      return { text: blockedText('a merge is asked for only with request_approval action accept, which merges the runner\'s pull request at its approved head; there is no other way to merge'), isError: true };
+    }
     // A request_approval that names its calls (as JSON) is bound to them: the hash goes with it for the card to sign.
     const calls = name === 'request_approval' ? parseCalls(local.input.call) : null;
     const bound = calls ? { calls, hash: hashCalls(calls) } : null;
@@ -562,11 +581,31 @@ export class Session {
   async save(reason) {
     // Before any push to GitHub: the repository's installation, looked up fresh, must be bound to the tenant (#28).
     // A refusal (or a lookup that fails) stops the push only; the work is still committed locally.
-    const r = await saveWork({ cwd: this.copy.cwd, branch: this.copy.branch, base: this.copy.base, role: this.role, reason, areas: this.body.areas ?? [], secrets: this.secretValues(), beforePush: () => this.unbound('push') })
+    let unboundWhy = null;
+    this.lookupFailed = false;
+    const r = await saveWork({ cwd: this.copy.cwd, branch: this.copy.branch, base: this.copy.base, role: this.role, reason, areas: this.body.areas ?? [], secrets: this.secretValues(), beforePush: async () => (unboundWhy = await this.unbound('push')) })
       .catch((e) => ({ pushed: false, error: e.message }));
     // A branch that changes nothing against its base has nothing to propose (a role that only talked).
-    if (r.pushed && this.proposes() && (r.changes || this.proposal)) await this.propose(r.commit).catch(async (e) => { r.proposalError = e.message; if (e.reason === 'installation') await this.refusedInstallation('open', String(e.message).slice(0, 500)); this.deps.log?.(`proposal for ${this.copy.branch}: ${e.message}`); });
+    if (r.pushed && this.proposes() && (r.changes || this.proposal)) await this.propose(r.commit).catch(async (e) => { r.proposalError = e.message; if (e.reason === 'installation') await this.refusedInstallation('open', String(e.message).slice(0, 500)); else await this.failedLoudly('open', e.message); this.deps.log?.(`proposal for ${this.copy.branch}: ${e.message}`); });
+    // F-B5: a push git refused (a read-only deploy key, a protected branch, no network) is said out loud, once per
+    // reason: proposal.failed for the record, which the control plane turns into a BLOCKED the owner sees. The
+    // installation refusal was already recorded by unbound(). The session is told BLOCKED by the tool that asked.
+    if (!r.pushed && r.error && !r.refused && this.copy.branch && this.body.repo?.url && !unboundWhy) await this.failedLoudly('push', r.error);
+    if (!r.pushed && r.error && !r.refused && this.copy.branch && this.body.repo?.url) r.blocked = `the branch ${this.copy.branch} was not pushed: ${r.error}`;
+    else if (r.proposalError) r.blocked = `the pull request for ${this.copy.branch} was not opened: ${r.proposalError}`;
+    if (r.blocked) r.told = !this.lookupFailed;
     return r;
+  }
+
+  /** proposal.failed for a push or an open the provider refused, at most once per reason and detail in a session. */
+  async failedLoudly(phase, detail) {
+    const text = String(detail ?? '').slice(0, 500);
+    this.loud ??= new Set();
+    if (this.loud.has(`${phase}\u0000${text}`)) return;
+    this.loud.add(`${phase}\u0000${text}`);
+    this.deps.log?.(`BLOCKED (${phase}): ${text}`);
+    await this.emit('proposal.failed', { connector: this.proposal?.connector ?? 'github', ref: this.proposal?.ref ?? null, url: this.proposal?.url ?? null, branch: this.copy?.branch ?? null, headSha: this.proposal?.headSha ?? null, reason: phase, phase, detail: text })
+      .catch((e) => this.deps.log?.(`proposal.failed (${phase}): ${e.message}`));
   }
 
   /**
@@ -582,6 +621,7 @@ export class Session {
     } catch (e) {
       const text = String(e.message).slice(0, 500);
       if (e.reason === 'installation') await this.refusedInstallation(phase, text);
+      else this.lookupFailed = true; // the provider could not be asked (an outage): not a refusal, nobody is told
       return text;
     }
   }
@@ -617,6 +657,7 @@ export class Session {
    */
   async acceptFlow(input) {
     const saved = await this.save('before accept');
+    if (saved.blocked) return { text: blockedText(saved.blocked, saved.told), isError: true };
     if (!saved.pushed || !this.proposal) {
       const why = saved.error ?? saved.proposalError ?? (saved.pushed && !saved.changes ? 'the branch changes nothing against its base' : 'no proposal');
       return { text: `Not asked: the branch could not be pushed and proposed (${why}). Fix that first, then ask again.`, isError: true };
