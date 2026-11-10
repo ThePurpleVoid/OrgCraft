@@ -11,7 +11,7 @@
 //     that steer agents or CI (.claude/, .mcp.json, .github/workflows/, .git*) are owned explicitly;
 //   - no symlink points outside the working copy;
 //   - no secret is in the changes (file names and content), the same scan the memory file gets (R4).
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -21,18 +21,37 @@ import { findSecrets } from './secrets.mjs';
 import { grant, sharedDir } from './sandbox.mjs';
 
 const run = promisify(execFile);
-/** Pinned for every runner-side git call; they override anything the repository's config says. */
-const SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.sshCommand=ssh', '-c', 'protocol.ext.allow=never', '-c', 'core.pager=cat', '-c', 'credential.interactive=false'];
+/**
+ * Pinned for every runner-side git call; they override anything the repository's config says. `core.sshCommand` is
+ * pinned too, since a command-line -c beats every config file: to plain `ssh`, or to the operator's own sshCommand
+ * from the runner's git config (the deploy key, IdentitiesOnly, strict host key checking against the image's
+ * known_hosts). A repository or a session can never choose it. (F-B1: pinning plain `ssh` over the operator's value
+ * made every clone over SSH fail with "Host key verification failed".)
+ */
+let sshCommand = 'ssh';
+const SAFE_BASE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'protocol.ext.allow=never', '-c', 'core.pager=cat', '-c', 'credential.interactive=false'];
+const gitSafe = () => [...SAFE_BASE, '-c', `core.sshCommand=${sshCommand}`];
 let gitGlobal = '/dev/null';
-/** A git config file the operator controls, for the runner's own push credential (a credential helper). */
-export function useGitConfig(path) { gitGlobal = path && existsSync(path) ? path : '/dev/null'; }
+/** A git config file the operator controls, for the runner's own push credential (a deploy key or a credential helper). */
+export function useGitConfig(path) {
+  gitGlobal = path && existsSync(path) ? path : '/dev/null';
+  sshCommand = 'ssh';
+  if (gitGlobal === '/dev/null') return;
+  let own = '';
+  try {
+    own = execFileSync('git', ['config', '--file', gitGlobal, '--get', 'core.sshCommand'], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }, encoding: 'utf8' }).trim();
+  } catch { /* not set: plain ssh */ }
+  if (own) sshCommand = own;
+}
+/** The ssh command every runner-side git call uses (for tests and the image check). */
+export function effectiveSshCommand() { return sshCommand; }
 const gitEnv = () => {
   const keep = ['PATH', 'HOME', 'SSH_AUTH_SOCK', 'LANG', 'TMPDIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', 'GIT_SSL_CAINFO', 'SSL_CERT_FILE'];
   return { ...Object.fromEntries(keep.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]])), GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: gitGlobal };
 };
 
 export async function git(cwd, ...args) {
-  const { stdout } = await run('git', [...SAFE, ...args], { cwd, env: gitEnv(), maxBuffer: 64 * 1024 * 1024 });
+  const { stdout } = await run('git', [...gitSafe(), ...args], { cwd, env: gitEnv(), maxBuffer: 64 * 1024 * 1024 });
   return stdout.trim();
 }
 
@@ -153,7 +172,7 @@ export async function prepare({ root, work = root, repo, worktree, session, sand
 
 /** Paths changed in the working copy and not yet committed (renames counted on both sides). */
 async function dirty(cwd) {
-  const out = (await run('git', [...SAFE, 'status', '--porcelain', '-z', '--untracked-files=all'], { cwd, env: gitEnv() })).stdout;
+  const out = (await run('git', [...gitSafe(), 'status', '--porcelain', '-z', '--untracked-files=all'], { cwd, env: gitEnv() })).stdout;
   const parts = out.split('\0').filter(Boolean);
   const paths = [];
   for (let i = 0; i < parts.length; i++) {
@@ -310,7 +329,7 @@ async function binaries(cwd, range) {
   const objects = (await git(cwd, 'rev-list', '--objects', '--no-object-names', ...range)).split('\n').filter(Boolean);
   const named = new Map((await git(cwd, 'rev-list', '--objects', ...range)).split('\n').map((l) => [l.slice(0, l.indexOf(' ') >>> 0), l.slice(l.indexOf(' ') + 1)]));
   if (!objects.length) return { binaries: [], large: [] };
-  const p = run('git', [...SAFE, 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], { cwd, env: gitEnv(), maxBuffer: 64 * 1024 * 1024 });
+  const p = run('git', [...gitSafe(), 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], { cwd, env: gitEnv(), maxBuffer: 64 * 1024 * 1024 });
   p.child.stdin.end(objects.join('\n') + '\n');
   const out = [], large = [], wanted = [];
   for (const line of (await p).stdout.trim().split('\n')) {
@@ -320,7 +339,7 @@ async function binaries(cwd, range) {
   }
   if (wanted.length) {
     // One `cat-file --batch` for every blob: "<sha> blob <size>\n<content>\n" each.
-    const q = run('git', [...SAFE, 'cat-file', '--batch'], { cwd, env: gitEnv(), encoding: 'buffer', maxBuffer: 512 * 1024 * 1024 });
+    const q = run('git', [...gitSafe(), 'cat-file', '--batch'], { cwd, env: gitEnv(), encoding: 'buffer', maxBuffer: 512 * 1024 * 1024 });
     q.child.stdin.end(wanted.join('\n') + '\n');
     const buf = (await q).stdout;
     let at = 0;
