@@ -4,11 +4,11 @@ The rules every role follows. Role briefs hold only what is specific to the role
 
 ## The one door and the dilution rule
 
-The owner talks to one role: the **chief of staff**. It opens an issue for every request and forwards the owner's words to the executive whose lane owns it. Executives route inside their lane and never ask the owner directly.
+The owner talks to one role: the **chief of staff**. It logs a task for every request (an issue where it has gh; in a hosted session, its report) and forwards the owner's words to the executive whose lane owns it. Executives route inside their lane and never ask the owner directly.
 
 **The owner's channel** is wherever the owner talks to the chief of staff. Usually the chief of staff is the project's coordinator and the channel is the main project chat. When the host already has a coordinator of its own, the chief of staff runs as a thread instead: the owner's channel is then the coordinator's chat, the coordinator relays the owner's words to the chief of staff verbatim, and the chief of staff dispatches by asking the coordinator to open or wake role threads (or by messaging threads directly where the host allows it). Everything else in these protocols is the same in both modes.
 
-The owner's message travels down the tree **verbatim**, quoted, with its issue id. Every brief starts with that quote. Interpretation goes underneath, labelled as the writer's. Nobody paraphrases the owner on the way down.
+The owner's message travels down the tree **verbatim**, quoted, with its task id. Every brief starts with that quote. Interpretation goes underneath, labelled as the writer's. Nobody paraphrases the owner on the way down.
 
 **No role asks the owner directly.** No role thread asks the owner anything in its own thread, waits on the owner there, or posts a decision card for the owner; the owner never has to open a role's thread. A question, approval or design pick for the owner goes to the chief of staff as a BLOCKED with the exact question and a recommendation. The chief of staff asks in the owner's channel and relays the owner's words back verbatim. The role keeps working on the recommended option meanwhile, unless the step cannot be undone.
 
@@ -102,6 +102,15 @@ A brief with `Status: dormant` exists on paper only. The chief of staff or the l
 - No secrets in chat, memory files or briefs. When a key is needed, the owner is told the secret's name and where to paste it.
 - Nothing leaves the company (email, DM, post, filing, payment, contract) unless the owner sends it. Agents draft.
 - No force-push to main, and no merge without both the approval and the SIGNOFF.
+
+## Hosted sessions
+
+When OrgCraft's hosted service runs your session (the runner), you have the team tools and the tools the team's systems give you. There is no command line for outside services and no sign-in of your own, by design.
+
+- Record and pass on work with the team tools (`report`, `handoff`, `signoff`, `blocked` and the rest). Never call `gh` or any other command line for an outside service, and never ask for one to be installed. Anything that has to reach an outside service goes through the runner.
+- Finish a change with `request_approval`, action `"accept"`. The runner saves the work, puts it up for review and, once a person approves, applies exactly the version they approved. Never ask for that approval in chat text, and never try to apply the change yourself.
+- A decision for the owner goes on a card, never only in chat text. The chief of staff puts it in front of the owner with `ask_owner`: one question, two to four options, and the one it recommends. Any other role sends a BLOCKED to the chief of staff, which puts it on a card. A step the protocols keep for the owner (see "When the owner steps in") is asked for with `request_approval`, naming the exact call.
+- In a hosted session, `request_approval` with action `"accept"` is how a pull request merges: the runner pushes the branch, opens the pull request and, on approval, merges it pinned to the head commit the person approved. Do not push to the base branch, merge, or ask for a merge in chat text; any other process a repository describes for its own builders (a shared local repository, a merge queue) is not for hosted sessions.
 
 ## Machine rules
 

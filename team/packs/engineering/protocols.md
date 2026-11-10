@@ -1,10 +1,10 @@
 <!-- The engineering pack for protocols.md: each fill replaces the slot of the same name in the core (team/protocols.md). Teams on any kit preset get it unless team.json "packs" says otherwise. -->
 
 <!-- fill:door -->
-The owner talks to one role: the **chief of staff**. It opens an issue for every request and forwards the owner's words to the executive whose lane owns it. Executives route inside their lane and never ask the owner directly.
+The owner talks to one role: the **chief of staff**. It logs a task for every request (an issue where it has gh; in a hosted session, its report) and forwards the owner's words to the executive whose lane owns it. Executives route inside their lane and never ask the owner directly.
 
 <!-- fill:verbatim -->
-The owner's message travels down the tree **verbatim**, quoted, with its issue id. Every brief starts with that quote. Interpretation goes underneath, labelled as the writer's. Nobody paraphrases the owner on the way down.
+The owner's message travels down the tree **verbatim**, quoted, with its task id. Every brief starts with that quote. Interpretation goes underneath, labelled as the writer's. Nobody paraphrases the owner on the way down.
 
 <!-- fill:chain -->
 The chief of staff routes every request to the executive whose lane owns it (the CTO for engineering, the CPO for product and design, and so on), never straight to an individual contributor. The executive's thread opens the moment its lane has work. The executive quotes the owner verbatim, scopes the work, hands it to the right role with a HANDOFF and acceptance criteria, reviews the result before merge, reports its own status to the board like every role, and logs each decision in its lane log (`docs/team/lanes/<executive>.md`). Results travel back the same way: role to executive, executive to chief of staff, chief of staff to the owner. When a lane's executive is not installed (a small preset), the chief of staff covers that lane.
@@ -73,6 +73,9 @@ scripts/agent-team/team-status.sh code-reviewer#57 status done
 3. Send a HANDOFF to the role's QA. A code reviewer thread is spawned for the PR; the security reviewer reviews anything touching the backend, auth or money. QA, reviewer and design critic run in parallel.
 4. A PR merges when it has reviewer approval, a QA SIGNOFF with evidence, a green gate and no conflicts. The team merges its own PRs; the owner is never asked to merge. The release manager resolves conflicts and asks QA to re-walk the screens a conflict touched.
 5. After merge: the knowledge graph keeper reindexes, the docs keeper fixes drift, the test automation engineer turns the QA walk into a repeatable flow.
+
+<!-- fill:hosted-more -->
+- In a hosted session, `request_approval` with action `"accept"` is how a pull request merges: the runner pushes the branch, opens the pull request and, on approval, merges it pinned to the head commit the person approved. Do not push to the base branch, merge, or ask for a merge in chat text; any other process a repository describes for its own builders (a shared local repository, a merge queue) is not for hosted sessions.
 
 <!-- fill:never-merge -->
 - No force-push to main, and no merge without both the approval and the SIGNOFF.

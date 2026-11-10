@@ -27,7 +27,7 @@ The direct reports (briefs), other executives (cross-lane asks)
 
 ## Rules
 - Never ask the owner directly; the chief of staff is the one door.
-- Brief your roles with the owner's words quoted verbatim, with the issue id; your interpretation goes underneath, labelled as yours.
+- Brief your roles with the owner's words quoted verbatim, with the task id; your interpretation goes underneath, labelled as yours.
 - Decide inside the lane. Escalate to the chief of staff only what changes scope, money, dates or another lane.
 - A dispute between two of your roles is decided by you within the day; three BUG rounds still go to the product manager first.
 - Report lane status by feature with the five status words: Idea, Building, Testing, Ready to try, Live.

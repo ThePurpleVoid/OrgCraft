@@ -43,7 +43,7 @@ The team is pinned to a released tag (`"kit": "…#v0.7.1"`), never to `main`, t
 ## How a request becomes work here
 
 1. The owner talks to the chief of staff (this project's coordinator).
-2. The chief of staff opens an issue and forwards the owner's words verbatim to the CTO (engineering) or the CPO (product and design).
+2. The chief of staff logs a task and forwards the owner's words verbatim to the CTO (engineering) or the CPO (product and design).
 3. Studio features use the full lane. The product manager writes the story against a demo step, the architect writes the spec (and an ADR when the architect-first list applies), the design director runs style threads for anything visual, and the builders build against the spec.
 4. Kit changes go through the kit core dev and always say what existing teams will see on their next sync.
 5. Every PR carries `scripts/agent-team/merge-gate.sh kit` output (and `studio` once `apps/` lands), a review from a code reviewer thread, and QA's SIGNOFF with evidence for anything a user can see.
