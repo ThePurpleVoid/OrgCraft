@@ -4,7 +4,7 @@
 // server; Withdraw narrows what the team may do, so it needs no passkey. Making a rule starts from an approved card
 // in the chat (mockup v20, signed off; make-rule.js), so this page has no form for it.
 import { requestJson } from './env.js';
-import { t } from './i18n.js';
+import { t, tl } from './i18n.js';
 import { infoButton } from './tooltip.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -117,7 +117,7 @@ export function rulesHtml(data, me, { owner = false } = {}) {
     ${gone.length ? `<details><summary>${esc(t('approvals.rules.withdrawn'))}</summary><ul class="plain rules">${gone.map(row).join('')}</ul></details>` : ''}
     ${later.length ? `<ul class="plain kinds">${later.map((k) => `<li aria-disabled="true"><span>${esc(kindName(k.id))}</span> <span class="pill">${esc(t('rule.unavailable'))}</span></li>`).join('')}</ul>` : ''}
     <h3>${esc(t('rule.never.heading'))}</h3>
-    <ul class="hlist never">${(data.never ?? []).map((n) => `<li>${esc(t(`rule.never.${n}`))}</li>`).join('')}</ul>
+    <ul class="hlist never">${(data.never ?? []).map((n) => `<li>${esc(tl(`rule.never.${n}`))}</li>`).join('')}</ul>
   </section>`;
 }
 

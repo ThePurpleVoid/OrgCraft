@@ -37,6 +37,8 @@ import { PROVIDERS, createEmail, createNotifications, page } from './email.mjs';
 import { PROVIDERS as SLACK_PROVIDERS, createSlack } from './slack.mjs';
 import { createHostedStudio } from './studio.mjs';
 import { pgObjects, pgRefs } from './managed-db.mjs';
+import { managedBackend } from '../studio/managed.mjs';
+import { teamFrom, RunRefused } from '../studio/runs.mjs';
 import { createChanges } from './changes.mjs';
 import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, describeRunner } from './deployment.mjs';
 
@@ -204,6 +206,27 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     refs: (tn, tm) => pgRefs(db, tn, tm),
   };
   const changes = createChanges({ db, m3, now });
+
+  /**
+   * The RunCreate team for a managed team (ADR 0012): { from: 'managed', repo } in, the roster of the accepted main out,
+   * parsed by the Studio's own teamFrom and pinned to main's sha. The request names only where the work lands: roles,
+   * briefs, meetings, a version or a summary from it are refused, never merged (CTO). Nothing is read from the work
+   * repository, so a stale or hostile .agent-team/ there changes nothing.
+   */
+  async function managedRoster(tenant, team, asked) {
+    const extra = Object.keys(asked).filter((k) => !['from', 'repo'].includes(k));
+    if (extra.length) throw new Problem(400, `a managed team's run is built from its accepted version; send only from and repo, not ${extra.join(', ')}`, { type: 'managed-roster' });
+    if ((await managedStore.teamBackend(tenant, team)) !== 'managed') throw new Problem(409, 'this team is not managed: its run is built from its repository', { type: 'not-managed' });
+    const backend = managedBackend({ store: managedStore.store(tenant, team), refs: managedStore.refs(tenant, team) });
+    const main = (await backend.info()).head?.sha ?? null;
+    if (!main) throw new Problem(409, 'publish first: the team has no accepted version yet', { type: 'not-published' });
+    const { files } = await backend.readTeam(main);
+    const byPath = new Map(files.map((f) => [f.path, f.content]));
+    let roster;
+    try { roster = teamFrom({ version: main, paths: [...byPath.keys()], read: (p) => byPath.get(p) ?? null }); } catch (e) { if (e instanceof RunRefused) throw new Problem(409, e.message, { type: 'not-published' }); throw e; }
+    // repo is checked downstream like any run's (m3 checkRoster: URL form, no credentials).
+    return { ...roster, ...(asked.repo !== undefined ? { repo: asked.repo } : {}) };
+  }
   const hostedStudio = createHostedStudio(studioOrigin ? {
     origin: studioOrigin,
     managed: managedStore,
@@ -790,9 +813,18 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (b === 'io' && c && !parts[5] && m === 'GET') return send(res, 200, await inspector.read(t, team, c, me));
       if (b === 'io' && !c && m === 'DELETE') { await store.getTeam(db, t, team); return send(res, 200, await inspector.remove(t, team, url.searchParams.get('before'), me, stepUp)); }
       if (b === 'runs' && !c && m === 'GET') return send(res, 200, { runs: await m3.listRuns(t, team) });
+      // What a run of a managed team would be frozen on, before Start (ADR 0012): the same roster POST runs builds.
+      if (b === 'run-plan' && !c && m === 'GET') {
+        try {
+          const r = await managedRoster(t, team, { from: 'managed' });
+          return send(res, 200, { ok: true, version: r.version, summary: r.summary, roles: r.roles.length, frontDoor: r.roles.find((x) => x.reportsTo === 'owner')?.slug ?? null });
+        } catch (e) { if (e instanceof Problem && e.status === 409) return send(res, 200, { ok: false, error: e.message, type: e.type }); throw e; }
+      }
       if (b === 'runs' && !c && m === 'POST') {
-        const body = (await readJson(req, MAX_BODY)) ?? {};
+        let body = (await readJson(req, MAX_BODY)) ?? {};
         if (deployMode === 'hosted' && (await m3.getBudget(t, team)).currency !== 'USD') throw new Problem(422, USD_ONLY, { type: 'currency' });
+        // ADR 0012: a managed team's run is frozen on the accepted main, read here from this deployment's own store.
+        if (body?.team?.from === 'managed') body = { ...body, team: await managedRoster(t, team, body.team) };
         // A run on a GitHub repository needs an installation the workspace has proven it owns (S9): the runner gets
         // only those, as repo.installations on session.start.
         const ids = installations?.enabled ? await installations.forRepo(t, body?.team?.repo?.url) : null;

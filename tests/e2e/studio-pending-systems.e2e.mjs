@@ -149,7 +149,7 @@ test('Send them now from a pushed branch waits (open PR with its number; none, c
   writeFileSync(ghOut, JSON.stringify({ number: 12, state: 'OPEN' }));
   const before = cp.systems.version;
   const line = await openStart(page);
-  assert.match(await line.getByRole('button', { name: 'Send them now' }).getAttribute('data-tip'), /passkey confirms the list first/);
+  assert.match(await line.getByRole('button', { name: 'Send them now' }).getAttribute('data-tip'), /You confirm the list first/);
   await line.getByRole('button', { name: 'Send them now' }).click();
   const dlg = page.locator('#stepup-dialog');
   await dlg.locator('#stepup-secret').fill(cp.stepUpSecret);

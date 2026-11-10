@@ -462,6 +462,9 @@ paths:
       summary: Start a run (mode, caps). The chief of staff starts first
       requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/RunCreate" } } } }
       responses: { "201": { description: The run } }
+  /teams/{team}/run-plan:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get: { x-min-role: viewer, tags: [runs], summary: "A managed team's run plan (ADR 0012): what Start would freeze, from the accepted version. { ok, version, summary, roles (count), frontDoor }, or { ok: false, error, type } before a first accept or for a team with a code host", responses: { "200": { description: The plan } } }
   /runs/{run}/{action}:
     post:
       x-min-role: editor
@@ -997,7 +1000,7 @@ components:
     TeamCreate:
       type: object
       required: [name]
-      properties: { name: { type: string }, workspace: { type: string }, repository: { type: string, description: A repository resource, or omitted for a Studio-managed one }, template: { type: string } }
+      properties: { name: { type: string }, workspace: { type: string }, repository: { type: string, description: A repository resource, or omitted for a Studio-managed one }, template: { type: string }, backend: { type: string, enum: [github, managed], default: github, description: "managed (ADR 0012): no code host; the team's files live in this deployment's own Git store, published through change requests" } }
     SpecBody: { type: object, required: [spec], properties: { spec: { $ref: "../../packages/team-model/schema/team-spec.v1.json" } } }
     Preview:
       type: object
@@ -1078,9 +1081,10 @@ components:
         caps: { type: object, properties: { costPerRun: { type: integer }, costPerDay: { type: integer }, currency: { type: string }, sessions: { type: integer } } }
         team:
           type: object
-          description: "The team version the run is frozen on. Sent by a person (the Studio fills it from the spec it compiles), never by a runner or session. Exactly one role reports to owner: the front door. Required until the server reads published versions itself"
+          description: "The team version the run is frozen on. Sent by a person (the Studio fills it from the spec it compiles), never by a runner or session. Exactly one role reports to owner: the front door. Required until the server reads published versions itself. A managed team (ADR 0012) sends only { from: managed, repo }: the server builds the roster from its accepted main (pinned to its sha), and roles, briefs, meetings, version or summary sent with it are refused (400 managed-roster)"
           required: [roles]
           properties:
+            from: { type: string, enum: [managed], description: "managed: build the roster from the team's accepted version in this deployment's store (409 not-managed for a team with a code host, 409 not-published before a first accept). Then roles is not required and repo is only where the work lands" }
             version: { type: string, description: The team version (commit SHA); it becomes the run's teamVersion }
             repo:
               type: object
@@ -1103,7 +1107,7 @@ components:
                   type: { type: string, description: "Additive (ADR 0011, L17): the type a member is based on, when it differs from slug. A message's to may name the type; see team-tools.md" }
                   name: { type: string, maxLength: 60, description: "Additive: the member's display name, for text people read; a message's to may name it" }
                   handsTo: { type: array, maxItems: 50, items: { type: string }, description: "Additive: the member ids its structured Hands to lists (the drawn wiring, used to route a message to a type with several members; never a firewall)" }
-                  model: { type: string }
+                  model: { type: string, description: "A tier word (deep, standard, routine, light) or a model id in the price table (packages/model-prices). Anything else is 400 (F-B2: a brief's Model words are never a model id)." }
                   brief: { type: string, description: "The role's brief as text, at most 20 KB; sent to the runner as session.start prompt.brief" }
             triggers:
               type: array

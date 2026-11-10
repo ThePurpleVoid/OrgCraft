@@ -71,7 +71,7 @@ test('the owner makes a refund rule from an approved card: limits, words, the qu
   await sheet.getByText('From A, which you approved: Pays $24.90 to card ending 4242 · in Payments.').waitFor();
   const quote = sheet.locator('#mr-quote-apr_A');
   assert.match(await quote.textContent(), /You made a standing rule: Refunds · up to \$25 each · at most \$75 per customer a week · at most \$250 a week in all · in Payments · may include: customer, amount, currency, reason · "…"$/);
-  const save = sheet.getByRole('button', { name: 'Make the rule with your passkey' });
+  const save = sheet.getByRole('button', { name: 'Make the rule', exact: true });
   assert.equal(await save.isDisabled(), true, 'no words yet');
   await sheet.getByText('Add your words first. They go in the ledger with the rule.').waitFor();
   // Wrong values say why, and block.
@@ -135,7 +135,7 @@ test('another owner\'s approval names them; amounts with thousands; a second win
   // Another window made a rule from K meanwhile: this one is told which, and nothing more is made.
   cp.rules.unshift({ id: 'sr_9', number: 9, approval: 'apr_K', kind: 'refund', form: REFUND, words: 'x', live: true });
   await sheet.getByLabel('In your own words, why the team doesn\'t need to ask you for this').fill('big orders are fine');
-  await sheet.getByRole('button', { name: 'Make the rule with your passkey' }).click();
+  await sheet.getByRole('button', { name: 'Make the rule', exact: true }).click();
   await page.locator('#stepup-dialog #stepup-secret').fill(cp.stepUpSecret);
   await page.locator('#stepup-dialog button[type="submit"]').click();
   await card.getByText('Standing rule #9 was made from this ask.').waitFor();
@@ -164,7 +164,7 @@ test('cancelling the passkey makes nothing and says the approval stands; a chang
   const sheet = card.locator('.mkrule');
   assert.match(await sheet.locator('#mr-quote-apr_A').textContent(), /Messages to people the team has written to before · in Support inbox · at most 50 a week/);
   await sheet.getByLabel('In your own words, why the team doesn\'t need to ask you for this').fill('they wrote to us first');
-  await sheet.getByRole('button', { name: 'Make the rule with your passkey' }).click();
+  await sheet.getByRole('button', { name: 'Make the rule', exact: true }).click();
   await page.locator('#stepup-dialog #stepup-why').waitFor();
   await page.keyboard.press('Escape');
   await sheet.getByText('The rule wasn\'t made. Your approval of A still stands.').waitFor();
@@ -172,7 +172,7 @@ test('cancelling the passkey makes nothing and says the approval stands; a chang
   assert.equal(cp.rulePosts.length, 0);
   // The card changes after the sheet opened: the control plane refuses, and nothing is made.
   cp.refuseRule([409, { type: 'rule-stale', error: 'the approval changed' }]);
-  await sheet.getByRole('button', { name: 'Make the rule with your passkey' }).click();
+  await sheet.getByRole('button', { name: 'Make the rule', exact: true }).click();
   await page.locator('#stepup-dialog #stepup-secret').fill(cp.stepUpSecret);
   await page.locator('#stepup-dialog button[type="submit"]').click();
   await sheet.getByText('This card changed after you opened it, so the rule wasn\'t made. Open the card again to start over.').waitFor();

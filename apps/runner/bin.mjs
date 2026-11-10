@@ -115,7 +115,7 @@ if (sandbox) {
 } else {
   console.error('[runner] warning: no sandbox (AGENT_TEAM_SANDBOX_UID); sessions run as this user and could read its environment. Development only.');
 }
-useGitConfig(process.env.AGENT_TEAM_RUNNER_GITCONFIG ?? join(data, 'gitconfig'));
+try { useGitConfig(process.env.AGENT_TEAM_RUNNER_GITCONFIG ?? join(data, 'gitconfig')); } catch (e) { console.error(`agent-team-runner: ${e.message}`); process.exit(2); }
 
 // Who opens and merges the session's pull request (runner-protocol, Proposals). The merger GitHub App when its id
 // and key are there (M3 on a Mac installs the key into the data folder), or the stand-in remote of the dry run.

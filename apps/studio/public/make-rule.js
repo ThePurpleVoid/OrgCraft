@@ -3,7 +3,7 @@
 // kind, system, tool and fields), so nobody types what the rule covers. The owner sets the amounts or count, the
 // period, how long it lasts and their own words; the line the ledger will quote is drawn from the same form, word for
 // word, as they type. Making it needs a passkey scoped to that exact rule (the control plane names the scope).
-import { t } from './i18n.js';
+import { t, tl } from './i18n.js';
 import { exponentOf, ledgerLine, personWord, ruleLine } from './approvals.js';
 
 /** The kinds a rule can be made for now; any other kind shows no button at all (CPO). */
@@ -135,10 +135,10 @@ export function sheetHtml(apr, s, me) {
     <textarea id="${id('words')}" data-mr="words" rows="2" placeholder="${esc(t('rule.make.words.placeholder'))}" aria-describedby="${id('wordshint')}">${esc(s.words)}</textarea>
     <p class="hint" id="${id('wordshint')}">${esc(t('rule.make.words.hint'))}</p>
     <div class="mr-quote"><p class="hint">${esc(t('rule.make.preview'))}</p><p id="${id('quote')}" aria-live="polite">${esc(quote)}</p></div>
-    <details><summary>${esc(t('rule.make.never'))}</summary><ul class="hlist">${NEVER.map((k) => `<li>${esc(t(`rule.never.${k}`))}</li>`).join('')}</ul></details>
+    <details><summary>${esc(t('rule.make.never'))}</summary><ul class="hlist">${NEVER.map((k) => `<li>${esc(tl(`rule.never.${k}`))}</li>`).join('')}</ul></details>
     <p class="hint">${esc(t('rule.make.later', { kinds: andList(LATER.map((k) => t(`rule.kind.${k}`))) }))}</p>
     ${result}
-    <div class="row"><button type="button" class="primary" data-mrgo="${esc(apr)}" aria-describedby="${id('need')}"${ok && !s.busy && s.result?.kind !== 'stale' ? '' : ' disabled'}>${esc(t('rule.make.save'))}</button><button type="button" data-mrcancel="${esc(apr)}">${esc(t('rule.make.cancel'))}</button></div>
+    <div class="row"><button type="button" class="primary" data-mrgo="${esc(apr)}" aria-describedby="${id('need')}"${ok && !s.busy && s.result?.kind !== 'stale' ? '' : ' disabled'}>${esc(tl('rule.make.save'))}</button><button type="button" data-mrcancel="${esc(apr)}">${esc(t('rule.make.cancel'))}</button></div>
     <p class="hint" id="${id('need')}"${words.length >= 3 ? ' hidden' : ''}>${esc(t('rule.make.need.words'))}</p>
   </section>`;
 }

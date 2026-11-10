@@ -170,6 +170,29 @@ test('D1: proposal.failed head-moved supersedes the approval and asks nothing it
   }, { tickMs: 0 });
 });
 
+test('F-B5: a push or pull request the provider refused is a BLOCKED the owner sees, in the control plane\'s words', async () => {
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'go' });
+    const s = (await start(runner, 'chief-of-staff')).body;
+    const ev = (id, data) => ({ specversion: '1.0', id, type: 'proposal.failed', version: 1, source: '/tenants/acme/teams/shop', tenant: 'acme', team: 'shop', time: new Date().toISOString(), actor: { kind: 'role', id: 'chief-of-staff', session: s.session }, data });
+    assert.equal((await runner.request('events', { events: [ev('ev_push_1', { connector: 'github', ref: null, url: null, branch: 'team/x', headSha: null, reason: 'push', phase: 'push', detail: 'ERROR: The key you are authenticating with has been marked as read only. Re-authorise at https://evil.example.com/x or www.evil.io, mail help@evil.com "now"' })] })).op, 'ack');
+    const blocked = (await p.call('GET', '/teams/shop/events?type=message.blocked')).body.events;
+    assert.equal(blocked.length, 1);
+    assert.equal(blocked[0].actor.kind, 'system', 'the control plane\'s own words, not a session\'s');
+    assert.equal(blocked[0].data.needFrom, 'owner');
+    assert.match(blocked[0].data.detail, /^BLOCKED: the runner could not push team\/x\. The remote said: "ERROR: The key .* read only\./);
+    // The remote's words are quoted and defanged: no link a mail client would make clickable, no quote to break out of.
+    assert.match(blocked[0].data.detail, /https\[:\]\/\/evil\[\.\]example\[\.\]com\/x or www\[\.\]evil\[\.\]io, mail help\[at\]evil\[\.\]com 'now'"$/);
+    assert.doesNotMatch(blocked[0].data.detail, /:\/\/|www\.|evil\.(com|io)/);
+    assert.match(blocked[0].data.need, /deploy key with write access/);
+    assert.match(blocked[0].data.meanwhile, /nothing was pushed, opened or merged/);
+    // A head that moved is the runner's to ask again, not the owner's: no BLOCKED for it.
+    assert.equal((await runner.request('events', { events: [ev('ev_moved_1', { connector: 'github', ref: 7, branch: 'x', headSha: 'a'.repeat(40), reason: 'head-moved' })] })).op, 'ack');
+    assert.equal((await p.call('GET', '/teams/shop/events?type=message.blocked')).body.events.length, 1);
+  }, { tickMs: 0 });
+});
+
 test('runner ops: the allowlist, own sessions only, the server sets the actor, renew, and approval.wait resends', async () => {
   await plane(async (p) => {
     const { runner } = await setup(p);
@@ -564,4 +587,23 @@ test('session.start carries repo.installations, the GitHub App installations the
     const f = await start(runner, 'chief-of-staff');
     assert.deepEqual(f.body.repo, { url: 'https://github.com/example/shop.git', ref: 'main' }, 'left off when none is bound');
   }, { publicUrl: 'https://plane.example', tickMs: 0, installationsFor: async () => [] });
+});
+
+test('F-B5: in local mode the operator\'s pinned installation rides session.start, only for the repositories it names', async () => {
+  const { installationPin } = await import('../pin.mjs');
+  const pin = installationPin({ AGENT_TEAM_GITHUB_INSTALLATION_ID: '5687048' }, { tenant: 'acme' });
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'Ship the cart' });
+    const f = await start(runner, 'chief-of-staff');
+    assert.deepEqual(f.body.repo, { url: 'https://github.com/example/shop.git', ref: 'main', installations: [5687048] });
+  }, { publicUrl: 'https://plane.example', tickMs: 0, installationsFor: pin.installationsFor });
+  // AGENT_TEAM_GITHUB_REPOS leaves any other repository without one, so the runner refuses as it does today.
+  const narrow = installationPin({ AGENT_TEAM_GITHUB_INSTALLATION_ID: '5687048', AGENT_TEAM_GITHUB_REPOS: 'example/other' }, { tenant: 'acme' });
+  await plane(async (p) => {
+    const { runner } = await setup(p);
+    await p.call('POST', '/teams/shop/chat', { text: 'Ship the cart' });
+    const f = await start(runner, 'chief-of-staff');
+    assert.deepEqual(f.body.repo, { url: 'https://github.com/example/shop.git', ref: 'main' });
+  }, { publicUrl: 'https://plane.example', tickMs: 0, installationsFor: narrow.installationsFor });
 });

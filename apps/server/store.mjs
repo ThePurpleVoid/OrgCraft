@@ -22,12 +22,14 @@ export async function ensureTenant(db, tenant, name = tenant) {
   await db.system('insert into tenants(id, name) values ($1, $2) on conflict (id) do nothing', [tenant, name]);
 }
 
-export async function createTeam(db, tenant, { id: team, name }) {
+export async function createTeam(db, tenant, { id: team, name, backend = 'github' }) {
   if (!SLUG.test(team ?? '')) throw new Problem(400, 'a team id is lowercase letters, digits and dashes, like coachspotter');
+  // ADR 0012: a team can start with no code host, its files in this deployment's own Git store.
+  if (!['github', 'managed'].includes(backend)) throw new Problem(400, 'backend is github (a code host, the default) or managed (no repository: OrgCraft keeps the team)');
   // Team ids are global (they are in report URLs), so a clash with another tenant's team is checked as the owner.
   const [taken] = await db.system('select tenant from teams where id = $1', [team]);
   if (taken) throw new Problem(409, taken.tenant === tenant ? 'this team already exists' : 'that team id is taken; pick another');
-  return db.tenant(tenant, async ({ q }) => (await q('insert into teams(id, tenant, name) values ($1, $2, $3) returning id, name, created_at', [team, tenant, name || team]))[0]);
+  return db.tenant(tenant, async ({ q }) => (await q('insert into teams(id, tenant, name, backend) values ($1, $2, $3, $4) returning id, name, backend, created_at', [team, tenant, name || team, backend]))[0]);
 }
 
 export const listTeams = (db, tenant) => db.tenant(tenant, ({ q }) => q('select id, name, created_at from teams order by id'));

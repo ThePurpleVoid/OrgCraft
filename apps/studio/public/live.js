@@ -3,7 +3,7 @@
 // Git, code host or publish: it goes straight to the control plane. Lifting one asks for the passkey step-up, bound
 // to that change (lift:<id>). The banner is drawn only from the control plane's list, so a run that starts never
 // hides it: only a lift does.
-import { t } from './i18n.js';
+import { t, tl } from './i18n.js';
 import { $, requestJson } from './env.js';
 import { showItems } from './systems.js';
 
@@ -24,7 +24,7 @@ export function stepUp(why, scope, lines = []) {
   const form = dlg.querySelector('form');
   const input = dlg.querySelector('input');
   const result = dlg.querySelector('.result');
-  dlg.querySelector('.why').textContent = t('stepup.body', { action: why });
+  dlg.querySelector('.why').textContent = t('stepup.local.body', { action: why });
   showItems(dlg.querySelector('.why'), lines);
   result.textContent = '';
   input.value = '';
@@ -39,7 +39,7 @@ export function stepUp(why, scope, lines = []) {
       go.disabled = true;
       const r = await api('/v1/team/step-up', { secret, ...(scope ? { scope } : {}) }).finally(() => { go.disabled = false; });
       if (r.ok) return finish(true);
-      result.textContent = t(r.status === 429 ? 'stepup.locked' : 'stepup.failed');
+      result.textContent = t(r.status === 429 ? 'stepup.locked' : 'stepup.local.failed');
       input.focus();
     };
     dlg.querySelector('[data-act="cancel"]').onclick = () => finish(false);
@@ -65,7 +65,7 @@ export function createLive({ say = () => {}, titleOf = (x) => x, onChange = () =
     box.hidden = !st.items.length && !st.error;
     box.innerHTML = st.items.map((x) => `<p class="live-row" data-live="${esc(x.id)}"><span class="live-text">${esc(x.kind === 'halt' ? t('stop.all.done') : t(`stop.member.${x.state === 'off' ? 'off' : 'paused'}`, { teammate: titleOf(x.member) }))}</span>${x.reason ? ` <span class="muted">${esc(x.reason)}</span>` : ''}
         <button type="button" data-lift="${esc(x.id)}" aria-label="${esc(`${t('stop.resume')}: ${x.kind === 'halt' ? t('stop.all') : titleOf(x.member)}`)}">${esc(t('stop.resume'))}</button></p>`).join('')
-      + (st.items.length ? `<p class="hint">${esc(t('stop.resume.passkey'))}</p>` : '')
+      + (st.items.length ? `<p class="hint">${esc(tl('stop.resume.passkey'))}</p>` : '')
       + (st.error ? `<p class="result error">${esc(st.error)}</p>` : '');
     // Redraw the page only when what is in force changed, so a poll never disturbs someone typing.
     const key = JSON.stringify([st.connected, st.items.map((x) => [x.id, x.state])]);

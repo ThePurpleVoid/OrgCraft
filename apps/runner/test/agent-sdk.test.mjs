@@ -219,3 +219,41 @@ test('ADR 0013: an approved call runs as signed: the PreToolUse hook and canUseT
   assert.deepEqual(seen.can, { behavior: 'allow', updatedInput: signed });
   assert.deepEqual(seen.plain, { behavior: 'allow', updatedInput: { file_path: 'x' } }, 'a call with no signed record runs as given');
 });
+
+test('F-B2: a brief\'s Model words are never a model id: tiers map, priced ids pass, anything else is refused before spending; a provider error is not a chat reply', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { Session, PRICES } = await import('../session.mjs');
+  const { agentSdkAdapter } = await import('../adapters/agent-sdk.mjs');
+  // A real brief of this repository, whose Model line is "deep (high effort)".
+  const architect = readFileSync(new URL('../../../docs/team/roles/architect.md', import.meta.url), 'utf8');
+  assert.match(architect, /\*\*Model:\*\* deep \(high effort\)/);
+  const make = (body, sent = []) => new Session({ session: 's_m', role: 'architect', team: 't', prompt: { brief: architect }, ...body }, { root: '/nonexistent', emit: async (_s, type, data) => sent.push({ type, data }) });
+  assert.equal(make({}).model, PRICES.tiers.deep, 'the brief alone: its tier word');
+  assert.equal(make({ model: 'deep' }).model, PRICES.tiers.deep, 'a tier word from the control plane');
+  assert.equal(make({ model: 'claude-haiku-5-5' }).model, 'claude-haiku-5-5', 'a model id the price table lists');
+  assert.equal(make({ model: 'deep (high effort)' }).model, null, 'the brief\'s words are not a model');
+  assert.equal(make({ model: 'claude-made-up' }).model, null, 'nor an id the table does not list');
+  // Refused before a lease or a model call: a failed-session notice, nothing said in the chat, nothing spent.
+  const sent = [];
+  const s = make({ model: 'deep (high effort)', caps: { remainingToday: 500 } }, sent);
+  let leased = 0, called = 0;
+  s.deps.lease = async () => { leased++; return { amount: 100 }; };
+  s.deps.adapter = { turn: async () => { called++; return { usage: {} }; } };
+  await s.runTurn({ message: 'hello' });
+  assert.deepEqual([leased, called], [0, 0]);
+  const idle = sent.find((e) => e.type === 'session.idle');
+  assert.equal(idle.data.reason, 'error');
+  assert.match(idle.data.detail, /"deep \(high effort\)" is not a tier .* Nothing was spent\./);
+  assert.ok(!sent.some((e) => e.type === 'chat.message'));
+  // The SDK reports a model the provider refuses as an assistant message with `error`: not text for the chat.
+  const said = [];
+  const sdk = { createSdkMcpServer: () => ({}), tool: (name, d, sh, fn) => ({ name, fn }), query: () => (async function* () {
+    yield { type: 'assistant', parent_tool_use_id: null, error: 'model_not_found', message: { content: [{ type: 'text', text: 'There\'s an issue with the selected model (deep (high effort)).' }] } };
+    yield { type: 'result', subtype: 'success', is_error: true, result: 'There\'s an issue with the selected model', session_id: 'x', usage: { input_tokens: 0, output_tokens: 0 }, total_cost_usd: 0 };
+  })() };
+  const o = { env: { ANTHROPIC_API_KEY: 'st_session_token', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1/s/x' }, model: PRICES.tiers.deep, tools: [], callTool: async () => ({ text: '' }), signal: new AbortController().signal, preToolUse: async () => ({ allow: true }), prompt: 'p', systemPrompt: 's', cwd: process.cwd(), onText: async (t) => said.push(t) };
+  const out = await agentSdkAdapter({ sdk }).turn(o);
+  assert.deepEqual(said, [], 'the provider\'s error is never posted as the role\'s reply');
+  assert.equal(out.stop, 'error');
+  assert.match(out.error, /^provider: model_not_found: There's an issue with the selected model/);
+});

@@ -1,7 +1,7 @@
 // The Publish sheet's words (B5.1, L14): one plain line per change in the draft, and the "Widens access" block the
 // server computes for every draft (capabilityDiff, ADR 0013 rule 2). Pure functions of the change items, so the
 // sheet, the commit message and the tests all say the same thing.
-import { t } from './i18n.js';
+import { t, tl } from './i18n.js';
 import { LEVELS } from './wiring.js';
 
 /** "Read", "Change" or "Act" for a binding permission. */
@@ -125,7 +125,7 @@ export function widensHtml(items, name, system) {
   if (!items?.length) return '';
   return `<h3>${esc(t('publish.section.widens'))}</h3><p class="hint">${esc(t('publish.widens.hint'))}</p>
     <ul class="clist">${items.map((x) => `<li><span class="dot warn" aria-hidden="true"></span>${esc(widensLine(x, name, system))}</li>`).join('')}</ul>
-    <p class="hint">${esc(t('publish.widens.passkey'))}</p>`;
+    <p class="hint">${esc(tl('publish.widens.passkey'))}</p>`;
 }
 
 /** Checks: {passed} of {total} passed, then the same list the canvas shows (B5.1-4). */

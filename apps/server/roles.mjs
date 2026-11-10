@@ -77,6 +77,7 @@ export const ROUTES = [
   ['PUT', '/teams/{team}/budget', 'admin'],
   ['GET', '/teams/{team}/runs', 'viewer'],
   ['POST', '/teams/{team}/runs', 'editor'],
+  ['GET', '/teams/{team}/run-plan', 'viewer'],
   ['GET', '/teams/{team}/chat', 'viewer'],
   ['POST', '/teams/{team}/chat', 'editor'],
   ['GET', '/teams/{team}/meetings', 'viewer'],
