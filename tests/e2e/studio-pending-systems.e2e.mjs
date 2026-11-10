@@ -134,7 +134,7 @@ test('a set changed after it was shown is refused with nothing spent; a dropped 
   await page.close();
 });
 
-test('Send them now from a branch whose change is still open waits for it; a purely local branch sends directly', { skip }, async () => {
+test('Send them now from a pushed branch waits (open PR with its number; none, closed or unreadable without); a purely local branch sends directly', { skip }, async () => {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -159,19 +159,21 @@ test('Send them now from a branch whose change is still open waits for it; a pur
   assert.equal(cp.systems.version, before, 'nothing switched on: an unreviewed widening does not apply');
   assert.notEqual(cp.systems.bindings[0]?.permission, 'deploy');
 
-  // gh can't be read on a pushed branch: it fails closed, waiting as pending with no PR number.
-  cp.dropPending('withdrawn');
-  writeFileSync(ghOut, 'broken');
-  const s0 = await state(page);
-  assert.equal((await post(page, '/v1/team/systems', { version: s0.version, hash: s0.hash })).status, 401);
-  assert.equal((await post(page, '/v1/team/step-up', { secret: cp.stepUpSecret, scope: `systems:${cp.team}` })).status, 200);
-  assert.equal((await post(page, '/v1/team/systems', { version: s0.version, hash: s0.hash })).status, 200);
-  assert.deepEqual(cp.systemsPuts.at(-1).pending, { sha: head }, 'waits, with no PR number');
-  assert.equal(cp.systems.version, before);
+  // Any other pushed, non-default branch waits too, with no PR number: gh can't be read, no PR, or the PR is closed.
+  for (const [why, gh] of [['gh unreadable', 'broken'], ['no PR', null], ['PR closed', JSON.stringify({ number: 12, state: 'CLOSED' })]]) {
+    cp.dropPending('withdrawn');
+    if (gh) writeFileSync(ghOut, gh); else rmSync(ghOut, { force: true });
+    const s0 = await state(page);
+    let r = await post(page, '/v1/team/systems', { version: s0.version, hash: s0.hash });
+    if (r.status === 401) { assert.equal((await post(page, '/v1/team/step-up', { secret: cp.stepUpSecret, scope: r.scope })).status, 200); r = await post(page, '/v1/team/systems', { version: s0.version, hash: s0.hash }); }
+    assert.equal(r.status, 200, why);
+    assert.deepEqual(cp.systemsPuts.at(-1).pending, { sha: head }, `${why}: waits, with no PR number`);
+    assert.equal(cp.systems.version, before, `${why}: nothing applied`);
+  }
 
   // The same branch with no upstream: nothing is open for it, so the send applies directly.
   cp.dropPending('withdrawn');
-  rmSync(ghOut);
+  rmSync(ghOut, { force: true });
   execFileSync('git', ['-C', root, 'branch', '-q', '--unset-upstream']);
   const s = await state(page);
   const ask = await post(page, '/v1/team/systems', { version: s.version, hash: s.hash });
