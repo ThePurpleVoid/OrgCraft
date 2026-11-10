@@ -25,7 +25,7 @@ export const FIELD = /^[A-Za-z0-9_]{1,64}$/;
  * Fields a rule may never leave free, at creation as well as in a draft (security L22m sev 2): who or where else the
  * call goes or pays from. Free, any value would do, so a rule for one known recipient could bcc or pay out anywhere.
  */
-export const NEVER_FREE = /^(cc|bcc|reply_?to|to_.*|to(address|email|number|phone)|destination.*|account.*|iban|wallet.*|address.*|payment_?method.*|source.*|customer.*|email.*|phone.*|url|.*_url|webhook.*|recipients?.*|payee.*)$/i;
+export const NEVER_FREE = /^(cc|bcc|cc_.*|bcc_.*|reply_?to|from|sender.*|forward.*|redirect.*|callback.*|beneficiary.*|bank.*|routing.*|payout.*|transfer.*|to_.*|to(address|email|number|phone)|destination.*|account.*|iban|wallet.*|address.*|payment_?method.*|source.*|customer.*|email.*|phone.*|url|.*_url|webhook.*|recipients?.*|payee.*)$/i;
 /** Content fields a draft leaves free (security L22m): what is said, not who it goes to; refunds also the charge. */
 export const CONTENT = /^(subject|body|text|message|html|memo|description|notes?|reason|reference|title|idempotency_?key|idempotencyKey)$/i;
 export const CONTENT_REFUND = /^(charge|charge_?id|chargeId|payment_?intent|paymentIntent|payment_intent_id)$/i;

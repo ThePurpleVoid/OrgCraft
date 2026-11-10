@@ -347,7 +347,7 @@ test('a draft fixes the other target fields to the approved values and leaves on
   const charge = draftForm('refund', [{ tool: 'mcp__payments__refund', input: { customer: 'cus_a', amount: 500, currency: 'USD', charge: 'ch_1' } }], no);
   assert.deepEqual([charge.fixed, charge.free], [{}, ['charge']]);
   // And at creation, not just in a draft: a free bcc, destination or source is refused whatever the client sends.
-  for (const k of ['bcc', 'cc', 'reply_to', 'destination', 'source', 'account_id', 'iban', 'webhook_url', 'payment_method'])
+  for (const k of ['bcc', 'cc', 'reply_to', 'destination', 'source', 'account_id', 'iban', 'webhook_url', 'payment_method', 'from', 'sender_email', 'forward_to', 'redirect_url', 'callback', 'beneficiary_id', 'bank_account', 'routing_number', 'payout_account', 'transfer_group', 'cc_list', 'bcc_emails'])
     assert.throws(() => ruleForm({ ...RULE, free: [k] }), (e) => e.type === 'rule-never-free', k);
   assert.doesNotThrow(() => ruleForm({ ...RULE, free: ['note', 'total_items'] }));
 });
