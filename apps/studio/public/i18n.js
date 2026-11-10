@@ -5,7 +5,8 @@ import { EN } from './strings.js';
 // Words the Studio needs that the strings file does not have yet. Each one is asked of the CPO; when the strings
 // file has it, it comes from there (EN wins) and the line here is deleted.
 const PENDING = {
-  'rule.make.err.format': 'Use digits only, like 25 or 1,000.',
+  // Final in strings-now §6b; strings.js is regenerated with it once web-dev/local-passphrase (which regenerates the file) merges.
+  'rule.make.err.format': 'Enter a number, like 25 or 24.90.',
   'nav.meetings': 'Meetings',
 };
 
