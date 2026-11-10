@@ -42,11 +42,21 @@ export function chatSource(env = process.env) {
     return open.sort((a, b) => String(b.started ?? b.time ?? '').localeCompare(String(a.started ?? a.time ?? '')))[0] ?? null;
   }
 
+  // ADR 0012: a managed team (no code host) is read and published through the deployment's Studio routes, and its
+  // change requests are the deployment's. The deployment checks the Origin against its own (its public URL).
+  const managed = env.AGENT_TEAM_SERVER_MANAGED === '1';
+  const studioHeaders = { 'x-agent-team-studio': '1', origin: env.AGENT_TEAM_SERVER_ORIGIN ?? new URL(server).origin };
+
   return {
     connected: true,
     team,
+    managed,
     where: `${server}/v1/teams/${t}`,
     Upstream,
+    /** The team's Studio routes on the deployment (managed teams): GET /v1/team, POST preview, publish and the rest. */
+    studio: (method, path, body, key) => call(method, `/teams/${t}/studio${path}`, body, { ...studioHeaders, ...(key ? { 'idempotency-key': key } : {}) }),
+    /** Change requests on a managed team: the list, one, and accept, close or rollback (accept and rollback may need the step-up). */
+    changes: (method, sub = '', body, key) => call(method, sub === '/rollback' ? `/teams/${t}/rollback` : `/teams/${t}/changes${sub}`, body, { ...(method === 'POST' && /\/(accept|rollback)$/.test(sub) ? spendStepUp() : {}), ...(key ? { 'idempotency-key': key } : {}) }),
     /** The rollout of the team version the control plane last heard was published (team.published). */
     rollout: () => call('GET', `/teams/${t}/rollout`),
     /** One held meeting (a link to its minutes names it): { definition, title, … }. */
@@ -133,6 +143,8 @@ export function chatSource(env = process.env) {
     /** Lifts one change: it spends the step-up this server holds, if any; without one the control plane asks (401). */
     lift: (id) => call('DELETE', `/teams/${t}/live/${encodeURIComponent(id)}`, undefined, spendStepUp()),
     /** Starts a run on the published team (runs.mjs builds the body). One run per team: a second one is a 409. */
+    /** A managed team's run plan (what Start would freeze), from the control plane. */
+    runPlan: () => call('GET', `/teams/${t}/run-plan`),
     start: (body, key) => call('POST', `/teams/${t}/runs`, body, key ? { 'idempotency-key': key } : {}),
   };
 }

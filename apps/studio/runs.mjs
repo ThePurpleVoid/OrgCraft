@@ -47,27 +47,10 @@ export function runRequest(root, { dirty = [] } = {}) {
   if (dirty.length) throw new RunRefused(`publish first: the team's files have changes nobody published (${dirty.slice(0, 3).join(', ')})`);
   const version = git(root, 'rev-parse', 'HEAD');
   if (!version) throw new RunRefused('publish first: this repository has no commits yet');
-  const dir = join(root, 'docs/team/roles');
-  const files = git(root, 'ls-tree', '--name-only', 'HEAD', 'docs/team/roles/').split('\n').filter((p) => /\/[a-z0-9-]+\.md$/.test(p) && !/README\.md$/.test(p));
-  if (!files.length) throw new RunRefused('publish first: there are no role briefs in docs/team/roles');
-  const ownership = existsSync(join(root, '.agent-team/ownership.json')) ? JSON.parse(readFileSync(join(root, '.agent-team/ownership.json'), 'utf8')).rows ?? [] : null;
-  const roles = files.map((p) => {
-    const slug = p.slice(p.lastIndexOf('/') + 1, -3);
-    const md = readFileSync(join(dir, `${slug}.md`), 'utf8');
-    const b = parseBrief(slug, md);
-    const areas = ownership ? ownership.filter((r) => r.writer === slug).flatMap((r) => String(r.path).split(/,\s*/)) : ownsPaths(md).paths.filter((x) => x.mode === 'writes').map((x) => x.path);
-    return { slug, reportsTo: b.reportsTo, areas: [...new Set(areas.map((a) => a.replace(/`/g, '').trim()).filter(Boolean))], ...(b.model ? { model: b.model } : {}), status: b.status, brief: cut(md, BRIEF_MAX, '\n\n(cut to fit a run)') };
-  });
-  const mds = files.map((p) => { const slug = p.slice(p.lastIndexOf('/') + 1, -3); return { slug, md: readFileSync(join(dir, `${slug}.md`), 'utf8') }; });
-  const slugs = new Set(roles.map((r) => r.slug));
-  for (const r of roles) if (!r.reportsTo) throw new RunRefused(`${r.slug}'s brief does not say who it reports to`);
-  for (const r of roles) if (r.reportsTo !== 'owner' && !slugs.has(r.reportsTo)) throw new RunRefused(`${r.slug} reports to ${r.reportsTo}, which is not in the published team`);
-  const doors = roles.filter((r) => r.reportsTo === 'owner');
-  if (doors.length !== 1) throw new RunRefused(`exactly one role must report to the owner; the published team has ${doors.length}${doors.length ? ` (${doors.map((r) => r.slug).join(', ')})` : ''}`);
-  const team = existsSync(join(root, '.agent-team/team.json')) ? JSON.parse(readFileSync(join(root, '.agent-team/team.json'), 'utf8')) : {};
-  const name = team.values?.PROJECT_NAME ?? 'This team';
-  const active = roles.filter((r) => r.status !== 'dormant').length;
-  const summary = `${name}: ${roles.length} roles (${active} active), ${doors[0].slug} reports to the owner. Published at ${version.slice(0, 12)}${team.kit ? ` with ${team.kit}` : ''}.`;
+  const files = git(root, 'ls-tree', '--name-only', 'HEAD', 'docs/team/roles/').split('\n');
+  // The briefs and ownership as on disk (equal to HEAD: nothing is unpublished), meetings.json as committed.
+  const read = (path) => (path === '.agent-team/meetings.json' ? git(root, 'show', `HEAD:${path}`) || null : existsSync(join(root, path)) ? readFileSync(join(root, path), 'utf8') : null);
+  const roster = teamFrom({ version, paths: files, read });
   // Sessions check out the repository from its remote, so the run must be pinned to a commit the remote has: publish
   // commits but does not push. HEAD must be what the upstream branch is, as far as this clone last fetched or pushed.
   const upstream = git(root, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}');
@@ -80,16 +63,53 @@ export function runRequest(root, { dirty = [] } = {}) {
   const url = publicRepoUrl(git(root, 'remote', 'get-url', remote));
   if (!url) throw new RunRefused(`the remote ${remote} has no URL the team's sessions could use`);
   const ref = upstream.slice(remote.length + 1);
-  return {
-    mode: 'runner',
-    team: {
-      version,
-      repo: { url, ref },
-      summary: cut(summary, SUMMARY_MAX, '…'),
-      roles,
-      ...(meetings(root, mds).length ? { meetings: meetings(root, mds) } : {}),
-    },
-  };
+  return { mode: 'runner', team: { version: roster.version, repo: { url, ref }, summary: roster.summary, roles: roster.roles, ...(roster.meetings ? { meetings: roster.meetings } : {}) } };
+}
+
+/**
+ * Where a managed team's work lands (ADR 0012): this checkout's upstream, as { url, ref }. The team itself is not read
+ * from here (the control plane builds the roster from its accepted version), so nothing in .agent-team/ here counts.
+ */
+export function workRepoOf(root) {
+  if (!git(root, 'rev-parse', '--git-dir')) throw new RunRefused(`${root} is not a git repository, so the team's work has nowhere to land`);
+  const upstream = git(root, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}');
+  if (!upstream) throw new RunRefused(`push first: branch ${git(root, 'branch', '--show-current') || '(detached)'} has no upstream for the team's work`);
+  const remote = upstream.split('/')[0];
+  const url = publicRepoUrl(git(root, 'remote', 'get-url', remote));
+  if (!url) throw new RunRefused(`the remote ${remote} has no URL the team's sessions could use`);
+  return { url, ref: upstream.slice(remote.length + 1) };
+}
+
+/**
+ * The roster a run is frozen on, from a published version's files: the one parser for a team in a repository (above)
+ * and a managed team (ADR 0012; the control plane reads the accepted main from its own store). `paths` are the
+ * version's paths (only docs/team/roles/<slug>.md count), `read(path)` a file's text or null. Returns
+ * { version, summary, roles, meetings? }, or throws RunRefused when the roster could not start a run.
+ */
+export function teamFrom({ version, paths, read }) {
+  const slugsOf = paths.filter((p) => /^docs\/team\/roles\/[a-z0-9-]+\.md$/.test(p) && !/README\.md$/.test(p)).map((p) => p.slice(p.lastIndexOf('/') + 1, -3));
+  if (!slugsOf.length) throw new RunRefused('publish first: there are no role briefs in docs/team/roles');
+  // A missing file is null; one that does not parse refuses the run, as before the shared parser (code review L31w).
+  const json = (path) => { const t = read(path); if (t === null || t === undefined) return null; try { return JSON.parse(t); } catch { throw new RunRefused(`${path} in the published team is not valid JSON; fix it and publish again`); } };
+  const own = json('.agent-team/ownership.json');
+  const ownership = own ? own.rows ?? [] : null;
+  const mds = slugsOf.map((slug) => ({ slug, md: read(`docs/team/roles/${slug}.md`) ?? '' }));
+  const roles = mds.map(({ slug, md }) => {
+    const b = parseBrief(slug, md);
+    const areas = ownership ? ownership.filter((r) => r.writer === slug).flatMap((r) => String(r.path).split(/,\s*/)) : ownsPaths(md).paths.filter((x) => x.mode === 'writes').map((x) => x.path);
+    return { slug, reportsTo: b.reportsTo, areas: [...new Set(areas.map((a) => a.replace(/`/g, '').trim()).filter(Boolean))], ...(b.model ? { model: b.model } : {}), status: b.status, brief: cut(md, BRIEF_MAX, '\n\n(cut to fit a run)') };
+  });
+  const slugs = new Set(roles.map((r) => r.slug));
+  for (const r of roles) if (!r.reportsTo) throw new RunRefused(`${r.slug}'s brief does not say who it reports to`);
+  for (const r of roles) if (r.reportsTo !== 'owner' && !slugs.has(r.reportsTo)) throw new RunRefused(`${r.slug} reports to ${r.reportsTo}, which is not in the published team`);
+  const doors = roles.filter((r) => r.reportsTo === 'owner');
+  if (doors.length !== 1) throw new RunRefused(`exactly one role must report to the owner; the published team has ${doors.length}${doors.length ? ` (${doors.map((r) => r.slug).join(', ')})` : ''}`);
+  const team = json('.agent-team/team.json') ?? {};
+  const name = team.values?.PROJECT_NAME ?? 'This team';
+  const active = roles.filter((r) => r.status !== 'dormant').length;
+  const summary = `${name}: ${roles.length} roles (${active} active), ${doors[0].slug} reports to the owner. Published at ${version.slice(0, 12)}${team.kit ? ` with ${team.kit}` : ''}.`;
+  const m = meetingsFrom(json('.agent-team/meetings.json'), mds);
+  return { version, summary: cut(summary, SUMMARY_MAX, '…'), roles, ...(m.length ? { meetings: m } : {}) };
 }
 
 /**
@@ -100,6 +120,11 @@ export function runRequest(root, { dirty = [] } = {}) {
 export function meetings(root, roles) {
   let raw;
   try { raw = JSON.parse(git(root, 'show', 'HEAD:.agent-team/meetings.json') || 'null'); } catch { return []; }
+  return meetingsFrom(raw, roles);
+}
+
+/** meetings() on a parsed meetings.json. */
+function meetingsFrom(raw, roles) {
   const list = Array.isArray(raw?.meetings) ? raw.meetings : [];
   return list.map((m) => {
     const who = meetingAttendees(m, roles).roles.filter((s) => s !== m.facilitator);
