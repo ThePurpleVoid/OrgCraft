@@ -786,3 +786,18 @@
 @media (max-width: 640px) { .ats #recovery button, .ats #recovery select, .ats .recovery-banner .button { min-height: 44px; } }
 /* qa-web L27w: 44 px targets on the account page at phone width. */
 @media (max-width: 640px) { .ats #account button, .ats .auth-dialog button, .ats .auth-brand a { min-height: 44px; } .ats .auth-brand a { display: inline-flex; align-items: center; } }
+
+/* L22 "Make this a standing rule" (mockup v20): the sheet under an approved card. */
+.ats .mkrule-row { margin: 8px 0 0; }
+.ats .mkrule.panel { margin-top: 10px; border: 1px solid var(--accent); }
+.ats .mkrule .mr-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
+.ats .mkrule .mr-line input, .ats .mkrule .mr-line select { width: auto; }
+.ats .mkrule .mr-check { display: inline-flex; align-items: center; gap: 6px; }
+.ats .mkrule .mr-check input { width: auto; }
+.ats .mkrule .mr-errors { margin: 0; padding-left: 18px; color: var(--error); }
+.ats .mkrule .mr-quote { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--off); }
+.ats .mkrule textarea { width: 100%; }
+@media (max-width: 640px) {
+  .ats .mkrule input, .ats .mkrule select, .ats .mkrule button, .ats .mkrule-row button, .ats .mkrule summary { min-height: 44px; }
+  .ats .mkrule .mr-check input { min-width: 24px; }
+}

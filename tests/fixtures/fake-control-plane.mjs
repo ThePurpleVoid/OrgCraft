@@ -4,6 +4,7 @@
 // the whole card, a 409 with the current card when an answer is stale, step-up for approvals, Idempotency-Key
 // replays, runs with pause and stop, usage counted into today's cost, and the event stream.
 // When the real endpoints land (issue #28, backend dev), the chat tests also run against apps/server.
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 
 export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 'step-up-secret', team = 'demo', runner = defaultRunner, running = true, perDay = 5000 } = {}) {
@@ -19,6 +20,10 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
   // L22 (apps/server/ledger.mjs): standing rules and the ledger, newest first; a test pushes rows.
   const rules = [];
   const ledger = [];
+  // L22 "Make this a standing rule": what GET …/approvals/{apr}/rule-draft answers ([status, body]), and each POST.
+  const drafts = new Map();
+  const rulePosts = [];
+  let ruleRefuse = null; // [status, body] the next rule POSTs get after the step-up, as when the card changed
   const live = []; // live overrides in force (apps/server/live.mjs): { id, kind, member, state, reason, by, at, text, liveChange }
   let n = 0;
   const id = () => `ev_${String(++n).padStart(6, '0')}`;
@@ -52,7 +57,8 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     usage(amount) { cost.today += amount; append('usage.recorded', role('chief-of-staff'), { inputTokens: 1000, outputTokens: 200, cost: amount, currency: cost.currency }); },
     /** Spends today's budget: the runs pause with reason budget, as the real control plane does at 100%. */
     exhaust() { cost.state = 'exhausted'; for (const r of runs) if (r.state === 'running') { r.state = 'paused'; r.reason = 'budget'; append('run.paused', { kind: 'system', id: 'budget' }, { reason: 'budget' }, `run/${r.id}`); } },
-    events, cards, runs, cost, budget, started, live, rules, ledger,
+    events, cards, runs, cost, budget, started, live, rules, ledger, drafts, rulePosts,
+    refuseRule(v) { ruleRefuse = v; },
   };
   const doIts = [];
   let systems = { resources: [], bindings: [], version: 0 };
@@ -191,6 +197,25 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     if (p === '/v1/me' && req.method === 'GET') return send(res, 200, { id: 'per_owner', login: 'owner', name: 'Owner', workspaces: [{ tenant: 't', role: 'owner' }] });
     if (p === `/v1/teams/${team}/standing-rules` && req.method === 'GET') {
       return send(res, 200, { kinds: [['refund', true], ['pay.known', true], ['send.known', true], ['reply', false], ['merge', false], ['cost', false]].map(([id, enforced]) => ({ id, enforced })), never: ['newrecipient', 'live', 'delete', 'passkey', 'outside'], rules });
+    }
+    const rd = new RegExp(`^/v1/teams/${team}/approvals/([^/]+)/rule-draft$`).exec(p);
+    if (rd && req.method === 'GET') {
+      const d = drafts.get(rd[1]);
+      return d ? send(res, d[0], d[1]) : send(res, 409, { type: 'rule-not-possible', reason: 'unbound', error: 'no draft' });
+    }
+    // Making a rule (apps/server/ledger.mjs add): owner only, a step-up scoped rule:<hash of the form>, a number.
+    if (p === `/v1/teams/${team}/standing-rules` && req.method === 'POST') {
+      const body = await read(req);
+      const { words, days = 30, ...form } = body;
+      const scope = `rule:${createHash('sha256').update(JSON.stringify(form)).digest('hex')}`;
+      if (!stepped(req, scope)) return send(res, 401, { type: 'step-up-required', title: 'Making a standing rule needs a recent sign-in', status: 401, scope });
+      rulePosts.push(body);
+      if (ruleRefuse) return send(res, ruleRefuse[0], ruleRefuse[1]);
+      const at = new Date();
+      const r = { id: `sr_${rules.length + 1}`, number: rules.length + 1, kind: form.kind, form, words, live: true, createdBy: 'per_owner', createdByName: 'Owner', createdAt: at.toISOString(), expiresAt: new Date(at.getTime() + days * 86_400_000).toISOString(), used: { n: 0, amount: 0 } };
+      rules.unshift(r);
+      ledger.unshift({ at: r.createdAt, kind: 'rule-added', by: 'per_owner', rule: r.id, ruleNumber: r.number, ruleForm: form, words });
+      return send(res, 201, { id: r.id, number: r.number, form, hash: scope.slice(5), expiresAt: r.expiresAt });
     }
     const sr = new RegExp(`^/v1/teams/${team}/standing-rules/([^/]+)$`).exec(p);
     if (sr && req.method === 'DELETE') {

@@ -299,7 +299,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
   const relay = async (res, fn) => {
     if (!chat.connected) return send(res, 503, { connected: false, error: 'connect a control plane: set AGENT_TEAM_SERVER, AGENT_TEAM_SERVER_TOKEN and AGENT_TEAM_SERVER_TEAM' });
     try { return send(res, 200, await fn()); } catch (e) {
-      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(typeof e.body?.scope === 'string' ? { scope: e.body.scope } : {}), ...(e.status === 409 && e.body?.id ? { card: e.body } : {}), ...(e.status === 409 && Array.isArray(e.body?.cards) ? { cards: e.body.cards } : {}) });
+      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(typeof e.body?.scope === 'string' ? { scope: e.body.scope } : {}), ...(typeof e.body?.reason === 'string' ? { reason: e.body.reason.slice(0, 40) } : {}), ...(e.status === 409 && e.body?.id ? { card: e.body } : {}), ...(e.status === 409 && Array.isArray(e.body?.cards) ? { cards: e.body.cards } : {}) });
       if (e instanceof RunRefused) return send(res, 409, { error: e.message, type: 'not-published' });
       return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
     }
@@ -362,7 +362,13 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
       // Who is signed in to the control plane, so a page can say "You" for this person's own answers (L39).
       if (req.method === 'GET' && url.pathname === '/v1/team/me') {
         if (!chat.connected) return send(res, 200, { connected: false });
-        return relay(res, async () => { const me = await chat.me(); return { connected: true, id: me?.id ?? me?.person?.id ?? null }; });
+        return relay(res, async () => { const me = await chat.me(); return { connected: true, id: me?.id ?? me?.person?.id ?? null, owner: (me?.workspaces ?? []).some((w) => w.role === 'owner') }; });
+      }
+      // L22 (mockup v20): the rule the control plane drafts from an approved card's exact call.
+      const draft = req.method === 'GET' ? /^\/v1\/team\/approvals\/([A-Za-z0-9_-]{1,100})\/rule-draft$/.exec(url.pathname) : null;
+      if (draft) {
+        if (!chat.connected) return send(res, 200, { connected: false });
+        return relay(res, () => chat.ruleDraft(draft[1]));
       }
       if (req.method === 'GET' && url.pathname === '/v1/team/approvals') {
         if (!chat.connected) return send(res, 200, { connected: false });
@@ -468,6 +474,14 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
           const here = publishedSystems(root) ?? { resources: [], bindings: [] };
           if (systemsHash(here) !== input.hash) { chat.dropStepUp(); throw new HttpError(409, 'the published systems changed since they were shown', { type: 'systems-moved' }); }
           return relay(res, () => chat.setSystems({ ...here, expect: input.version }, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
+        }
+        // L22 (mockup v20): makes a standing rule from the form the page shows. Only the form's own fields, the owner's
+        // words and the days pass; the control plane validates the form, and asks for a step-up scoped to its hash.
+        if (url.pathname === '/v1/team/standing-rules') {
+          const KEYS = ['kind', 'tool', 'recipientField', 'amountField', 'currencyField', 'currency', 'fixed', 'free', 'period', 'maxEach', 'total', 'all', 'n', 'channel', 'system', 'words', 'days'];
+          if (typeof input.words !== 'string' || typeof input.kind !== 'string') { chat.dropStepUp(); throw new HttpError(400, 'send the rule form and your words'); }
+          const body = Object.fromEntries(KEYS.filter((k) => input[k] !== undefined).map((k) => [k, input[k]]));
+          return relay(res, () => chat.addRule(body, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
         }
         const withdraw = /^\/v1\/team\/standing-rules\/([^/]+)\/withdraw$/.exec(url.pathname);
         if (withdraw) return relay(res, () => chat.withdrawRule(decodeURIComponent(withdraw[1])));

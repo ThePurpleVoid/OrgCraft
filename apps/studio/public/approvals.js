@@ -2,7 +2,7 @@
 // use this period and Withdraw, what a rule can never cover, and the ledger, one line per decision in the person's own
 // words. GET /v1/team/approvals reads all three from the control plane (apps/server/ledger.mjs) through this Studio's
 // server; Withdraw narrows what the team may do, so it needs no passkey. Making a rule starts from an approved card
-// (mockup v20, waiting for the owner's sign-off), so this page has no form for it.
+// in the chat (mockup v20, signed off; make-rule.js), so this page has no form for it.
 import { requestJson } from './env.js';
 import { t } from './i18n.js';
 import { infoButton } from './tooltip.js';

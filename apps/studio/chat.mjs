@@ -124,6 +124,10 @@ export function chatSource(env = process.env) {
     dropStepUp: () => { spendStepUp(); },
     setSystems: (body, key) => call('PUT', `/teams/${t}/systems`, body, { ...(key ? { 'idempotency-key': key } : {}), ...spendStepUp() }),
     rules: () => call('GET', `/teams/${t}/standing-rules`),
+    // L22 (mockup v20): a rule drafted from an approval a person approved, and making it behind a step-up scoped
+    // rule:<hash of the form> (the control plane names the scope in its 401).
+    ruleDraft: (approval) => call('GET', `/teams/${t}/approvals/${encodeURIComponent(approval)}/rule-draft`),
+    addRule: (body, key) => call('POST', `/teams/${t}/standing-rules`, body, { ...(key ? { 'idempotency-key': key } : {}), ...spendStepUp() }),
     withdrawRule: (id) => call('DELETE', `/teams/${t}/standing-rules/${encodeURIComponent(id)}`),
     ledger: (before) => call('GET', `/teams/${t}/ledger${before ? `?before=${encodeURIComponent(before)}` : ''}`),
     stopEverything: (reason, key) => call('POST', `/teams/${t}/live/stop-everything`, reason ? { reason } : {}, key ? { 'idempotency-key': key } : {}),
