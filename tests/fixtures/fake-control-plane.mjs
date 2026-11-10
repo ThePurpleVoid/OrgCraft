@@ -6,6 +6,7 @@
 // When the real endpoints land (issue #28, backend dev), the chat tests also run against apps/server.
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { canonicalSystemsHash } from '../../tools/systems-hash.mjs';
 
 export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 'step-up-secret', team = 'demo', runner = defaultRunner, running = true, perDay = 5000 } = {}) {
   const events = [];
@@ -63,8 +64,12 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
   const doIts = [];
   let systems = { resources: [], bindings: [], version: 0 };
   const systemsPuts = [];
+  const applied = [];
   /** Sets the team's systems directly, as an earlier send or another admin would. */
   const setSystems = (next) => { systems = { resources: next.resources ?? [], bindings: next.bindings ?? [], version: systems.version + 1 }; };
+  /** L40b: a set waiting for its change; `ready` once the code host reports the change accepted with the same content. */
+  let pending = null;
+  const pendingOut = () => (pending ? { ...pending, ready: pending.ready ?? null } : null);
   const scopes = new Map(); // su -> scope it was bound to (ADR 0013)
   const stepped = (req, scope = null) => { const su = req.headers['x-step-up']; if (!su || !(stepUps.get(su) > Date.now()) || (scopes.get(su) ?? null) !== scope) return false; stepUps.delete(su); scopes.delete(su); return true; };
   const needStepUp = (res, what) => send(res, 401, { type: 'step-up-required', title: `${what} needs a recent sign-in`, status: 401 });
@@ -84,7 +89,7 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     const held = new RegExp(`^/v1/teams/${team}/meetings/([^/]+)$`).exec(p);
     if (held && req.method === 'GET') return held[1] === 'mtg_held1' ? send(res, 200, { id: 'mtg_held1', definition: 'weekly-review', title: 'Weekly review', state: 'closed' }) : send(res, 404, { error: 'no such meeting' });
     if (p === `/v1/teams/${team}/chat` && req.method === 'GET') {
-      const shown = events.filter((e) => /^(chat\.|decision\.|approval\.|card\.updated|run\.|budget\.)/.test(e.type));
+      const shown = events.filter((e) => /^(chat\.|decision\.|approval\.|card\.updated|run\.|budget\.|systems\.pending\.)/.test(e.type));
       const before = url.searchParams.get('before');
       const end = before ? shown.findIndex((e) => e.id === before) : shown.length;
       const page = shown.slice(Math.max(0, end - 50), end);
@@ -271,14 +276,31 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
       return send(res, 200, { ...o, lifted: true });
     }
     // L40: a team's systems. Setting them needs a step-up scoped systems:<team> (ADR 0013), as the real server does.
-    if (p === `/v1/teams/${team}/systems` && req.method === 'GET') return send(res, 200, { ...systems });
+    if (p === `/v1/teams/${team}/systems` && req.method === 'GET') return send(res, 200, { ...systems, pending: pendingOut() });
     if (p === `/v1/teams/${team}/systems` && req.method === 'PUT') {
       const body = await read(req);
       if (body.expect !== undefined && body.expect !== systems.version) return send(res, 409, { type: 'systems-changed', title: 'The systems changed since they were compared', status: 409, version: systems.version });
       if (!stepped(req, `systems:${team}`)) return send(res, 401, { type: 'step-up-required', title: 'Changing what the team can reach needs a recent sign-in', status: 401, scope: `systems:${team}` });
-      systems = { resources: body.resources ?? [], bindings: body.bindings ?? [], version: systems.version + 1 };
       systemsPuts.push(body);
+      if (body.pending) {
+        const contentHash = canonicalSystemsHash(body);
+        pending = { sha: body.pending.sha, pr: body.pending.pr ?? null, resources: body.resources ?? [], bindings: body.bindings ?? [], expect: body.expect, contentHash, ready: null, createdBy: 'per_owner', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30 * 864e5).toISOString() };
+        return send(res, 200, { version: systems.version, pending: { sha: pending.sha, pr: pending.pr, contentHash } });
+      }
+      pending = null;
+      systems = { resources: body.resources ?? [], bindings: body.bindings ?? [], version: systems.version + 1 };
       return send(res, 200, { ...systems });
+    }
+    if (p === `/v1/teams/${team}/systems/pending/apply` && req.method === 'POST') {
+      const body = await read(req);
+      if (!pending || pending.sha !== body.sha) return send(res, 409, { type: 'no-pending', title: 'no pending change for that commit', status: 409 });
+      if (body.contentHash && body.contentHash !== pending.contentHash) return send(res, 409, { type: 'pending-changed', title: 'the pending change was changed since it was shown', status: 409 });
+      if (pending.expect !== systems.version) { const was = pending; pending = null; append('systems.pending.dropped', { kind: 'system', id: 'control-plane' }, { sha: was.sha, pr: was.pr, reason: 'base-moved' }); return send(res, 409, { type: 'pending-dropped', title: 'the pending change could not be switched on', status: 409 }); }
+      if (!stepped(req, `systems:${team}`)) return send(res, 401, { type: 'step-up-required', title: 'Switching on systems needs a recent sign-in', status: 401, scope: `systems:${team}` });
+      systems = { resources: pending.resources, bindings: pending.bindings, version: systems.version + 1 };
+      applied.push(pending.sha);
+      pending = null;
+      return send(res, 200, { applied: true, version: systems.version });
     }
     if (p === '/v1/me/summary') {
       const r = runs.find((x) => x.state !== 'stopped');
@@ -297,7 +319,11 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}`;
   return {
-    url, token, stepUpSecret, team, ...api, doIts, systemsPuts, setSystems, get systems() { return systems; },
+    url, token, stepUpSecret, team, ...api, doIts, systemsPuts, setSystems, applied, get systems() { return systems; }, get pending() { return pending; },
+    /** The code host reports the change accepted (L40b): the set is ready to switch on. */
+    readyPending(publishedSha = 'f'.repeat(40)) { pending.ready = { sha: publishedSha, at: new Date().toISOString(), by: 'ci' }; append('systems.pending.ready', { kind: 'system', id: 'ci' }, { sha: pending.sha, pr: pending.pr, publishedSha, by: 'ci' }); },
+    /** Drops the pending set, as a closed change or an expiry would. */
+    dropPending(reason = 'withdrawn') { const was = pending; pending = null; append('systems.pending.dropped', { kind: 'system', id: 'control-plane' }, { sha: was.sha, pr: was.pr, reason }); },
     env: { AGENT_TEAM_SERVER: url, AGENT_TEAM_SERVER_TOKEN: token, AGENT_TEAM_SERVER_TEAM: team },
     close: () => { for (const s of streams) s.end(); server.closeAllConnections?.(); server.close(); },
   };

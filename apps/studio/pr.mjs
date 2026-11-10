@@ -39,6 +39,35 @@ export function prSupport(root, env = process.env) {
 }
 
 /**
+ * Whether a send of systems from the branch HEAD is on must wait as a pending set (L40b, CTO rulings): null on the
+ * default branch or a purely local branch (no upstream), where a send applies directly; otherwise
+ * { pr, branch }, with `pr` the number of the branch's open pull request when gh finds one, else null. A detached HEAD waits. Every pushed,
+ * non-default branch waits, whether its PR is open, closed, missing or unreadable: systems nobody has reviewed must
+ * not widen a team's access.
+ */
+export function openChangeRequest(root, env = process.env) {
+  const branch = run('git', ['-C', root, 'symbolic-ref', '--short', 'HEAD'], { env }).out;
+  // A detached HEAD always waits: there is no honest reason to send systems from one (CTO ruling on security's low).
+  if (!branch) return { pr: null, branch: null };
+  const head = run('git', ['-C', root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { env }).out.replace(/^origin\//, '');
+  if (head ? branch === head : ['main', 'master'].includes(branch)) return null;
+  if (!run('git', ['-C', root, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { env }).ok) return null;
+  const view = run(ghBin(env), ['pr', 'view', branch, '--json', 'number,state'], { cwd: root, env, timeout: 15_000 });
+  let j = null;
+  try { j = view.ok ? JSON.parse(view.out) : null; } catch { /* unreadable: waits with no number */ }
+  return { pr: j?.state === 'OPEN' && Number.isInteger(j.number) && j.number > 0 ? j.number : null, branch };
+}
+
+/** The page to open a change for review of the branch HEAD is on (GitHub compare), or null: no branch or another host. */
+export function reviewUrl(root, env = process.env) {
+  const branch = run('git', ['-C', root, 'symbolic-ref', '--short', 'HEAD'], { env }).out;
+  const page = branch ? githubRepo(run('git', ['-C', root, 'remote', 'get-url', 'origin'], { env }).out) : null;
+  if (!page) return null;
+  const base = run('git', ['-C', root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { env }).out.replace(/^origin\//, '');
+  return `${page}/compare/${base ? `${encodeURIComponent(base)}...` : ''}${encodeURIComponent(branch)}?expand=1`;
+}
+
+/**
  * Pushes `branch` to origin (never forced) and opens a pull request into `base` with gh when it is signed in.
  * Returns { state, branch, base, url?, compareUrl?, error?, commands }: state is opened, exists, pushed (no gh, or
  * gh not signed in), not-pushed (the push failed), no-remote or same-branch. `commands` are what the owner can run.

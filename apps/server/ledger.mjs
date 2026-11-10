@@ -15,77 +15,21 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { canonical } from '../../packages/calls/index.mjs';
 import { Problem, getTeam } from './store.mjs';
+import { KINDS, NEVER, NEVER_TOOL, PERIODS, RuleError, int as intCore, minorDigits, ruleForm as ruleFormCore, ruleLine } from '../../packages/calls/rules.mjs';
 
-/** Calendar periods in the team's time zone (CPO ruling): a day from midnight, a week from Monday, a month from the 1st. */
-export const PERIODS = { day: 'day', week: 'week', month: 'month' };
-/** The fixed list (CPO §6b). Only these three are enforced in Now; the others need data the server does not hold yet. */
-export const KINDS = { refund: true, 'pay.known': true, 'send.known': true, reply: false, merge: false, cost: false };
-export const NEVER = ['newrecipient', 'live', 'delete', 'passkey', 'outside'];
-/** Tools a rule may never cover, by name: deleting things and going live (rule.never.delete, rule.never.live). */
-const NEVER_TOOL = /(delete|remove|destroy|drop|purge|wipe|deploy|publish|release|go_?live|promote)/i;
-const TOOL = /^mcp__[A-Za-z0-9_-]{1,64}__[A-Za-z0-9_-]{1,64}$/;
-const FIELD = /^[A-Za-z0-9_]{1,64}$/;
+export { KINDS, NEVER, PERIODS, ruleLine };
+
 const WORDS_MAX = 2000;
 const DECLINE_DAYS = 7;
 
 const sha = (s) => createHash('sha256').update(s).digest('hex');
 const rid = () => `sr_${randomBytes(12).toString('base64url')}`;
-const int = (v, what, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) => {
-  if (!Number.isSafeInteger(v) || v < min || v > max) throw new Problem(400, `${what} is a whole number from ${min} to ${max}${what.includes('amount') || what === 'maxEach' || what === 'total' ? ' (minor units, like cents)' : ''}`);
-  return v;
-};
+/** rules.mjs's int, as a problem+json 400. */
+const int = (...a) => problems(() => intCore(...a));
 
-/** The structured form of a rule from a request body, or a 400 saying what is wrong. */
-export function ruleForm(body = {}) {
-  const kind = body.kind;
-  if (!(kind in KINDS)) throw new Problem(400, `kind is one of ${Object.keys(KINDS).join(', ')}`);
-  if (!KINDS[kind]) throw new Problem(422, `${kind} rules are not enforced yet; in Now a rule can be refund, pay.known or send.known`, { type: 'rule-kind-later' });
-  if (typeof body.tool !== 'string' || !TOOL.test(body.tool)) throw new Problem(400, 'tool is the exact connector tool the rule covers, like mcp__payments__refund');
-  if (NEVER_TOOL.test(body.tool)) throw new Problem(422, 'a standing rule can never cover deleting things or going live', { type: 'rule-never' });
-  if (typeof body.recipientField !== 'string' || !FIELD.test(body.recipientField)) throw new Problem(400, 'recipientField is the input field that names who it goes to (customer, to, ...)');
-  if (!(body.period in PERIODS)) throw new Problem(400, `period is one of ${Object.keys(PERIODS).join(', ')}: every rule has a limit per period`);
-  const label = (v, what) => (v === undefined || v === null ? null : typeof v === 'string' && v.length <= 80 ? v : (() => { throw new Problem(400, `${what} is a short name`); })());
-  const form = { kind, tool: body.tool, recipientField: body.recipientField, period: body.period, ...shapeOf(body, kind) };
-  if (kind === 'send.known') {
-    return { ...form, n: int(body.n, 'n', { max: 10_000 }), channel: label(body.channel, 'channel') };
-  }
-  if (typeof body.amountField !== 'string' || !FIELD.test(body.amountField)) throw new Problem(400, 'amountField is the input field with the amount, in minor units');
-  if (typeof body.currency !== 'string' || !/^[A-Z]{3}$/.test(body.currency)) throw new Problem(400, 'currency is a three-letter code, like USD');
-  // The call must say its currency, and it is always compared with the rule's (code review sev 3): a money rule with
-  // no currency field would take any currency as the rule's.
-  if (typeof body.currencyField !== 'string' || !FIELD.test(body.currencyField)) throw new Problem(400, 'currencyField is the input field with the currency, compared with the rule\'s on every call');
-  const maxEach = int(body.maxEach, 'maxEach');
-  const total = int(body.total, 'total');
-  if (total < maxEach) throw new Problem(400, 'total per period is at least maxEach');
-  // Refunds may also have a total across all customers (CPO ruling; off by default).
-  const all = kind === 'refund' && body.all !== undefined && body.all !== null ? int(body.all, 'all') : null;
-  if (all !== null && all < maxEach) throw new Problem(400, 'all (the total across all customers per period) is at least maxEach');
-  return { ...form, amountField: body.amountField, currency: body.currency, currencyField: body.currencyField, maxEach, total, ...(all !== null ? { all } : {}), system: label(body.system, 'system') };
-}
-
-/**
- * The call's shape a rule allows (security review sev 2): `fixed` input fields that must equal these values, and
- * `free` fields that may hold any plain value. A covered call has no other field and nothing nested, so the owner's
- * rule is never wider than what they read. Both are in the form, so in its hash and its line.
- */
-function shapeOf(body, kind) {
-  const fixed = body.fixed ?? {};
-  const free = body.free ?? [];
-  if (!fixed || typeof fixed !== 'object' || Array.isArray(fixed) || Object.keys(fixed).length > 20) throw new Problem(400, 'fixed is an object of at most 20 input fields and the exact value each must have');
-  if (!Array.isArray(free) || free.length > 20) throw new Problem(400, 'free is a list of at most 20 input fields that may hold any plain value');
-  const own = [body.recipientField, ...(kind === 'send.known' ? [] : [body.amountField, body.currencyField])].filter(Boolean);
-  const seen = new Set(own);
-  for (const [k, v] of Object.entries(fixed)) {
-    if (!FIELD.test(k) || seen.has(k)) throw new Problem(400, `fixed names each input field once, and not the recipient, amount or currency field: ${k}`);
-    if (!(typeof v === 'string' ? v.length <= 200 : Number.isSafeInteger(v) || typeof v === 'boolean')) throw new Problem(400, `fixed.${k} is a short text, a whole number or true/false`);
-    seen.add(k);
-  }
-  for (const k of free) {
-    if (typeof k !== 'string' || !FIELD.test(k) || seen.has(k)) throw new Problem(400, `free names each input field once, and none already named: ${k}`);
-    seen.add(k);
-  }
-  return { fixed: Object.fromEntries(Object.entries(fixed).sort(([a], [b]) => (a < b ? -1 : 1))), free: [...free].sort() };
-}
+/** The structured form of a rule from a request body, or the problem saying what is wrong (packages/calls/rules.mjs). */
+export function ruleForm(body = {}) { return problems(() => ruleFormCore(body)); }
+const problems = (fn) => { try { return fn(); } catch (e) { if (e instanceof RuleError) throw new Problem(e.status, e.message, e.type ? { type: e.type } : {}); throw e; } };
 
 /** Does this call's input have exactly the fields the rule names, every fixed one as fixed, and nothing nested? */
 function fitsShape(f, input) {
@@ -106,21 +50,55 @@ function fitsShape(f, input) {
 const ACTIONS = { refund: ['payment', 'refund'], 'pay.known': ['payment'], 'send.known': ['outbound-message', 'send', 'message'] };
 
 export const formHash = (form) => sha(`rule/1\n${canonical(form)}`);
+/** The step-up scope for making a rule: its form and how many days it lasts (security L22m), so the passkey covers both. */
+export const ruleScope = (form, days = 30) => `rule:${sha(`rule/2\n${canonical({ days, form })}`)}`;
 
-/** The one line a rule reads as (CPO §6b patterns), for the ledger and the list. Parts that are not set are left out. */
-export function ruleLine(form) {
-  // "$20", or "$20.50" when there are cents (strings-now rule.* examples).
-  const money = (minor) => new Intl.NumberFormat('en-US', { style: 'currency', currency: form.currency ?? 'USD', ...(minor % 100 === 0 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}) }).format(minor / 100);
-  const parts = {
-    refund: ['Refunds', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} per customer a ${form.period}`, form.all && `at most ${money(form.all)} a ${form.period} in all`, form.system && `in ${form.system}`],
-    'pay.known': ['Payments to people you\'ve paid before', `up to ${money(form.maxEach ?? 0)} each`, `at most ${money(form.total ?? 0)} a ${form.period}`, form.system && `in ${form.system}`],
-    'send.known': ['Messages to people the team has written to before', form.channel && `in ${form.channel}`, `at most ${form.n} a ${form.period}`],
-  }[form.kind];
-  // rule.part.with, one per fixed field, then rule.part.fields: every field a covered call may carry, so the line is
-  // never narrower than the rule (security sev 2). Anything not listed makes it ask a person.
-  const fixed = Object.entries(form.fixed ?? {}).map(([k, v]) => `only when ${k} is "${v}"`);
-  const fields = [form.recipientField, form.amountField, form.currencyField, ...(form.free ?? []), ...Object.keys(form.fixed ?? {})].filter(Boolean);
-  return [...parts, ...fixed, `may include: ${fields.join(', ')}`].filter(Boolean).join(' · ');
+/**
+ * Is this rule no wider than the draft it was made from? The same kind, tool, recipient, amount and currency fields and
+ * currency; fixed and free fields only from the call's own other fields. Limits, period, days and labels are the owner's.
+ */
+export function fromDraft(form, d) {
+  for (const k of ['kind', 'tool', 'recipientField', 'amountField', 'currencyField', 'currency']) if ((form[k] ?? null) !== (d[k] ?? null)) return false;
+  const callFields = new Set(d.free ?? []);
+  return [...Object.keys(form.fixed ?? {}), ...(form.free ?? [])].every((k) => callFields.has(k));
+}
+
+/** Why an approval cannot become a standing rule (rule-draft's 409 reason). */
+export const DRAFT_REASONS = ['not-approved', 'unbound', 'many-calls', 'never', 'kind-later', 'no-recipient', 'no-amount', 'nested'];
+const RECIPIENT = ['customer', 'customer_id', 'customerId', 'to', 'recipient', 'recipient_id', 'email', 'user', 'user_id', 'account', 'account_id', 'payee', 'channel', 'chat_id'];
+const AMOUNT = ['amount', 'amount_cents', 'amountCents', 'amount_minor', 'value', 'total'];
+
+/**
+ * The draft form for one signed call (rule-draft): the kind from the action class (a refund tool or action is a
+ * refund, other payments pay.known, messages send.known), the recipient, amount and currency fields by their usual
+ * names, every other plain field free (so the rule is no wider than the call), and the defaults: a week, maxEach the
+ * amount rounded up to a whole unit, total three times that, 50 messages. `no(reason, why)` throws the 409.
+ */
+export function draftForm(action, calls, no) {
+  if (!Array.isArray(calls) || !calls.length) no('unbound', 'this ask has no signed call to make a rule from');
+  if (calls.length !== 1) no('many-calls', 'this ask covers several calls; a rule is made from one');
+  const { tool, input } = calls[0];
+  if (typeof tool !== 'string' || !/^mcp__/.test(tool) || NEVER_TOOL.test(tool)) no('never', 'a standing rule can never cover this kind of action');
+  const kind = /refund/i.test(`${action} ${tool}`) ? 'refund' : action === 'payment' ? 'pay.known' : ['outbound-message', 'send', 'message'].includes(action) ? 'send.known' : null;
+  if (!kind) no('kind-later', 'rules for this kind of action are not available yet');
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.values(input).some((v) => v !== null && typeof v === 'object')) no('nested', 'the call carries nested data, so no rule can match it exactly');
+  const recipientField = RECIPIENT.find((k) => typeof input[k] === 'string' && input[k]);
+  if (!recipientField) no('no-recipient', 'the call does not say who it goes to in a field a rule can use');
+  const system = tool.split('__')[1];
+  let form = { kind, tool, recipientField, period: 'week' };
+  const used = new Set([recipientField]);
+  if (kind === 'send.known') form = { ...form, n: 50, channel: system };
+  else {
+    const amountField = AMOUNT.find((k) => Number.isSafeInteger(input[k]) && input[k] > 0);
+    const currencyField = ['currency', 'currency_code', 'currencyCode'].find((k) => typeof input[k] === 'string' && /^[A-Za-z]{3}$/.test(input[k]));
+    if (!amountField || !currencyField) no('no-amount', 'the call does not say its amount and currency in fields a rule can use');
+    const unit = 10 ** minorDigits(input[currencyField].toUpperCase());
+    const maxEach = Math.ceil(input[amountField] / unit) * unit;
+    form = { ...form, amountField, currencyField, currency: input[currencyField].toUpperCase(), maxEach, total: maxEach * 3, system };
+    used.add(amountField); used.add(currencyField);
+  }
+  const free = Object.keys(input).filter((k) => !used.has(k) && /^[A-Za-z0-9_]{1,64}$/.test(k)).slice(0, 20);
+  try { return ruleForm({ ...form, fixed: {}, free }); } catch (e) { return no(e.type === 'rule-never' ? 'never' : 'kind-later', e.message); }
 }
 
 /** Has this teammate read outside text (a trigger's outside block) since a person last decided for its session? */
@@ -316,18 +294,67 @@ export function createLedger({ db, m3, now = () => new Date() }) {
     const words = typeof body?.words === 'string' ? body.words.trim() : '';
     if (words.length < 3 || words.length > WORDS_MAX) throw new Problem(400, 'words are the owner\'s own reason, kept in the ledger exactly as written (3 to 2,000 characters)');
     const days = body?.days === undefined ? 30 : int(body.days, 'days', { max: 90 });
+    // Made from an approval ("Make this a standing rule"): bound to that approval's draft, never wider, and at most one
+    // rule from it, even from two windows (qa-web D1, CTO).
+    const from = body?.approval ?? null;
+    if (from !== null && (typeof from !== 'string' || !from || from.length > 100)) throw new Problem(400, 'approval is the id of the approval the rule is made from');
+    if (from !== null) {
+      const { draft: d, made } = await approvedDraft(tenant, team, from);
+      if (made) throw new Problem(409, `standing rule #${made.number} was already made from this approval`, { type: 'rule-exists', body: { id: made.id, number: made.number } });
+      if (!fromDraft(form, d)) throw new Problem(400, 'the rule is wider than the approval it is made from: the same kind, tool, recipient, amount and currency fields, and only the call\'s other fields', { type: 'rule-not-from-draft' });
+    }
     const hash = formHash(form);
-    // ADR 0013 rule 2: a standing rule is a capability change, so the step-up names this exact rule.
-    await m3.requireStepUp(tenant, who.principal, stepUp, 'Making a standing rule', `rule:${hash}`);
+    // ADR 0013 rule 2: a standing rule is a capability change, so the step-up names this exact rule and how long it lasts.
+    await m3.requireStepUp(tenant, who.principal, stepUp, 'Making a standing rule', ruleScope(form, days));
     const at = now();
     const id = rid();
     await m3.tx(tenant, async (ctx) => {
-      await ctx.q('insert into standing_rules(id, tenant, team, kind, spec, spec_hash, words, created_by, created_at, expires_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-        [id, tenant, team, form.kind, JSON.stringify(form), hash, words, who.principal, at, new Date(at.getTime() + days * 86_400_000)]);
+      // The unique index settles two windows at once: the second insert fails and is answered as rule-exists.
+      try {
+        await ctx.q('insert into standing_rules(id, tenant, team, kind, spec, spec_hash, words, created_by, created_at, expires_at, from_approval) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+          [id, tenant, team, form.kind, JSON.stringify(form), hash, words, who.principal, at, new Date(at.getTime() + days * 86_400_000), from]);
+      } catch (e) {
+        if (from !== null && (e?.code === '23505' || /standing_rules_from_approval/.test(String(e?.message)))) {
+          const [made] = await madeFrom(tenant, team, from).catch(() => []);
+          throw new Problem(409, 'a standing rule was already made from this approval', { type: 'rule-exists', body: made ? { id: made.id, number: made.number } : {} });
+        }
+        throw e;
+      }
       await ledgerRow(ctx.q, tenant, team, { kind: 'rule-added', rule: id, by: who.principal, words });
       await ctx.audit({ team, actorKind: 'person', actorId: who.principal, action: 'standing-rule', target: id, decision: 'allowed', detail: { op: 'add', form, hash } });
     });
-    return { id, form, line: ruleLine(form), hash, expiresAt: new Date(at.getTime() + days * 86_400_000).toISOString() };
+    // {n} of rule.made: the same count the list and the ledger use (rules on this team by when they were made).
+    const [{ number }] = await db.tenant(tenant, ({ q }) => q('select count(*)::int as number from standing_rules where team = $1 and (created_at, id) <= ($2, $3)', [team, at, id]));
+    return { id, number, form, line: ruleLine(form), hash, expiresAt: new Date(at.getTime() + days * 86_400_000).toISOString() };
+  }
+
+  /** The rule made from this approval, with its number, if any. */
+  const madeFrom = (tenant, team, apr) => db.tenant(tenant, ({ q }) => q(`select s.id, (select count(*)::int from standing_rules x where x.team = s.team and (x.created_at, x.id) <= (s.created_at, s.id)) as number
+    from standing_rules s where s.team = $1 and s.from_approval = $2`, [team, apr]));
+
+  /**
+   * "Make this a standing rule" (L22 web, mockup v20): a draft form from one approval a person approved, no wider than
+   * that call. Owner only. 409 rule-not-possible with `reason` when it cannot be one (DRAFT_REASONS).
+   */
+  async function draft(tenant, team, apr, who) {
+    await getTeam(db, tenant, team);
+    if (who.role !== 'owner') throw new Problem(403, 'only an owner makes a standing rule', { type: 'forbidden' });
+    const { a, draft: form, made } = await approvedDraft(tenant, team, apr);
+    const facts = a.card?.data?.facts;
+    const names = await namesOf(tenant, [a.decided_by]);
+    return { approval: a.id, letter: a.card?.data?.letter ?? null, effect: Array.isArray(facts) && facts[0]?.text ? String(facts[0].text) : a.card?.title ?? null,
+      approvedBy: { id: a.decided_by, name: nameIn(names, a.decided_by) }, made: made ? { id: made.id, number: made.number } : null, form, line: ruleLine(form) };
+  }
+
+  /** A person-approved approval on this team, its draft form, and the rule already made from it; or the 404/409. */
+  async function approvedDraft(tenant, team, apr) {
+    const [a] = await db.tenant(tenant, ({ q }) => q('select a.id, a.state, a.decided_by, a.action, a.calls, c.card from approvals a left join cards c on c.id = a.card where a.team = $1 and a.id = $2', [team, apr]));
+    if (!a) throw new Problem(404, 'no such approval on this team');
+    const no = (reason, why) => { throw new Problem(409, why, { type: 'rule-not-possible', body: { reason } }); };
+    const person = a.state === 'approved' && a.decided_by && !/^rule:/.test(a.decided_by) && !['ledger', 'changed'].includes(a.decided_by);
+    if (!person) no('not-approved', 'only an ask a person approved can become a standing rule');
+    const [made] = await madeFrom(tenant, team, a.id);
+    return { a, draft: draftForm(a.action, a.calls, no), made: made ?? null };
   }
 
   async function withdraw(tenant, team, rule, who) {
@@ -361,5 +388,5 @@ export function createLedger({ db, m3, now = () => new Date() }) {
     return { items, next: rows.length === n ? String(rows.at(-1).id) : null };
   }
 
-  return { list, add, withdraw, ledger };
+  return { list, add, withdraw, ledger, draft };
 }

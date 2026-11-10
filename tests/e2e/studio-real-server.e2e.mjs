@@ -219,3 +219,43 @@ test('against the real control plane: systems sent behind a scoped step-up, and 
   assert.equal(after.version, 1);
   await page.close();
 });
+
+test('against the real control plane: Make this a standing rule from an approved refund, its number, and one per approval (L22)', { skip }, async () => {
+  const { hashCalls, callOf } = await import('../../packages/calls/index.mjs');
+  const { boundCalls } = await import('../../apps/server/signed.mjs');
+  const calls = [{ tool: 'mcp__payments__refund', input: { amount: 2490, currency: 'USD', customer: 'cus_dana', reason: 'cracked mug' } }];
+  const bound = boundCalls(calls, hashCalls(calls.map((c) => callOf(c.tool, c.input))));
+  const { result: apr } = await role.approval({ action: 'payment', call: { command: JSON.stringify(calls) }, why: 'The mug arrived cracked.', role: 'chief-of-staff', bound });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${base}/?t=${studio.launchToken}`);
+  await page.goto(`${base}/#chat`);
+  const card = page.locator(`.card-msg[data-card-id="${apr.card.id}"]`);
+  await card.getByRole('button', { name: 'Approve' }).click();
+  await card.getByLabel('Confirmation code').fill(SECRET);
+  await card.getByRole('button', { name: 'Use passkey' }).click();
+  await card.locator('.answer', { hasText: 'Approve' }).waitFor();
+  // The real rule-draft: the button, then the sheet from the exact call, made behind a step-up scoped to it and its days.
+  await card.getByRole('button', { name: 'Make this a standing rule' }).click();
+  const sheet = card.locator('.mkrule');
+  await sheet.getByText(/which you approved: /).waitFor();
+  await sheet.getByLabel('In your own words, why the team doesn\'t need to ask you for this').fill('cracked mugs are fine to refund');
+  await sheet.getByRole('button', { name: 'Make the rule with your passkey' }).click();
+  const su = page.locator('#stepup-dialog');
+  await su.getByText('Ends after 30 days').waitFor();
+  await su.getByLabel('Confirmation code').fill(SECRET);
+  await su.getByRole('button', { name: 'Use passkey' }).click();
+  await card.getByText(/^Standing rule #\d+ is in force until /).waitFor();
+  // On the real server: one rule from this approval, the owner's words kept; a reload still says which.
+  const { rules } = await page.evaluate(async () => (await fetch('/v1/team/approvals')).json());
+  const list = rules?.rules ?? [];
+  const made = list.filter((r) => r.words === 'cracked mugs are fine to refund');
+  assert.equal(made.length, 1, JSON.stringify(list[0]));
+  assert.equal(made[0].words, 'cracked mugs are fine to refund');
+  await page.reload();
+  await card.getByText(/^Standing rule #\d+ was made from this ask\.$/).waitFor();
+  assert.equal(await card.getByRole('button', { name: 'Make this a standing rule' }).count(), 0);
+  assert.deepEqual(errors, []);
+  await page.close();
+});

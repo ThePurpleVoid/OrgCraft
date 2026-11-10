@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hashCalls, callOf } from '../../../packages/calls/index.mjs';
 import { approveScope } from '../signed.mjs';
-import { formHash, ruleForm, ruleLine } from '../ledger.mjs';
+import { ruleForm, ruleLine, ruleScope } from '../ledger.mjs';
 import { fakeRunner, plane, registerRunner } from './helpers.mjs';
 
 const roster = () => ({
@@ -34,6 +34,16 @@ test('rule forms: the fixed list, a limit per period, never deleting or going li
   assert.equal(ruleLine(ruleForm(RULE)), 'Refunds · up to $20 each · at most $30 per customer a week · in Payments · may include: customer, amount, currency');
   assert.equal(ruleLine(ruleForm({ kind: 'send.known', tool: 'mcp__mail__send', recipientField: 'to', n: 50, period: 'day', channel: 'Email' })), 'Messages to people the team has written to before · in Email · at most 50 a day · may include: to');
   assert.throws(() => ruleForm({ ...RULE, period: undefined }), /limit per period/);
+  // Fields read as words (CPO rule.part.fields.names).
+  assert.match(ruleLine(ruleForm({ ...RULE, recipientField: 'customer_email', amountField: 'amountCents', free: ['order_id'], fixed: { refund_reason: 'late' } })), /only when refund reason is "late" · may include: customer email, amount cents, currency, order id, refund reason$/);
+  // Minor units by the currency's own ISO 4217 exponent (code review L22m): yen have none, dinars three.
+  assert.match(ruleLine(ruleForm({ ...RULE, currency: 'JPY', maxEach: 2500, total: 7500 })), /^Refunds · up to ¥2,500 each · at most ¥7,500 per customer a week/);
+  assert.match(ruleLine(ruleForm({ ...RULE, currency: 'KWD', maxEach: 2500, total: 7000 })), /^Refunds · up to KWD\s?2\.500 each · at most KWD\s?7 per customer a week/);
+  assert.match(ruleLine(ruleForm({ ...RULE, currency: 'BHD', maxEach: 1250, total: 3750 })), /up to BHD\s?1\.250 each · at most BHD\s?3\.750 per/);
+  assert.match(ruleLine(ruleForm({ ...RULE, maxEach: 2050, total: 3000 })), /up to \$20\.50 each · at most \$30 per/);
+  // An unknown code is refused: there is no exponent to read its amounts by.
+  assert.throws(() => ruleForm({ ...RULE, currency: 'XYZ' }), /known three-letter ISO 4217 code/);
+  assert.throws(() => ruleForm({ ...RULE, currency: 'usd' }), /ISO 4217/);
   assert.throws(() => ruleForm({ ...RULE, tool: 'mcp__shop__delete_order' }), /never cover deleting/);
   assert.throws(() => ruleForm({ ...RULE, tool: 'mcp__site__deploy' }), /going live/);
   assert.throws(() => ruleForm({ ...RULE, kind: 'merge' }), /not enforced yet/);
@@ -47,8 +57,8 @@ test('a refund rule covers small refunds per customer per week, in the ledger, a
     const form = ruleForm(RULE);
     // An owner's decision in advance: words required, a step-up scoped to this exact rule.
     assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...RULE, words: 'small refunds don\'t need me' }, await p.su())).status, 401);
-    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...RULE }, await p.su(`rule:${formHash(form)}`))).status, 400, 'words first');
-    const made = await p.call('POST', '/teams/shop/standing-rules', { ...RULE, words: 'small refunds don\'t need me' }, await p.su(`rule:${formHash(form)}`));
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...RULE }, await p.su(ruleScope(form)))).status, 400, 'words first');
+    const made = await p.call('POST', '/teams/shop/standing-rules', { ...RULE, words: 'small refunds don\'t need me' }, await p.su(ruleScope(form)));
     assert.equal(made.status, 201, JSON.stringify(made.body));
 
     const a = await ask(p, s, [refund('cus_dana')]);
@@ -95,7 +105,7 @@ test('pay.known and send.known never cover someone new; a merge is never covered
   await plane(async (p) => {
     const { s } = await setup(p);
     const PAY = { kind: 'pay.known', tool: 'mcp__bank__pay', amountField: 'amount', currency: 'USD', currencyField: 'currency', recipientField: 'to', maxEach: 20000, total: 100000, period: 'week' };
-    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...PAY, words: 'regular suppliers are fine' }, await p.su(`rule:${formHash(ruleForm(PAY))}`))).status, 201);
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...PAY, words: 'regular suppliers are fine' }, await p.su(ruleScope(ruleForm(PAY))))).status, 201);
     const pay = (to) => [{ tool: 'mcp__bank__pay', input: { amount: 5000, currency: 'USD', to } }];
     // Someone new: a person decides, with their words in the ledger.
     const first = await ask(p, s, pay('acct_supplier'));
@@ -128,9 +138,9 @@ test('a rule covers only the fields it names, only its own kind of action, and n
     const PAY = { kind: 'pay.known', tool: 'mcp__bank__pay', amountField: 'amount', currency: 'USD', currencyField: 'currency', recipientField: 'to', maxEach: 20000, total: 100000, period: 'week', free: ['memo'] };
     assert.equal(ruleLine(ruleForm(PAY)), "Payments to people you've paid before · up to $200 each · at most $1,000 a week · may include: to, amount, currency, memo");
     assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...PAY, fixed: { 'bad key': 1 }, words: 'regular suppliers' }, await p.su('rule:x'))).status, 400);
-    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...PAY, words: 'regular suppliers are fine' }, await p.su(`rule:${formHash(ruleForm(PAY))}`))).status, 201);
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...PAY, words: 'regular suppliers are fine' }, await p.su(ruleScope(ruleForm(PAY))))).status, 201);
     const SEND = { kind: 'send.known', tool: 'mcp__mail__send', recipientField: 'to', n: 10, period: 'day', free: ['subject', 'body'] };
-    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...SEND, words: 'replies to known customers' }, await p.su(`rule:${formHash(ruleForm(SEND))}`))).status, 201);
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...SEND, words: 'replies to known customers' }, await p.su(ruleScope(ruleForm(SEND))))).status, 201);
     const pay = (input) => [{ tool: 'mcp__bank__pay', input: { amount: 5000, currency: 'USD', to: 'acct_supplier', ...input } }];
     const mail = (input) => [{ tool: 'mcp__mail__send', input: { to: 'jo@shop.example', subject: 'Hi', body: 'Thanks', ...input } }];
     await approve(await askAs('payment', pay({})));
@@ -215,7 +225,7 @@ test('money rules: the currency is always compared; refunds can also have a tota
   assert.throws(() => ruleForm({ ...RULE, all: 100 }), /at least maxEach/);
   await plane(async (p) => {
     const { s } = await setup(p);
-    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...ALL, words: 'small refunds, $35 a week in all' }, await p.su(`rule:${formHash(ruleForm(ALL))}`))).status, 201);
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...ALL, words: 'small refunds, $35 a week in all' }, await p.su(ruleScope(ruleForm(ALL))))).status, 201);
     // Another currency is never this rule's, whatever the amount.
     assert.equal((await ask(p, s, [{ tool: 'mcp__payments__refund', input: { amount: 500, currency: 'GBP', customer: 'cus_a' } }])).card.state, 'open');
     // Per customer $30, in all $35: the third customer's refund would pass its own limit but not the total.
@@ -244,4 +254,59 @@ test('targetsOf: the tool and the values it acts on, whatever field carries them
   const nested = (id) => targetsOf([{ tool: 'mcp__payments__refund', input: { customer: { id, country: 'us', currency: 'usd' }, amount: 1 } }]);
   assert.ok(!overlap(nested('cus_1'), nested('cus_2')));
   assert.deepEqual(nested('cus_1'), ['mcp__payments__refund\ncus_1']);
+});
+
+test('Make this a standing rule: a draft from one approved call, no wider than it, and the made rule says its number', async () => {
+  await plane(async (p) => {
+    const { s } = await setup(p);
+    const approve = async (a) => assert.equal((await p.call('POST', `/approvals/${a.approval}`, { decision: 'approved', version: 1, note: 'fine' }, await p.su(approveScope({ tenant: 'acme', team: 'shop', approval: a.approval, version: 1, callsHash: a.callsHash })))).status, 200);
+    const a = await ask(p, s, [{ tool: 'mcp__payments__refund', input: { amount: 1250, currency: 'usd', customer: 'cus_dana', reason: 'late' } }]);
+    // Open: not yet a person's approval.
+    let d = await p.call('GET', `/teams/shop/approvals/${a.approval}/rule-draft`);
+    assert.deepEqual([d.status, d.body.type, d.body.reason], [409, 'rule-not-possible', 'not-approved']);
+    await approve(a);
+    d = await p.call('GET', `/teams/shop/approvals/${a.approval}/rule-draft`);
+    assert.equal(d.status, 200, JSON.stringify(d.body));
+    assert.deepEqual(d.body.form, ruleForm({ kind: 'refund', tool: 'mcp__payments__refund', recipientField: 'customer', amountField: 'amount', currencyField: 'currency', currency: 'USD', maxEach: 1300, total: 3900, period: 'week', system: 'payments', fixed: {}, free: ['reason'] }));
+    assert.equal(d.body.line, ruleLine(d.body.form));
+    assert.equal(d.body.approval, a.approval);
+    assert.equal(typeof d.body.effect, 'string');
+    // The draft, made as is, is a rule (the owner's words and the scoped step-up as always), and says its number.
+    const made = await p.call('POST', '/teams/shop/standing-rules', { ...d.body.form, approval: a.approval, words: 'late refunds are fine' }, await p.su(ruleScope(d.body.form)));
+    assert.deepEqual([made.status, made.body.number], [201, 1]);
+    // One rule per approval, even from a second window (qa-web D1): the draft says which, and a second POST is refused.
+    const after = await p.call('GET', `/teams/shop/approvals/${a.approval}/rule-draft`);
+    assert.deepEqual([after.status, after.body.made], [200, { id: made.body.id, number: 1 }]);
+    assert.equal(d.body.made, null);
+    assert.equal(typeof d.body.approvedBy.id, 'string');
+    const twice = await p.call('POST', '/teams/shop/standing-rules', { ...d.body.form, approval: a.approval, words: 'from the other window' }, await p.su(ruleScope(d.body.form)));
+    assert.deepEqual([twice.status, twice.body.type, twice.body.number, twice.body.id], [409, 'rule-exists', 1, made.body.id]);
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...d.body.form, approval: 'apr_nope', words: 'x y z' }, await p.su(ruleScope(d.body.form)))).status, 404);
+    // Bound to the draft: nothing wider than the approved call (CTO). Another tool, or a field the call did not have.
+    const b = await ask(p, s, [{ tool: 'mcp__payments__refund', input: { amount: 50000, currency: 'USD', customer: 'cus_h' } }]);
+    await approve(b);
+    const bd = (await p.call('GET', `/teams/shop/approvals/${b.approval}/rule-draft`)).body.form;
+    for (const wider of [{ ...bd, tool: 'mcp__payments__pay' }, { ...bd, free: ['note'] }, { ...bd, recipientField: 'amount' }]) {
+      const r = await p.call('POST', '/teams/shop/standing-rules', { ...wider, approval: b.approval, words: 'wider' }, await p.su(ruleScope(ruleForm(wider))));
+      assert.equal(r.body.type, 'rule-not-from-draft', JSON.stringify(wider));
+    }
+    // The step-up covers how long the rule lasts too (security L22m): one made for 30 days does not make a 90-day rule.
+    assert.equal((await p.call('POST', '/teams/shop/standing-rules', { ...d.body.form, days: 90, words: 'longer' }, await p.su(ruleScope(d.body.form, 30)))).status, 401);
+    const again = await p.call('POST', '/teams/shop/standing-rules', { ...d.body.form, maxEach: 1000, total: 2000, words: 'a smaller one' }, await p.su(ruleScope(ruleForm({ ...d.body.form, maxEach: 1000, total: 2000 }))));
+    assert.deepEqual([again.status, again.body.number], [201, 2]);
+
+    // Not possible: several calls, nested data, no recipient, a deleting tool; and an unknown approval is 404.
+    const reason = async (calls) => { const x = await ask(p, s, calls); await approve(x); return (await p.call('GET', `/teams/shop/approvals/${x.approval}/rule-draft`)).body.reason; };
+    assert.equal(await reason([refund('cus_a', 5000), refund('cus_b', 5000)]), 'many-calls');
+    assert.equal(await reason([{ tool: 'mcp__payments__refund', input: { amount: 5000, currency: 'USD', customer: 'cus_c', meta: { a: 1 } } }]), 'nested');
+    assert.equal(await reason([{ tool: 'mcp__payments__refund', input: { amount: 5000, currency: 'USD', who: 'cus_d' } }]), 'no-recipient');
+    assert.equal(await reason([{ tool: 'mcp__payments__delete_refund', input: { amount: 5000, currency: 'USD', customer: 'cus_e' } }]), 'never');
+    assert.equal((await p.call('GET', '/teams/shop/approvals/apr_nope/rule-draft')).status, 404);
+    // Yen have no minor unit: the amount is the limit as it is (code review L22m).
+    const yen = await ask(p, s, [{ tool: 'mcp__payments__refund', input: { amount: 1234, currency: 'JPY', customer: 'cus_g' } }]);
+    await approve(yen);
+    const y = (await p.call('GET', `/teams/shop/approvals/${yen.approval}/rule-draft`)).body;
+    assert.deepEqual([y.form.maxEach, y.form.total], [1234, 3702]);
+    assert.match(y.line, /up to ¥1,234 each/);
+  });
 });

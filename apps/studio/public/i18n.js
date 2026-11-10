@@ -7,7 +7,6 @@ import { EN } from './strings.js';
 const PENDING = {
   // Final in strings-now §6b; strings.js is regenerated with it once web-dev/local-passphrase (which regenerates the file) merges.
   'rule.make.err.format': 'Enter a number, like 25 or 24.90.',
-  'nav.meetings': 'Meetings',
 };
 
 export function t(key, vars = {}) {

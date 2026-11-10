@@ -801,3 +801,8 @@
   .ats .mkrule input, .ats .mkrule select, .ats .mkrule button, .ats .mkrule-row button, .ats .mkrule summary { min-height: 44px; }
   .ats .mkrule .mr-check input { min-width: 24px; }
 }
+/* L40b: the systems line's controls are tapped from a phone (qa-web L40b P2). */
+@media (max-width: 640px) {
+  .ats #start-systems button.link, .ats #run-systems button.link, .ats #start-systems a, .ats #run-systems a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; }
+  .ats #start-systems button.info, .ats #run-systems button.info { min-width: 44px; min-height: 44px; }
+}

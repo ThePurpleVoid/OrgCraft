@@ -25,9 +25,13 @@ export function exponentOf(currency = 'USD') {
 
 /** Minor units in the rule's currency: 2000 USD is "$20", 2000 JPY is "¥2,000", 2000 KWD is "KWD 2". */
 export const money = (minor, currency = 'USD') => {
-  const unit = 10 ** exponentOf(currency);
   // "$20", or "$20.50" when there are cents (CPO §6b; the server says the same).
-  try { return new Intl.NumberFormat([], { style: 'currency', currency, ...(minor % unit === 0 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}) }).format(minor / unit); } catch { return `${minor / unit} ${currency}`; }
+  // By the currency's own exponent (code review L22m): USD 2 decimals, JPY none, KWD three.
+  try {
+    const d = exponentOf(currency);
+    const whole = minor % 10 ** d === 0;
+    return new Intl.NumberFormat([], { style: 'currency', currency, ...(whole ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : { minimumFractionDigits: d, maximumFractionDigits: d }) }).format(minor / 10 ** d);
+  } catch { return `${minor} ${currency}`; }
 };
 
 /** Every input field a covered call may carry: the recipient, amount and currency fields, the free ones, the fixed ones. */

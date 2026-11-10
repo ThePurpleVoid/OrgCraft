@@ -6,7 +6,7 @@
 import { apiUrl, ask, askText, requestJson } from './env.js';
 import { t } from './i18n.js';
 import { personWord, ruleLine } from './approvals.js';
-import { sendSystems, showItems, systemsState } from './systems.js';
+import { applyPending, droppedLine, readyLine, readyTip, sendSystems, waitingParts, showItems, systemsState } from './systems.js';
 import { buttonHtml, initial, makeRule, sheetHtml } from './make-rule.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -91,8 +91,12 @@ function speaker(e) {
 const by = (e) => { const b = e.data?.by; const n = typeof b === 'object' ? b?.name ?? b?.id : b; return n ? ` by ${n}` : ''; };
 /** Who did it, after a middle dot ("A run started · Dana"), so the line never reads as the team acting "by" someone. */
 const who = (e) => { const b = e.data?.by; const n = typeof b === 'object' ? b?.name ?? b?.id : b; return n ? ` · ${n}` : ''; };
+/** The code host by name, once the Studio says (GET /v1/team/me), for "{code host} reports…" (L40b). */
 /** Run and budget events, as one line each in the chat. */
 const TIMELINE = {
+  // L40b: a pending systems set the code host reports accepted, or one dropped, and why.
+  'systems.pending.ready': () => readyLine(),
+  'systems.pending.dropped': (e) => droppedLine(e.data?.reason),
   'run.started': (e) => `A run started${who(e)}`,
   'run.paused': (e) => `The run was paused${who(e)}${e.data?.reason ? ` (${e.data.reason})` : ''}`,
   'run.resumed': (e) => `The run resumed${who(e)}`,
@@ -601,17 +605,56 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       st.runSystemsAt = Date.now();
       systemsState().then((s) => { st.runSystems = s; renderRunSystems(going); }).catch(() => {});
     }
-    const s = st.runSystems;
-    const sending = s === 'sending';
-    const sent = s?.result === 'done' && s.inSync;
-    el.hidden = !(going && st.connected === true && (sending || sent || (s && !s.inSync && s.connected !== false)));
+    const parts = systemsParts(st.runSystems, { running: true, send: sendRunSystems, switchOn: () => switchOn('runSystems'), prefix: 'run-systems' });
+    el.hidden = !(going && st.connected === true && parts);
     if (el.hidden) return;
-    if (sending) { el.textContent = t('start.systems.sending'); return; }
-    if (sent) { el.textContent = t('run.systems.sent'); return; }
-    const button = (id, label, onclick) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'link'; b.id = id; b.textContent = label; b.onclick = onclick; return b; };
-    const parts = [`${t(s.result === 'failed' ? 'start.systems.failed' : 'run.systems.behind')} `, button('run-systems-send', t('start.systems.send'), sendRunSystems)];
-    if (s.lost?.length) parts.push(` ${t('run.systems.narrows')} `, button('run-systems-stop', t('run.systems.stop'), () => control('stop')));
     el.replaceChildren(...parts);
+  }
+  /**
+   * The systems line, in the start plan and the running header (L40, L40b): what is being done, what was done, a set
+   * waiting for its change to be accepted, one the code host reports accepted (Switch on now), or systems that aren't
+   * the published ones (Send them now, and Stop while running when the change takes access away). Null: nothing to say.
+   */
+  function systemsParts(s, opts) {
+    // Changed by someone else after it was shown: say so first, then what is true now (backend-dev L40b).
+    if (s?.result === 'changed') { const rest = systemsParts({ ...s, result: null }, opts); return [`${t('card.changed')} `, ...(rest ?? [])]; }
+    return systemsNow(s, opts);
+  }
+  function systemsNow(s, { running, send, switchOn, prefix }) {
+    const button = (id, label, onclick) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'link'; b.id = `${prefix}-${id}`; b.textContent = label; b.onclick = onclick; return b; };
+    if (!s || s.connected === false) return null;
+    if (s === 'sending') return [t('start.systems.sending')];
+    if (s.result === 'done' && (s.inSync || !s.pending)) return [t(running ? 'run.systems.sent' : 'publish.systems.done')];
+    if (s.result === 'already') return [t('systems.already')];
+    const p = s.pending?.ours ? s.pending : null;
+    if (p?.ready) {
+      if (s.result === 'failed') return [`${t('start.systems.failed')} `, button('switchon', t('systems.switchon'), switchOn)];
+      return [`${readyLine()} `, readyTip(), ' ', button('switchon', t('systems.switchon'), switchOn)];
+    }
+    if (p) return waitingParts(p.url, p.pr, p.openUrl);
+    if (s.result === 'dropped') return [droppedLine('base-moved')];
+    if (s.inSync) return null;
+    const parts = [`${t(s.result === 'failed' ? 'start.systems.failed' : running ? 'run.systems.behind' : 'start.systems.behind')} `, button('send', t('start.systems.send'), send)];
+    parts[1].dataset.tip = t('start.systems.send.tip');
+    if (running && s.lost?.length) parts.push(` ${t('run.systems.narrows')} `, button('stop', t('run.systems.stop'), () => control('stop')));
+    return parts;
+  }
+  /** L40b: switches on the set the code host reports accepted, then says how it went where the button was. */
+  async function switchOn(key) {
+    const was = st[key];
+    if (!was || was === 'sending') return;
+    st[key] = 'sending'; renderRun(); renderSystems();
+    const result = await applyPending({ stepUp, state: was });
+    const fresh = await systemsState();
+    // Switched on from another window meanwhile: say so, not "dropped… publish again" (qa-web L40b P4).
+    const outcome = result === 'dropped' && fresh?.inSync ? 'already' : result;
+    st[key] = fresh ? { ...fresh, result: outcome === 'cancelled' ? null : outcome } : was;
+    if (key === 'runSystems') st.runSystemsAt = Date.now();
+    renderRun(); renderSystems();
+    const el = $(key === 'runSystems' ? '#run-systems' : '#start-systems', root);
+    el.tabIndex = -1;
+    // Back on Switch on now when it is still there (Escape on the passkey), never on the ⓘ (qa-web L40b P3).
+    if (!el.hidden) (el.querySelector('[id$="-switchon"]') ?? el.querySelector('button:not(.info)') ?? el).focus();
   }
   async function sendRunSystems() {
     const was = st.runSystems;
@@ -824,17 +867,9 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   // send them now, behind the same systems:<team> step-up as a publish (CTO ruling on the L40 review: no new screen).
   function renderSystems() {
     const el = $('#start-systems', root);
-    const s = st.systems;
-    const sending = s === 'sending';
-    const done = s?.result === 'done' && s.inSync;
-    el.hidden = !sending && !done && (!s || s.inSync || s.connected === false);
-    if (el.hidden) return;
-    if (sending) { el.textContent = t('start.systems.sending'); return; }
-    if (done) { el.textContent = t('publish.systems.done'); return; }
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'link'; b.id = 'start-systems-send'; b.textContent = t('start.systems.send');
-    b.onclick = sendSystemsNow;
-    el.replaceChildren(`${t(s.result === 'failed' ? 'start.systems.failed' : 'start.systems.behind')} `, b);
+    const parts = systemsParts(st.systems, { running: false, send: sendSystemsNow, switchOn: () => switchOn('systems'), prefix: 'start-systems' });
+    el.hidden = !parts;
+    if (parts) el.replaceChildren(...parts);
   }
   async function sendSystemsNow() {
     const was = st.systems;
