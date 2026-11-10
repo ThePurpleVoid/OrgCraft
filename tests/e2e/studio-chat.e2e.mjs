@@ -93,6 +93,15 @@ test('a chat round trip, a stale card refreshed, and pause', { skip }, async () 
   await page.getByText('Another update arrives.').waitFor();
   assert.equal(await approval.getByText('3f9c2ab41e7d0c95b8f6a2d4e1c0b9a8f7e6d5c4').isVisible(), true, 'still shown after a redraw');
   await approval.getByRole('button', { name: 'Approve' }).click();
+  // The card's own box has a visible label, the (i) and the Forgot-it hint, and is 44px tall on a phone (qa-web L-pass P1/P2).
+  await approval.locator('form[data-stepup] label', { hasText: 'Approval passphrase' }).waitFor();
+  await approval.getByText('Forgot it? Whoever set up OrgCraft on this computer can set a new one.').waitFor();
+  const wide = page.viewportSize();
+  await page.setViewportSize({ width: 360, height: 740 });
+  for (const el of [approval.getByLabel('Approval passphrase', { exact: true }), approval.getByRole('button', { name: 'Confirm', exact: true })]) assert.ok((await el.boundingBox()).height >= 44, 'a 44px target on a phone');
+  const row = await approval.locator('form[data-stepup] .stepup-label').boundingBox();
+  assert.ok(row.height < 50, 'the label and its (i) stay on one line');
+  await page.setViewportSize(wide);
   await approval.getByLabel('Approval passphrase', { exact: true }).fill('not it');
   await approval.getByRole('button', { name: 'Confirm', exact: true }).click();
   await approval.getByText("That passphrase didn't match. Try again, or cancel.").waitFor();

@@ -792,3 +792,13 @@
   .ats #start-systems button.link, .ats #run-systems button.link, .ats #start-systems a, .ats #run-systems a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; }
   .ats #start-systems button.info, .ats #run-systems button.info { min-width: 44px; min-height: 44px; }
 }
+
+/* The typed step-up box (local mode): its label and (i) stay on one line, the card's inline box has a visible label and
+   the Forgot-it hint, and on a phone the field and Confirm are 44px tall and the field takes the row (qa-web L-pass). */
+.stepup-label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.stepup-label label { margin: 0; }
+form.inline-stepup { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+form.inline-stepup .row { display: flex; gap: 8px; align-items: center; }
+form.inline-stepup input { flex: 1 1 auto; min-width: 0; }
+form.inline-stepup .hint { font-size: 0.85em; }
+@media (max-width: 640px) { form.inline-stepup input, form.inline-stepup button[type="submit"] { min-height: 44px; } }

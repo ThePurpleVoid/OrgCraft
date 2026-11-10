@@ -24,5 +24,8 @@ export function tl(key, vars = {}) {
   return isLocal() && (EN[`${key}.local`] ?? PENDING[`${key}.local`]) !== undefined ? t(`${key}.local`, vars) : t(key, vars);
 }
 
+/** A typed step-up line: "on this computer" locally, "your team's OrgCraft server" when embedded (CPO §1, 2026-11-10). */
+export const ts = (key, vars = {}) => t(isLocal() ? key : `${key}.server`, vars);
+
 /** The tooltip for a glossary word or control, or '' when the table has none. */
 export const tip = (key) => EN[`tip.${key}`] ?? '';

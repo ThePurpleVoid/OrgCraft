@@ -1,7 +1,7 @@
 // The Studio's page: the bar, the editor's three panes, the other pages and the dialogs. mount() renders it into its
 // root, so the same markup serves the local Studio (index.html mounts into body) and a host's admin page.
 // No inline styles or scripts (embed spec 4, strict CSP).
-import { t, tip } from './i18n.js';
+import { t, tip, ts } from './i18n.js';
 import { hintHtml } from './tooltip.js';
 
 const attr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -111,9 +111,9 @@ export const SHELL = `
     <h2 id="live-stepup-title">${t('stepup.title')}</h2>
     <p class="why"></p>
     <p class="hint">${t('stepup.why')}</p>
-    <label for="live-stepup-secret">${t('stepup.local.label')}</label> <button type="button" class="info" data-tip="${t('stepup.local.tip')}" aria-label="${t('tip.button', { term: t('stepup.local.label') })}">ⓘ</button>
+    <span class="stepup-label"><label for="live-stepup-secret">${t('stepup.local.label')}</label><button type="button" class="info" data-tip="${ts('stepup.local.tip')}" aria-label="${t('tip.button', { term: t('stepup.local.label') })}">ⓘ</button></span>
     <input id="live-stepup-secret" type="password" autocomplete="current-password" aria-describedby="live-stepup-hint" required>
-    <p class="hint" id="live-stepup-hint">${t('stepup.local.forgot')}</p>
+    <p class="hint" id="live-stepup-hint">${ts('stepup.local.forgot')}</p>
     <p class="result error" role="status"></p>
     <div class="dialog-actions"><button type="button" data-act="cancel">${t('stepup.cancel')}</button><button type="submit" class="primary">${t('stepup.local.button')}</button></div>
   </form>

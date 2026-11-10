@@ -4,7 +4,7 @@
 // pause and stop for the run. The Studio server holds the token; this page only talks to it.
 
 import { apiUrl, ask, askText, requestJson } from './env.js';
-import { t, tl } from './i18n.js';
+import { t, tl, ts } from './i18n.js';
 import { infoButton } from './tooltip.js';
 import { personWord, ruleLine } from './approvals.js';
 import { applyPending, droppedLine, readyLine, readyTip, sendSystems, waitingParts, showItems, systemsState } from './systems.js';
@@ -209,9 +209,9 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       <form class="dialog" id="stepup-form">
         <h2>${t('stepup.title')}</h2>
         <p id="stepup-why"></p>
-        <label for="stepup-secret">${t('stepup.local.label')}</label> ${infoButton(t('stepup.local.tip'), esc, t('stepup.local.label'))}
+        <span class="stepup-label"><label for="stepup-secret">${t('stepup.local.label')}</label>${infoButton(ts('stepup.local.tip'), esc, t('stepup.local.label'))}</span>
         <input id="stepup-secret" type="password" autocomplete="current-password" aria-describedby="stepup-hint" required>
-        <p class="hint" id="stepup-hint">${t('stepup.local.forgot')}</p>
+        <p class="hint" id="stepup-hint">${ts('stepup.local.forgot')}</p>
         <p class="hint">${t('stepup.why')}</p>
         <p id="stepup-result" class="result error" role="status"></p>
         <div class="dialog-actions">
@@ -367,7 +367,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}" data-card-id="${esc(card.id)}"${subjectId(card.subject) ? ` data-subject-id="${esc(subjectId(card.subject))}"` : ''}>
       <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtWhen(card.expires))}` : ''}</div>
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
-      ${note?.kind === 'stepup' && !answered ? `<form class="stepup row" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><input type="password" autocomplete="current-password" aria-label="${esc(t('stepup.local.label'))}" placeholder="${esc(t('stepup.local.label'))}" required><button type="submit" class="primary">${esc(t('stepup.local.button'))}</button> ${infoButton(t('stepup.local.tip'), esc, t('stepup.local.label'))}</form>` : ''}
+      ${note?.kind === 'stepup' && !answered ? `<form class="stepup inline-stepup" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><span class="stepup-label"><label for="su-${esc(card.id)}">${esc(t('stepup.local.label'))}</label>${infoButton(ts('stepup.local.tip'), esc, t('stepup.local.label'))}</span><span class="row"><input id="su-${esc(card.id)}" type="password" autocomplete="current-password" aria-describedby="su-${esc(card.id)}-hint" required><button type="submit" class="primary">${esc(t('stepup.local.button'))}</button></span><span class="hint" id="su-${esc(card.id)}-hint">${esc(ts('stepup.local.forgot'))}</span></form>` : ''}
       <h3>${card.kind === 'approval' && LETTER.test(card.data?.letter ?? '') && !answered ? `<span class="letter">${card.data.letter}.</span> ` : ''}${esc(card.title)}</h3>
       ${card.kind === 'approval' ? declineHtml(card, me(), organization()) : ''}
       ${boundHtml(card)}
