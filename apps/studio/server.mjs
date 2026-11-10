@@ -24,7 +24,7 @@ import * as core from './core.mjs';
 import { liveSource } from './live.mjs';
 import { changeUrl, localRollout, pendingOf } from './rollout.mjs';
 import { chatSource } from './chat.mjs';
-import { runRequest, RunRefused } from './runs.mjs';
+import { runRequest, RunRefused, workRepoOf } from './runs.mjs';
 import { openPullRequest, prSupport, pullRequestText } from './pr.mjs';
 import { linkHash, resolveMeeting } from './public/links.js';
 
@@ -289,6 +289,42 @@ const COOKIE = 'studio_session';
 const same = (a, b) => { const x = Buffer.from(String(a ?? '')), y = Buffer.from(String(b ?? '')); return x.length === y.length && timingSafeEqual(x, y); };
 const cookieOf = (req) => (String(req.headers.cookie ?? '').split(';').map((c) => c.trim().split('=')).find(([k]) => k === COOKIE) ?? [])[1];
 
+const MANAGED_POSTS = new Set(['/v1/team/preview', '/v1/team/from-template', '/v1/team/publish', '/v1/team/graph', '/v1/team/suggestions']);
+const CHANGE = /^\/v1\/team\/changes(?:\/([1-9][0-9]{0,8})(?:\/(accept|close))?)?$/;
+
+/**
+ * A managed team's routes (ADR 0012), as a call to make on the control plane, or null when the route is not one of
+ * them. The body is read here (same-origin JSON only, as for every POST), and only the fields the deployment reads are
+ * passed on. Accept and rollback use the step-up this server holds.
+ */
+async function managedRoute(req, url, chat) {
+  const change = CHANGE.exec(url.pathname);
+  const isTeam = url.pathname === '/v1/team' || MANAGED_POSTS.has(url.pathname) || url.pathname === '/v1/team/rollback';
+  if (!change && !isTeam) return null;
+  if (req.method === 'GET') {
+    // The deployment's own page has no chat or runs yet; this Studio has them (the control plane it is connected to).
+    if (url.pathname === '/v1/team') return async () => { const d = await chat.studio('GET', '/v1/team'); return { ...d, features: { ...(d?.features ?? {}), chat: true, runs: true, live: true } }; };
+    if (change && !change[2]) return () => chat.changes('GET', change[1] ? `/${change[1]}` : (url.searchParams.get('state') ? `?state=${encodeURIComponent(url.searchParams.get('state'))}` : ''));
+    return null;
+  }
+  if (req.method !== 'POST' || (change && !change[2]) || (!change && url.pathname === '/v1/team')) return null;
+  const origin = req.headers.origin;
+  if (origin && new URL(origin).host !== req.headers.host) throw new HttpError(403, 'cross-origin request refused');
+  if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) throw new HttpError(415, 'send JSON');
+  let body = '';
+  for await (const chunk of req) { body += chunk; if (body.length > 5_000_000) throw new HttpError(413, 'too large'); }
+  const input = JSON.parse(body || '{}');
+  const key = typeof input.key === 'string' ? input.key.slice(0, 80) : undefined;
+  if (change) {
+    const words = typeof input.words === 'string' ? input.words.slice(0, 2000) : undefined;
+    return () => chat.changes('POST', `/${change[1]}/${change[2]}`, words === undefined ? {} : { words }, key);
+  }
+  // Rollback opens a change that puts an earlier version back: { to } is its commit.
+  if (url.pathname === '/v1/team/rollback') return () => chat.changes('POST', '/rollback', { to: String(input.to ?? '') }, key);
+  const { key: _k, ...rest } = input;
+  return () => chat.studio('POST', url.pathname, rest, key);
+}
+
 export function createStudio({ root, env = process.env, launchToken = randomBytes(24).toString('base64url') }) {
   const live = liveSource(root, env);
   const chat = chatSource(env);
@@ -320,6 +356,12 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         if (url.pathname.startsWith('/v1/')) throw new HttpError(401, 'open the Studio with the link it printed when it started (it ends in ?t=…)');
         res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         return res.end('<!doctype html><meta charset="utf-8"><title>OrgCraft Studio</title><p style="font:15px system-ui;margin:2em">Open the Studio with the link it printed when it started. It ends in <code>?t=…</code>.</p>');
+      }
+      // ADR 0012: a managed team (AGENT_TEAM_SERVER_MANAGED=1) has no repository here. Reading, previews and publishing go
+      // to the deployment's Studio routes, and change requests to the deployment; chat, runs and the rest are as below.
+      if (chat.connected && chat.managed) {
+        const r = await managedRoute(req, url, chat);
+        if (r) return relay(res, r);
       }
       // The Studio's API, versioned like the public API it will become (ADR 0005): additive changes only within /v1/.
       if (req.method === 'GET' && url.pathname === '/v1/team') return send(res, 200, state(root));
@@ -384,6 +426,11 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         return relay(res, async () => ({ connected: true, ...(await chat.runners()) }));
       }
       if (req.method === 'GET' && url.pathname === '/v1/team/run/plan') {
+        if (chat.connected && chat.managed) {
+          let repo;
+          try { repo = workRepoOf(root); } catch (e) { if (e instanceof RunRefused) return send(res, 200, { ok: false, error: e.message }); throw e; }
+          return relay(res, async () => ({ ...(await chat.runPlan()), repo }));
+        }
         try {
           const { team } = runRequest(root, { dirty: gitState(root).dirty });
           return send(res, 200, { ok: true, version: team.version, repo: team.repo ?? null, summary: team.summary, roles: team.roles.length, frontDoor: team.roles.find((r) => r.reportsTo === 'owner').slug });
@@ -435,7 +482,13 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         const action = /^\/v1\/team\/run\/(pause|resume|stop)$/.exec(url.pathname);
         if (action) return relay(res, () => chat.control(action[1], input.key, input.run));
         // Built here from the repository, never from the page: a run starts on what was published, not on the canvas.
-        if (url.pathname === '/v1/team/run/start') return relay(res, () => chat.start(runRequest(root, { dirty: gitState(root).dirty }), typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
+        if (url.pathname === '/v1/team/run/start') {
+          const key = typeof input.key === 'string' ? input.key.slice(0, 80) : undefined;
+          // A managed team (ADR 0012): the control plane builds the roster from the accepted version; this checkout is
+          // only where the work lands.
+          if (chat.managed) return relay(res, () => chat.start({ mode: 'runner', team: { from: 'managed', repo: workRepoOf(root) } }, key));
+          return relay(res, () => chat.start(runRequest(root, { dirty: gitState(root).dirty }), key));
+        }
         if (url.pathname === '/v1/team/budget') {
           for (const k of ['perDay', 'perRun']) if (input[k] !== undefined && input[k] !== null && !(Number.isInteger(input[k]) && input[k] >= 0)) throw new HttpError(400, `${k} is a whole number of cents, or null`);
           return relay(res, () => chat.setBudget(input, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));
