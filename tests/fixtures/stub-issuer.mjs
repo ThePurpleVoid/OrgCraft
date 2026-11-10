@@ -144,9 +144,9 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       const mine = passkeys.get(who.id) ?? [];
       // A scoped step-up (ADR 0013) counts only for the change it names; an unscoped one for anything not scoped.
       const stepped = (scope = null) => { const t = req.headers['x-step-up']; const s = t && stepUps.get(t); if (!s || s.person !== who.id || s.expires < Date.now() || (s.scope ?? null) !== scope) return false; stepUps.delete(t); return true; };
-      const challenge = (kind) => { const c = b64u(randomBytes(32)); challenges.set(c, { kind, person: who.id, expires: Date.now() + 2 * 60_000 }); return c; };
+      const challenge = (kind, scope = null) => { const c = b64u(randomBytes(32)); challenges.set(c, { kind, person: who.id, expires: Date.now() + 2 * 60_000, scope }); return c; };
       /** The client data a browser signed: its type, a live single-use challenge of this kind, and exactly this origin. */
-      const clientData = (cred, kind, type) => {
+      const clientData = (cred, kind, type, scope) => {
         let cd;
         try { cd = JSON.parse(Buffer.from(cred?.response?.clientDataJSON ?? '', 'base64url').toString()); } catch { return 'unreadable client data'; }
         const c = challenges.get(cd.challenge);
@@ -154,6 +154,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
         if (!c || c.kind !== kind || c.person !== who.id || c.expires < Date.now()) return 'that challenge is unknown, used or expired';
         challenges.delete(cd.challenge);
         if (cd.origin !== origin) return 'an assertion from another origin';
+        if (scope !== undefined && (c.scope ?? null) !== scope) return 'that challenge was for another change';
         return null;
       };
       const rpOk = (authData) => authData && authData.subarray(0, 32).equals(createHash('sha256').update(new URL(origin).hostname).digest());
@@ -403,7 +404,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
       }
       if (p === '/v1/auth/step-up/challenge' && req.method === 'GET') {
         if (!mine.length) return problem(409, 'no-passkey', 'add a passkey first');
-        return send(200, { challenge: challenge('get'), rpId: new URL(origin).hostname, timeout: 120_000, userVerification: 'required', allowCredentials: mine.map((k) => ({ type: 'public-key', id: k.id })) });
+        return send(200, { challenge: challenge('get', url.searchParams.get('scope')), rpId: new URL(origin).hostname, timeout: 120_000, userVerification: 'required', allowCredentials: mine.map((k) => ({ type: 'public-key', id: k.id })) });
       }
       if (p === '/v1/auth/step-up' && req.method === 'POST') {
         const recent = (failures.get(who.id) ?? []).filter((t) => t > Date.now() - 15 * 60_000);
@@ -414,7 +415,7 @@ export async function stubIssuer({ members = { octo: { id: 'per_octo', name: 'Oc
         const cred = body.webauthn;
         const key = mine.find((k) => k.id === cred?.id);
         if (!key) return fail('that passkey is not yours');
-        const bad = clientData(cred, 'get', 'webauthn.get');
+        const bad = clientData(cred, 'get', 'webauthn.get', typeof body.scope === 'string' ? body.scope : null);
         if (bad) return fail(bad);
         const auth = Buffer.from(cred.response.authenticatorData ?? '', 'base64url');
         if (!rpOk(auth)) return fail('the passkey is for another site');

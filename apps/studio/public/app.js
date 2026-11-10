@@ -1210,17 +1210,18 @@ async function openPublish() {
  * L40: after a publish, sends the published systems when the control plane's differ (systems.js). The passkey dialog
  * lists what the control plane gains. One line under the result says how it went, with a retry that compares again.
  */
-async function publishSystems(out) {
-  const result = await sendSystems({ stepUp, name: (s) => roleTitle(s), system: systemName });
+async function publishSystems(out, pending = null) {
+  const result = await sendSystems({ stepUp, name: (s) => roleTitle(s), system: systemName, pending });
   out.querySelector('.systems-result')?.remove();
   if (result === 'none') return;
   const line = document.createElement('p');
   line.className = 'systems-result';
-  line.textContent = t(`publish.systems.${result}`);
+  // PR mode (L40b): the set waits for the change to be accepted, then the owner switches it on.
+  line.textContent = t(pending && result === 'done' ? 'publish.systems.onapproval' : `publish.systems.${result}`);
   if (result !== 'done') {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'link'; b.textContent = t('publish.systems.retry');
-    b.onclick = () => publishSystems(out);
+    b.onclick = () => publishSystems(out, pending);
     line.append(' ', b);
   }
   out.append(line);
@@ -1261,8 +1262,9 @@ async function confirmPublish() {
       out.replaceChildren(done, cmd);
     } else out.textContent = t('canvas.publish.none');
     // L40: a commit in this checkout is what runs from here start on, so the control plane gets its systems now,
-    // whatever this publish changed (an earlier cancelled send is caught too). A pull request applies at merge (L40b).
-    if (r.commit && !r.pr && approvalsOn()) await publishSystems(out);
+    // whatever this publish changed (an earlier cancelled send is caught too). A pull request's wait as a pending set
+    // bound to its commit, which the owner switches on once the code host reports it accepted (L40b).
+    if (r.commit && approvalsOn()) await publishSystems(out, r.pr ? { pr: Number(/\/(?:pull|merge_requests|pull-requests)\/(\d+)/.exec(r.pr.url ?? '')?.[1]) || null } : null);
     const fresh = await api('/v1/team');
     const wasNew = !!S.noTeam;
     S = fresh;

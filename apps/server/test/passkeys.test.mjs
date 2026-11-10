@@ -204,3 +204,24 @@ test('a retry with the same Idempotency-Key replays a passkey write instead of f
   assert.equal((await db.system("select count(*)::int as n from identity_audit where action = 'step-up.failed'"))[0].n, 0);
   assert.equal((await db.system("select count(*)::int as n from idempotency_keys where response ? 'token'"))[0].n, 0, 'the token is never kept');
 }));
+
+test('a step-up challenge is made for one scope: the passkey assertion buys that scope only (L22 open item)', () => issuer(async ({ db, gh, browser }) => {
+  const { b, key } = await withPasskey(gh, browser);
+  const ch = async (scope) => (await b.call('GET', `/auth/step-up/challenge${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`)).body;
+  const shop = await ch('systems:shop');
+  assert.equal(shop.scope, 'systems:shop', 'the options name the scope they are for');
+  // Asked for systems:shop, minted as systems:cafe: refused, and the challenge is used up.
+  const swapped = await b.call('POST', '/auth/step-up', { webauthn: key.get(shop), scope: 'systems:cafe' });
+  assert.deepEqual([swapped.status, swapped.body.type], [401, 'step-up-failed']);
+  assert.match(swapped.body.error, /not for systems:cafe/);
+  assert.equal((await b.call('POST', '/auth/step-up', { webauthn: key.get(shop), scope: 'systems:shop' })).status, 401, 'single use, even after a refusal');
+  // A scoped challenge never mints an unscoped token, and an unscoped challenge never mints a scoped one.
+  assert.equal((await b.call('POST', '/auth/step-up', { webauthn: key.get(await ch('systems:shop')) })).status, 401);
+  assert.equal((await b.call('POST', '/auth/step-up', { webauthn: key.get(await ch()), scope: 'systems:shop' })).status, 401);
+  assert.equal((await b.call('GET', '/auth/step-up/challenge?scope=no%20spaces')).status, 400);
+  // Matching scope: the token carries it.
+  const ok = await b.call('POST', '/auth/step-up', { webauthn: key.get(await ch('systems:shop')), scope: 'systems:shop' });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  const [row] = await db.system('select scope from step_up_tokens where id = $1', [ok.body.token.split('.')[0]]);
+  assert.equal(row.scope, 'systems:shop');
+}));

@@ -527,7 +527,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (passkeys && ((a === 'me' && team === 'passkeys') || (a === 'auth' && team === 'step-up'))) {
       // A retry after a lost answer replays it (the challenge is single use, so running it again would fail).
       // Idempotency is kept per workspace, so a person in none of them has none.
-      return who.tenant ? idempotent(req, res, who.tenant, who.principal, url.pathname, () => passkeyRoute(req, res, who, parts)) : passkeyRoute(req, res, who, parts);
+      return who.tenant ? idempotent(req, res, who.tenant, who.principal, url.pathname, () => passkeyRoute(req, res, who, parts, url)) : passkeyRoute(req, res, who, parts, url);
     }
     // A member elsewhere only: nothing here shows which teams exist (spec section 4).
     if (!who.tenant) throw new Problem(404, 'not found');
@@ -559,11 +559,11 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   }
 
   /** Passkeys and step-up for a signed-in person (spec section 3). Their own, so any member may manage them. */
-  async function passkeyRoute(req, res, who, parts) {
+  async function passkeyRoute(req, res, who, parts, url) {
     const m = req.method;
     const [, a, , b, c] = parts;
     const step = req.headers['x-step-up'] ?? null;
-    if (a === 'auth' && b === 'challenge' && !c && m === 'GET') return send(res, 200, await passkeys.challenge(mustBePerson(who)));
+    if (a === 'auth' && b === 'challenge' && !c && m === 'GET') return send(res, 200, await passkeys.challenge(mustBePerson(who), url.searchParams.get('scope')));
     if (a === 'auth' && !b && m === 'POST') {
       const body = await readJson(req, 16 * 1024);
       // The typed secret is local mode's only (spec section 3): a hosted deployment steps up with a passkey.
