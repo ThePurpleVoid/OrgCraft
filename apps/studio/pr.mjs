@@ -40,14 +40,15 @@ export function prSupport(root, env = process.env) {
 
 /**
  * Whether a send of systems from the branch HEAD is on must wait as a pending set (L40b, CTO rulings): null on the
- * default branch, a detached HEAD or a purely local branch (no upstream), where a send applies directly; otherwise
- * { pr, branch }, with `pr` the number of the branch's open pull request when gh finds one, else null. Every pushed,
+ * default branch or a purely local branch (no upstream), where a send applies directly; otherwise
+ * { pr, branch }, with `pr` the number of the branch's open pull request when gh finds one, else null. A detached HEAD waits. Every pushed,
  * non-default branch waits, whether its PR is open, closed, missing or unreadable: systems nobody has reviewed must
  * not widen a team's access.
  */
 export function openChangeRequest(root, env = process.env) {
   const branch = run('git', ['-C', root, 'symbolic-ref', '--short', 'HEAD'], { env }).out;
-  if (!branch) return null;
+  // A detached HEAD always waits: there is no honest reason to send systems from one (CTO ruling on security's low).
+  if (!branch) return { pr: null, branch: null };
   const head = run('git', ['-C', root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { env }).out.replace(/^origin\//, '');
   if (head ? branch === head : ['main', 'master'].includes(branch)) return null;
   if (!run('git', ['-C', root, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { env }).ok) return null;

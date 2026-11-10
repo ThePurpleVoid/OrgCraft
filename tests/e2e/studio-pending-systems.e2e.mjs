@@ -171,7 +171,18 @@ test('Send them now from a pushed branch waits (open PR with its number; none, c
     assert.equal(cp.systems.version, before, `${why}: nothing applied`);
   }
 
-  // The same branch with no upstream: nothing is open for it, so the send applies directly.
+  // A detached HEAD waits too, with no PR number, so detaching can't skip review.
+  cp.dropPending('withdrawn');
+  execFileSync('git', ['-C', root, 'checkout', '-q', '--detach']);
+  const sd = await state(page);
+  let rd = await post(page, '/v1/team/systems', { version: sd.version, hash: sd.hash });
+  if (rd.status === 401) { assert.equal((await post(page, '/v1/team/step-up', { secret: cp.stepUpSecret, scope: rd.scope })).status, 200); rd = await post(page, '/v1/team/systems', { version: sd.version, hash: sd.hash }); }
+  assert.equal(rd.status, 200);
+  assert.deepEqual(cp.systemsPuts.at(-1).pending, { sha: head }, 'detached: waits, with no PR number');
+  assert.equal(cp.systems.version, before, 'detached: nothing applied');
+  execFileSync('git', ['-C', root, 'checkout', '-q', 'more-drive']);
+
+  // The same branch with no upstream: a purely local branch, so the send applies directly.
   cp.dropPending('withdrawn');
   rmSync(ghOut, { force: true });
   execFileSync('git', ['-C', root, 'branch', '-q', '--unset-upstream']);
