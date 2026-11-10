@@ -444,6 +444,8 @@ function openWiring(slug) {
 }
 
 function renderCanvas() {
+  // A resize can come before the first render (phone contexts): there is nothing to draw yet (qa-web L22m D4).
+  if (!view) return;
   stateEl().dataset.wiring = wiring ? 'on' : '';
   if (wiring) {
     if (!wiringWired) { wireWiring($('#canvas'), wiringCtx, () => wiring); wiringWired = true; }

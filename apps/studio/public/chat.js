@@ -397,6 +397,8 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     }
     const d = st.drafts.get(apr);
     if (!d) return '';
+    // Who approved it: the server's word, else the card's own answer (qa-web L22m D2), never assumed to be "you".
+    if (!d.approvedBy && by) d.approvedBy = { id: by, ...(typeof a.by === 'object' && a.by?.name ? { name: a.by.name } : {}) };
     const m = st.mk.get(apr);
     return m ? sheetHtml(apr, m, myId()) : buttonHtml(apr, d);
   }

@@ -21,17 +21,20 @@ export const major = (minor, currency = 'USD') => {
   return minor % unit === 0 ? String(minor / unit) : (minor / unit).toFixed(e);
 };
 /**
- * What the owner typed, in the rule's currency, to minor units; null when it isn't an amount above zero. Thousands
- * separators are fine ("1,000", "1 000"); a lone comma is a decimal point ("25,50") (qa-web L22m D3).
+ * What the owner typed, in the rule's currency, to minor units: null when it can't be read as an amount, 0 when it is
+ * zero. A leading currency sign ("$25"), thousands separators ("1,000", "1 000", "1.000,50") and a decimal comma
+ * ("25,50") are fine (qa-web L22m D3).
  */
 export function toMinor(text, currency = 'USD') {
   const e = exponentOf(currency);
-  let v = String(text ?? '').replace(/[\s\u00a0\u202f]/g, '');
-  v = /^\d{1,3}(,\d{3})+(\.\d*)?$/.test(v) ? v.replace(/,/g, '') : v.replace(/^(\d+),(\d+)$/, '$1.$2');
+  let v = String(text ?? '').trim().replace(/^(?:[A-Za-z]{3}|[^\d\s.,-]{1,3})\s*/, '').replace(/[\s\u00a0\u202f']/g, '');
+  if (/^\d{1,3}(,\d{3})+(\.\d*)?$/.test(v)) v = v.replace(/,/g, '');
+  else if (/^\d{1,3}(\.\d{3}){2,}(,\d*)?$|^\d{1,3}(\.\d{3})+,\d*$/.test(v)) /* "1.000,50"; a lone "25.505" stays a decimal point */ v = v.replace(/\./g, '').replace(',', '.');
+  else v = v.replace(/^(\d+),(\d+)$/, '$1.$2');
   const m = (e ? new RegExp(`^(\\d{1,12})(?:\\.(\\d{1,${e}}))?$`) : /^(\d{1,12})$/).exec(v);
   if (!m) return null;
   const minor = Number(m[1]) * 10 ** e + Number((m[2] ?? '').padEnd(e, '0') || 0);
-  return minor > 0 && Number.isSafeInteger(minor) ? minor : null;
+  return Number.isSafeInteger(minor) ? minor : null;
 }
 const whole = (text, max) => { const m = /^\s*(\d{1,6})\s*$/.exec(String(text ?? '')); const v = m ? Number(m[1]) : NaN; return v >= 1 && v <= max ? v : null; };
 
@@ -58,10 +61,11 @@ export function formOf(s) {
     if (n === null) errors.push('rule.make.err.amount');
     form.n = n ?? 0;
   } else {
-    const each = toMinor(s.each, f.currency);
-    const total = toMinor(s.total, f.currency);
-    const all = f.kind === 'refund' && s.allOn ? toMinor(s.all, f.currency) : null;
-    if (each === null || total === null || (f.kind === 'refund' && s.allOn && all === null)) errors.push('rule.make.err.amount');
+    const read = [s.each, s.total, ...(f.kind === 'refund' && s.allOn ? [s.all] : [])].map((x) => toMinor(x, f.currency));
+    // Can't be read: say how to write it; zero: say it must be above zero (qa-web L22m D3).
+    if (read.some((x) => x === null)) errors.push('rule.make.err.format');
+    else if (read.some((x) => x === 0)) errors.push('rule.make.err.amount');
+    const [each, total, all = null] = read.map((x) => (x ? x : null));
     if (each !== null && total !== null && total < each) errors.push('rule.make.err.total');
     if (all !== null && total !== null && all < total) errors.push('rule.make.err.all');
     form.maxEach = each ?? 0;
@@ -131,9 +135,9 @@ export function sheetHtml(apr, s, me) {
 function fromLine(draft, me) {
   const by = draft.approvedBy ?? null;
   const vars = { letter: draft.letter ?? '', effect: draft.effect ?? '' };
-  return !by?.id || by.id === me ? t('rule.make.from', vars) : t('rule.make.from.other', { ...vars, person: personWord(by.id, by.name, me) });
+  return by?.id && by.id === me ? t('rule.make.from', vars) : t('rule.make.from.other', { ...vars, person: personWord(by?.id ?? null, by?.id ? by.name : null, me) });
 }
-const fieldErr = (k, errors) => ({ each: ['rule.make.err.amount', 'rule.make.err.total'], total: ['rule.make.err.amount', 'rule.make.err.total', 'rule.make.err.all'], all: ['rule.make.err.amount', 'rule.make.err.all'], n: ['rule.make.err.amount'], days: ['rule.make.err.days'] }[k] ?? []).some((e) => errors.includes(e));
+const fieldErr = (k, errors) => ({ each: ['rule.make.err.amount', 'rule.make.err.format', 'rule.make.err.total'], total: ['rule.make.err.amount', 'rule.make.err.format', 'rule.make.err.total', 'rule.make.err.all'], all: ['rule.make.err.amount', 'rule.make.err.format', 'rule.make.err.all'], n: ['rule.make.err.amount'], days: ['rule.make.err.days'] }[k] ?? []).some((e) => errors.includes(e));
 
 /**
  * Makes the rule: POST /v1/team/standing-rules with the form, words and days; on the control plane's 401, the passkey
