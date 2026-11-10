@@ -36,10 +36,14 @@ test('rule forms: the fixed list, a limit per period, never deleting or going li
   assert.throws(() => ruleForm({ ...RULE, period: undefined }), /limit per period/);
   // Fields read as words (CPO rule.part.fields.names).
   assert.match(ruleLine(ruleForm({ ...RULE, recipientField: 'customer_email', amountField: 'amountCents', free: ['order_id'], fixed: { refund_reason: 'late' } })), /only when refund reason is "late" · may include: customer email, amount cents, currency, order id, refund reason$/);
-  // Minor units by the currency's own exponent (code review L22m): yen have none, dinars three.
+  // Minor units by the currency's own ISO 4217 exponent (code review L22m): yen have none, dinars three.
   assert.match(ruleLine(ruleForm({ ...RULE, currency: 'JPY', maxEach: 2500, total: 7500 })), /^Refunds · up to ¥2,500 each · at most ¥7,500 per customer a week/);
-  assert.match(ruleLine(ruleForm({ ...RULE, currency: 'KWD', maxEach: 2500, total: 7250 })), /^Refunds · up to KWD\s?2\.500 each · at most KWD\s?7\.250 per customer a week/);
+  assert.match(ruleLine(ruleForm({ ...RULE, currency: 'KWD', maxEach: 2500, total: 7000 })), /^Refunds · up to KWD\s?2\.500 each · at most KWD\s?7 per customer a week/);
+  assert.match(ruleLine(ruleForm({ ...RULE, currency: 'BHD', maxEach: 1250, total: 3750 })), /up to BHD\s?1\.250 each · at most BHD\s?3\.750 per/);
   assert.match(ruleLine(ruleForm({ ...RULE, maxEach: 2050, total: 3000 })), /up to \$20\.50 each · at most \$30 per/);
+  // An unknown code is refused: there is no exponent to read its amounts by.
+  assert.throws(() => ruleForm({ ...RULE, currency: 'XYZ' }), /known three-letter ISO 4217 code/);
+  assert.throws(() => ruleForm({ ...RULE, currency: 'usd' }), /ISO 4217/);
   assert.throws(() => ruleForm({ ...RULE, tool: 'mcp__shop__delete_order' }), /never cover deleting/);
   assert.throws(() => ruleForm({ ...RULE, tool: 'mcp__site__deploy' }), /going live/);
   assert.throws(() => ruleForm({ ...RULE, kind: 'merge' }), /not enforced yet/);

@@ -4,6 +4,10 @@
 // problem+json. The form's hash and the step-up scope stay on the server (POST standing-rules answers 401 with it).
 
 /** A rule the form cannot be: `status` is the HTTP status the server answers with, `type` its problem type. */
+import { formatMinor, knownCurrency, minorDigits } from './money.mjs';
+
+export { formatMinor, minorDigits };
+
 export class RuleError extends Error {
   constructor(status, message, { type = null } = {}) { super(message); this.name = 'RuleError'; this.status = status; this.type = type; }
 }
@@ -38,7 +42,7 @@ export function ruleForm(body = {}) {
     return { ...form, n: int(body.n, 'n', { max: 10_000 }), channel: label(body.channel, 'channel') };
   }
   if (typeof body.amountField !== 'string' || !FIELD.test(body.amountField)) throw new RuleError(400, 'amountField is the input field with the amount, in minor units');
-  if (typeof body.currency !== 'string' || !/^[A-Z]{3}$/.test(body.currency)) throw new RuleError(400, 'currency is a three-letter code, like USD');
+  if (!knownCurrency(body.currency)) throw new RuleError(400, 'currency is a known three-letter ISO 4217 code, like USD; amounts are whole minor units of it (cents, yen, fils)');
   // The call must say its currency, and it is always compared with the rule's (code review sev 3): a money rule with
   // no currency field would take any currency as the rule's.
   if (typeof body.currencyField !== 'string' || !FIELD.test(body.currencyField)) throw new RuleError(400, 'currencyField is the input field with the currency, compared with the rule\'s on every call');
@@ -73,21 +77,6 @@ function shapeOf(body, kind) {
     seen.add(k);
   }
   return { fixed: Object.fromEntries(Object.entries(fixed).sort(([a], [b]) => (a < b ? -1 : 1))), free: [...free].sort() };
-}
-
-/**
- * How many minor units a currency's major unit has, as a power of ten (code review, L22m): USD 2, JPY 0, KWD 3. Amounts
- * in rules and calls are whole minor units, so "up to ¥2,500" is maxEach 2500, and 2.500 KWD is 2500.
- */
-export function minorDigits(currency) {
-  try { return new Intl.NumberFormat('en-US', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits; } catch { return 2; }
-}
-
-/** Whole minor units as money, without decimals when there are none: $20, $20.50, ¥2,500, KWD 2.500. */
-export function formatMinor(minor, currency = 'USD') {
-  const d = minorDigits(currency);
-  const whole = minor % 10 ** d === 0;
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency, ...(whole ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : { minimumFractionDigits: d, maximumFractionDigits: d }) }).format(minor / 10 ** d);
 }
 
 /** An input field as words (CPO rule.part.fields.names): customer_email, customerEmail and customer.email read "customer email". */
