@@ -460,3 +460,25 @@ test('the publish audit line is written before the answer: a host logger that ta
     assert.equal(written, true, 'the audit line was written before the publish answered');
   } finally { await m.gh.close(); }
 });
+
+test('a publish logger that rejects or never settles: the publish still answers 200, and the entry goes to stderr as audit-fallback', async () => {
+  for (const [name, logger] of [['rejects', async () => { throw new Error('audit table down'); }], ['hangs', () => new Promise(() => {})]]) {
+    const r = repos();
+    const m = await mounted(r.bare, { handler: { logWaitMs: 200, logger: (e) => (e.event === 'agent-team-studio.publish' ? logger(e) : undefined) } });
+    const errors = [];
+    const was = console.error;
+    console.error = (line) => errors.push(String(line));
+    try {
+      const { spec, base } = (await m.call('GET', '/v1/team')).body;
+      spec.values = { ...spec.values, PROJECT_NAME: `Shop ${name}` };
+      const t0 = Date.now();
+      const pub = await m.call('POST', '/v1/team/publish', { spec, base, message: 'Rename the project' });
+      assert.equal(pub.status, 200, `${name}: ${JSON.stringify(pub.body)}`);
+      assert.ok(Date.now() - t0 < 5000, `${name}: answered without waiting on the logger`);
+      const fallback = errors.map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((x) => x?.event === 'audit-fallback');
+      assert.ok(fallback, `${name}: an audit-fallback line`);
+      assert.equal(fallback.entry.branch, pub.body.branch);
+      assert.match(fallback.error, name === 'rejects' ? /audit table down/ : /did not finish in 200 ms/);
+    } finally { console.error = was; await m.gh.close(); }
+  }
+});

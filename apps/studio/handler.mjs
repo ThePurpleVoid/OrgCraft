@@ -61,7 +61,8 @@ const BRANCH = /^[A-Za-z0-9._/-]{1,100}$/;
  *   branchPrefix         every Studio branch starts with it (default "agent-team/", E4)
  *   limiter(key, { limit, windowSeconds }) → true to allow (optional; a shared store, S6, E8)
  *   logger(entry)        the host's logger for the audit line (E9); default console.info. It may return a promise:
- *                        the publish line is awaited before the answer
+ *                        the publish line is awaited before the answer, for at most logWaitMs (default 3000);
+ *                        a rejection or a timeout is written to stderr as audit-fallback and the publish still answers 200
  *   tmpRoot              the folder publishes are planned in (default the system temp folder)
  *   cache                a blobCache() to share across handlers of one customer (default: one per handler)
  *   api, fetch           GitHub's API and fetch (tests use a fake)
@@ -147,7 +148,7 @@ function controlPlaneClient(c) {
 }
 
 export function createStudioHandler(opts = {}) {
-  const { repo, authorize, getInstallationToken, limiter = null, logger = (e) => console.info(JSON.stringify(e)), api = 'https://api.github.com', fetch: fetchImpl = globalThis.fetch } = opts;
+  const { repo, authorize, getInstallationToken, limiter = null, logger = (e) => console.info(JSON.stringify(e)), logWaitMs = 3000, api = 'https://api.github.com', fetch: fetchImpl = globalThis.fetch } = opts;
   const basePath = String(opts.basePath ?? '').replace(/\/+$/, '');
   const branchPrefix = opts.branchPrefix ?? 'agent-team/';
   // Where publishes are planned: the system temp folder, or one of the host's own (hosted mode: one per customer, S3).
@@ -339,7 +340,16 @@ export function createStudioHandler(opts = {}) {
     });
     // Awaited: a host whose logger writes the audit row (the control plane's audit table) has it written before the
     // answer goes out, so whoever reads the audit after a publish finds it (FLAKE-gov: it raced the response).
-    try { await logger({ event: 'agent-team-studio.publish', user: user.id, branch: out.branch, commit: out.commit, pr: out.pr?.url ?? null, files: out.files.length, ...(user.via ? { via: user.via } : {}) }); } catch { /* the host's logger */ }
+    // At most logWaitMs, though: the publish has landed, so a logger that fails or never settles must not turn it into
+    // an error or a hang; the entry then goes to stderr as audit-fallback, so it is never lost without a trace.
+    const entry = { event: 'agent-team-studio.publish', user: user.id, branch: out.branch, commit: out.commit, pr: out.pr?.url ?? null, files: out.files.length, ...(user.via ? { via: user.via } : {}) };
+    let timer;
+    try {
+      const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error(`the logger did not finish in ${logWaitMs} ms`)), logWaitMs); });
+      await Promise.race([Promise.resolve().then(() => logger(entry)), late]);
+    } catch (e) {
+      try { console.error(JSON.stringify({ event: 'audit-fallback', error: redact(e?.message ?? e), entry })); } catch { /* nothing left to tell */ }
+    } finally { clearTimeout(timer); }
     return json(200, { branch: out.branch, commit: out.commit, files: out.files, pr: out.pr, commands: p.commands });
   }
 
