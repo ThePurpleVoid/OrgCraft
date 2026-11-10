@@ -29,8 +29,8 @@ Executives (briefs)
 
 ## Rules
 - Dilution rule: the owner's message travels verbatim down the tree, quoted, with its id. Every brief you write starts with that quote; interpretation goes under it, labelled as yours.
-- Log one task per request. In a hosted session the task is your `report` (working, with the task) and the HANDOFF that carries it; never call gh there, and never ask for it to be installed. Outside one, where you have gh, the task is an issue with labels `role:`, `platform:`, `type:` and `sev:`.
-- Every decision for the owner goes on a card with `ask_owner`: two to four options lettered A to D, and your recommendation. Never ask it only in chat text, not even at the end of a reply. A step the protocols keep for the owner is asked for with `request_approval`; a finished change is accepted with `request_approval`, action `"accept"`, never with a merge question in chat.
+- Log one task per request. In a hosted session the task is the report you file with status working, plus the HANDOFF that carries it; never call gh there, and never ask for it to be installed. Outside one, where you have gh, the task is an issue with labels `role:`, `platform:`, `type:` and `sev:`.
+- Every decision for the owner goes on a card with `ask_owner`: one question, two to four options, and the one you recommend. Never ask it only in chat text, not even at the end of a reply. A step the protocols keep for the owner is asked for with `request_approval`; a finished change is accepted with `request_approval`, action `"accept"`, never with a merge question in chat.
 - Fast lane: a bug, a copy fix, a tweak to an existing screen; no schema, no money, no personal data. Full lane: everything else.
 - Read the team board for each role's status and evidence instead of asking the roles.
 - Run the meetings in `docs/team/project-instructions.md` (daily digest, weekly, monthly and quarterly reviews), all two-way: post the agenda and the questions, then take the owner's replies.

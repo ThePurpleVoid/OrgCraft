@@ -16,7 +16,7 @@ OrgCraft is built by a team defined with OrgCraft. `team/` is the kit's source, 
 
 ### "Local PR" in this repository's history
 
-Some commits, the changelog and a few ADRs and specs name a "local PR Lnn" and a shared local repository. That is this repository's own interim process, used while its builders work in a cloud project without direct GitHub access: a person-run queue merges reviewed branches into a shared local repository, and one thread pushes to GitHub. It is not part of OrgCraft. Teams don't use it, and a hosted (runner) session never does: it finishes a change with `request_approval`, action `"accept"`, and the runner pushes, opens the pull request and merges it on approval (`team/protocols.md`, "Hosted sessions").
+Some commits, the changelog and a few ADRs and specs name a "local PR Lnn" and a shared local repository. That is this repository's own interim process, used while its builders work in a cloud project without direct GitHub access: a merge queue, run by the team's CTO role after a written review, merges reviewed branches into a shared local repository, and one thread pushes to GitHub. It is not part of OrgCraft. Teams don't use it, and a hosted (runner) session never does: it finishes a change with `request_approval`, action `"accept"`, and the runner pushes, opens the pull request and merges it on approval (`team/protocols.md`, "Hosted sessions").
 
 ## Rules for briefs
 

@@ -5,13 +5,13 @@
 - Device, emulator and browser testing happens on the team machine. `scripts/agent-team/merge-gate.sh` is the merge gate for anything CI does not cover.
 
 <!-- fill:company -->
-{{OWNER}} is the owner (CEO). The coordinator is the **chief of staff**, or, when the host keeps its own coordinator, the chief of staff runs as a thread the coordinator relays to: either way it is the one door. It takes every request, opens the issue, forwards the owner's words verbatim (quoted, with the issue id) to the executive whose lane owns it, and reports back in one daily digest. Executives route inside their lane and never ask the owner directly. Interpretation goes under the quote, labelled as the writer's.
+{{OWNER}} is the owner (CEO). The coordinator is the **chief of staff**, or, when the host keeps its own coordinator, the chief of staff runs as a thread the coordinator relays to: either way it is the one door. It takes every request, logs it as a task (an issue where it has gh, never in a hosted session), forwards the owner's words verbatim (quoted, with the task id) to the executive whose lane owns it, and reports back in one daily digest. Executives route inside their lane and never ask the owner directly. Interpretation goes under the quote, labelled as the writer's.
 
 <!-- fill:routine -->
 - **routine**: a fast model. Device driving, test suites, docs sync, support, community.
 
 <!-- fill:how-work-moves -->
-1. Owner to chief of staff. It opens an issue, tags the lane and forwards the owner's words verbatim to the lane's executive, never straight to an individual contributor; the executive scopes it, hands it off, reviews before merge and logs the decision in `docs/team/lanes/<executive>.md`. The work is fast (bug, copy, tweak; the executive hands it straight to the dev) or full (new screen, schema, money, personal data; PM story, architect spec, design fan-out, critic review).
+1. Owner to chief of staff. It logs a task (an issue where it has gh, never in a hosted session), tags the lane and forwards the owner's words verbatim to the lane's executive, never straight to an individual contributor; the executive scopes it, hands it off, reviews before merge and logs the decision in `docs/team/lanes/<executive>.md`. The work is fast (bug, copy, tweak; the executive hands it straight to the dev) or full (new screen, schema, money, personal data; PM story, architect spec, design fan-out, critic review).
 2. Devs build against the spec's mock; shared and backend PRs merge as they pass.
 3. Every PR: merge-gate output pasted in, HANDOFF to QA, a reviewer spawned, security review for backend, auth or money. QA, reviewer and design critic run in parallel.
 4. A PR merges when it has reviewer approval, a SIGNOFF with evidence, a green gate and no conflicts. The release manager resolves conflicts and asks QA to re-walk touched screens.

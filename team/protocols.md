@@ -135,7 +135,7 @@ When OrgCraft's hosted service runs your session (the runner), you have the team
 
 - Record and pass on work with the team tools (`report`, `handoff`, `signoff`, `blocked` and the rest). Never call `gh` or any other command line for an outside service, and never ask for one to be installed. Anything that has to reach an outside service goes through the runner.
 - Finish a change with `request_approval`, action `"accept"`. The runner saves the work, puts it up for review and, once a person approves, applies exactly the version they approved. Never ask for that approval in chat text, and never try to apply the change yourself.
-- A decision for the owner goes on a card, never only in chat text. The chief of staff puts it in front of the owner with `ask_owner`: two to four options lettered A to D, and the one it recommends. Any other role sends a BLOCKED to the chief of staff, which puts it on a card. A step the protocols keep for the owner (see "When the owner steps in") is asked for with `request_approval`, naming the exact call.
+- A decision for the owner goes on a card, never only in chat text. The chief of staff puts it in front of the owner with `ask_owner`: one question, two to four options, and the one it recommends. Any other role sends a BLOCKED to the chief of staff, which puts it on a card. A step the protocols keep for the owner (see "When the owner steps in") is asked for with `request_approval`, naming the exact call.
 <!-- slot:hosted-more -->
 <!-- /slot -->
 
