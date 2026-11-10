@@ -119,11 +119,13 @@ test('another owner\'s approval names them; amounts with thousands; a second win
   const sheet = card.locator('.mkrule');
   await sheet.getByText('From K, which Kim approved: Pays $24.90 to card ending 4242 · in Payments.').waitFor();
   // "1,000" is a thousand (qa-web D3), and field names read as words.
-  // Something that isn't an amount says how to write one; a leading $ and "1.000,50" are read (qa-web D3).
+  // Something that isn't an amount says how to write one; in en-US a leading $ and "1,000.50" are read (qa-web D3).
   await sheet.getByLabel('At most … per customer a week').fill('lots');
   await sheet.getByText('Enter a number, like 25 or 24.90.').waitFor();
+  await sheet.getByLabel('At most … per customer a week').fill('25,50'); // 25.50 or 2,550? Never guessed (CPO).
+  await sheet.getByText('Enter a number, like 25 or 24.90.').waitFor();
   await sheet.getByLabel('At most … per customer a week').fill('$25');
-  await sheet.getByLabel('At most … a week in all').fill('1.000,50');
+  await sheet.getByLabel('At most … a week in all').fill('1,000.50');
   assert.match(await sheet.locator('#mr-quote-apr_K').textContent(), /at most \$25 per customer a week · at most \$1,000\.50 a week in all/);
   assert.equal(await sheet.getByText('Enter a number, like 25 or 24.90.').count(), 0);
   await sheet.getByLabel('At most … per customer a week').fill('1,000');

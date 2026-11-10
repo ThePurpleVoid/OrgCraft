@@ -18,11 +18,21 @@ test('each currency keeps its own minor units', () => {
   assert.equal(toMinor('abc', 'USD'), null);
   assert.equal(toMinor('$25', 'USD'), 2500);
   assert.equal(toMinor('USD 25', 'USD'), 2500);
-  assert.equal(toMinor('1.000,50', 'USD'), 100050);
-  assert.equal(toMinor('1,000', 'USD'), 100000, 'thousands (qa-web D3)');
-  assert.equal(toMinor('1 000.50', 'USD'), 100050);
-  assert.equal(toMinor('25,50', 'USD'), 2550, 'a lone comma is a decimal point');
-  assert.equal(toMinor('1,000', 'JPY'), 1000);
+  assert.equal(toMinor('1,000', 'USD', 'en-US'), 100000, 'thousands (qa-web D3)');
+  assert.equal(toMinor('1,000.50', 'USD', 'en-US'), 100050);
+  assert.equal(toMinor('1 000.50', 'USD', 'en-US'), 100050);
+  assert.equal(toMinor('1,000', 'JPY', 'en-US'), 1000);
+  // Never guess (CPO): where the mark is ".", "25,50" could be 25.50 or 2,550, so it is refused; "1.000,50" too.
+  assert.equal(toMinor('25,50', 'USD', 'en-US'), null);
+  assert.equal(toMinor('1.000,50', 'USD', 'en-US'), null);
+  assert.equal(toMinor('1,00', 'USD', 'en-US'), null);
+  // Where the mark is ",", the same text reads the other way round.
+  assert.equal(toMinor('25,50', 'USD', 'de-DE'), 2550);
+  assert.equal(toMinor('1.000,50', 'USD', 'de-DE'), 100050);
+  assert.equal(toMinor('1.000', 'USD', 'de-DE'), 100000);
+  assert.equal(toMinor('25.50', 'USD', 'de-DE'), null);
+  assert.equal(major(2550, 'USD', 'de-DE'), '25,50');
+  assert.equal(toMinor(major(2550, 'USD', 'de-DE'), 'USD', 'de-DE'), 2550, 'the prefilled box reads back');
   assert.equal(major(2500, 'JPY'), '2500');
   assert.equal(major(2500, 'KWD'), '2.500');
   assert.equal(major(2000, 'KWD'), '2');

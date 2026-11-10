@@ -14,23 +14,34 @@ const PERIODS = ['day', 'week', 'month'];
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
-/** Minor units as the owner types them: 2500 USD is "25", 2550 USD "25.50", 2500 JPY "2500", 2500 KWD "2.5". */
-export const major = (minor, currency = 'USD') => {
+/** The decimal mark where the Studio is open ("." in en-US, "," in de-DE), the same locale money is shown in. */
+export const decimalOf = (locale) => {
+  try { return new Intl.NumberFormat(locale ?? []).formatToParts(1.5).find((p) => p.type === 'decimal')?.value === ',' ? ',' : '.'; } catch { return '.'; }
+};
+/** Minor units as the owner types them: 2500 USD is "25", 2550 USD "25.50" ("25,50" where the mark is a comma), 2500 JPY "2500", 2500 KWD "2.5". */
+export const major = (minor, currency = 'USD', locale) => {
   const e = exponentOf(currency);
   const unit = 10 ** e;
-  return minor % unit === 0 ? String(minor / unit) : (minor / unit).toFixed(e);
+  return minor % unit === 0 ? String(minor / unit) : (minor / unit).toFixed(e).replace('.', decimalOf(locale));
 };
 /**
- * What the owner typed, in the rule's currency, to minor units: null when it can't be read as an amount, 0 when it is
- * zero. A leading currency sign ("$25"), thousands separators ("1,000", "1 000", "1.000,50") and a decimal comma
- * ("25,50") are fine (qa-web L22m D3).
+ * What the owner typed, in the rule's currency, to minor units: null when it can't be read as one amount, 0 when it is
+ * zero. It follows the locale's decimal mark and never guesses (CPO, qa-web L22m D3): in en-US "1,000.50" and "$25" are
+ * read, and "25,50" is refused because it could mean 25.50 or 2,550; in de-DE "1.000,50" and "25,50" are read. Spaces
+ * group thousands everywhere.
  */
-export function toMinor(text, currency = 'USD') {
+export function toMinor(text, currency = 'USD', locale) {
   const e = exponentOf(currency);
-  let v = String(text ?? '').trim().replace(/^(?:[A-Za-z]{3}|[^\d\s.,-]{1,3})\s*/, '').replace(/[\s\u00a0\u202f']/g, '');
-  if (/^\d{1,3}(,\d{3})+(\.\d*)?$/.test(v)) v = v.replace(/,/g, '');
-  else if (/^\d{1,3}(\.\d{3}){2,}(,\d*)?$|^\d{1,3}(\.\d{3})+,\d*$/.test(v)) /* "1.000,50"; a lone "25.505" stays a decimal point */ v = v.replace(/\./g, '').replace(',', '.');
-  else v = v.replace(/^(\d+),(\d+)$/, '$1.$2');
+  const dec = decimalOf(locale);
+  const grp = dec === '.' ? ',' : '.';
+  let v = String(text ?? '').trim().replace(/^(?:[A-Za-z]{3}|[^\d\s.,-]{1,3})\s*/, '').replace(/[\s  ']/g, '');
+  const q = (c) => `\\${c}`;
+  if (v.includes(grp)) {
+    // The other mark only ever groups thousands: in threes, before any decimal part.
+    if (!new RegExp(`^\\d{1,3}(${q(grp)}\\d{3})+(${q(dec)}\\d*)?$`).test(v)) return null;
+    v = v.split(grp).join('');
+  }
+  if (dec === ',') v = v.replace(',', '.');
   const m = (e ? new RegExp(`^(\\d{1,12})(?:\\.(\\d{1,${e}}))?$`) : /^(\d{1,12})$/).exec(v);
   if (!m) return null;
   const minor = Number(m[1]) * 10 ** e + Number((m[2] ?? '').padEnd(e, '0') || 0);
