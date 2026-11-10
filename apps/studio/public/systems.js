@@ -82,9 +82,18 @@ export const droppedLine = (reason, days = 30) => t({ withdrawn: 'systems.droppe
 
 /** "{code host} reports that the change was accepted…": the host by name when the Studio knows it. */
 export const readyLine = () => t('systems.ready');
-/** The ⓘ beside the ready line: the report comes from the team's own checks, which OrgCraft does not vouch for. */
-export function readyTip() {
+/** An ⓘ with `text` as its tooltip, labelled "About this message". */
+export function tipButton(text) {
   const b = document.createElement('button');
-  b.type = 'button'; b.className = 'info'; b.dataset.tip = t('systems.ready.tip'); b.setAttribute('aria-label', t('tip.button', { term: t('systems.ready.term') })); b.textContent = 'ⓘ';
+  b.type = 'button'; b.className = 'info'; b.dataset.tip = text; b.setAttribute('aria-label', t('tip.button', { term: t('systems.ready.term') })); b.textContent = 'ⓘ';
   return b;
+}
+/** The ⓘ beside the ready line: the report comes from the team's own checks, which OrgCraft does not vouch for. */
+export const readyTip = () => tipButton(t('systems.ready.tip'));
+/** The waiting line's parts: the line, its ⓘ, and a link to the change when the code host gives one. */
+export function waitingParts(url) {
+  const label = t('systems.waiting.link');
+  const parts = [`${t('systems.waiting')} `, tipButton(t('systems.waiting.tip', { change: label }))];
+  if (/^https:\/\//.test(url ?? '')) { const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = label; parts.push(' ', a); }
+  return parts;
 }

@@ -80,7 +80,7 @@ export async function systemsPlan(root, chat) {
   // would change is the control plane's current systems against the pending set.
   const p = there.pending ?? null;
   const pending = p ? {
-    sha: p.sha, pr: p.pr ?? null, contentHash: p.contentHash, ready: !!p.ready, expiresAt: p.expiresAt ?? null,
+    sha: p.sha, pr: p.pr ?? null, url: Number.isInteger(p.pr) && p.pr > 0 ? changeUrl(root, { pr: p.pr }) : null, contentHash: p.contentHash, ready: !!p.ready, expiresAt: p.expiresAt ?? null,
     ours: p.contentHash === canonicalSystemsHash(here),
     items: systemsCapability(there, p), lost: systemsLost(there, p),
   } : null;

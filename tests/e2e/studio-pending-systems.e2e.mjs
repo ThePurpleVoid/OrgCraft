@@ -82,8 +82,10 @@ test('a pending set waits, the code host reports it accepted, and Switch on now 
   assert.equal(s.pending.ours, true);
   assert.equal(s.pending.ready, false);
   let line = await openStart(page);
-  await line.getByText('The system changes wait until this change is approved. Then you switch them on.').waitFor();
-  assert.equal(await line.getByRole('button').count(), 0, 'nothing to tap until the change is accepted');
+  await line.getByText('The system changes are waiting for the change to be approved.').waitFor();
+  assert.equal(await line.getByRole('link', { name: 'see the change' }).getAttribute('href'), 'https://github.com/example/sample-app/pull/7');
+  assert.match(await line.locator('button.info').getAttribute('data-tip'), /^This team was published as a change for review \(see the change\)\./);
+  assert.equal(await line.getByRole('button', { name: 'Switch on now' }).count(), 0, 'nothing to switch on until the change is accepted');
 
   // The code host reports the change accepted: the chat says so, and the plan offers to switch it on.
   cp.readyPending();
@@ -147,11 +149,12 @@ test('Send them now from a branch whose change is still open waits for it; a pur
   writeFileSync(ghOut, JSON.stringify({ number: 12, state: 'OPEN' }));
   const before = cp.systems.version;
   const line = await openStart(page);
+  assert.match(await line.getByRole('button', { name: 'Send them now' }).getAttribute('data-tip'), /passkey confirms the list first/);
   await line.getByRole('button', { name: 'Send them now' }).click();
   const dlg = page.locator('#stepup-dialog');
   await dlg.locator('#stepup-secret').fill(cp.stepUpSecret);
   await dlg.locator('button[type="submit"]').click();
-  await line.getByText('The system changes wait until this change is approved. Then you switch them on.').waitFor();
+  await line.getByText('The system changes are waiting for the change to be approved.').waitFor();
   assert.deepEqual(cp.systemsPuts.at(-1).pending, { sha: head, pr: 12 }, 'stored as pending, bound to the commit');
   assert.equal(cp.systems.version, before, 'nothing switched on: an unreviewed widening does not apply');
   assert.notEqual(cp.systems.bindings[0]?.permission, 'deploy');

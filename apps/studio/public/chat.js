@@ -6,7 +6,7 @@
 import { apiUrl, ask, askText, requestJson } from './env.js';
 import { t } from './i18n.js';
 import { personWord, ruleLine } from './approvals.js';
-import { applyPending, droppedLine, readyLine, readyTip, sendSystems, showItems, systemsState } from './systems.js';
+import { applyPending, droppedLine, readyLine, readyTip, sendSystems, waitingParts, showItems, systemsState } from './systems.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -569,10 +569,11 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       if (s.result === 'failed') return [`${t('start.systems.failed')} `, button('switchon', t('systems.switchon'), switchOn)];
       return [`${readyLine()} `, readyTip(), ' ', button('switchon', t('systems.switchon'), switchOn)];
     }
-    if (p) return [t('publish.systems.onapproval')];
+    if (p) return waitingParts(p.url);
     if (s.result === 'dropped') return [droppedLine('base-moved')];
     if (s.inSync) return null;
     const parts = [`${t(s.result === 'failed' ? 'start.systems.failed' : running ? 'run.systems.behind' : 'start.systems.behind')} `, button('send', t('start.systems.send'), send)];
+    parts[1].dataset.tip = t('start.systems.send.tip');
     if (running && s.lost?.length) parts.push(` ${t('run.systems.narrows')} `, button('stop', t('run.systems.stop'), () => control('stop')));
     return parts;
   }
