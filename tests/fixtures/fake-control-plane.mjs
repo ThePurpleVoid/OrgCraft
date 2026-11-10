@@ -201,19 +201,23 @@ export async function fakeControlPlane({ token = 'test-token', stepUpSecret = 's
     const rd = new RegExp(`^/v1/teams/${team}/approvals/([^/]+)/rule-draft$`).exec(p);
     if (rd && req.method === 'GET') {
       const d = drafts.get(rd[1]);
-      return d ? send(res, d[0], d[1]) : send(res, 409, { type: 'rule-not-possible', reason: 'unbound', error: 'no draft' });
+      if (!d) return send(res, 409, { type: 'rule-not-possible', reason: 'unbound', error: 'no draft' });
+      const made = rules.find((x) => x.approval === rd[1]);
+      return send(res, d[0], d[0] === 200 && made ? { ...d[1], made: { id: made.id, number: made.number } } : d[1]);
     }
     // Making a rule (apps/server/ledger.mjs add): owner only, a step-up scoped rule:<hash of the form>, a number.
     if (p === `/v1/teams/${team}/standing-rules` && req.method === 'POST') {
       const body = await read(req);
-      const { words, days = 30, ...form } = body;
+      const { words, days = 30, approval, ...form } = body;
       // Scoped to the form and how long it lasts, as backend-dev/rule-draft does (security L22m low).
       const scope = `rule:${createHash('sha256').update(JSON.stringify({ form, days })).digest('hex')}`;
       if (!stepped(req, scope)) return send(res, 401, { type: 'step-up-required', title: 'Making a standing rule needs a recent sign-in', status: 401, scope });
       rulePosts.push(body);
+      const was = rules.find((x) => approval && x.approval === approval);
+      if (was) return send(res, 409, { type: 'rule-exists', error: 'a rule was already made from this approval', id: was.id, number: was.number });
       if (ruleRefuse) return send(res, ruleRefuse[0], ruleRefuse[1]);
       const at = new Date();
-      const r = { id: `sr_${rules.length + 1}`, number: rules.length + 1, kind: form.kind, form, words, live: true, createdBy: 'per_owner', createdByName: 'Owner', createdAt: at.toISOString(), expiresAt: new Date(at.getTime() + days * 86_400_000).toISOString(), used: { n: 0, amount: 0 } };
+      const r = { id: `sr_${rules.length + 1}`, number: rules.length + 1, approval, kind: form.kind, form, words, live: true, createdBy: 'per_owner', createdByName: 'Owner', createdAt: at.toISOString(), expiresAt: new Date(at.getTime() + days * 86_400_000).toISOString(), used: { n: 0, amount: 0 } };
       rules.unshift(r);
       ledger.unshift({ at: r.createdAt, kind: 'rule-added', by: 'per_owner', rule: r.id, ruleNumber: r.number, ruleForm: form, words });
       return send(res, 201, { id: r.id, number: r.number, form, hash: scope.slice(5), expiresAt: r.expiresAt });

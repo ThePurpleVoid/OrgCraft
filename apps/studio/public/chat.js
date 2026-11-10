@@ -424,6 +424,8 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     const result = await makeRule({ api, stepUp, s: m });
     m.busy = false;
     m.result = result;
+    // Made (here or elsewhere): the card keeps saying so after the sheet is gone, with no second button.
+    if (result.made?.number) m.draft.made = result.made;
     render();
     const el = $(result.kind === 'cancelled' ? `[data-mrgo="${CSS.escape(apr)}"]` : `#mr-result-${CSS.escape(apr)}`, root);
     el?.focus();
@@ -990,7 +992,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       render();
       return $(`#mr-title-${CSS.escape(apr)}`, root)?.focus();
     }
-    if (b.dataset.mrcancel) { const apr = b.dataset.mrcancel; st.mk.delete(apr); render(); return $(`[data-mkrule="${CSS.escape(apr)}"]`, root)?.focus(); }
+    if (b.dataset.mrcancel) { const apr = b.dataset.mrcancel; st.mk.delete(apr); render(); return $(`[data-mkrule="${CSS.escape(apr)}"], [data-mkmade="${CSS.escape(apr)}"]`, root)?.focus(); }
     if (b.dataset.mrgo) return saveRule(b.dataset.mrgo);
     if (b.dataset.card) answer(b.dataset.card, b.dataset.option);
   });

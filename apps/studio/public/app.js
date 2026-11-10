@@ -256,7 +256,7 @@ const ctx = {
   spec: () => spec,
   change: (fn) => change(fn),
   render: () => render(),
-  get team() { return view.team; },
+  get team() { return view?.team ?? []; },
   esc,
   selectSystem: (id) => { selectedSystem = id; if (id) selected = null; render(); },
   selectRole: (slug) => select(slug),
@@ -988,7 +988,7 @@ function select(slug) { selected = slug; selectedSystem = null; render(); }
 /** Opens a custom agent in the editor. `origin` ({ from, title, md }) is the role a copy started from. */
 function openEditor(slug, origin) {
   editor ??= createAgentEditor($('#agent-editor'), {
-    spec: () => spec, kit: S.kit, roles: () => view.all, team: () => view.team,
+    spec: () => spec, kit: S.kit, roles: () => view?.all ?? [], team: () => view?.team ?? [],
     // A switched-off agent is checked as if it were on, so the editor shows what stands between it and the team.
     issues: () => (spec.roles[editor.slug]?.enabled ? view.issues : checksOf({ ...spec, roles: { ...spec.roles, [editor.slug]: { ...spec.roles[editor.slug], enabled: true } } })),
     change, ctx, api,
@@ -1072,7 +1072,7 @@ async function ours(work) {
 }
 
 /** The roles on in the draft, for hand-off targets (criterion 10: never one that is off). */
-const onRoles = () => view.team.map((r) => ({ slug: r.slug, title: r.title }));
+const onRoles = () => (view?.team ?? []).map((r) => ({ slug: r.slug, title: r.title }));
 // A deep link straight to the Rollout page arrives before anything has rendered the team, so build it here if needed.
 const roleTitle = (slug) => (view ??= derive()).bySlug.get(slug)?.title ?? slug;
 /** The rollout page reads the board and the repository through the local Studio's server; an embedded Studio has neither yet. */
@@ -1355,7 +1355,7 @@ function closeMore() { const m = $('#more-menu'); if (m && !m.hidden) { m.hidden
 /** What the Meetings view reads from the team and how it edits the draft. */
 const meetingsCtx = {
   spec: () => spec,
-  team: () => view.team,
+  team: () => view?.team ?? [],
   resolved: () => resolveSpec(spec, S.kit).roles,
   change: (fn) => change(fn, { quiet: true }),
   prices: () => prices,

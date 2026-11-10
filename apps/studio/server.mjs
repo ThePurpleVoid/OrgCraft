@@ -299,7 +299,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
   const relay = async (res, fn) => {
     if (!chat.connected) return send(res, 503, { connected: false, error: 'connect a control plane: set AGENT_TEAM_SERVER, AGENT_TEAM_SERVER_TOKEN and AGENT_TEAM_SERVER_TEAM' });
     try { return send(res, 200, await fn()); } catch (e) {
-      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(typeof e.body?.scope === 'string' ? { scope: e.body.scope } : {}), ...(typeof e.body?.reason === 'string' ? { reason: e.body.reason.slice(0, 40) } : {}), ...(e.status === 409 && e.body?.id ? { card: e.body } : {}), ...(e.status === 409 && Array.isArray(e.body?.cards) ? { cards: e.body.cards } : {}) });
+      if (e instanceof chat.Upstream) return send(res, e.status, { error: e.message, type: e.body?.type, ...(typeof e.body?.scope === 'string' ? { scope: e.body.scope } : {}), ...(typeof e.body?.reason === 'string' ? { reason: e.body.reason.slice(0, 40) } : {}), ...(e.status === 409 && Number.isSafeInteger(e.body?.number) ? { number: e.body.number, ...(typeof e.body.id === 'string' ? { id: e.body.id.slice(0, 100) } : {}) } : {}), ...(e.status === 409 && e.body?.id ? { card: e.body } : {}), ...(e.status === 409 && Array.isArray(e.body?.cards) ? { cards: e.body.cards } : {}) });
       if (e instanceof RunRefused) return send(res, 409, { error: e.message, type: 'not-published' });
       return send(res, 502, { error: `the control plane did not answer: ${e.message}` });
     }
@@ -478,7 +478,7 @@ export function createStudio({ root, env = process.env, launchToken = randomByte
         // L22 (mockup v20): makes a standing rule from the form the page shows. Only the form's own fields, the owner's
         // words and the days pass; the control plane validates the form, and asks for a step-up scoped to its hash.
         if (url.pathname === '/v1/team/standing-rules') {
-          const KEYS = ['kind', 'tool', 'recipientField', 'amountField', 'currencyField', 'currency', 'fixed', 'free', 'period', 'maxEach', 'total', 'all', 'n', 'channel', 'system', 'words', 'days'];
+          const KEYS = ['kind', 'tool', 'recipientField', 'amountField', 'currencyField', 'currency', 'fixed', 'free', 'period', 'maxEach', 'total', 'all', 'n', 'channel', 'system', 'words', 'days', 'approval'];
           if (typeof input.words !== 'string' || typeof input.kind !== 'string') { chat.dropStepUp(); throw new HttpError(400, 'send the rule form and your words'); }
           const body = Object.fromEntries(KEYS.filter((k) => input[k] !== undefined).map((k) => [k, input[k]]));
           return relay(res, () => chat.addRule(body, typeof input.key === 'string' ? input.key.slice(0, 80) : undefined));

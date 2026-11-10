@@ -4,7 +4,7 @@
 // period, how long it lasts and their own words; the line the ledger will quote is drawn from the same form, word for
 // word, as they type. Making it needs a passkey scoped to that exact rule (the control plane names the scope).
 import { t } from './i18n.js';
-import { exponentOf, ledgerLine, ruleLine } from './approvals.js';
+import { exponentOf, ledgerLine, personWord, ruleLine } from './approvals.js';
 
 /** The kinds a rule can be made for now; any other kind shows no button at all (CPO). */
 export const ENFORCED = ['refund', 'pay.known', 'send.known'];
@@ -20,13 +20,18 @@ export const major = (minor, currency = 'USD') => {
   const unit = 10 ** e;
   return minor % unit === 0 ? String(minor / unit) : (minor / unit).toFixed(e);
 };
-/** What the owner typed, in the rule's currency, to minor units; null when it isn't an amount above zero. */
+/**
+ * What the owner typed, in the rule's currency, to minor units; null when it isn't an amount above zero. Thousands
+ * separators are fine ("1,000", "1 000"); a lone comma is a decimal point ("25,50") (qa-web L22m D3).
+ */
 export function toMinor(text, currency = 'USD') {
   const e = exponentOf(currency);
-  const m = (e ? new RegExp(`^\\s*(\\d{1,9})(?:[.,](\\d{1,${e}}))?\\s*$`) : /^\s*(\d{1,12})\s*$/).exec(String(text ?? ''));
+  let v = String(text ?? '').replace(/[\s\u00a0\u202f]/g, '');
+  v = /^\d{1,3}(,\d{3})+(\.\d*)?$/.test(v) ? v.replace(/,/g, '') : v.replace(/^(\d+),(\d+)$/, '$1.$2');
+  const m = (e ? new RegExp(`^(\\d{1,12})(?:\\.(\\d{1,${e}}))?$`) : /^(\d{1,12})$/).exec(v);
   if (!m) return null;
-  const v = Number(m[1]) * 10 ** e + Number((m[2] ?? '').padEnd(e, '0') || 0);
-  return v > 0 && Number.isSafeInteger(v) ? v : null;
+  const minor = Number(m[1]) * 10 ** e + Number((m[2] ?? '').padEnd(e, '0') || 0);
+  return minor > 0 && Number.isSafeInteger(minor) ? minor : null;
 }
 const whole = (text, max) => { const m = /^\s*(\d{1,6})\s*$/.exec(String(text ?? '')); const v = m ? Number(m[1]) : NaN; return v >= 1 && v <= max ? v : null; };
 
@@ -72,6 +77,8 @@ export function formOf(s) {
 /** The button under an approved card, for the owner, when the control plane could draft a rule of a kind made now. */
 export function buttonHtml(apr, draft) {
   if (!draft || !ENFORCED.includes(draft.form?.kind)) return '';
+  // One rule per approval (CTO ruling on qa-web L22m D1): once made, the card says which, with no button.
+  if (draft.made?.number) return `<p class="mkrule-row muted" data-mkmade="${esc(apr)}">${esc(t('rule.make.done', { n: draft.made.number }))}</p>`;
   const letter = draft.letter ?? '';
   return `<p class="mkrule-row"><button type="button" data-mkrule="${esc(apr)}" data-tip="${esc(t('rule.make.tip', { letter }))}">${esc(t('rule.make'))}</button></p>`;
 }
@@ -104,7 +111,7 @@ export function sheetHtml(apr, s, me) {
   if (s.result?.kind === 'done') return `<section class="mkrule done" data-mkapr="${esc(apr)}">${result}</section>`;
   return `<section class="mkrule panel stack" data-mkapr="${esc(apr)}" aria-labelledby="${id('title')}">
     <h3 id="${id('title')}" tabindex="-1">${esc(t('rule.make.title'))}</h3>
-    <p class="hint">${esc(t('rule.make.from', { letter: draft.letter ?? '', effect: draft.effect ?? '' }))}</p>
+    <p class="hint">${esc(fromLine(draft, me))}</p>
     <p><strong>${esc(t(`rule.kind.${f.kind}`))}</strong>${f.system || f.channel ? ` <span class="muted">${esc(f.system || f.channel)}</span>` : ''} <button type="button" class="info" data-tip="${esc(t('rule.make.what.tip'))}" aria-label="${esc(t('tip.button', { term: t(`rule.kind.${f.kind}`) }))}">ⓘ</button></p>
     ${fields}
     ${line(`${pat('rule.make.days', { input: input('days', sentence('rule.make.days'), 60, 'numeric') })} <span class="hint">${esc(t('rule.make.days.hint'))}</span>`)}
@@ -116,9 +123,15 @@ export function sheetHtml(apr, s, me) {
     <details><summary>${esc(t('rule.make.never'))}</summary><ul class="hlist">${NEVER.map((k) => `<li>${esc(t(`rule.never.${k}`))}</li>`).join('')}</ul></details>
     <p class="hint">${esc(t('rule.make.later', { kinds: andList(LATER.map((k) => t(`rule.kind.${k}`))) }))}</p>
     ${result}
-    <div class="row"><button type="button" class="primary" data-mrgo="${esc(apr)}" aria-describedby="${id('need')}"${ok && !s.busy ? '' : ' disabled'}>${esc(t('rule.make.save'))}</button><button type="button" data-mrcancel="${esc(apr)}">${esc(t('rule.make.cancel'))}</button></div>
+    <div class="row"><button type="button" class="primary" data-mrgo="${esc(apr)}" aria-describedby="${id('need')}"${ok && !s.busy && s.result?.kind !== 'stale' ? '' : ' disabled'}>${esc(t('rule.make.save'))}</button><button type="button" data-mrcancel="${esc(apr)}">${esc(t('rule.make.cancel'))}</button></div>
     <p class="hint" id="${id('need')}"${words.length >= 3 ? ' hidden' : ''}>${esc(t('rule.make.need.words'))}</p>
   </section>`;
+}
+/** "From A, which you approved: …", or which {person} approved it (CTO: any owner, any approved card). */
+function fromLine(draft, me) {
+  const by = draft.approvedBy ?? null;
+  const vars = { letter: draft.letter ?? '', effect: draft.effect ?? '' };
+  return !by?.id || by.id === me ? t('rule.make.from', vars) : t('rule.make.from.other', { ...vars, person: personWord(by.id, by.name, me) });
 }
 const fieldErr = (k, errors) => ({ each: ['rule.make.err.amount', 'rule.make.err.total'], total: ['rule.make.err.amount', 'rule.make.err.total', 'rule.make.err.all'], all: ['rule.make.err.amount', 'rule.make.err.all'], n: ['rule.make.err.amount'], days: ['rule.make.err.days'] }[k] ?? []).some((e) => errors.includes(e));
 
@@ -128,7 +141,7 @@ const fieldErr = (k, errors) => ({ each: ['rule.make.err.amount', 'rule.make.err
  */
 export async function makeRule({ api, stepUp, s }) {
   const { form, days, words } = formOf(s);
-  const body = { ...form, words, days, key: `rule-${Date.now().toString(36)}` };
+  const body = { ...form, words, days, approval: s.draft.approval, key: `rule-${Date.now().toString(36)}` };
   let r = await api('/v1/team/standing-rules', body);
   if (r.status === 401 && /step-up-required$/.test(r.data?.type ?? '')) {
     // The passkey dialog says how long it lasts too (security L22m low).
@@ -137,8 +150,10 @@ export async function makeRule({ api, stepUp, s }) {
   }
   if (r.ok && r.data?.id) {
     const date = r.data.expiresAt ? new Date(r.data.expiresAt).toLocaleDateString([], { day: 'numeric', month: 'short' }) : '';
-    return { kind: 'done', text: t('rule.made', { n: r.data.number ?? '', date }) };
+    return { kind: 'done', made: { id: r.data.id, number: r.data.number ?? null }, text: t('rule.made', { n: r.data.number ?? '', date }) };
   }
+  // Already made from this approval, here or in another window: say which, and make nothing (qa-web L22m D1).
+  if (r.status === 409 && /rule-exists$/.test(r.data?.type ?? '') && r.data.number) return { kind: 'done', made: { id: r.data.id ?? null, number: r.data.number }, text: t('rule.make.done', { n: r.data.number }) };
   if (r.status === 409) return { kind: 'stale', text: t('rule.make.stale') };
   return { kind: 'failed', text: t('rule.make.failed') };
 }

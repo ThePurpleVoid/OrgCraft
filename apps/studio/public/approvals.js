@@ -50,9 +50,20 @@ function ruleLineMarked(form) {
   const period = form.period ? t(`rule.period.${form.period}`) : null;
   const base = fill(`rule.${form.kind}`, { amount: form.maxEach != null ? money(form.maxEach, form.currency) : null, total: form.total != null ? money(form.total, form.currency) : null, all: form.all != null ? money(form.all, form.currency) : null, system: form.system, channel: form.channel, n: form.n, period });
   // Every field a covered call may carry, so the line never reads narrower than the rule (security sev 2, code review).
-  const fixed = Object.entries(form.fixed ?? {}).map(([field, value]) => t('rule.part.with', { field: mark(field), value: String(value) }));
+  const name = (field) => mark(fieldName(form, field));
+  const fixed = Object.entries(form.fixed ?? {}).map(([field, value]) => t('rule.part.with', { field: name(field), value: String(value) }));
   const fields = fieldsOf(form);
-  return [base, ...fixed, fields.length ? t('rule.part.fields', { fields: fields.map(mark).join(', ') }) : null].filter(Boolean).join(' · ');
+  return [base, ...fixed, fields.length ? t('rule.part.fields', { fields: fields.map(name).join(', ') }) : null].filter(Boolean).join(' · ');
+}
+
+/**
+ * A field as people read it (CPO rule.part.fields.names): the label its system gives it when the form carries one,
+ * else the name with _ and - (and camelCase) as spaces, lowercase: customer_email is "customer email".
+ */
+export function fieldName(form, field) {
+  const label = form?.labels?.[field];
+  if (typeof label === 'string' && label.trim()) return label.trim();
+  return String(field).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_\-.]+/g, ' ').trim().toLowerCase();
 }
 
 /** Where the field names come from, for the fields tooltip: the rule's system, else its channel, else the connector. */

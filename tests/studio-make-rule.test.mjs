@@ -15,6 +15,10 @@ test('each currency keeps its own minor units', () => {
   assert.equal(toMinor('2.5', 'KWD'), 2500);
   assert.equal(toMinor('2.125', 'KWD'), 2125);
   assert.equal(toMinor('0', 'USD'), null);
+  assert.equal(toMinor('1,000', 'USD'), 100000, 'thousands (qa-web D3)');
+  assert.equal(toMinor('1 000.50', 'USD'), 100050);
+  assert.equal(toMinor('25,50', 'USD'), 2550, 'a lone comma is a decimal point');
+  assert.equal(toMinor('1,000', 'JPY'), 1000);
   assert.equal(major(2500, 'JPY'), '2500');
   assert.equal(major(2500, 'KWD'), '2.500');
   assert.equal(major(2000, 'KWD'), '2');
