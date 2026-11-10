@@ -32,7 +32,7 @@ test('the pin is refused beside a database, beside sign-in, and when it is not a
     assert.equal(r.code, 2, JSON.stringify(env));
     assert.match(r.err, /for local mode only/);
   }
-  for (const env of [{ AGENT_TEAM_GITHUB_INSTALLATION_ID: '12ab' }, { AGENT_TEAM_GITHUB_INSTALLATION_ID: '0' }, { ...pin, AGENT_TEAM_GITHUB_REPOS: 'not a repo' }, { AGENT_TEAM_GITHUB_REPOS: 'a/b' }]) {
+  for (const env of [{ AGENT_TEAM_GITHUB_INSTALLATION_ID: '12ab' }, { AGENT_TEAM_GITHUB_INSTALLATION_ID: '0' }, { AGENT_TEAM_GITHUB_INSTALLATION_ID: '9999999999999999' }, { ...pin, AGENT_TEAM_GITHUB_REPOS: 'not a repo' }, { AGENT_TEAM_GITHUB_REPOS: 'a/b' }]) {
     const r = await run(env);
     assert.equal(r.code, 2, JSON.stringify(env));
   }

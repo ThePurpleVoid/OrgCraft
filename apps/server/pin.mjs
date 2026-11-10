@@ -22,7 +22,7 @@ export function installationPin(env, { host = '127.0.0.1', tenant = 'local' } = 
     return null;
   }
   if (env.DATABASE_URL || signInOn(env)) throw new Error('AGENT_TEAM_GITHUB_INSTALLATION_ID is for local mode only (no DATABASE_URL, no sign-in); remove it');
-  if (!/^[1-9]\d{0,15}$/.test(pinned)) throw new Error('AGENT_TEAM_GITHUB_INSTALLATION_ID must be a GitHub installation id (a number)');
+  if (!/^[1-9]\d{0,15}$/.test(pinned) || !Number.isSafeInteger(Number(pinned))) throw new Error('AGENT_TEAM_GITHUB_INSTALLATION_ID must be a GitHub installation id (a number)');
   let repos = null;
   if (env.AGENT_TEAM_GITHUB_REPOS) {
     repos = String(env.AGENT_TEAM_GITHUB_REPOS).split(',').map((s) => s.trim()).filter(Boolean);
