@@ -16,7 +16,7 @@ async function person(gh, browser, user) {
   const key = authenticator({ origin: ORIGIN, rpId: RP });
   const added = await b.call('POST', '/me/passkeys', { name: `${user.login}'s laptop`, credential: key.create((await b.call('GET', '/me/passkeys/options')).body) });
   assert.equal(added.status, 201, JSON.stringify(added.body));
-  const su = async (scope) => (await b.call('POST', '/auth/step-up', { webauthn: key.get((await b.call('GET', '/auth/step-up/challenge')).body), ...(scope ? { scope } : {}) })).body.token;
+  const su = async (scope) => (await b.call('POST', '/auth/step-up', { webauthn: key.get((await b.call('GET', `/auth/step-up/challenge${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`)).body), ...(scope ? { scope } : {}) })).body.token;
   const me = (await b.call('GET', '/me')).body.id;
   return { b, key, su, me };
 }

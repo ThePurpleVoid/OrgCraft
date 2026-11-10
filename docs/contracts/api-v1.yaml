@@ -757,7 +757,8 @@ paths:
   /auth/step-up/challenge:
     get:
       tags: [me]
-      summary: "Passkey step-up options (PublicKeyCredentialRequestOptionsJSON, userVerification required): the person's passkeys and a challenge for one use within 2 minutes. 409 (problem type no-passkey) when they have none"
+      summary: "Passkey step-up options (PublicKeyCredentialRequestOptionsJSON, userVerification required): the person's passkeys and a challenge for one use within 2 minutes. 409 (problem type no-passkey) when they have none. ?scope=<scope> makes the challenge for that one change (the options echo `scope`): POST /auth/step-up with this challenge mints only that scope, and an unscoped challenge mints only an unscoped token (401 step-up-failed otherwise; 400 for a malformed scope)"
+      parameters: [{ name: scope, in: query, required: false, schema: { type: string, pattern: "^[a-z][a-z-]{0,30}:[A-Za-z0-9_-]{1,120}$" } }]
       responses: { "200": { description: Options, content: { application/json: { schema: { type: object } } } } }
   /me/passkeys:
     get: { tags: [me], summary: My passkeys, responses: { "200": { description: Passkeys, content: { application/json: { schema: { type: object, properties: { passkeys: { type: array, items: { $ref: "#/components/schemas/Passkey" } } } } } } } } }

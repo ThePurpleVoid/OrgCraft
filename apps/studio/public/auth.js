@@ -173,7 +173,8 @@ export async function addPasskey(name, stepUpHeader = {}) {
 
 /** One passkey assertion traded for one su_ token. Resolves { token } or { error }. */
 export async function passkeyStepUp(scope) {
-  const ch = await call('GET', '/v1/auth/step-up/challenge');
+  // The challenge is made for this scope (the passkey signs it), and the server mints only that scope from it.
+  const ch = await call('GET', `/v1/auth/step-up/challenge${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`);
   if (!ch.ok) return { error: ch.data.error ?? `HTTP ${ch.status}` };
   let cred;
   try { cred = await navigator.credentials.get({ publicKey: requestOptions(ch.data) }); } catch (e) { return { error: ceremonyError(e) }; }
