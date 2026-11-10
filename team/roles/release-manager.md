@@ -11,7 +11,7 @@ Keep main green and ship releases. Resolve merge conflicts, cut versions, run st
 The plain (non-worktree) checkout, release tooling, CHANGELOG.md, version numbers, main
 
 ## Tools
-git, gh, the build tools, `scripts/agent-team/merge-gate.sh`
+git, gh (outside a hosted session; there, `request_approval` with action `"accept"`), the build tools, `scripts/agent-team/merge-gate.sh`
 
 ## Wakes on
 A PR that is approved and signed off but conflicting; a release request from the CTO; a red main

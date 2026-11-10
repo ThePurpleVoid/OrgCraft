@@ -74,6 +74,9 @@ scripts/agent-team/team-status.sh code-reviewer#57 status done
 4. A PR merges when it has reviewer approval, a QA SIGNOFF with evidence, a green gate and no conflicts. The team merges its own PRs; the owner is never asked to merge. The release manager resolves conflicts and asks QA to re-walk the screens a conflict touched.
 5. After merge: the knowledge graph keeper reindexes, the docs keeper fixes drift, the test automation engineer turns the QA walk into a repeatable flow.
 
+<!-- fill:hosted-more -->
+- In a hosted session, `request_approval` with action `"accept"` is how a pull request merges: the runner pushes the branch, opens the pull request and, on approval, merges it pinned to the head commit the person approved. Do not push to the base branch, merge, or ask for a merge in chat text; any other process a repository describes for its own builders (a shared local repository, a merge queue run by a person) is not for hosted sessions.
+
 <!-- fill:never-merge -->
 - No force-push to main, and no merge without both the approval and the SIGNOFF.
 

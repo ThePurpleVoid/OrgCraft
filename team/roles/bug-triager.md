@@ -11,7 +11,7 @@ Take every bug report, dedupe it against open issues, set severity, and route it
 Issue labels
 
 ## Tools
-gh, the code graph, the screens map
+gh (outside a hosted session; there, the team tools), the code graph, the screens map
 
 ## Wakes on
 Any bug report from the owner (through the chief of staff); any BUG message

@@ -2,7 +2,7 @@
 
 Owner: architect. Builder: kit-core-dev. Reviewers: CTO and security-reviewer. Decision: [ADR 0012](../adr/0012-no-repository-start.md), accepted by the owner on 2026-11-09 at 15:33 UTC (A1). Security rules: [ADR 0013](../adr/0013-what-you-see-is-what-you-sign.md) and the vision architecture (project plans, vision/architecture.md) §8. Local PR queue row: L9 in `/mnt/project-files/git/queue.md`.
 
-Written against `main` b27e99d of the shared local repository (`/mnt/project-files/git/orgcraft.git`). File and line references are to that commit.
+Written against `main` b27e99d of the shared local repository (`/mnt/project-files/git/orgcraft.git`). File and line references are to that commit. (The shared local repository is this repository's interim build process, not part of OrgCraft; see CONTRIBUTING.md, "Local PR".)
 
 ## 1. What the owner gets
 

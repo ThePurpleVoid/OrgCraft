@@ -14,6 +14,10 @@ Thanks for helping. The kit is small on purpose: briefs, protocols, a few script
 
 OrgCraft is built by a team defined with OrgCraft. `team/` is the kit's source, the role library every team gets. `.agent-team/` is this repository's own project layer and `docs/team/` is the team generated from it, pinned to the last kit release. Fix a brief for everyone in `team/`; change this repository's team in `.agent-team/`. [docs/product/team.md](docs/product/team.md) explains how that team works.
 
+### "Local PR" in this repository's history
+
+Some commits, the changelog and a few ADRs and specs name a "local PR Lnn" and a shared local repository. That is this repository's own interim process, used while its builders work in a cloud project without direct GitHub access: a person-run queue merges reviewed branches into a shared local repository, and one thread pushes to GitHub. It is not part of OrgCraft. Teams don't use it, and a hosted (runner) session never does: it finishes a change with `request_approval`, action `"accept"`, and the runner pushes, opens the pull request and merges it on approval (`team/protocols.md`, "Hosted sessions").
+
 ## Rules for briefs
 
 - Keep the fields in the same order as `_template.md`, and keep the shared "Every thread, every task" footer word for word (only the slug changes).
