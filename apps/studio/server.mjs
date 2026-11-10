@@ -25,7 +25,7 @@ import { liveSource } from './live.mjs';
 import { changeUrl, localRollout, pendingOf } from './rollout.mjs';
 import { chatSource } from './chat.mjs';
 import { runRequest, RunRefused } from './runs.mjs';
-import { openChangeRequest, openPullRequest, prSupport, pullRequestText } from './pr.mjs';
+import { openChangeRequest, openPullRequest, reviewUrl, prSupport, pullRequestText } from './pr.mjs';
 import { linkHash, resolveMeeting } from './public/links.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -80,7 +80,7 @@ export async function systemsPlan(root, chat) {
   // would change is the control plane's current systems against the pending set.
   const p = there.pending ?? null;
   const pending = p ? {
-    sha: p.sha, pr: p.pr ?? null, url: Number.isInteger(p.pr) && p.pr > 0 ? changeUrl(root, { pr: p.pr }) : null, contentHash: p.contentHash, ready: !!p.ready, expiresAt: p.expiresAt ?? null,
+    sha: p.sha, pr: p.pr ?? null, url: Number.isInteger(p.pr) && p.pr > 0 ? changeUrl(root, { pr: p.pr }) : null, openUrl: Number.isInteger(p.pr) && p.pr > 0 ? null : reviewUrl(root), contentHash: p.contentHash, ready: !!p.ready, expiresAt: p.expiresAt ?? null,
     ours: p.contentHash === canonicalSystemsHash(here),
     items: systemsCapability(there, p), lost: systemsLost(there, p),
   } : null;

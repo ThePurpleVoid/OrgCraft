@@ -58,6 +58,15 @@ export function openChangeRequest(root, env = process.env) {
   return { pr: j?.state === 'OPEN' && Number.isInteger(j.number) && j.number > 0 ? j.number : null, branch };
 }
 
+/** The page to open a change for review of the branch HEAD is on (GitHub compare), or null: no branch or another host. */
+export function reviewUrl(root, env = process.env) {
+  const branch = run('git', ['-C', root, 'symbolic-ref', '--short', 'HEAD'], { env }).out;
+  const page = branch ? githubRepo(run('git', ['-C', root, 'remote', 'get-url', 'origin'], { env }).out) : null;
+  if (!page) return null;
+  const base = run('git', ['-C', root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { env }).out.replace(/^origin\//, '');
+  return `${page}/compare/${base ? `${encodeURIComponent(base)}...` : ''}${encodeURIComponent(branch)}?expand=1`;
+}
+
 /**
  * Pushes `branch` to origin (never forced) and opens a pull request into `base` with gh when it is signed in.
  * Returns { state, branch, base, url?, compareUrl?, error?, commands }: state is opened, exists, pushed (no gh, or

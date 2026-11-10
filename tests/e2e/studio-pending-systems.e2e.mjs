@@ -174,7 +174,8 @@ test('Send them now from a pushed branch waits (open PR with its number; none, c
   await page.reload();
   const nochange = await openStart(page);
   await nochange.getByText('The system changes are waiting. Send your published change for review', { exact: false }).waitFor();
-  assert.equal(await nochange.getByRole('link').count(), 0);
+  assert.equal(await nochange.getByRole('link', { name: 'Send it for review' }).getAttribute('href'), 'https://github.com/example/sample-app/compare/more-drive?expand=1');
+  assert.equal(await nochange.getByRole('link', { name: 'See the change' }).count(), 0);
   assert.match(await nochange.locator('button.info').getAttribute('data-tip'), /no change is open for review yet/);
   await page.keyboard.press('Escape');
 
