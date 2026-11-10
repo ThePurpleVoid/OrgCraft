@@ -2,7 +2,7 @@
 // use this period and Withdraw, what a rule can never cover, and the ledger, one line per decision in the person's own
 // words. GET /v1/team/approvals reads all three from the control plane (apps/server/ledger.mjs) through this Studio's
 // server; Withdraw narrows what the team may do, so it needs no passkey. Making a rule starts from an approved card
-// (mockup v20, waiting for the owner's sign-off), so this page has no form for it.
+// in the chat (mockup v20, signed off; make-rule.js), so this page has no form for it.
 import { requestJson } from './env.js';
 import { t, tl } from './i18n.js';
 import { infoButton } from './tooltip.js';
@@ -18,12 +18,17 @@ export function fill(key, vars) {
     .map((p) => p.replace(/\{([^}]+)\}/g, (_, k) => vars[k])).join(' · ');
 }
 
-/** Minor units in the rule's currency: 2000 USD is "$20.00". */
+/** How many minor-unit digits a currency has: 2 for USD, 0 for JPY, 3 for KWD (code review L22m sev3). */
+export function exponentOf(currency = 'USD') {
+  try { return new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits; } catch { return 2; }
+}
+
+/** Minor units in the rule's currency: 2000 USD is "$20", 2000 JPY is "¥2,000", 2000 KWD is "KWD 2". */
 export const money = (minor, currency = 'USD') => {
   // "$20", or "$20.50" when there are cents (CPO §6b; the server says the same).
   // By the currency's own exponent (code review L22m): USD 2 decimals, JPY none, KWD three.
   try {
-    const d = new Intl.NumberFormat([], { style: 'currency', currency }).resolvedOptions().maximumFractionDigits;
+    const d = exponentOf(currency);
     const whole = minor % 10 ** d === 0;
     return new Intl.NumberFormat([], { style: 'currency', currency, ...(whole ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : { minimumFractionDigits: d, maximumFractionDigits: d }) }).format(minor / 10 ** d);
   } catch { return `${minor} ${currency}`; }
@@ -49,9 +54,20 @@ function ruleLineMarked(form) {
   const period = form.period ? t(`rule.period.${form.period}`) : null;
   const base = fill(`rule.${form.kind}`, { amount: form.maxEach != null ? money(form.maxEach, form.currency) : null, total: form.total != null ? money(form.total, form.currency) : null, all: form.all != null ? money(form.all, form.currency) : null, system: form.system, channel: form.channel, n: form.n, period });
   // Every field a covered call may carry, so the line never reads narrower than the rule (security sev 2, code review).
-  const fixed = Object.entries(form.fixed ?? {}).map(([field, value]) => t('rule.part.with', { field: mark(field), value: String(value) }));
+  const name = (field) => mark(fieldName(form, field));
+  const fixed = Object.entries(form.fixed ?? {}).map(([field, value]) => t('rule.part.with', { field: name(field), value: String(value) }));
   const fields = fieldsOf(form);
-  return [base, ...fixed, fields.length ? t('rule.part.fields', { fields: fields.map(mark).join(', ') }) : null].filter(Boolean).join(' · ');
+  return [base, ...fixed, fields.length ? t('rule.part.fields', { fields: fields.map(name).join(', ') }) : null].filter(Boolean).join(' · ');
+}
+
+/**
+ * A field as people read it (CPO rule.part.fields.names): the label its system gives it when the form carries one,
+ * else the name with _ and - (and camelCase) as spaces, lowercase: customer_email is "customer email".
+ */
+export function fieldName(form, field) {
+  const label = form?.labels?.[field];
+  if (typeof label === 'string' && label.trim()) return label.trim();
+  return String(field).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_\-.]+/g, ' ').trim().toLowerCase();
 }
 
 /** Where the field names come from, for the fields tooltip: the rule's system, else its channel, else the connector. */

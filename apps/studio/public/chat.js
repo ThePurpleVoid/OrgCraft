@@ -8,6 +8,7 @@ import { t, tl, ts } from './i18n.js';
 import { infoButton } from './tooltip.js';
 import { personWord, ruleLine } from './approvals.js';
 import { applyPending, droppedLine, readyLine, readyTip, sendSystems, waitingParts, showItems, systemsState } from './systems.js';
+import { buttonHtml, initial, makeRule, sheetHtml } from './make-rule.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -158,6 +159,10 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     runError: null, budget: null, plan: null, shaOpen: new Set(), // approval cards whose full sha is shown // GET /v1/team/budget and /v1/team/run/plan, read when the start dialog opens
     older: [], local: new Set(), // pages fetched with 'Show earlier'; events this page posted
     forbidden: new Set(), // cards the control plane said this person's role may not answer (403)
+    // L22 "Make this a standing rule" (mockup v20): drafts by approval id (null when none can be made), open sheets.
+    drafts: new Map(),
+    mk: new Map(),
+    owner: false,
 
   };
 
@@ -376,8 +381,62 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       ${card.recommendation?.why && !answered ? `<p class="muted why">${esc(card.recommendation.why)}</p>` : ''}
       ${links ? `<p class="links">${links}</p>` : ''}
       ${answered ? `<p class="answer">${esc(answered)}</p>` : `<div class="card-actions">${buttons}</div>`}
+      ${answered ? ruleHtml(card) : ''}
       ${!answered && st.doit?.host === card.id ? doItHtml(st.doit) : ''}
     </article>`;
+  }
+
+  /**
+   * Under an approval a person approved (not a standing rule, nothing held back), for the owner: Make this a standing
+   * rule, when the control plane can draft one of a kind made now; or the sheet, once it is open.
+   */
+  function ruleHtml(card) {
+    if (!st.owner || card.kind !== 'approval' || !card.data?.callsHash) return '';
+    const a = card.answer;
+    const by = typeof a?.by === 'object' ? a.by?.id : a?.by;
+    if (card.state !== 'answered' || a?.option !== 'approve' || /^(rule:|ledger|changed)/.test(String(by ?? ''))) return '';
+    const apr = subjectId(card.subject) || card.data?.approval;
+    if (!apr) return '';
+    if (!st.drafts.has(apr)) {
+      st.drafts.set(apr, undefined);
+      api(`/v1/team/approvals/${encodeURIComponent(apr)}/rule-draft`).then((r) => { st.drafts.set(apr, r.ok && r.data?.form ? r.data : null); if (r.ok && r.data?.form) render(); });
+    }
+    const d = st.drafts.get(apr);
+    if (!d) return '';
+    // Who approved it: the server's word, else the card's own answer (qa-web L22m D2), never assumed to be "you".
+    if (!d.approvedBy && by) d.approvedBy = { id: by, ...(typeof a.by === 'object' && a.by?.name ? { name: a.by.name } : {}) };
+    const m = st.mk.get(apr);
+    return m ? sheetHtml(apr, m, myId()) : buttonHtml(apr, d);
+  }
+  /** Redraws one open sheet in place, keeping the field being typed in and its caret. */
+  function redrawSheet(apr) {
+    const el = log.querySelector(`[data-mkapr="${CSS.escape(apr)}"]`);
+    const m = st.mk.get(apr);
+    if (!el || !m) return render();
+    const keep = keepField();
+    el.outerHTML = sheetHtml(apr, m, myId());
+    keep();
+  }
+  /** Notes which sheet field has the focus (and its caret), and gives back a function that puts it back after a redraw. */
+  function keepField() {
+    const a = document.activeElement;
+    if (!a?.id?.startsWith('mr-') || !log.contains(a)) return () => {};
+    const sel = 'selectionStart' in a && a.type !== 'checkbox' ? [a.selectionStart, a.selectionEnd] : null;
+    const id = a.id;
+    return () => { const b = document.getElementById(id); if (!b) return; b.focus({ preventScroll: true }); if (sel) try { b.setSelectionRange(...sel); } catch { /* not a text field */ } };
+  }
+  async function saveRule(apr) {
+    const m = st.mk.get(apr);
+    if (!m || m.busy) return;
+    m.busy = true; m.result = null; redrawSheet(apr);
+    const result = await makeRule({ api, stepUp, s: m });
+    m.busy = false;
+    m.result = result;
+    // Made (here or elsewhere): the card keeps saying so after the sheet is gone, with no second button.
+    if (result.made?.number) m.draft.made = result.made;
+    render();
+    const el = $(result.kind === 'cancelled' ? `[data-mrgo="${CSS.escape(apr)}"]` : `#mr-result-${CSS.escape(apr)}`, root);
+    el?.focus();
   }
 
   function answerText(e, card) {
@@ -487,6 +546,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     const typing = [...log.querySelectorAll('form[data-stepup] input')].map((i) => ({ card: i.closest('form').dataset.stepup, value: i.value, focused: document.activeElement === i }));
     // A run that is going again (a budget card's Add half again, another tab) has nothing left to refuse.
     if (st.runError === SPENT && (st.run?.state ?? st.summary?.run) === 'running') { st.runError = null; st.raiseNote = null; }
+    const keepRule = keepField();
     log.innerHTML = html + [st.error, st.runError].filter(Boolean).map((m) => {
       if (m !== SPENT) return `<p class="result error" role="alert">${esc(m)}</p>`;
       // Worded as it is drawn: whether today's budget card is still open decides which cap the button raises.
@@ -499,6 +559,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       input.value = t.value;
       if (t.focused) input.focus({ preventScroll: true });
     }
+    keepRule();
     if (atBottom) log.scrollTop = log.scrollHeight;
     renderRun();
   }
@@ -611,7 +672,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
   }
 
   async function load() {
-    if (st.me === undefined) { st.me = null; api('/v1/team/me').then((r) => { if (r.ok && r.data.id) { st.me = r.data.id; render(); } }); }
+    if (st.me === undefined) { st.me = null; api('/v1/team/me').then((r) => { if (r.ok) st.owner = r.data.owner === true; if (r.ok && r.data.id) { st.me = r.data.id; render(); } }); }
     const r = await api('/v1/team/chat');
     st.loaded = true;
     if (r.data.connected === false) { st.connected = false; return render(); }
@@ -933,6 +994,18 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     f.querySelector('input').value = '';
     answer(f.dataset.stepup, f.dataset.option, secret);
   });
+  // The standing-rule sheet: every keystroke updates its values, the error lines and the quoted line.
+  const ruleField = (e) => {
+    const el = e.target;
+    const key = el?.dataset?.mr;
+    const apr = el?.closest?.('[data-mkapr]')?.dataset.mkapr;
+    const m = apr && st.mk.get(apr);
+    if (!key || !m) return;
+    m[key] = el.type === 'checkbox' ? el.checked : el.value;
+    if (m.result?.kind !== 'done') m.result = null;
+    redrawSheet(apr);
+  };
+  log.addEventListener('input', ruleField);
   // Keeps a card's full sha shown across live redraws.
   log.addEventListener('toggle', (e) => {
     const d = e.target.closest?.('details[data-sha-card]');
@@ -950,6 +1023,16 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     }
     if (b.dataset.retry) { const p = st.pending.find((x) => x.clientId === b.dataset.retry); if (p) send(p); return; }
     if (b.id === 'doit') return doIt();
+    if (b.dataset.mkrule) {
+      const apr = b.dataset.mkrule;
+      const d = st.drafts.get(apr);
+      if (!d) return;
+      st.mk.set(apr, initial(d));
+      render();
+      return $(`#mr-title-${CSS.escape(apr)}`, root)?.focus();
+    }
+    if (b.dataset.mrcancel) { const apr = b.dataset.mrcancel; st.mk.delete(apr); render(); return $(`[data-mkrule="${CSS.escape(apr)}"], [data-mkmade="${CSS.escape(apr)}"]`, root)?.focus(); }
+    if (b.dataset.mrgo) return saveRule(b.dataset.mrgo);
     if (b.dataset.card) answer(b.dataset.card, b.dataset.option);
   });
   $('#run-pause', root).onclick = () => control(st.run?.state === 'paused' || st.summary?.run === 'paused' ? 'resume' : 'pause');

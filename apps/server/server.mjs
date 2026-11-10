@@ -737,6 +737,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
       if (!c && m === 'POST') return send(res, 201, await ledger.add(t, team, (await readJson(req, 8 * 1024)) ?? {}, who, stepUp));
       if (c && m === 'DELETE') return send(res, 200, await ledger.withdraw(t, team, c, who));
     }
+    if (a === 'teams' && team && b === 'approvals' && c && parts[5] === 'rule-draft' && !parts[6] && m === 'GET') return send(res, 200, await ledger.draft(t, team, c, who));
     if (a === 'teams' && team && b === 'ledger' && !c && m === 'GET') return send(res, 200, await ledger.ledger(t, team, { limit: url.searchParams.get('limit'), before: url.searchParams.get('before') }));
     // Hooks and triggers (N2, L21).
     // L20: the team's systems (resources.json), set only by an admin with a step-up; runs freeze them.
