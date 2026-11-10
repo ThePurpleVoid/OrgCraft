@@ -140,6 +140,21 @@ jobs:
             /usr/local/libexec/agent-team/setpriv --reuid=10002 --regid=10010 --clear-groups cat /data/runner/deploy-key; then
             echo "the agent user read the deploy key"; exit 1
           fi
+      - name: The runner's own git reaches GitHub over ssh with the deploy key and the image's known_hosts (F-B1)
+        if: hashFiles('apps/runner/Dockerfile') != ''
+        run: |
+          # The runner's git (worktree.mjs) with the entrypoint's gitconfig, as the runner user. The throwaway key is
+          # not on any repository, so GitHub must refuse the key: that answer means the host key was checked against
+          # the image's known_hosts and the deploy key was offered. "Host key verification failed" is the F-B1 bug.
+          docker run --rm -v runner-keys-ci:/data agent-team-runner:ci node --input-type=module -e '
+            import { git, useGitConfig, effectiveSshCommand } from "/app/apps/runner/worktree.mjs";
+            useGitConfig("/data/runner/gitconfig");
+            console.log("sshCommand:", effectiveSshCommand());
+            try { await git("/tmp", "ls-remote", "https://github.com/ThePurpleVoid/OrgCraft.git"); console.log("answered"); }
+            catch (e) { console.log(String(e.stderr ?? e.message)); }' 2>&1 | tee ssh.txt
+          grep -q 'deploy-key' ssh.txt
+          if grep -q 'Host key verification failed' ssh.txt; then echo "F-B1: the runner's git does not use the image's known_hosts"; exit 1; fi
+          grep -Eq 'Permission denied \(publickey\)|answered' ssh.txt
 
       - uses: actions/setup-node@v4
         if: hashFiles('apps/runner/Dockerfile') != ''

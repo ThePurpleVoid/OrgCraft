@@ -93,7 +93,7 @@ test('demo steps 7, 8 and 13: the first publish, then a small change with Widens
   const text = await widens.textContent();
   assert.match(text, /^Widens access/);
   assert.match(text, /Backend dev can work on up to 2 tasks at once \(was 1\)/);
-  assert.match(text, /needs your passkey/);
+  assert.match(text, /needs your approval passphrase/);
   assert.ok(await sheet(page).evaluate((d) => d.querySelector('#widens').compareDocumentPosition(d.querySelector('#sheet-checks')) & Node.DOCUMENT_POSITION_FOLLOWING), 'Widens access is above the checks');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'publish-sheet-desktop-light.png') });
 

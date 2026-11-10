@@ -2,7 +2,7 @@
 // The M3 dry run (exit test, Pass A): the control plane, the Studio and a runner with a scripted fake model, against
 // a fresh team repository whose "GitHub" is a bare repository on disk. No model, no key, no GitHub, no cost.
 //
-//   node tools/dry-run/m3.mjs up [--dir <folder>] [--port 4849] [--studio-port 4848] [--runner process|docker]
+//   node tools/dry-run/m3.mjs up [--dir <folder>] [--port 4849] [--studio-port 4848] [--runner process|docker] [--store repo|managed]
 //       starts everything and prints the Studio link and the step-up secret; Ctrl-C stops it
 //   node tools/dry-run/m3.mjs signoff  --dir <folder> [--evidence path,...] [--result pass|fail]   QA's SIGNOFF (step 6)
 //   node tools/dry-run/m3.mjs hold     --dir <folder>      an approved merge waits (before step 9b)
@@ -65,13 +65,40 @@ export function teamRepo(dir) {
   return { root, bare };
 }
 
+/**
+ * The work repository of a managed team (ADR 0012, question 2): where the team's work lands, with no team in it. The
+ * team itself lives in the control plane's own store. An empty first commit, pushed to a bare "remote".
+ */
+export function workRepo(dir) {
+  const root = join(dir, 'work'), bare = join(dir, 'origin.git');
+  mkdirSync(root, { recursive: true });
+  git(root, 'init', '-q', '-b', 'main');
+  writeFileSync(join(root, 'README.md'), '# Dry run\n\nThe team\'s work lands here. The team itself is kept by OrgCraft (no repository).\n');
+  git(root, 'add', 'README.md');
+  git(root, 'commit', '-qm', 'The work repository');
+  git(dir, 'init', '-q', '--bare', '-b', 'main', bare);
+  git(root, 'remote', 'add', 'origin', bare);
+  git(root, 'push', '-q', '-u', 'origin', 'main');
+  return { root, bare };
+}
+
+/** The origin the managed Studio routes are checked against (the deployment's public URL in this process). */
+const STUDIO_ORIGIN = 'http://studio.dry-run.invalid';
+
 async function json(res) { const b = await res.json().catch(() => ({})); if (!res.ok) throw new Error(`${res.status}: ${b.error ?? b.title ?? JSON.stringify(b)}`); return b; }
 
 /**
  * Bring the dry run up. Returns { dir, studio, link, cp, secret, adminToken, control, bare, team, down() } and writes
  * <dir>/state.json. `runner`: 'process' (node apps/runner/bin.mjs) or 'docker' (the runner image, host network).
+ * `store`: 'repo' (a team repository, as before) or 'managed' (ADR 0012: no repository; the team starts empty in the
+ * control plane's own store, published through change requests, and the work repository has no team in it). The
+ * managed team always starts empty, so `empty: true` is the only form for now.
  */
-export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), port = 4849, studioPort = 4848, runner = 'process', image = 'agent-team-runner', log = console.error } = {}) {
+export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), port = 4849, studioPort = 4848, runner = 'process', image = 'agent-team-runner', log = console.error, store: kind = 'repo', empty = kind === 'managed' } = {}) {
+  if (!['repo', 'managed'].includes(kind)) throw new Error('store is repo or managed');
+  if (kind === 'managed' && !empty) throw new Error('a managed team starts empty: up({ store: \'managed\', empty: true })');
+  if (kind === 'repo' && empty) throw new Error('empty is for store: managed');
+  const managed = kind === 'managed';
   if (!existsSync(join(KIT, 'apps/server/node_modules'))) throw new Error('run npm ci --prefix apps/server first');
   if (!existsSync(join(KIT, 'apps/runner/node_modules')) && runner === 'process') throw new Error('run npm ci --prefix apps/runner first');
   dir = resolve(dir);
@@ -79,8 +106,8 @@ export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), por
   const control = join(dir, 'control');
   mkdirSync(control, { recursive: true });
   writeFileSync(join(control, 'builder.json'), JSON.stringify(BUILDER));
-  const { root, bare } = teamRepo(dir);
-  log(`[dry-run] team repository in ${root}, its remote ${bare}`);
+  const { root, bare } = managed ? workRepo(dir) : teamRepo(dir);
+  log(managed ? `[dry-run] managed team (no repository); the work repository in ${root}, its remote ${bare}` : `[dry-run] team repository in ${root}, its remote ${bare}`);
 
   // The control plane, in this process, on PGlite in the folder.
   const { openDb } = await import(pathToFileURL(join(KIT, 'apps/server/db.mjs')));
@@ -92,7 +119,7 @@ export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), por
   const adminToken = `adm_${randomBytes(18).toString('base64url')}`;
   const db = await openDb({ dataDir: join(dir, 'control-plane') });
   await store.ensureTenant(db, TENANT);
-  const planeOpts = { db, key: masterKey(randomBytes(32).toString('base64')), tenant: TENANT, adminToken, stepUpVerifier: stepUpVerifier(await hashStepUpSecret(secret)), pollMs: 200 };
+  const planeOpts = { db, key: masterKey(randomBytes(32).toString('base64')), tenant: TENANT, adminToken, stepUpVerifier: stepUpVerifier(await hashStepUpSecret(secret)), pollMs: 200, ...(managed ? { publicUrl: STUDIO_ORIGIN } : {}) };
   // A cut link (a network partition): the runner's reconnects are refused until it is lifted.
   let cut = false;
   const listen = async (at) => {
@@ -105,11 +132,11 @@ export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), por
   const cp = `http://127.0.0.1:${plane.address().port}`;
   log(`[dry-run] control plane on ${cp}`);
   const auth = { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' };
-  await json(await fetch(`${cp}/v1/teams`, { method: 'POST', headers: auth, body: JSON.stringify({ id: TEAM }) }));
+  await json(await fetch(`${cp}/v1/teams`, { method: 'POST', headers: auth, body: JSON.stringify({ id: TEAM, ...(managed ? { backend: 'managed' } : {}) }) }));
 
   // The Studio, pointed at it.
   const { createStudio } = await import(pathToFileURL(join(KIT, 'apps/studio/server.mjs')));
-  const studio = createStudio({ root, env: { ...process.env, AGENT_TEAM_SERVER: cp, AGENT_TEAM_SERVER_TOKEN: adminToken, AGENT_TEAM_SERVER_TEAM: TEAM } });
+  const studio = createStudio({ root, env: { ...process.env, AGENT_TEAM_SERVER: cp, AGENT_TEAM_SERVER_TOKEN: adminToken, AGENT_TEAM_SERVER_TEAM: TEAM, ...(managed ? { AGENT_TEAM_SERVER_MANAGED: '1', AGENT_TEAM_SERVER_ORIGIN: STUDIO_ORIGIN } : {}) } });
   await new Promise((r, j) => { studio.once('error', j); studio.listen(studioPort, '127.0.0.1', r); });
   const studioUrl = `http://127.0.0.1:${studio.address().port}`;
   const link = `${studioUrl}/?t=${studio.launchToken}`;
@@ -143,7 +170,7 @@ export async function up({ dir = mkdtempSync(join(tmpdir(), 'm3-dry-run-')), por
     launch = () => spawn(process.execPath, [bin, 'start', '--data', data], { env, stdio: ['ignore', 'inherit', 'inherit'] });
   }
   child = launch();
-  const state = { dir, link, studio: studioUrl, cp, secret, adminToken, team: TEAM, control, bare, root, runner, pid: child.pid };
+  const state = { dir, link, studio: studioUrl, cp, secret, adminToken, team: TEAM, control, bare, root, runner, pid: child.pid, store: kind };
   writeFileSync(join(dir, 'state.json'), JSON.stringify(state, null, 2), { mode: 0o600 });
   // Ready when the runner has said hello on its connection.
   await waitFor(() => plane.runners?.connected?.(TENANT)?.length, 30_000).catch(() => log('the runner has not connected yet; carrying on'));
@@ -250,10 +277,10 @@ async function main() {
   const { values: o, positionals: [cmd, arg] } = parseArgs({ allowPositionals: true, options: {
     dir: { type: 'string' }, port: { type: 'string', default: '4849' }, 'studio-port': { type: 'string', default: '4848' },
     runner: { type: 'string', default: 'process' }, image: { type: 'string', default: 'agent-team-runner' },
-    evidence: { type: 'string' }, result: { type: 'string', default: 'pass' },
+    evidence: { type: 'string' }, result: { type: 'string', default: 'pass' }, store: { type: 'string', default: 'repo' },
   } });
   if (cmd === 'up') {
-    const h = await up({ dir: o.dir, port: Number(o.port), studioPort: Number(o['studio-port']), runner: o.runner, image: o.image });
+    const h = await up({ dir: o.dir, port: Number(o.port), studioPort: Number(o['studio-port']), runner: o.runner, image: o.image, store: o.store });
     console.log(`\nM3 dry run is up (folder ${h.dir}).\n  Studio:          ${h.link}\n  Step-up secret:  ${h.secret}\n  Control plane:   ${h.cp} (admin token in ${join(h.dir, 'state.json')})\n  Stand-in remote: ${h.bare}\n\nSteer it from another terminal with: node tools/dry-run/m3.mjs <signoff|hold|move-head|release|deploy [pr]|spend <usd>|meeting|meeting-spend <usd>|status> --dir ${h.dir}\nCtrl-C stops it.`);
     const stop = async () => { await h.down(); process.exit(0); };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);

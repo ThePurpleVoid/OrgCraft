@@ -19,6 +19,11 @@
 //                           Local mode makes a secret in --data/step-up.secret
 //   CRON_SECRET             lets a cron call POST /v1/internal/tick (the server also ticks itself every 15 s), and the
 //                           deploy smoke check GET /v1/internal/caller
+//   AGENT_TEAM_GITHUB_INSTALLATION_ID  local mode only (refused with DATABASE_URL or sign-in): the GitHub App
+//                           installation the runner may push and open pull requests through. The runner still checks
+//                           with GitHub before every write that the repository is under it. Install the app on selected
+//                           repositories only
+//   AGENT_TEAM_GITHUB_REPOS optional, "owner/name,owner/name": the pin covers only these repositories
 //   AGENT_TEAM_MODE         local, self-hosted or hosted: the "Where OrgCraft runs" tile (GET /v1/deployment). Default:
 //                           local without DATABASE_URL, self-hosted with it. deploy/fly/server.toml sets hosted
 //
@@ -49,6 +54,7 @@ import { createControlPlane } from './server.mjs';
 import { hashStepUpSecret, stepUpVerifier } from './m3.mjs';
 import { createIdentity, githubUpstream } from './identity.mjs';
 import { resetOwner } from './members.mjs';
+import { installationPin, signInOn } from './pin.mjs';
 
 const { values: o, positionals } = parseArgs({ allowPositionals: true, options: {
   port: { type: 'string', default: process.env.PORT ?? '4849' },
@@ -68,6 +74,10 @@ if (o['hash-step-up']) {
 
 const env = process.env;
 const local = !env.DATABASE_URL;
+const tenantName = env.AGENT_TEAM_TENANT ?? 'local';
+// F-B5: an installation the operator names, local mode only; refused before anything is opened or written.
+let pin = null;
+try { pin = installationPin(env, { host: o.host, tenant: tenantName }); } catch (e) { console.error(`agent-team-server: ${e.message}`); process.exit(2); }
 const data = resolve(o.data);
 /** A value from the environment, or (local mode only) one kept in a private file in the data folder. */
 function keep(name, file, make) {
@@ -80,7 +90,7 @@ function keep(name, file, make) {
 if (local) mkdirSync(join(data, 'db'), { recursive: true, mode: 0o700 });
 const key = masterKey(keep('AGENT_TEAM_MASTER_KEY', 'master.key', () => randomBytes(32).toString('base64')));
 const adminToken = keep('AGENT_TEAM_ADMIN_TOKEN', 'admin.token', () => `adm_${randomBytes(24).toString('base64url')}`);
-const tenant = env.AGENT_TEAM_TENANT ?? 'local';
+const tenant = tenantName;
 // The step-up secret is never kept in plain text by the server: only its scrypt hash (issue #28 D3).
 let stepUpHash = env.AGENT_TEAM_STEP_UP_SECRET_HASH ?? null;
 if (!stepUpHash && local) {
@@ -110,7 +120,7 @@ const email = { studioUrl: env.AGENT_TEAM_STUDIO_URL ?? env.AGENT_TEAM_PUBLIC_UR
 const sinks = startSinks(db, key, { email: { publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '' } });
 const proxy = { hops: Number(env.AGENT_TEAM_PROXY_HOPS ?? 0) || 0, edgeSecret: env.AGENT_TEAM_EDGE_SECRET || null };
 if (proxy.edgeSecret && proxy.edgeSecret.length < 32) { console.error('agent-team-server: AGENT_TEAM_EDGE_SECRET must be at least 32 characters'); process.exit(2); }
-const identity = env.GITHUB_APP_CLIENT_ID ? await createIdentity({
+const identity = signInOn(env) ? await createIdentity({
   db, key, tenant, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', ownerGithub: env.AGENT_TEAM_OWNER_GITHUB ?? null,
   upstream: githubUpstream({ clientId: env.GITHUB_APP_CLIENT_ID, clientSecret: env.GITHUB_APP_CLIENT_SECRET }),
   proxy, githubApp: { slug: env.GITHUB_APP_SLUG || null, webhookSecret: env.GITHUB_WEBHOOK_SECRET || null },
@@ -119,10 +129,16 @@ if (env.GITHUB_WEBHOOK_SECRET && env.GITHUB_WEBHOOK_SECRET.length < 20) { consol
 // The hosted Studio: only with sign-in on and installations to prove; studio.mjs stays off without all of them.
 const studio = identity?.installations?.enabled && env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY
   ? { appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, '\n') } : null;
-const server = createControlPlane({ db, key, tenant, adminToken, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', sinks, stepUpVerifier: verifier, identity, email, studio });
+// The operator's choice is on record like a proven binding (identity_audit), once per start.
+if (pin) await db.system('insert into identity_audit(person, action, detail) values ($1, $2, $3)', [null, 'installation-pinned', { tenant, installation: pin.id, repos: pin.repos, host: o.host }]);
+const server = createControlPlane({ db, key, tenant, adminToken, publicUrl: env.AGENT_TEAM_PUBLIC_URL ?? '', sinks, stepUpVerifier: verifier, identity, email, studio, ...(pin ? { installationsFor: pin.installationsFor } : {}) });
 server.listen(Number(o.port), o.host, () => {
   console.log(`Agent Team control plane on http://${o.host}:${server.address().port}/v1 (${db.kind}${local ? `, data in ${data}` : ''}${identity ? `, sign-in at ${identity.origin}` : ''})`);
   if (local) console.log(`Admin token: ${join(data, 'admin.token')}\nStep-up secret (typed before approving): ${join(data, 'step-up.secret')}`);
+  if (pin) {
+    console.log(`GitHub installation (set by the operator): ${pin.id}${pin.repos ? `, for ${pin.repos.join(', ')}` : ''}`);
+    for (const w of pin.warnings) console.error(`agent-team-server: ${w}`);
+  }
 });
 const stop = async () => { sinks.stop(); server.runners.closeAll(); server.close(); await db.close(); process.exit(0); };
 process.on('SIGINT', stop);

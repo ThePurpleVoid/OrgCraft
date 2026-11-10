@@ -215,3 +215,55 @@ test('L40b: a systems change pending on a managed change switches on when the se
     assert.deepEqual([now.version, now.resources.map((r) => r.id), now.pending], [1, ['slack'], null]);
   }, { publicUrl: ORIGIN });
 });
+
+test('a team can be created managed (ADR 0012): POST /teams { backend: "managed" }; github stays the default; anything else is refused', async () => {
+  await plane(async ({ call, db }) => {
+    const made = await call('POST', '/teams', { id: 'cafe', backend: 'managed' });
+    assert.deepEqual([made.status, made.body.backend], [201, 'managed']);
+    assert.equal((await call('POST', '/teams', { id: 'shop' })).body.backend, 'github');
+    assert.equal((await call('POST', '/teams', { id: 'deli', backend: 'gitlab' })).status, 400);
+    assert.deepEqual((await db.system("select id, backend from teams order by id")).map((r) => [r.id, r.backend]), [['cafe', 'managed'], ['shop', 'github']]);
+    const read = await call('GET', '/teams/cafe/studio/v1/team', undefined, studio());
+    assert.equal(read.body.managed, true, JSON.stringify(read.body).slice(0, 300));
+  }, { publicUrl: ORIGIN });
+});
+
+test('a managed team runs on its accepted version: the request names only where work lands; roles or briefs in it are refused, never merged', async () => {
+  await plane(async ({ call, db, su }) => {
+    const repo = { url: 'file:///tmp/work.git', ref: 'main' };
+    await call('POST', '/teams', { id: 'cafe', backend: 'managed' });
+    await call('POST', '/teams', { id: 'deli' });
+    // Nothing accepted yet: no plan, no run.
+    assert.deepEqual([(await call('GET', '/teams/cafe/run-plan')).body.ok, (await call('GET', '/teams/cafe/run-plan')).body.type], [false, 'not-published']);
+    assert.deepEqual([(await call('POST', '/teams/cafe/runs', { team: { from: 'managed', repo } })).status], [409]);
+    // Only managed teams, and only from and repo.
+    assert.equal((await call('POST', '/teams/deli/runs', { team: { from: 'managed', repo } })).body.type, 'not-managed');
+    for (const extra of [{ roles: [{ slug: 'x', reportsTo: 'owner' }] }, { meetings: [] }, { version: 'a'.repeat(40) }, { summary: 'mine' }, { triggers: [] }]) {
+      const r = await call('POST', '/teams/cafe/runs', { team: { from: 'managed', repo, ...extra } });
+      assert.deepEqual([r.status, r.body.type], [400, 'managed-roster'], Object.keys(extra)[0]);
+    }
+    // Accept a first version (the same steps as the Studio), then the plan and the run are that version.
+    const empty = await call('GET', '/teams/cafe/studio/v1/team', undefined, studio());
+    const tpl = empty.body.templates.find((x) => x.id !== 'almost-empty') ?? empty.body.templates[0];
+    const draft = await call('POST', '/teams/cafe/studio/v1/team/from-template', { id: tpl.id, project: 'Cafe', owner: 'Sam', timezone: 'UTC' }, studio());
+    const first = await call('POST', '/teams/cafe/studio/v1/team/publish', { spec: draft.body.spec, base: null, message: 'Start' }, studio({ 'idempotency-key': 'c1' }));
+    assert.equal((await call('POST', '/teams/cafe/changes/1/accept', {}, await su('accept-change:cafe_1'))).status, 200);
+    const plan = (await call('GET', '/teams/cafe/run-plan')).body;
+    assert.deepEqual([plan.ok, plan.version], [true, first.body.commit]);
+    await call('PUT', '/teams/cafe/budget', { perDay: 100 }, await su());
+    const run = await call('POST', '/teams/cafe/runs', { team: { from: 'managed', repo } });
+    assert.equal(run.status, 201, JSON.stringify(run.body));
+    const [row] = await db.system("select roster from runs where team = 'cafe'");
+    assert.deepEqual([row.roster.version, row.roster.repo, row.roster.frontDoor], [first.body.commit, repo, plan.frontDoor]);
+    assert.equal(row.roster.roles.length, plan.roles);
+  }, { publicUrl: ORIGIN });
+});
+
+test('teamFrom refuses a published ownership.json or team.json that does not parse (code review L31w)', async () => {
+  const { teamFrom } = await import('../../studio/runs.mjs');
+  const brief = '# Chief of staff\n\n**Reports to:** owner\n';
+  const read = (bad) => (p) => (p === 'docs/team/roles/chief-of-staff.md' ? brief : p === bad ? '{nope' : null);
+  const paths = ['docs/team/roles/chief-of-staff.md'];
+  assert.equal(teamFrom({ version: 'a'.repeat(40), paths, read: read(null) }).roles[0].slug, 'chief-of-staff');
+  for (const bad of ['.agent-team/ownership.json', '.agent-team/team.json']) assert.throws(() => teamFrom({ version: 'a'.repeat(40), paths, read: read(bad) }), new RegExp(`${bad.replace(/\./g, '\\.')} in the published team is not valid JSON`));
+});

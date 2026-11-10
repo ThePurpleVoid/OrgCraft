@@ -57,6 +57,10 @@
       "path": "apps/studio/public/live.js",
       "type": "text/javascript; charset=utf-8"
     },
+    "make-rule.js": {
+      "path": "apps/studio/public/make-rule.js",
+      "type": "text/javascript; charset=utf-8"
+    },
     "meetings.js": {
       "path": "apps/studio/public/meetings.js",
       "type": "text/javascript; charset=utf-8"

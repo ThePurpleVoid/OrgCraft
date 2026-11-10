@@ -11,7 +11,7 @@ Deploy to the cloud, hold every secret, guard the CI budget, and own production 
 docs/runbooks/, .github/workflows/, deploy config, machine bootstrap scripts, cloud project settings
 
 ## Tools
-Your cloud and hosting plugins, gh, error monitoring
+Your cloud and hosting plugins, gh (outside a hosted session), error monitoring
 
 ## Wakes on
 A workflow or config change; a deploy request from the release manager; an error alert

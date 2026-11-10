@@ -71,16 +71,16 @@ test('Stop everything in one tap; the banner stays through a run start; Resume n
   // Resume asks for the step-up, bound to lift:<id>; cancelling changes nothing.
   await banner.getByRole('button', { name: 'Resume: Stop everything' }).click();
   const dlg = page.locator('#live-stepup');
-  await dlg.getByText('Resume the team. Use your passkey to confirm. It covers this one action only.').waitFor();
+  await dlg.getByText('Resume the team. Type your approval passphrase to confirm. It covers this one action only.').waitFor();
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.activeElement?.matches?.('#live-banner [data-lift]'));
   assert.equal(cp.live.length, 1, 'nothing lifted without the step-up');
   await banner.getByRole('button', { name: 'Resume: Stop everything' }).click();
-  await dlg.getByLabel('Confirmation code').fill('wrong');
-  await dlg.getByRole('button', { name: 'Use passkey' }).click();
-  await dlg.getByText("That didn't work. Try again, or cancel.").waitFor();
-  await dlg.getByLabel('Confirmation code').fill(cp.stepUpSecret);
-  await dlg.getByRole('button', { name: 'Use passkey' }).click();
+  await dlg.getByLabel('Approval passphrase', { exact: true }).fill('wrong');
+  await dlg.getByRole('button', { name: 'Confirm', exact: true }).click();
+  await dlg.getByText("That passphrase didn't match. Try again, or cancel.").waitFor();
+  await dlg.getByLabel('Approval passphrase', { exact: true }).fill(cp.stepUpSecret);
+  await dlg.getByRole('button', { name: 'Confirm', exact: true }).click();
   await banner.waitFor({ state: 'hidden' });
   assert.equal(cp.live.length, 0);
   assert.equal(cp.runs[0].state, 'running', 'the runs it paused carry on');
@@ -132,9 +132,9 @@ test('SH-10: Pause a teammate from a 360 px phone; it stops at once, and comes b
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'pause-teammate-phone-light.png') });
 
   await page.locator('#live-banner [data-lift]').click();
-  await page.locator('#live-stepup .why', { hasText: `Resume ${name}. Use your passkey` }).waitFor();
-  await page.locator('#live-stepup').getByLabel('Confirmation code').fill(cp.stepUpSecret);
-  await page.locator('#live-stepup').getByRole('button', { name: 'Use passkey' }).click();
+  await page.locator('#live-stepup .why', { hasText: `Resume ${name}. Type your approval passphrase` }).waitFor();
+  await page.locator('#live-stepup').getByLabel('Approval passphrase', { exact: true }).fill(cp.stepUpSecret);
+  await page.locator('#live-stepup').getByRole('button', { name: 'Confirm', exact: true }).click();
   await page.locator('#live-banner').waitFor({ state: 'hidden' });
   assert.equal(cp.live.length, 0);
   // SH-5 on a phone: Stop everything is in More, one tap, a 44 px target.

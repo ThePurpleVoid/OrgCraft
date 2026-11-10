@@ -13,3 +13,6 @@ team.env
 *.env
 !*.env.example
 .vercel-site/
+
+# The real-wire test's tables (scripts/real-wire.sh): kept on the machine that ran it, sent to QA by hand.
+evidence/real-wire/

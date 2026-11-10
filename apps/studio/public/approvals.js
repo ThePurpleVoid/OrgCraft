@@ -2,11 +2,11 @@
 // use this period and Withdraw, what a rule can never cover, and the ledger, one line per decision in the person's own
 // words. GET /v1/team/approvals reads all three from the control plane (apps/server/ledger.mjs) through this Studio's
 // server; Withdraw narrows what the team may do, so it needs no passkey. Making a rule starts from an approved card
-// (mockup v20, waiting for the owner's sign-off), so this page has no form for it.
+// in the chat (mockup v20, signed off; make-rule.js), so this page has no form for it.
 import { requestJson } from './env.js';
-import { t } from './i18n.js';
+import { t, tl } from './i18n.js';
 import { infoButton } from './tooltip.js';
-import { formatMinor } from './money.mjs';
+import { formatMinor, minorDigits } from './money.mjs';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmtDay = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleDateString([], { day: 'numeric', month: 'short' }); };
@@ -17,6 +17,11 @@ const WORDS_CUT = 200;
 export function fill(key, vars) {
   return t(key).split(' · ').filter((p) => [...p.matchAll(/\{([^}]+)\}/g)].every(([, k]) => vars[k] !== undefined && vars[k] !== null))
     .map((p) => p.replace(/\{([^}]+)\}/g, (_, k) => vars[k])).join(' · ');
+}
+
+/** How many minor-unit digits a currency has: 2 for USD, 0 for JPY, 3 for KWD (code review L22m sev3; money.mjs). */
+export function exponentOf(currency = 'USD') {
+  try { return minorDigits(currency); } catch { return 2; }
 }
 
 /** Minor units in the rule's currency: 2000 USD is "$20", 2050 is "$20.50" (CPO §6b; the server says the same). */
@@ -46,9 +51,20 @@ function ruleLineMarked(form) {
   const period = form.period ? t(`rule.period.${form.period}`) : null;
   const base = fill(`rule.${form.kind}`, { amount: form.maxEach != null ? money(form.maxEach, form.currency, form.exponent) : null, total: form.total != null ? money(form.total, form.currency, form.exponent) : null, all: form.all != null ? money(form.all, form.currency, form.exponent) : null, system: form.system, channel: form.channel, n: form.n, period });
   // Every field a covered call may carry, so the line never reads narrower than the rule (security sev 2, code review).
-  const fixed = Object.entries(form.fixed ?? {}).map(([field, value]) => t('rule.part.with', { field: mark(field), value: String(value) }));
+  const name = (field) => mark(fieldName(form, field));
+  const fixed = Object.entries(form.fixed ?? {}).map(([field, value]) => t('rule.part.with', { field: name(field), value: String(value) }));
   const fields = fieldsOf(form);
-  return [base, ...fixed, fields.length ? t('rule.part.fields', { fields: fields.map(mark).join(', ') }) : null].filter(Boolean).join(' · ');
+  return [base, ...fixed, fields.length ? t('rule.part.fields', { fields: fields.map(name).join(', ') }) : null].filter(Boolean).join(' · ');
+}
+
+/**
+ * A field as people read it (CPO rule.part.fields.names): the label its system gives it when the form carries one,
+ * else the name with _ and - (and camelCase) as spaces, lowercase: customer_email is "customer email".
+ */
+export function fieldName(form, field) {
+  const label = form?.labels?.[field];
+  if (typeof label === 'string' && label.trim()) return label.trim();
+  return String(field).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_\-.]+/g, ' ').trim().toLowerCase();
 }
 
 /** Where the field names come from, for the fields tooltip: the rule's system, else its channel, else the connector. */
@@ -98,7 +114,7 @@ export function rulesHtml(data, me, { owner = false } = {}) {
     ${gone.length ? `<details><summary>${esc(t('approvals.rules.withdrawn'))}</summary><ul class="plain rules">${gone.map(row).join('')}</ul></details>` : ''}
     ${later.length ? `<ul class="plain kinds">${later.map((k) => `<li aria-disabled="true"><span>${esc(kindName(k.id))}</span> <span class="pill">${esc(t('rule.unavailable'))}</span></li>`).join('')}</ul>` : ''}
     <h3>${esc(t('rule.never.heading'))}</h3>
-    <ul class="hlist never">${(data.never ?? []).map((n) => `<li>${esc(t(`rule.never.${n}`))}</li>`).join('')}</ul>
+    <ul class="hlist never">${(data.never ?? []).map((n) => `<li>${esc(tl(`rule.never.${n}`))}</li>`).join('')}</ul>
   </section>`;
 }
 

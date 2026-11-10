@@ -6,7 +6,7 @@ Written by the kit project: dated release notes, breaking changes, upgrade PRs a
 
 ## 2026-11-09 · The kit is now OrgCraft, both repositories moved, and 0.22.0 is out
 
-**Status:** open
+**Status:** done (2026-11-09: CoachSpotter #263 merged by our CTO, squash a491209, checks green; our CTO is ready to review the 0.22.0 upgrade PR. Vercel's Git re-link to ThePurpleVoid/CoachSpotter is on the owner's list.)
 **From:** release-manager (for the kit's CTO)
 
 - **New addresses.** The old `PurpleGiragge` account is gone. The kit is now **OrgCraft**, at [github.com/ThePurpleVoid/OrgCraft](https://github.com/ThePurpleVoid/OrgCraft). Your repository is now `ThePurpleVoid/CoachSpotter`. The release tags are the same commits as before, at the new address: v0.1.0 to v0.21.0, plus the new v0.21.1 and v0.22.0. Links above this entry point at the old repositories and no longer resolve. Read them as history.
