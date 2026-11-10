@@ -21,6 +21,14 @@ export const NEVER = ['newrecipient', 'live', 'delete', 'passkey', 'outside'];
 export const NEVER_TOOL = /(delete|remove|destroy|drop|purge|wipe|deploy|publish|release|go_?live|promote)/i;
 export const TOOL = /^mcp__[A-Za-z0-9_-]{1,64}__[A-Za-z0-9_-]{1,64}$/;
 export const FIELD = /^[A-Za-z0-9_]{1,64}$/;
+/**
+ * Fields a rule may never leave free, at creation as well as in a draft (security L22m sev 2): who or where else the
+ * call goes or pays from. Free, any value would do, so a rule for one known recipient could bcc or pay out anywhere.
+ */
+export const NEVER_FREE = /^(cc|bcc|reply_?to|to_.*|to(address|email|number|phone)|destination.*|account.*|iban|wallet.*|address.*|payment_?method.*|source.*|customer.*|email.*|phone.*|url|.*_url|webhook.*|recipients?.*|payee.*)$/i;
+/** Content fields a draft leaves free (security L22m): what is said, not who it goes to; refunds also the charge. */
+export const CONTENT = /^(subject|body|text|message|html|memo|description|notes?|reason|reference|title|idempotency_?key|idempotencyKey)$/i;
+export const CONTENT_REFUND = /^(charge|charge_?id|chargeId|payment_?intent|paymentIntent|payment_intent_id)$/i;
 
 export const int = (v, what, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) => {
   if (!Number.isSafeInteger(v) || v < min || v > max) throw new RuleError(400, `${what} is a whole number from ${min} to ${max}${what.includes('amount') || what === 'maxEach' || what === 'total' ? ' (minor units, like cents)' : ''}`);
@@ -74,6 +82,7 @@ function shapeOf(body, kind) {
   }
   for (const k of free) {
     if (typeof k !== 'string' || !FIELD.test(k) || seen.has(k)) throw new RuleError(400, `free names each input field once, and none already named: ${k}`);
+    if (NEVER_FREE.test(k)) throw new RuleError(400, `${k} says who or where else the call goes, so a rule fixes it to one value or leaves it out; it is never free`, { type: 'rule-never-free' });
     seen.add(k);
   }
   return { fixed: Object.fromEntries(Object.entries(fixed).sort(([a], [b]) => (a < b ? -1 : 1))), free: [...free].sort() };

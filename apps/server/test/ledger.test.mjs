@@ -327,4 +327,14 @@ test('a draft fixes the other target fields to the approved values and leaves on
   assert.ok(!fromDraft({ ...mail, fixed: {}, free: [...mail.free, 'bcc'] }, mail));
   assert.ok(!fromDraft({ ...mail, fixed: { bcc: 'other@evil.example' } }, mail));
   assert.ok(!fromDraft({ ...refund, fixed: {}, free: ['destination', 'reason'] }, refund));
+  // Free is an allowlist of content (security L22m sev 2): a payment's source account and any unknown field keep the
+  // approved value; a refund may leave its charge free.
+  const pay = draftForm('payment', [{ tool: 'mcp__payments__pay', input: { payee: 'acct_bob', amount: 900, currency: 'USD', source: 'acct_ours', memo: 'May', priority: 'high' } }], no);
+  assert.deepEqual([pay.recipientField, pay.fixed, pay.free], ['payee', { priority: 'high', source: 'acct_ours' }, ['memo']]);
+  const charge = draftForm('refund', [{ tool: 'mcp__payments__refund', input: { customer: 'cus_a', amount: 500, currency: 'USD', charge: 'ch_1' } }], no);
+  assert.deepEqual([charge.fixed, charge.free], [{}, ['charge']]);
+  // And at creation, not just in a draft: a free bcc, destination or source is refused whatever the client sends.
+  for (const k of ['bcc', 'cc', 'reply_to', 'destination', 'source', 'account_id', 'iban', 'webhook_url', 'payment_method'])
+    assert.throws(() => ruleForm({ ...RULE, free: [k] }), (e) => e.type === 'rule-never-free', k);
+  assert.doesNotThrow(() => ruleForm({ ...RULE, free: ['note', 'total_items'] }));
 });

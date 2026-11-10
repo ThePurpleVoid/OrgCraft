@@ -15,7 +15,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { canonical } from '../../packages/calls/index.mjs';
 import { Problem, getTeam } from './store.mjs';
-import { KINDS, NEVER, NEVER_TOOL, PERIODS, RuleError, int as intCore, minorDigits, ruleForm as ruleFormCore, ruleLine } from '../../packages/calls/rules.mjs';
+import { CONTENT, CONTENT_REFUND, KINDS, NEVER, NEVER_FREE, NEVER_TOOL, PERIODS, RuleError, int as intCore, minorDigits, ruleForm as ruleFormCore, ruleLine } from '../../packages/calls/rules.mjs';
 
 export { KINDS, NEVER, PERIODS, ruleLine };
 
@@ -102,14 +102,17 @@ export function draftForm(action, calls, no) {
     form = { ...form, amountField, currencyField, currency: input[currencyField].toUpperCase(), maxEach, total: maxEach * 3, system };
     used.add(amountField); used.add(currencyField);
   }
-  // Fields that name who or where else it goes (cc, bcc, destination, account, *_id: the ledger's TARGET) keep the
-  // approved value as `fixed` (code review L22m sev 3): a rule from one message to a known `to` must not let later ones
-  // bcc anyone, nor a refund route to another destination. Only content fields (subject, body, note ...) stay free.
+  // Fields that name who or where else it goes (cc, bcc, destination, source, account ...) keep the approved value as
+  // `fixed` (code review L22m sev 3): a rule from one message to a known `to` must not let later ones bcc anyone, nor a
+  // refund route to another destination. Only content fields (subject, body, note ...) stay free.
   const other = Object.keys(input).filter((k) => !used.has(k) && /^[A-Za-z0-9_]{1,64}$/.test(k));
-  const fixed = Object.fromEntries(other.filter((k) => TARGET.test(k) && input[k] !== null).map((k) => [k, input[k]]));
-  const free = other.filter((k) => !TARGET.test(k));
+  // Security L22m sev 2: free is an allowlist of content fields; every other field keeps its approved value.
+  const content = (k) => !NEVER_FREE.test(k) && (CONTENT.test(k) || (kind === 'refund' && CONTENT_REFUND.test(k)));
+  const free = other.filter(content);
+  const fixed = Object.fromEntries(other.filter((k) => !content(k) && input[k] !== null).map((k) => [k, input[k]]));
+  if (Object.values(fixed).some((v) => !(typeof v === 'string' ? v.length <= 200 : Number.isSafeInteger(v) || typeof v === 'boolean'))) no('nested', 'the call carries a value a rule cannot hold exactly');
   if (other.length > 20 || Object.keys(fixed).length > 20) no('nested', 'the call carries more fields than a rule can name');
-  try { return ruleForm({ ...form, fixed, free }); } catch (e) { return no(e.type === 'rule-never' ? 'never' : 'kind-later', e.message); }
+  try { return ruleForm({ ...form, fixed, free }); } catch (e) { return no(e.type === 'rule-never' ? 'never' : e.status === 400 ? 'nested' : 'kind-later', e.message); }
 }
 
 /** Has this teammate read outside text (a trigger's outside block) since a person last decided for its session? */
