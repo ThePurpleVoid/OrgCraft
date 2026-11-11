@@ -140,7 +140,7 @@ export function createStandingExports({ db, m3, exportOf, deliver = noDeliver, n
           await deliver({ tenant: r.tenant, team: r.team, connection: r.connection, service: cred.service, target: r.target, name: out.name, bytes: out.zip });
           await db.tenant(r.tenant, async ({ q }) => {
             await q('update standing_exports set last_sha = $2, last_at = $3, last_error = null where team = $1', [r.team, out.sha, at]);
-            await q("insert into audit(tenant, team, actor_kind, actor_id, action, target, decision, detail) values ($1, $2, 'system', 'control-plane', 'team.export', $3, 'allowed', $4)", [r.tenant, r.team, r.team, { sha: out.sha, kind: 'standing', target: r.target, bytes: out.zip.length }]);
+            await q("insert into audit(tenant, team, actor_kind, actor_id, action, target, decision, detail) values ($1, $2, 'system', 'control-plane', 'team.export.standing', $3, 'allowed', $4)", [r.tenant, r.team, r.team, { sha: out.sha, kind: 'standing', target: r.target, bytes: out.zip.length }]);
           });
           await emit(r.tenant, r.team, 'team.exported', { by: 'control-plane', sha: out.sha, kind: 'standing', target: r.target }, { kind: 'system', id: 'control-plane', via: 'api' });
           done.written++;

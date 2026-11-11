@@ -154,7 +154,7 @@ export function createChanges({ db, m3, now = () => new Date(), backendFor = nul
       if (who.via !== 'cookie') throw new Problem(403, 'download the team\'s files in the Studio, signed in on the web, with your passkey', { type: 'forbidden' });
       if (!atLeast(who.role, 'admin')) throw new Problem(403, 'only an admin can download the team\'s files', { type: 'forbidden' });
       const b = await backendOf(tenant, team);
-      const [{ n }] = await db.tenant(tenant, ({ q }) => q("select count(*)::int as n from audit where team = $1 and action = 'team.export' and decision = 'allowed' and at > now() - interval '1 day'", [team]));
+      const [{ n }] = await db.tenant(tenant, ({ q }) => q("select count(*)::int as n from audit where team = $1 and action = 'team.export' and decision = 'allowed' and detail->>'kind' = 'download' and at > now() - interval '1 day'", [team]));
       if (n >= EXPORTS_PER_DAY) throw new Problem(429, `this team's files were downloaded ${n} times in the last day; try again tomorrow`, { type: 'rate-limited' });
       await m3.requireStepUp(tenant, String(who.principal), stepUp, `Downloading all of ${team}'s files and history`, exportScope(team));
       const out = await b.exportZip({ team }).catch((e) => { throw e?.status ? new Problem(e.status, e.message, e.type ? { type: e.type } : undefined) : e; });

@@ -106,7 +106,10 @@ test('export: at most 10 a day per team, and never through an app token or for a
   assert.equal(empty.status, 409);
   assert.equal((await empty.json()).type, 'empty');
   await twoVersions(db);
-  for (let i = 0; i < 10; i++) await db.system("insert into audit(tenant, team, actor_kind, actor_id, action, target, decision) values ('acme', 'shop', 'person', 'x', 'team.export', 'shop', 'allowed')");
+  // The standing export's own writes never use up the download quota (code review L9d sev3).
+  for (let i = 0; i < 12; i++) await db.system("insert into audit(tenant, team, actor_kind, actor_id, action, target, decision, detail) values ('acme', 'shop', 'system', 'control-plane', 'team.export.standing', 'shop', 'allowed', '{\"kind\":\"standing\"}')");
+  assert.equal((await download(o.b, { 'x-step-up': await o.su('export:shop') })).status, 200, 'twelve standing writes today, and the admin can still download');
+  for (let i = 0; i < 9; i++) await db.system("insert into audit(tenant, team, actor_kind, actor_id, action, target, decision, detail) values ('acme', 'shop', 'person', 'x', 'team.export', 'shop', 'allowed', '{\"kind\":\"download\"}')");
   const many = await download(o.b, { 'x-step-up': await o.su('export:shop') });
   assert.equal(many.status, 429);
   assert.equal((await many.json()).type, 'rate-limited');
