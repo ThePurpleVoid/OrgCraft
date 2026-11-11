@@ -83,6 +83,12 @@ test('through the team tool: a handoff by type is stamped with the member, a nam
     const byName = await tool('handoff', { ...handoff, to: 'Maya' });
     assert.deepEqual([byName.status, byName.body.to, byName.body.routedBy], [200, 'support-agent-2', 'name']);
     await runner.next((f) => f.op === 'session.start' && f.body.role === 'support-agent-2');
+    // blocked's needFrom by name, end to end (L17r): stored as the member id.
+    const blk = await tool('blocked', { task: 'Refund', need: 'the EMEA policy', needFrom: 'Ana', meanwhile: 'drafting' });
+    assert.equal(blk.status, 200, JSON.stringify(blk.body));
+    const [bev] = (await call('GET', '/teams/desk/events?type=message.blocked')).body.events;
+    assert.equal(bev.data.needFrom, 'support-agent-3');
+    assert.equal((await tool('blocked', { task: 'Refund', need: 'x', needFrom: 'Zed', meanwhile: 'y' })).status, 422);
     // A run's roster checks the new fields.
     const bad = await call('POST', '/teams/desk/runs', { team: { roles: [{ slug: 'a', reportsTo: 'owner', handsTo: ['Not An Id'] }] } });
     assert.equal(bad.status, 400);
@@ -96,4 +102,27 @@ test('through the team tool: a handoff by type is stamped with the member, a nam
     const twins = await call('POST', '/teams/desk/runs', { team: { roles: [{ slug: 'boss', reportsTo: 'owner', name: 'Maya' }, { slug: 'x-2', reportsTo: 'boss', name: 'maya' }] } });
     assert.match(twins.body.error, /already called/);
   });
+});
+
+test('blocked needFrom resolves like `to`: a name works; ambiguous, unknown or the sender\'s own name is refused (L17r)', async () => {
+  const { checkTool } = await import('../tools.mjs');
+  const ctx = (sender, r = roster) => ({ role: sender, roster: r.roles.map((x) => x.slug), resolve: (to, msg) => resolveTo(r, to, sender, msg) });
+  const blocked = (needFrom) => ({ task: 'Refund', need: 'the EMEA policy', needFrom, meanwhile: 'drafting the reply' });
+  // By name, by id and by a type with one member, all to the same member id; owner stays owner.
+  for (const asked of ['Maya', 'maya', 'support-agent-2']) assert.equal(checkTool('blocked', blocked(asked), ctx('chief-of-staff')).input?.needFrom, 'support-agent-2', asked);
+  assert.equal(checkTool('blocked', blocked('security-reviewer'), ctx('chief-of-staff')).input?.needFrom, 'security-reviewer');
+  assert.equal(checkTool('blocked', { ...blocked('owner'), recommendation: 'ask legal' }, ctx('chief-of-staff')).input?.needFrom, 'owner');
+  // The sender's own name (or id) is refused, as for `to`.
+  for (const own of ['Maya', 'support-agent-2']) assert.deepEqual(checkTool('blocked', blocked(own), ctx('support-agent-2')).problems, ['a message goes to another teammate, never to yourself'], own);
+  // An unknown name gives the same error as an unknown id.
+  const unknown = (asked) => checkTool('blocked', blocked(asked), ctx('chief-of-staff')).problems;
+  assert.deepEqual(unknown('Zed'), [`Zed is not a teammate, a name or a role on this team (teammates: ${roster.roles.map((r) => r.slug).join(', ')})`]);
+  assert.deepEqual(unknown('Zed').map((p) => p.replace('Zed', 'X')), unknown('zed-9').map((p) => p.replace('zed-9', 'X')));
+  // Ambiguous: two teammates share the name (a run refuses that, but routing never picks silently either).
+  const twins = { ...roster, roles: [...roster.roles, { slug: 'support-agent-4', reportsTo: 'support-lead-us', areas: [], type: 'support-agent', name: 'Maya' }] };
+  assert.match(checkTool('blocked', blocked('Maya'), ctx('chief-of-staff', twins)).problems.join('\n'), /Maya is the name of 2 teammates: .*Pick one by id/);
+  // A type with several is refused like `to` when nothing picks one.
+  assert.match(checkTool('blocked', blocked('support-lead'), ctx('security-reviewer')).problems.join('\n'), /support-lead has 2 teammates/);
+  // Not a name at all.
+  assert.match(checkTool('blocked', blocked('<script>'), ctx('chief-of-staff')).problems.join('\n'), /needFrom must be owner, or a teammate's id, name or role/);
 });
