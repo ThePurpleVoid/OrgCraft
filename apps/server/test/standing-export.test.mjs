@@ -28,7 +28,7 @@ async function signedIn(gh, browser) {
 async function setUp(db, o) {
   await o.b.call('POST', '/teams', { id: 'shop' }, { 'x-step-up': await o.su() });
   await db.system("update teams set backend = 'managed' where id = 'shop'");
-  await db.system("insert into credentials(id, tenant, name, service, grants, created_by) values ('cred_drive000001', 'acme', 'DRIVE', 'google-drive', '{shop/backups}', 'x'), ('cred_drive000002', 'acme', 'DRIVE_TWO', 'google-drive', '{shop/backups}', 'x'), ('cred_slack000001', 'acme', 'SLACK', 'slack', '{shop/chat}', 'x')");
+  await db.system("insert into credentials(id, tenant, name, service, grants, created_by) values ('cred_drive000001', 'acme', 'DRIVE', 'google-drive', '{shop/standing-export}', 'x'), ('cred_drive000002', 'acme', 'DRIVE_TWO', 'google-drive', '{shop/standing-export}', 'x'), ('cred_slack000001', 'acme', 'SLACK', 'slack', '{shop/chat}', 'x')");
   const b = managedBackend({ store: pgObjects(db, 'acme', 'shop'), refs: pgRefs(db, 'acme', 'shop'), autoAccept: true });
   await b.publish({ base: null, changes: [{ path: '.agent-team/team.json', content: '{}\n' }], message: 'One', branch: 'x', pr: { title: 'One' } });
   return b;

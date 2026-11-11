@@ -3,7 +3,8 @@
 // pure functions the gateway's put-file effect calls (gateway.mjs putFile):
 //
 //   where(target)                              -> the parsed place to write, or throws a readable Error
-//   put({ secret, where, name, bytes, send })  -> { id }   (send is the gateway's paced fetch, limited to `hosts`)
+//   put({ secret, where, name, bytes, send, key }) -> { id }  (send is the gateway's paced fetch, limited to `hosts`;
+//                                              key is the effect's key: a put must be safe to repeat with it)
 //
 // The secret is the credential's value, released by the vault to the gateway for this one write (purpose
 // standing-export); a target never stores it, never logs it, and never puts it in an error. Errors name what went
@@ -60,7 +61,7 @@ const googleDrive = {
     if (!DRIVE_FOLDER.test(folder)) throw new Error('the target is not a Google Drive folder id or folder link');
     return { folder };
   },
-  async put({ secret, where, name, bytes, send }) {
+  async put({ secret, where, name, bytes, send, key = null }) {
     let token = String(secret ?? '').trim();
     if (token.startsWith('{')) {
       const v = parseValue(token, 'Google Drive');
@@ -75,8 +76,19 @@ const googleDrive = {
       token = b.access_token;
     }
     if (!token || /\s/.test(token)) throw new Error('the Google Drive credential is empty or malformed');
+    // A multipart upload is not idempotent: one that timed out after Drive kept it would be written again on the retry
+    // (code review L9e sev3). So every upload carries the effect's key as an app property, and is looked up first:
+    // a file in the folder with that key is the earlier try that went through, and is answered instead.
+    if (key) {
+      if (!/^[A-Za-z0-9:._-]{8,124}$/.test(key)) throw new Error('the upload key is not one Drive can tag a file with');
+      const q = `'${where.folder}' in parents and appProperties has { key='orgcraftKey' and value='${key}' } and trashed = false`;
+      const res = await send(`https://www.googleapis.com/drive/v3/files?${new URLSearchParams({ q, fields: 'files(id)', pageSize: '1', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true' })}`, { headers: { authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`Google Drive could not be searched for an earlier copy (${await said(res)})`);
+      const found = (await res.json().catch(() => ({})))?.files?.[0]?.id;
+      if (found) return { id: String(found).slice(0, 200), existing: true };
+    }
     const boundary = `orgcraft-${createHash('sha256').update(bytes).digest('hex').slice(0, 24)}`;
-    const meta = JSON.stringify({ name, parents: [where.folder], mimeType: 'application/zip' });
+    const meta = JSON.stringify({ name, parents: [where.folder], mimeType: 'application/zip', ...(key ? { appProperties: { orgcraftKey: key } } : {}) });
     const body = Buffer.concat([
       Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\ncontent-type: application/zip\r\n\r\n`),
       bytes, Buffer.from(`\r\n--${boundary}--\r\n`),

@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { fresh, key, plane } from './helpers.mjs';
+import { fakeRunner, fresh, key, plane, registerRunner } from './helpers.mjs';
 import * as store from '../store.mjs';
 import { seal } from '../vault.mjs';
 import { createM3 } from '../m3.mjs';
@@ -106,7 +106,7 @@ test('the S3 and Drive puts send what the services expect, and a bad value is ne
 });
 
 /** A workspace with a managed team `shop` that has published once, and a sealed S3 and Drive credential. */
-async function world(db, { grants = ['shop/backups'] } = {}) {
+async function world(db, { grants = ['shop/standing-export'] } = {}) {
   await store.ensureTenant(db, 'acme');
   await db.system("insert into teams(id, tenant, name, backend) values ('shop', 'acme', 'Shop', 'managed'), ('other', 'acme', 'Other', 'managed')");
   const creds = [['cred_s3conn000001', 'S3_BACKUPS', 's3', S3_VALUE], ['cred_drive000001', 'DRIVE', 'google-drive', DRIVE_VALUE]];
@@ -176,7 +176,7 @@ test('put-file: the vault releases the active, granted connection to the gateway
 test('put-file: a connection not granted to the team is refused before any call; a pending target is never written', async () => {
   const db = await fresh();
   try {
-    await world(db, { grants: ['other/backups'] });
+    await world(db, { grants: ['other/standing-export', 'shop/backups'] });
     await db.system("insert into standing_exports(tenant, team, connection, target, cadence, pending_connection, pending_target, pending_cadence, pending_at, pending_by) values ('acme', 'shop', 'cred_s3conn000001', 'shop-backups', 'daily', 'cred_drive000001', '1AbCdEfGhIjKlMn', 'daily', '2026-11-13T00:00:00Z', 'per_owner0001')");
     const f = fakeStorage();
     const { job, vault } = wired(db, f);
@@ -186,7 +186,7 @@ test('put-file: a connection not granted to the team is refused before any call;
     assert.match(st.last_error, /did not release this connection/);
     assert.deepEqual((await db.system("select rule from audit where action = 'secret.release'")).map((x) => x.rule), ['not-granted']);
     // The pending connection (still in its 24 hours) is not released either, even once granted.
-    await db.system("update credentials set grants = '{shop/backups}'");
+    await db.system("update credentials set grants = '{shop/standing-export}'");
     assert.equal(await vault.release({ tenant: 'acme', purpose: 'standing-export', team: 'shop', connection: 'cred_drive000001' }), null);
     // The failed write may be tried again (the effect failed, nothing went), and goes once granted.
     await db.system('update standing_exports set last_try_at = null');
@@ -220,11 +220,74 @@ test('put-file: a slow-down holds the connection\'s keys; a host the connector d
   } finally { await db.close(); }
 });
 
+test('a Drive upload that went through but timed out is found by its key on the retry, never written twice (code review sev3)', async () => {
+  const db = await fresh();
+  try {
+    await world(db);
+    await db.system("insert into standing_exports(tenant, team, connection, target, cadence) values ('acme', 'shop', 'cred_drive000001', '1AbCdEfGhIjKlMn', 'daily')");
+    const kept = [];
+    let slow = true;
+    const f = fakeStorage();
+    f.answer = (u, init, body) => {
+      if (u.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'ya29.fake-access-token' });
+      if (u.pathname === '/drive/v3/files') {
+        const q = u.searchParams.get('q');
+        const hit = kept.find((k) => q.includes(`value='${k.key}'`) && q.includes(`'${k.folder}' in parents`));
+        return Response.json({ files: hit ? [{ id: hit.id }] : [] });
+      }
+      if (u.pathname === '/upload/drive/v3/files') {
+        const meta = JSON.parse(/\{"name".*?\}\}/.exec(body.toString())[0]);
+        kept.push({ id: `drivefile_${kept.length + 1}`, key: meta.appProperties.orgcraftKey, folder: meta.parents[0] });
+        // Drive kept it, but the answer never arrives in time.
+        if (slow) throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+        return Response.json({ id: kept.at(-1).id });
+      }
+      return new Response('no', { status: 404 });
+    };
+    const { job } = wired(db, f);
+    assert.equal((await job.runDue()).failed, 1);
+    assert.equal(kept.length, 1, 'Drive kept the first upload');
+    assert.match((await db.system('select last_error from standing_exports'))[0].last_error, /google-drive did not answer in time/);
+    slow = false;
+    await db.system('update standing_exports set last_try_at = null');
+    assert.deepEqual(await job.runDue(), { promoted: 0, written: 1, failed: 0 });
+    assert.equal(kept.length, 1, 'the retry found the earlier upload and did not POST again');
+    assert.equal(f.seen.filter((x) => x.url.includes('/upload/')).length, 1);
+    const [eff] = await db.system("select state, result from effects where tool = 'put-file:google-drive'");
+    assert.deepEqual([eff.state, eff.result.id], ['done', 'drivefile_1']);
+  } finally { await db.close(); }
+});
+
+test('the export\'s grant is reserved: no system may take the id, and a session never gets the storage key through secret.get (security review)', async () => {
+  await plane(async ({ call, base, su, db }) => {
+    await call('POST', '/teams', { id: 'shop' });
+    assert.equal((await call('PUT', '/teams/shop/budget', { perDay: 1000, sessions: 3 }, await su())).status, 200);
+    const add = await call('POST', '/credentials', { name: 'S3_BACKUPS', service: 's3', value: S3_VALUE, grants: [{ team: 'shop', resource: 'standing-export' }] }, await su('credential:S3_BACKUPS'));
+    assert.equal(add.status, 201, JSON.stringify(add.body));
+    const sys = (id) => ({ resources: [{ id, type: 's3', secrets: ['S3_BACKUPS'], tools: { command: 's3-mcp' } }], bindings: [{ role: 'chief-of-staff', resource: id, permission: 'write' }] });
+    const taken = await call('PUT', '/teams/shop/systems', sys('standing-export'), await su('systems:shop'));
+    assert.deepEqual([taken.status, taken.body.type], [400, 'reserved-id']);
+    assert.equal((await call('PUT', '/teams/shop/systems', sys('backups'), await su('systems:shop'))).status, 200);
+    const r = await registerRunner(call);
+    const runner = await fakeRunner(base, r.key, { runner: r.id });
+    assert.equal((await call('POST', '/teams/shop/runs', { team: { version: 'v1', roles: [{ slug: 'chief-of-staff', reportsTo: 'owner', areas: [], brief: 'Front door.' }] } })).status, 201);
+    await call('POST', '/teams/shop/chat', { text: 'hi' });
+    const st = (await runner.next((f) => f.op === 'session.start')).body;
+    assert.deepEqual(st.secrets, ['S3_BACKUPS'], 'the name is bound');
+    const no = await runner.request('secret.get', { session: st.session, name: 'S3_BACKUPS' });
+    assert.equal(no.op, 'nack', 'but the export\'s grant is not a system\'s: never released to a session');
+    const [refused] = await db.system("select rule from audit where action = 'secret.release' and decision = 'refused' order by at desc limit 1");
+    assert.equal(refused.rule, 'not-granted');
+    assert.ok(!JSON.stringify(no).includes('fake/secret/value'));
+    runner.close();
+  }, { tickMs: 0 });
+});
+
 test('the server wires it: the tick writes a standing export through the gateway to the fake S3', async () => {
   const f = fakeStorage();
   await plane(async ({ db, call }) => {
     await db.system("insert into teams(id, tenant, name, backend) values ('shop', 'acme', 'Shop', 'managed')");
-    await db.system('insert into credentials(id, tenant, name, service, grants, created_by, sealed) values ($1, $2, $3, $4, $5, $6, $7)', ['cred_s3conn000001', 'acme', 'S3_BACKUPS', 's3', ['shop/backups'], 'admin', seal(key, 'acme', 'credential/cred_s3conn000001', S3_VALUE)]);
+    await db.system('insert into credentials(id, tenant, name, service, grants, created_by, sealed) values ($1, $2, $3, $4, $5, $6, $7)', ['cred_s3conn000001', 'acme', 'S3_BACKUPS', 's3', ['shop/standing-export'], 'admin', seal(key, 'acme', 'credential/cred_s3conn000001', S3_VALUE)]);
     await managedBackend({ store: pgObjects(db, 'acme', 'shop'), refs: pgRefs(db, 'acme', 'shop'), autoAccept: true }).publish({ base: null, changes: [{ path: '.agent-team/team.json', content: '{}\n' }], message: 'One', branch: 'x', pr: { title: 'One' } });
     await db.system("insert into standing_exports(tenant, team, connection, target, cadence) values ('acme', 'shop', 'cred_s3conn000001', 'shop-backups/team', 'on-publish')");
     assert.equal((await call('POST', '/internal/tick', undefined, { authorization: 'Bearer cron-secret-for-the-export-deliver-test' })).status, 200);
@@ -322,6 +385,10 @@ test('setting and turning off a standing export appends standing-export.changed 
     const job = createStandingExports({ db, m3, exportOf: async () => null });
     const who = { tenant: 'acme', principal: 'per_owner0001', role: 'owner', via: 'cookie' };
     await assert.rejects(job.put(who, 'other', { connection: 'cred_s3conn000001', target: 'shop-backups', cadence: 'daily' }, 'tok'), (e) => e.type === 'not-granted');
+    // A grant to one of the team's systems is not the export's grant (security review): only <team>/standing-export.
+    await db.system("update credentials set grants = '{shop/backups}' where id = 'cred_s3conn000001'");
+    await assert.rejects(job.put(who, 'shop', { connection: 'cred_s3conn000001', target: 'shop-backups', cadence: 'daily' }, 'tok'), (e) => e.type === 'not-granted');
+    await db.system("update credentials set grants = '{shop/standing-export}' where id = 'cred_s3conn000001'");
     await job.put(who, 'shop', { connection: 'cred_s3conn000001', target: 'shop-backups', cadence: 'daily' }, 'tok');
     await job.remove(who, 'shop', 'tok');
     const evs = (await db.system("select envelope from events where type = 'standing-export.changed' order by seq")).map((r) => r.envelope.data);

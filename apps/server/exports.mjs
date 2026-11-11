@@ -19,6 +19,7 @@
 import { Problem } from './store.mjs';
 import { atLeast } from './roles.mjs';
 import { mint } from './m3.mjs';
+import { EXPORT_GRANT } from './credentials.mjs';
 import { EXPORT_CONNECTORS, EXPORT_SERVICES } from './export-targets.mjs';
 
 export { EXPORT_SERVICES };
@@ -87,7 +88,7 @@ export function createStandingExports({ db, m3, exportOf, deliver = noDeliver, n
       // L9e: the connector says whether it can write there (a Drive folder id or link, an S3 bucket and prefix).
       try { EXPORT_CONNECTORS[cred.service].where(target); } catch (e) { throw new Problem(400, e.message, { type: 'bad-target' }); }
       // L9e (CTO): the vault releases it only to a team it is granted to, so say so now rather than at the first write.
-      if (!(cred.grants ?? []).some((g) => g.startsWith(`${team}/`))) throw new Problem(422, 'this connection is not granted to this team; grant it to the team in Credentials first', { type: 'not-granted' });
+      if (!(cred.grants ?? []).includes(`${team}/${EXPORT_GRANT}`)) throw new Problem(422, `this connection is not granted to this team's standing export; grant it to ${team} for ${EXPORT_GRANT} in Credentials first`, { type: 'not-granted' });
       const by = String(who.principal);
       const cur = await rowOf(who.tenant, team);
       const sameTarget = cur?.connection === connection && cur?.target === target;

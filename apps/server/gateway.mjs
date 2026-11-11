@@ -370,7 +370,7 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
         }
         return res;
       };
-      const out = await conn.put({ secret: value, where, name, bytes: Buffer.from(bytes), send: paced, now: now() });
+      const out = await conn.put({ secret: value, where, name, bytes: Buffer.from(bytes), send: paced, now: now(), key });
       const result = { service, id: out.id, ...(out.etag ? { etag: out.etag } : {}), bytes: bytes.length };
       value = null;
       await m3.tx(tenant, (ctx) => end(ctx, { key, ok: true, result }));
