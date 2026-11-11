@@ -29,5 +29,6 @@ Tools are **MCP**. The manifest is the small part MCP does not cover: what the c
 | `inbound` | Can send events in: webhooks from GitHub, replies to emails |
 | `discover` | Can suggest things for the Studio: folders for owned areas, build files for checks, projects and databases for systems |
 | `work` | Implements the work contract verbs ([work.md](work.md)) for a workspace store |
+| `export` | Can receive a file: `{ "putFile": true, "target": "<what the target names>" }`. Used by a managed team's standing export (Google Drive, S3). The server calls it only through the connector gateway's put-file effect, which has the vault release the connection's value for that one write (purpose `standing-export`: the team's active connection, granted to the team), paces it per connection and per tenant, records it as an effect so a written file is never written twice, and lets it reach only the connector's own hosts over https |
 
 Rules: a manifest never holds a secret value, only names. Values live in the vault and are released only to a session whose role is bound to the resource, or to the notifier for a channel. Every release is audited.

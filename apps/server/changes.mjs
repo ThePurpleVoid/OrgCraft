@@ -14,6 +14,7 @@ import * as core from '../studio/core.mjs';
 import { capabilityDiff, selfCapability } from '../../packages/team-model/index.mjs';
 import { loadKit } from '../../packages/team-model/node.mjs';
 import { mint } from './m3.mjs';
+import { nameOf } from './exports.mjs';
 import { atLeast } from './roles.mjs';
 import { pgObjects, pgRefs } from './managed-db.mjs';
 import { Problem, publishedId } from './store.mjs';
@@ -166,7 +167,8 @@ export function createChanges({ db, m3, now = () => new Date(), backendFor = nul
           if (/^per_/.test(p)) await q('insert into identity_audit(person, action, detail) values ($1, $2, $3)', [p, 'team.exported', { by: String(who.principal), tenant, team, sha: out.sha, kind: 'download' }]);
         }
       });
-      await emit(tenant, team, 'team.exported', { by: String(who.principal), sha: out.sha, kind: 'download' }, who);
+      // byName: the security notice (email, Slack) names the person, never their id (L9e).
+      await emit(tenant, team, 'team.exported', { by: String(who.principal), byName: await nameOf(db, String(who.principal)), sha: out.sha, kind: 'download' }, who);
       return out;
     },
 

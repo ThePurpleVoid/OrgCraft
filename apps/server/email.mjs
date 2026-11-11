@@ -190,6 +190,64 @@ export function compose(event, { teamName, titles = {} } = {}) {
   };
 }
 
+// ---- security notices (L9e; ADR 0013 rule 3) ---------------------------------------------------------------------
+
+/**
+ * Events that are security notices: a copy of the team leaving OrgCraft, or a change to where it goes. They are not a
+ * kind anyone switches on or off: every verified address and linked Slack account of the team's owners and admins
+ * gets them, through quiet hours, with no "turn off" link (L9 sign-off condition 1). A standing export's routine write
+ * to a target already announced 24 hours ahead is not one (it would be a daily email); a person's download is.
+ */
+export function isSecurityNotice(event) {
+  if (event?.type === 'standing-export.changed') return true;
+  return event?.type === 'team.exported' && event.data?.kind === 'download';
+}
+
+/** Where a notice's one link lands: the account page, which lists recent notices and can end every session. */
+export const SECURITY_PATH = '/account.html';
+
+/**
+ * The words of a security notice, shared by email and Slack: { subject, lines, link }, lines as plain text (Slack
+ * escapes them). Names come from the event (byName), never a person's id; target text is quoted and cut.
+ */
+export function securityWords(event, { teamName } = {}) {
+  if (!isSecurityNotice(event)) return null;
+  const d = event.data ?? {};
+  const team = outside(teamName || event.team, 60);
+  const who = outside(d.byName || 'An admin', 60);
+  const notYou = 'Not you, or not expected? Open your account to end every session and check your passkeys.';
+  const link = { label: 'Check your account', path: SECURITY_PATH };
+  if (event.type === 'team.exported') {
+    return { subject: `[${team}] Security: the team's files were downloaded`, lines: [`${who} downloaded all of ${team}'s files and history.`, notYou], link };
+  }
+  const target = outside(d.target ?? 'a folder', 80);
+  if (d.change === 'off') {
+    return { subject: `[${team}] Security: the standing export was turned off`, lines: [`${who} turned off ${team}'s standing export to "${target}".`, 'No more copies go there.', notYou], link };
+  }
+  const when = d.effectiveAt ? `${String(d.effectiveAt).slice(0, 16).replace('T', ' ')} UTC` : 'in 24 hours';
+  return { subject: `[${team}] Security: a copy of the team will go to a new place`, lines: [`${who} set ${team}'s standing export to write a copy of all its files to "${target}".`, `It starts ${when}. Until then an admin can turn it off.`, notYou], link };
+}
+
+/** The security notice email (no unsubscribe: an owner or admin always gets these). */
+export function renderSecurity(key, event, { base, tenant, teamName, now = new Date() }) {
+  const w = securityWords(event, { teamName });
+  if (!w) return null;
+  const root = String(base ?? '').replace(/\/+$/, '');
+  const link = `${root}/v1/email/link?t=${token(key, { t: tenant, p: w.link.path, e: now.getTime() + LINK_TTL.default })}`;
+  const footer = `You get this because you are an owner or admin of ${outside(teamName || event.team, 60)}. Security notices can't be turned off.`;
+  const text = [...w.lines, '', `${w.link.label}: ${link}`, '', '--', footer].join('\n');
+  const html = `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5;max-width:560px">${w.lines.map((l) => `<p style="margin:0 0 8px">${esc(l)}</p>`).join('')}`
+    + `<p style="margin:16px 0"><a href="${esc(link)}" style="display:inline-block;padding:10px 16px;border-radius:6px;background:#1f4fd1;color:#fff;text-decoration:none">${esc(w.link.label)}</a></p>`
+    + `<p style="margin:24px 0 0;font-size:12px;color:#666">${esc(footer)}</p></div>`;
+  return { subject: cutSubject(w.subject), text, html, headers: {} };
+}
+
+/**
+ * Who gets a security notice in a team: the subscription's person is an owner or admin of the workspace now, or it
+ * is the local admin while nobody owns it (stillIn). A member demoted since never gets one.
+ */
+export const securityAudience = (a) => `(${stillIn(a)} and (${a}.principal = 'admin' or exists(select 1 from members m where m.person = ${a}.principal and m.tenant = ${a}.tenant and m.removed_at is null and m.role in ('owner', 'admin'))))`;
+
 /** The verification email (no link, no footer). */
 export function verifyEmail(code) {
   return {
@@ -391,6 +449,7 @@ export const stillIn = (a) => `((${a}.principal = 'admin' and not exists(select 
  */
 export async function deliver(db, key, sink, row, { providers = PROVIDERS, readSecret, publicUrl = '', now = new Date(), fetch: send = fetch } = {}) {
   const event = row.envelope;
+  if (isSecurityNotice(event)) return deliverSecurity(db, key, sink, event, { providers, readSecret, publicUrl, now, fetch: send });
   const kind = kindOfEvent(event?.type);
   if (!kind) return null;
   const { tenant, team } = sink;
@@ -407,6 +466,35 @@ export async function deliver(db, key, sink, row, { providers = PROVIDERS, readS
   const todo = subs.filter((s) => !s.done && !quiet.includes(s));
   if (!todo.length) return null;
   return (await sendTo(db, key, sink, event, kind, todo, { providers, readSecret, publicUrl, now, fetch: send })).error;
+}
+
+/** A security notice to every verified address of the team's owners and admins: no kind, no quiet hours, logged as kind security. */
+async function deliverSecurity(db, key, sink, event, { providers, readSecret, publicUrl, now, fetch: send }) {
+  const { tenant, team } = sink;
+  const subs = await db.tenant(tenant, ({ q }) => q(`select s.id, s.email, (select name from teams where id = s.team) as team_name
+    from email_subscriptions s where s.team = $1 and s.verified_at is not null and ${securityAudience('s')}
+      and not exists(select 1 from email_deliveries d where d.subscription = s.id and d.event = $2 and d.status = 'sent')`, [team, event.id]));
+  if (!subs.length) return null;
+  const log = (s, status, extra = {}) => db.tenant(tenant, ({ q }) => q("insert into email_deliveries(tenant, team, subscription, event, kind, status, provider_id, error) values ($1, $2, $3, $4, 'security', $5, $6, $7)",
+    [tenant, team, s.id, event.id, status, extra.id ?? null, extra.error ?? null]));
+  const provider = providers[sink.provider];
+  const apiKey = provider && sink.secret ? await readSecret(db, key, tenant, sink.secret) : null;
+  if (!provider || !apiKey) {
+    for (const s of subs) await log(s, 'skipped', { error: provider ? `no provider key stored as ${sink.secret}` : `unknown provider ${sink.provider}` });
+    return null;
+  }
+  let error = null;
+  for (const s of subs) {
+    const msg = renderSecurity(key, event, { base: publicUrl, tenant, teamName: s.team_name, now });
+    try {
+      const r = await provider.send({ apiKey, from: sink.sender, to: s.email, ...msg }, { fetch: send });
+      await log(s, 'sent', { id: r?.id });
+    } catch (e) {
+      error = String(e.message ?? e).slice(0, 200);
+      await log(s, 'failed', { error });
+    }
+  }
+  return error;
 }
 
 /** Is it inside this person's quiet hours, in their own time zone? (minutes of the day; may wrap past midnight) */

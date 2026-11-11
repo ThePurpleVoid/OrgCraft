@@ -13,7 +13,7 @@
 // - When Slack fails, a DM goes by email to the person's verified addresses instead (criterion 7), and the health
 //   line says Slack is failing.
 import { randomBytes } from 'node:crypto';
-import { KINDS, LINK_TTL, SUGGESTED, emailFallback, kindOfEvent, money, outside, readToken, roleTitle, stillIn, token } from './email.mjs';
+import { KINDS, LINK_TTL, SUGGESTED, emailFallback, isSecurityNotice, kindOfEvent, money, outside, readToken, roleTitle, securityAudience, securityWords, stillIn, token } from './email.mjs';
 import { Problem, getTeam, id as newId } from './store.mjs';
 
 /** Approval and BLOCKED name what the team is deciding, so a channel starts without them (D55). */
@@ -155,6 +155,26 @@ export function renderSlack(key, msg, { base, tenant, team, teamName, link = nul
       { type: 'section', text: { type: 'mrkdwn', text: msg.lines.join('\n') } },
       { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: msg.button.label }, url }] },
       { type: 'context', elements: [{ type: 'mrkdwn', text: context }] },
+    ],
+  };
+}
+
+/**
+ * A security notice as a DM (L9e): the same words as the email, escaped, one link to the account page, and a context
+ * line that says why it came and that it can't be turned off. Never posted in a channel.
+ */
+export function renderSlackSecurity(key, event, { base, tenant, teamName, now = new Date() }) {
+  const w = securityWords(event, { teamName });
+  if (!w) return null;
+  const root = String(base ?? '').replace(/\/+$/, '');
+  const url = `${root}/v1/email/link?t=${token(key, { t: tenant, p: w.link.path, e: now.getTime() + LINK_TTL.default })}`;
+  const [first, ...rest] = w.lines.map(mrk);
+  return {
+    text: mrk(w.subject),
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: [`*${first}*`, ...rest].join('\n') } },
+      { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: w.link.label }, url }] },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: `${mrk(teamName || event.team)} · Security notice for owners and admins · These can't be turned off` }] },
     ],
   };
 }
@@ -352,6 +372,7 @@ export function createSlack({ db, key, publicUrl = '', redirectUri = '', provide
  */
 export async function deliverSlack(db, key, sink, row, { providers = PROVIDERS, readSecret, publicUrl = '', now = new Date(), fetch: send = fetch, email = {} } = {}) {
   const event = row.envelope;
+  if (isSecurityNotice(event)) return deliverSlackSecurity(db, key, sink, event, { providers, readSecret, publicUrl, now, fetch: send });
   const kind = kindOfEvent(event?.type);
   if (!kind) return { retry: null, failed: false, posted: 0 };
   const { tenant, team } = sink;
@@ -394,6 +415,42 @@ export async function deliverSlack(db, key, sink, row, { providers = PROVIDERS, 
     if (err.permanent && !emailed) { await log(t, 'skipped', error); continue; }
     await log(t, emailed ? 'emailed' : 'failed', error);
     if (!emailed) retry = error;
+  }
+  return { retry, failed, posted };
+}
+
+/**
+ * A security notice by DM to every linked owner and admin of the team, whatever kinds they switched on; never to a
+ * channel. Email sends its own copy to their verified addresses, so a failed DM is retried, not emailed again.
+ */
+async function deliverSlackSecurity(db, key, sink, event, { providers, readSecret, publicUrl, now, fetch: send }) {
+  const { tenant, team } = sink;
+  const [links, [{ name: teamName }]] = await db.tenant(tenant, async ({ q }) => [
+    await q(`select l.id, l.slack_user from slack_links l where l.team = $1 and ${securityAudience('l')}
+      and not exists(select 1 from slack_deliveries d where d.target = l.id and d.event = $2 and d.status in ('sent', 'emailed', 'skipped'))`, [team, event.id]),
+    await q('select name from teams where id = $1', [team]),
+  ]);
+  if (!links.length) return { retry: null, failed: false, posted: 0 };
+  const log = (t, status, error = null) => db.tenant(tenant, ({ q }) => q("insert into slack_deliveries(tenant, team, target, event, kind, status, error) values ($1, $2, $3, $4, 'security', $5, $6)",
+    [tenant, team, t.id, event.id, status, error]));
+  const provider = providers.slack;
+  const bot = provider ? await readSecret(db, key, tenant, sink.secret) : null;
+  if (!bot || !BOT.test(bot)) {
+    for (const t of links) await log(t, 'skipped', bot ? notBot(sink.secret) : `no Slack token stored as ${sink.secret}`);
+    return { retry: null, failed: false, posted: 0 };
+  }
+  let retry = null, failed = false, posted = 0;
+  for (const t of links) {
+    const body = renderSlackSecurity(key, event, { base: publicUrl, tenant, teamName, now });
+    try { await provider.post({ token: bot, channel: t.slack_user, ...body }, { fetch: send }); } catch (err) {
+      failed = true;
+      const error = String(err.message ?? err).slice(0, 200);
+      await log(t, err.permanent ? 'skipped' : 'failed', error);
+      if (!err.permanent) retry = error;
+      continue;
+    }
+    posted++;
+    try { await log(t, 'sent'); } catch (e) { retry = `the delivery log failed: ${String(e.message ?? e).slice(0, 160)}`; }
   }
   return { retry, failed, posted };
 }

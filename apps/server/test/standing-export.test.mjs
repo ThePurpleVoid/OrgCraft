@@ -28,7 +28,7 @@ async function signedIn(gh, browser) {
 async function setUp(db, o) {
   await o.b.call('POST', '/teams', { id: 'shop' }, { 'x-step-up': await o.su() });
   await db.system("update teams set backend = 'managed' where id = 'shop'");
-  await db.system("insert into credentials(id, tenant, name, service, created_by) values ('cred_drive000001', 'acme', 'DRIVE', 'google-drive', 'x'), ('cred_drive000002', 'acme', 'DRIVE_TWO', 'google-drive', 'x'), ('cred_slack000001', 'acme', 'SLACK', 'slack', 'x')");
+  await db.system("insert into credentials(id, tenant, name, service, grants, created_by) values ('cred_drive000001', 'acme', 'DRIVE', 'google-drive', '{shop/backups}', 'x'), ('cred_drive000002', 'acme', 'DRIVE_TWO', 'google-drive', '{shop/backups}', 'x'), ('cred_slack000001', 'acme', 'SLACK', 'slack', '{shop/chat}', 'x')");
   const b = managedBackend({ store: pgObjects(db, 'acme', 'shop'), refs: pgRefs(db, 'acme', 'shop'), autoAccept: true });
   await b.publish({ base: null, changes: [{ path: '.agent-team/team.json', content: '{}\n' }], message: 'One', branch: 'x', pr: { title: 'One' } });
   return b;
@@ -38,17 +38,18 @@ test('standing export: a new target waits 24 hours and is announced; cadence alo
   const o = await signedIn(gh, browser);
   await setUp(db, o);
   const put = async (body, scope = 'standing-export:shop') => o.b.call('PUT', '/teams/shop/standing-export', body, scope === null ? {} : { 'x-step-up': await o.su(scope) });
-  const drive = { connection: 'cred_drive000001', target: 'OrgCraft/shop', cadence: 'daily' };
+  const drive = { connection: 'cred_drive000001', target: '1OrgCraftShopFolder', cadence: 'daily' };
   assert.equal((await put(drive, null)).body.type, 'step-up-required');
   assert.equal((await put(drive, 'export:shop')).status, 401, 'a step-up for the download does not set the standing export');
   assert.equal((await put({ ...drive, connection: 'cred_slack000001' })).body.type, 'wrong-service');
   assert.equal((await put({ ...drive, connection: 'cred_nothere0001' })).status, 404);
   assert.equal((await put({ ...drive, cadence: 'hourly' })).status, 400);
+  assert.equal((await put({ ...drive, target: 'My Drive/backups' })).body.type, 'bad-target', 'the connector checks the target (L9e)');
 
   const on = await put(drive);
   assert.equal(on.status, 200, JSON.stringify(on.body));
   assert.equal(on.body.active, null, 'not active yet');
-  assert.equal(on.body.pending.target, 'OrgCraft/shop');
+  assert.equal(on.body.pending.target, '1OrgCraftShopFolder');
   const wait = new Date(on.body.pending.effectiveAt).getTime() - Date.now();
   assert.ok(wait > 23.9 * H && wait <= 24 * H, `${wait} ms`);
   const me = (await o.b.call('GET', '/me')).body;
@@ -61,17 +62,17 @@ test('standing export: a new target waits 24 hours and is announced; cadence alo
   assert.deepEqual(await job(new Date(Date.now() + 23 * H)), { promoted: 0, written: 0, failed: 0 });
   assert.equal(writes.length, 0, 'nothing written to a target still waiting');
   assert.deepEqual(await job(new Date(Date.now() + 25 * H)), { promoted: 1, written: 1, failed: 0 });
-  assert.deepEqual([writes[0].connection, writes[0].service, writes[0].target], ['cred_drive000001', 'google-drive', 'OrgCraft/shop']);
+  assert.deepEqual([writes[0].connection, writes[0].service, writes[0].target], ['cred_drive000001', 'google-drive', '1OrgCraftShopFolder']);
   assert.match(writes[0].name, /^shop-v1-\d{4}-\d{2}-\d{2}\.zip$/);
   assert.ok(readZip(writes[0].bytes).some((e) => e.name === 'history.bundle'));
   const got = (await o.b.call('GET', '/teams/shop/standing-export')).body;
-  assert.deepEqual([got.active.target, got.active.cadence, got.pending, !!got.last.sha], ['OrgCraft/shop', 'daily', null, true]);
+  assert.deepEqual([got.active.target, got.active.cadence, got.pending, !!got.last.sha], ['1OrgCraftShopFolder', 'daily', null, true]);
 
   // The cadence alone: at once, no wait. Another folder: pending again, the active one keeps going meanwhile.
   const cad = await put({ ...drive, cadence: 'on-publish' });
   assert.deepEqual([cad.body.active.cadence, cad.body.pending], ['on-publish', null]);
-  const moved = await put({ ...drive, target: 'Elsewhere' });
-  assert.deepEqual([moved.body.active.target, moved.body.pending.target], ['OrgCraft/shop', 'Elsewhere']);
+  const moved = await put({ ...drive, target: '1ElsewhereFolder00' });
+  assert.deepEqual([moved.body.active.target, moved.body.pending.target], ['1OrgCraftShopFolder', '1ElsewhereFolder00']);
 
   // Off: at once, pending and all.
   assert.equal((await o.b.call('DELETE', '/teams/shop/standing-export', {}, {})).status, 401);
@@ -84,7 +85,7 @@ test('standing export: a new target waits 24 hours and is announced; cadence alo
 test('standing export job: daily once a day, on-publish when main moves, failures recorded and announced once a day', () => issuer(async ({ db, gh, browser }) => {
   const o = await signedIn(gh, browser);
   const b = await setUp(db, o);
-  await db.system("insert into standing_exports(tenant, team, connection, target, cadence) values ('acme', 'shop', 'cred_drive000001', 'Backups', 'on-publish')");
+  await db.system("insert into standing_exports(tenant, team, connection, target, cadence) values ('acme', 'shop', 'cred_drive000001', '1BackupsFolder0000', 'on-publish')");
   const m3 = createM3({ db });
   let fail = null;
   const writes = [];
@@ -107,7 +108,7 @@ test('standing export job: daily once a day, on-publish when main moves, failure
   const st = (await o.b.call('GET', '/teams/shop/standing-export')).body;
   assert.deepEqual([st.last.error, st.last.sha], [null, (await pgRefs(db, 'acme', 'shop').getRef('main')).sha]);
   const exported = await db.system("select envelope from events where team = 'shop' and type = 'team.exported' order by seq");
-  assert.deepEqual(exported.map((e) => [e.envelope.data.kind, e.envelope.data.target]), [['standing', 'Backups'], ['standing', 'Backups']]);
+  assert.deepEqual(exported.map((e) => [e.envelope.data.kind, e.envelope.data.target]), [['standing', '1BackupsFolder0000'], ['standing', '1BackupsFolder0000']]);
   // Daily: once per UTC day.
   await db.system("update standing_exports set cadence = 'daily'");
   assert.equal((await job(new Date(t0.getTime() + 8 * H))).written, 0, 'already written today');

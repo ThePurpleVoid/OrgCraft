@@ -165,7 +165,7 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, triggers: givenTriggers = null, cronSecret = process.env.CRON_SECRET ?? null, deliverExport = null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION, gateway: givenGateway = null, gatewayLimits = null, vault: givenVault = null }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, triggers: givenTriggers = null, cronSecret = process.env.CRON_SECRET ?? null, deliverExport = null, exportFetch = null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION, gateway: givenGateway = null, gatewayLimits = null, vault: givenVault = null }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
@@ -207,7 +207,10 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     refs: (tn, tm) => pgRefs(db, tn, tm),
   };
   const changes = createChanges({ db, m3, now });
-  const standing = createStandingExports({ db, m3, now, exportOf: (tenant, team) => changes.exportOf(tenant, team), ...(deliverExport ? { deliver: deliverExport } : {}) });
+  // L9e: the real deliver is the gateway's put-file effect, which has the vault release the connection inside the
+  // call (purpose standing-export); `vault` is set further down and only read when the tick runs.
+  const standing = createStandingExports({ db, m3, now, exportOf: (tenant, team) => changes.exportOf(tenant, team),
+    deliver: deliverExport ?? ((a) => gateway.putFile(a, { release: (r) => vault.release(r), ...(exportFetch ? { fetch: exportFetch } : {}) })) });
 
   /**
    * The RunCreate team for a managed team (ADR 0012): { from: 'managed', repo } in, the roster of the accepted main out,
