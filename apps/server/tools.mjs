@@ -110,7 +110,9 @@ export function checkTool(name, input, ctx) {
       break;
     case 'blocked': {
       out = { ...work(), need: f.text('need', { need: true }), needFrom: f.text('needFrom', { need: true, max: 200 }), meanwhile: f.text('meanwhile', { need: true }), to: f.role('to'), recommendation: f.text('recommendation'), unverified: f.unverified() };
-      if (out.needFrom !== undefined && out.needFrom !== 'owner' && !SLUG.test(out.needFrom)) problems.push('needFrom must be a role slug or owner');
+      // needFrom is "owner" or a teammate, named like `to` (an id, a name or a role, L17r): the same routing below
+      // resolves it, refusing a name that is ambiguous, unknown or the sender's own (code review L17r sev 3).
+      if (out.needFrom !== undefined && out.needFrom !== 'owner' && !ROLE.test(out.needFrom) && !NAME.test(out.needFrom)) problems.push('needFrom must be owner, or a teammate\'s id, name or role, such as web-dev or Maya');
       if (out.needFrom === 'owner' && !out.recommendation?.trim()) problems.push('a question for the owner needs your recommendation');
       break;
     }

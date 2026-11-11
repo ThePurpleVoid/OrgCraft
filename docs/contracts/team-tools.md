@@ -79,7 +79,7 @@ Emits `message.signoff`. Wakes `to`. Result: `{ "event": "<id>" }`.
 | --- | --- | --- |
 | `issue` or `task` | yes | |
 | `need` | yes | what is needed |
-| `needFrom` | yes | from whom: a role slug or `owner` |
+| `needFrom` | yes | from whom: `owner`, or a teammate named like `to` (an id, a display name or a role); the server resolves it to one member id the same way and refuses an ambiguous or unknown name, or the sender's own |
 | `meanwhile` | yes | what the role does while it waits (the recommended option, unless the step cannot be undone) |
 | `to` | no | defaults to the caller's `Reports to` role; `owner` questions go to the front door |
 | `recommendation` | when `needFrom` is `owner` | |
