@@ -11,7 +11,12 @@ export const TOOLS_VERSION = 'tools/1';
 const MAX_TEXT = 4000;
 const slug = /^[a-z0-9][a-z0-9-]*$/;
 const meetingId = /^mtg_[A-Za-z0-9_-]{1,60}$/;
-const role = z.string().regex(/^[a-z0-9][a-z0-9-]*(#[A-Za-z0-9._-]+)?$/, 'must be a role slug, such as web-dev or code-reviewer#57');
+const ROLE = /^[a-z0-9][a-z0-9-]*(#[A-Za-z0-9._-]+)?$/;
+const role = z.string().regex(ROLE, 'must be a role slug, such as web-dev or code-reviewer#57');
+// A message's `to` (and blocked's needFrom) may also be a teammate's display name, which the control plane resolves
+// to one member id against the run's roster (team-json-0.22 section 5.3, L17). Same pattern as the server's.
+const NAME = /^[\p{L}\p{N}][\p{L}\p{N} .'’-]{0,59}$/u;
+const teammate = z.string().max(200).refine((s) => ROLE.test(s) || NAME.test(s), 'must be a teammate\'s id, name or role, such as web-dev, Maya or code-reviewer#57');
 const issue = z.union([z.number().int().positive(), z.string().regex(/^#?[1-9]\d*$/)]).transform((v) => Number(String(v).replace(/^#/, '')));
 const posInt = z.number().int().positive();
 const text = (max = MAX_TEXT) => z.string().max(max, `must be at most ${max} characters`);
@@ -49,22 +54,22 @@ export const TOOLS = {
   },
   handoff: {
     description: 'Send a HANDOFF to another role; it wakes that role. Say what changed, how to verify it, and when the receiver is done.',
-    shape: { to: role, ...workItem, changed: need(), verify: need(), doneWhen: need(), branch: text(200).optional(), commit: text(80).optional(), pr: posInt.optional(), artifact: link.optional(), unverified },
+    shape: { to: teammate, ...workItem, changed: need(), verify: need(), doneWhen: need(), branch: text(200).optional(), commit: text(80).optional(), pr: posInt.optional(), artifact: link.optional(), unverified },
     check: needsWorkItem,
   },
   bug: {
     description: 'Send a BUG to the role that owns the thing that is wrong. Evidence (a screenshot or a log) is required.',
-    shape: { to: role, ...workItem, where: need(500), steps: need(), expected: need(), actual: need(), severity: z.number().int().min(1).max(4), evidence: links, build: text(200).optional(), unverified },
+    shape: { to: teammate, ...workItem, where: need(500), steps: need(), expected: need(), actual: need(), severity: z.number().int().min(1).max(4), evidence: links, build: text(200).optional(), unverified },
     check: (a) => needsWorkItem(a) ?? (a.evidence.length ? null : 'evidence needs at least one link: a screenshot or a log'),
   },
   signoff: {
     description: 'Send a SIGNOFF after testing. Evidence (screenshot or log links) is required: a SIGNOFF without evidence is refused. Name the exact version you checked (version: the full commit id, or the document or draft revision, with versionKind), because a sign-off counts only for that version. List in unverified what you pass on without having checked it yourself; an empty list means you checked everything. The runner attaches the calls it saw you run as the evidence behind that.',
-    shape: { to: role, ...workItem, testedOn: need(500), walked: need(), result: z.enum(['pass', 'fail']), evidence: links, pr: posInt.optional(), version: text(200).optional(), versionKind: z.enum(VERSION_KINDS).optional(), unverified },
+    shape: { to: teammate, ...workItem, testedOn: need(500), walked: need(), result: z.enum(['pass', 'fail']), evidence: links, pr: posInt.optional(), version: text(200).optional(), versionKind: z.enum(VERSION_KINDS).optional(), unverified },
     check: (a) => needsWorkItem(a) ?? (a.evidence.length ? null : 'evidence needs at least one link: a screenshot or a log. A SIGNOFF without evidence is refused') ?? versionProblem(a),
   },
   blocked: {
-    description: 'Say you are BLOCKED: what you need, from whom (a role, or owner), and what you do meanwhile. A question for the owner goes to the front door this way, with your recommendation; keep working on it unless the step cannot be undone.',
-    shape: { ...workItem, need: need(), needFrom: z.string().refine((s) => s === 'owner' || slug.test(s), 'must be a role slug or owner'), meanwhile: need(), to: role.optional(), recommendation: text().optional(), unverified },
+    description: 'Say you are BLOCKED: what you need, from whom (a teammate by id, name or role, or owner), and what you do meanwhile. A question for the owner goes to the front door this way, with your recommendation; keep working on it unless the step cannot be undone.',
+    shape: { ...workItem, need: need(), needFrom: z.string().max(200).refine((s) => s === 'owner' || ROLE.test(s) || NAME.test(s), 'must be a teammate\'s id, name or role, or owner'), meanwhile: need(), to: teammate.optional(), recommendation: text().optional(), unverified },
     check: (a) => needsWorkItem(a) ?? (a.needFrom === 'owner' && !a.recommendation?.trim() ? 'a question for the owner needs your recommendation' : null),
   },
   ask_owner: {
@@ -129,10 +134,11 @@ export function checkTool(name, args, ctx) {
   if (!parsed.success) return { problems: parsed.error.issues.map((i) => `${i.path.join('.') || name} ${i.message.replace(/^Invalid input: /, '')}`) };
   const a = parsed.data;
   const problems = [];
+  // Only the plain mistake here: a message to yourself. Whether `to` is a teammate is the control plane's to say: it
+  // resolves an id, a name (any case, so "maya" may be one) or a type against the run's roster and answers with the
+  // teammates to pick from, never picking silently (L17). The runner's roster lists ids only.
   for (const target of [a.to, name === 'blocked' && a.needFrom !== 'owner' ? a.needFrom : null].filter(Boolean)) {
-    const base = target.split('#')[0];
-    if (base === ctx.role) problems.push('a message goes to another role, never to yourself');
-    else if (ctx.roster?.length && !ctx.roster.includes(base)) problems.push(`${base} is not a role on this team (roles: ${ctx.roster.join(', ')})`);
+    if (target.split('#')[0] === ctx.role) problems.push('a message goes to another teammate, never to yourself');
   }
   const p = TOOLS[name].check?.(a, ctx);
   if (p) problems.push(p);

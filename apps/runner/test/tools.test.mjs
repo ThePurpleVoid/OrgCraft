@@ -29,7 +29,12 @@ test('handoff', () => {
   no('handoff', { ...h, issue: undefined }, /issue or a task/);
   no('handoff', { ...h, verify: '  ' }, /verify is required/);
   no('handoff', { ...h, to: 'web-dev' }, /never to yourself/);
-  no('handoff', { ...h, to: 'ghost' }, /not a role on this team/);
+  // L17: a display name or a type goes to the control plane, which resolves it against the run's roster.
+  ok('handoff', { ...h, to: 'Maya' });
+  ok('handoff', { ...h, to: 'José O\u2019Neil' });
+  ok('handoff', { ...h, to: 'support-agent' });
+  no('handoff', { ...h, to: 'ghost@example.com' }, /teammate's id, name or role/);
+  no('handoff', { ...h, to: ' Maya' }, /teammate's id, name or role/);
   no('handoff', { ...h, artifact: 'ftp://x' }, /https:\/\/ URL or a path/);
   no('handoff', { ...h, changed: 'x'.repeat(4001) }, /at most 4000/);
 });
@@ -73,7 +78,8 @@ test('blocked', () => {
   ok('blocked', { issue: 4, need: 'review of the schema', needFrom: 'release-manager', meanwhile: 'writing tests' });
   ok('blocked', { task: 'Model key', need: 'an API key', needFrom: 'owner', meanwhile: 'building against the stub', recommendation: 'a daily cap of 20 USD' });
   no('blocked', { task: 'Model key', need: 'an API key', needFrom: 'owner', meanwhile: 'stub' }, /needs your recommendation/);
-  no('blocked', { task: 'x', need: 'y', needFrom: 'Bob Smith', meanwhile: 'z' }, /role slug or owner/);
+  ok('blocked', { task: 'x', need: 'y', needFrom: 'Bob Smith', meanwhile: 'z' });
+  no('blocked', { task: 'x', need: 'y', needFrom: 'bob@x', meanwhile: 'z' }, /id, name or role, or owner/);
 });
 
 test('ask_owner: the front door only', () => {
