@@ -1420,6 +1420,9 @@ export function mount(el, opts = {}) {
   if (env.embedded) el.classList.add('ats-embedded');
   el.innerHTML = SHELL;
   installTips(el, life.signal);
+  // A page picked before the team has loaded (the shell's buttons show at once; their own listener is wired with the
+  // team) is opened once it has, instead of the click being lost (FLAKE-links: under load, Chat did nothing).
+  el.querySelector('#pages')?.addEventListener('click', (e) => { if (spec) return; const b = e.target.closest('[data-page]'); if (b) initialPage = b.dataset.page; }, { signal: life.signal });
   start();
   return {
     destroy,

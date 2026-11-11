@@ -34,6 +34,8 @@ export function resetIn(now = Date.now()) {
  * while today's budget card is open (its Add half again lifts today only), else "the daily cap" (a new cap from now on).
  */
 const SPENT = Symbol('budget-exhausted');
+/** How long a card reached from a link stays marked. */
+const MARK_MS = 4000;
 export const spentText = (forToday, now) => `Today's budget is spent, so the run can't resume yet. Raise ${forToday ? 'the cap for today' : 'the daily cap'} to resume it now, or resume it after ${resetIn(now)}.`;
 /** Names for the link relations cards use most; any other relation shows as its own words. */
 const LINKS = { pr: 'Pull request', preview: 'Preview', evidence: 'Evidence', issue: 'Issue', log: 'Log', diff: 'Changes' };
@@ -370,7 +372,7 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
       return `<button type="button" class="${style}" data-card="${esc(card.id)}" data-option="${esc(o.id)}">${esc(o.label ?? o.id)}</button>`;
     }).join('');
     const links = (card.links ?? []).map((l) => safeUrl(l.url) && `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.title ?? LINKS[l.rel] ?? human(l.rel ?? 'link'))}</a>`).filter(Boolean).join(' · ');
-    return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}" data-card-id="${esc(card.id)}"${subjectId(card.subject) ? ` data-subject-id="${esc(subjectId(card.subject))}"` : ''}>
+    return `<article class="card-msg k-${known ? esc(card.kind) : 'other'}${answered ? ' answered' : ''}${marked(card.id) ? ' focused' : ''}" data-card-id="${esc(card.id)}"${subjectId(card.subject) ? ` data-subject-id="${esc(subjectId(card.subject))}"` : ''}>
       <div class="card-meta muted">${esc(human(card.kind))}${recLabel ? ` · recommended: ${esc(recLabel)}` : ''}${card.risk ? ` · risk ${esc(card.risk)}` : ''}${card.expires && !answered ? ` · until ${esc(fmtWhen(card.expires))}` : ''}</div>
       ${note ? `<p class="card-note ${note.kind}" role="alert">${esc(note.text)}</p>` : ''}
       ${note?.kind === 'stepup' && !answered ? `<form class="stepup inline-stepup" data-stepup="${esc(card.id)}" data-option="${esc(note.option)}"><span class="stepup-label"><label for="su-${esc(card.id)}">${esc(t('stepup.local.label'))}</label>${infoButton(ts('stepup.local.tip'), esc, t('stepup.local.label'))}</span><span class="row"><input id="su-${esc(card.id)}" type="password" autocomplete="current-password" aria-describedby="su-${esc(card.id)}-hint" required><button type="submit" class="primary">${esc(t('stepup.local.button'))}</button></span><span class="hint" id="su-${esc(card.id)}-hint">${esc(ts('stepup.local.forgot'))}</span></form>` : ''}
@@ -469,8 +471,17 @@ export function createChat({ root, onOpen, runs = true, organization = () => '',
     st.focus = null;
     el.classList.add('focused');
     el.scrollIntoView({ block: 'center' });
-    setTimeout(() => el.classList.remove('focused'), 4000);
+    // The mark is state, not only a class: the next live redraw rebuilds the log, and would drop a class set here
+    // (FLAKE-links). cardHtml draws it while it lasts; when it ends, it comes off whatever element holds the card now.
+    const id = el.dataset.cardId;
+    if (id) st.marked = { id, until: Date.now() + MARK_MS };
+    setTimeout(() => {
+      if (id && st.marked?.id === id) st.marked = null;
+      (id ? log.querySelector(`[data-card-id="${CSS.escape(id)}"]`) : el)?.classList.remove('focused');
+    }, MARK_MS);
   }
+  /** Whether a linked card is still marked (shown "focused") after it was brought into view. */
+  function marked(id) { return !!st.marked && st.marked.id === id && Date.now() < st.marked.until; }
   /** A note above the chat (not in it, so the next refresh does not wipe or repeat it), gone after a while. */
   function flashNote(text) {
     log.parentElement.querySelector('.focus-miss')?.remove();
