@@ -170,6 +170,12 @@ export function createChanges({ db, m3, now = () => new Date(), backendFor = nul
       return out;
     },
 
+    /** The export zip for the standing export's job (exports.mjs): no person, no step-up; the job is the system's. */
+    async exportOf(tenant, team) {
+      const b = await backendOf(tenant, team);
+      return b.exportZip({ team });
+    },
+
     /** POST /v1/teams/{team}/changes/{n}/close */
     async close(who, team, n) {
       const b = await backendOf(who.tenant, team);
