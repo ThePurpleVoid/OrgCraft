@@ -65,7 +65,7 @@ const { Problem } = store;
 const REPORTS_PER_MINUTE = 30;
 
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-const NOTICE_ACTIONS = ['passkey.added', 'passkey.removed', 'passkey.sign-count-flagged', 'step-up.locked', 'sessions.ended', 'member.role-changed', 'member.removed', 'recovery-owner.added', 'recovery-owner.removed'];
+const NOTICE_ACTIONS = ['passkey.added', 'passkey.removed', 'passkey.sign-count-flagged', 'step-up.locked', 'sessions.ended', 'member.role-changed', 'member.removed', 'recovery-owner.added', 'recovery-owner.removed', 'team.exported'];
 
 /** The JSON body for a Problem: { error }, plus RFC 9457 type, title and status when it has a type, plus any body
  *  it carries (a 409 for a changed card carries the current card itself, as api-v1.yaml says). */
@@ -595,7 +595,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     const notices = await db.system(`select action, at, detail from identity_audit where person = $1 and at > now() - interval '30 days'
       and action = any($2) order by at desc, id desc limit 20`, [who.principal, NOTICE_ACTIONS]);
     return { id: who.principal, login: who.session.login, name: who.session.name ?? who.session.login, workspaces: who.workspaces.map((w) => ({ tenant: w.tenant, role: w.role })), passkeys: Number(n), authTime: who.session.authTime,
-      notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}), ...(r.detail?.person ? { person: r.detail.person } : {}), ...(r.detail?.effectiveAt ? { effectiveAt: r.detail.effectiveAt } : {}) })) };
+      notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}), ...(r.detail?.person ? { person: r.detail.person } : {}), ...(r.detail?.effectiveAt ? { effectiveAt: r.detail.effectiveAt } : {}), ...(r.detail?.team ? { team: r.detail.team } : {}), ...(r.action === 'team.exported' && r.detail?.by ? { by: r.detail.by } : {}) })) };
   }
 
   const html = (res, status, body, headers = {}) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'", ...headers }); res.end(body); };
@@ -857,6 +857,11 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         return send(res, 200, await changes.accept(who, team, c, { stepUp, words: typeof body.words === 'string' ? body.words : '' }));
       }
       if (b === 'changes' && c && parts[5] === 'close' && !parts[6] && m === 'POST') { await readJson(req, 4 * 1024); return send(res, 200, await changes.close(who, team, c)); }
+      if (b === 'export' && !c && m === 'GET') {
+        const out = await changes.exportTeam(who, team, { stepUp });
+        res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${out.name}"`, 'content-length': out.zip.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-team-version': out.sha });
+        return res.end(out.zip);
+      }
       if (b === 'rollback' && !c && m === 'POST') return send(res, 201, await changes.rollback(who, team, (await readJson(req, 4 * 1024)) ?? {}));
       if (b === 'rollout' && !c && m === 'GET') return send(res, 200, await store.rollout(db, t, team, { version: url.searchParams.get('version') ?? '', publishedAt: url.searchParams.get('publishedAt') ?? '', now: now() }));
       if (b === 'report-tokens' && !c && m === 'POST') {

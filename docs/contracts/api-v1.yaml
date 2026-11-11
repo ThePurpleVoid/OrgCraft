@@ -232,6 +232,14 @@ paths:
       summary: "Roll a managed team back (spec L9 section 4.5, S2-19): opens a change request whose tree is version `to`'s, on top of main. Its capability diff is against the current main, so access it restores needs the step-up when it is accepted"
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [to], properties: { to: { type: string, pattern: "^[0-9a-f]{40}$" } } } } } }
       responses: { "201": { description: "The new change request, as GET /teams/{team}/changes/{change}" }, "404": { description: "Not a version this team published" } }
+  /teams/{team}/export:
+    parameters: [ { $ref: "#/components/parameters/team" } ]
+    get:
+      x-min-role: admin
+      x-interactive-only: true
+      tags: [studio]
+      summary: "Download a managed team's files and history (spec L9 section 5.1): a zip named <team>-v<number>-<yyyy-mm-dd>.zip with files/ (every file at main), history.bundle (refs/heads/main only, clones with any Git) and README.txt. Signed in on the web only (never a host or an app token), with x-step-up scoped export:<team>; at most 10 a team a day. Audited (team.export), appended as team.exported { by, sha, kind: download }, and shown to every owner and admin as a security notice. x-team-version is main's commit"
+      responses: { "200": { description: "application/zip", content: { application/zip: { schema: { type: string, format: binary } } } }, "401": { description: "step-up-required, scope export:<team>" }, "403": { description: "Not signed in on the web, or not an admin" }, "409": { description: "empty: nothing published yet; not-managed: the team lives in a code host" }, "429": { description: "rate-limited: 10 downloads in the last day" } }
   /teams/{team}/tasks:
     parameters:
       - { $ref: "#/components/parameters/team" }
