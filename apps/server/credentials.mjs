@@ -18,6 +18,7 @@ import { randomBytes } from 'node:crypto';
 import { Problem, getTeam } from './store.mjs';
 import { seal, unseal } from './vault.mjs';
 import { canonicalSystemsHash } from '../../packages/team-model/node.mjs';
+import { EXPORT_SERVICES } from './export-targets.mjs';
 
 const NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SERVICE = /^[a-z0-9][a-z0-9.-]{0,39}$/;
@@ -39,6 +40,11 @@ const SHA = /^[0-9a-f]{40}$/;
 /** How long a pending systems set waits for its pull request to merge (L40b). */
 const PENDING_DAYS = 30;
 const GRANT = /^[a-z0-9][a-z0-9-]{0,62}\/[a-z0-9][a-z0-9_-]{0,59}$/;
+/**
+ * L9e (security review): the grant a standing export's connection needs, `<team>/standing-export`. It is reserved: no
+ * team system may take this id, so a session can never be bound to it and pull the storage key through secret.get.
+ */
+export const EXPORT_GRANT = 'standing-export';
 
 /**
  * The systems part of a run's roster (resources.json, frozen at run start like the roles): each resource with its
@@ -53,6 +59,7 @@ export function checkSystems(team, roles = null) {
   const ids = new Set();
   const out = resources.map((r) => {
     if (!r || typeof r !== 'object' || !RESOURCE.test(r.id ?? '') || ids.has(r.id)) throw new Problem(400, 'every resource has a unique id (lowercase letters, digits, - and _)');
+    if (r.id === EXPORT_GRANT) throw new Problem(400, `${EXPORT_GRANT} is reserved for the team's standing export; give this system another id`, { type: 'reserved-id' });
     ids.add(r.id);
     const at = `resource ${r.id}`;
     if (typeof r.type !== 'string' || !SERVICE.test(r.type)) throw new Problem(400, `${at}: type names a connector, like slack`);
@@ -423,7 +430,8 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
    * or gateway. Checked here, never from the request: the session is live in a running run, the frozen roster binds its
    * role to a resource listing `name`, and the credential is granted to the session's team.
    */
-  async function release({ tenant, session, name, purpose, runner = null, server = null }) {
+  async function release({ tenant, session, name, purpose, runner = null, server = null, team = null, connection = null }) {
+    if (purpose === 'standing-export') return releaseForExport({ tenant, team, connection });
     if (typeof name !== 'string' || !NAME.test(name) || !['sidecar', 'gateway'].includes(purpose)) return null;
     const found = await db.tenant(tenant, async ({ q }) => {
       const [s] = await q(`select s.id, s.team, s.role, s.state, s.runner, r.state as run_state, r.roster from sessions s join runs r on r.id = s.run where s.id = $1`, [session]);
@@ -442,7 +450,8 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
       const [c] = await q('select id, service, grants from credentials where name = $1 and removed_at is null', [name]);
       if (!c) return deny('no-credential');
       // Security review sev2: only to a resource of the credential's own service, granted for this team's resource.
-      const ofService = here.filter((r) => r.type === c.service);
+      // A standing export's grant is never a session's (L9e), even on a roster frozen before the id was reserved.
+      const ofService = here.filter((r) => r.type === c.service && r.id !== EXPORT_GRANT);
       if (!ofService.length) return deny('wrong-service');
       if (!ofService.some((r) => c.grants.includes(`${s.team}/${r.id}`))) return deny('not-granted');
       await q('update credentials set last_used_at = now() where id = $1', [c.id]);
@@ -453,6 +462,37 @@ export function createVault({ db, key, m3, now = () => new Date(), outbound = nu
     if (!found) return null;
     const value = await valueOf(tenant, found.id);
     return value ? { name, value } : null;
+  }
+
+  /**
+   * L9e: a standing export's connection, released only to the gateway's put-file effect (never a session, a route or
+   * the export job itself), only for the team whose standing export has that connection active now (not a pending
+   * one still in its 24 hours), only for a storage service, and only when the credential carries the team's reserved
+   * grant `<team>/standing-export` (security review: not any of the team's grants, which would push admins to grant
+   * the storage key to a system a session can be bound to). Every try is audited, allowed or refused, without the value.
+   */
+  async function releaseForExport({ tenant, team, connection }) {
+    if (typeof team !== 'string' || !team || typeof connection !== 'string' || !/^cred_[A-Za-z0-9_-]{8,40}$/.test(connection)) return null;
+    const found = await db.tenant(tenant, async ({ q }) => {
+      const deny = async (why) => {
+        await q("insert into audit(tenant, team, actor_kind, actor_id, action, target, decision, rule, detail) values ($1, $2, 'system', 'vault', 'secret.release', $3, 'refused', $4, $5)",
+          [tenant, team, connection, why, { connection, purpose: 'standing-export' }]);
+        return null;
+      };
+      const [x] = await q('select connection from standing_exports where team = $1', [team]);
+      if (!x || x.connection !== connection) return deny('not-active-connection');
+      const [c] = await q('select id, name, service, grants from credentials where id = $1 and removed_at is null', [connection]);
+      if (!c) return deny('no-credential');
+      if (!EXPORT_SERVICES.has(c.service)) return deny('wrong-service');
+      if (!c.grants.includes(`${team}/${EXPORT_GRANT}`)) return deny('not-granted');
+      await q('update credentials set last_used_at = now() where id = $1', [c.id]);
+      await q("insert into audit(tenant, team, actor_kind, actor_id, action, target, decision, rule, detail) values ($1, $2, 'system', 'vault', 'secret.release', $3, 'allowed', 'standing-export', $4)",
+        [tenant, team, c.id, { name: c.name, purpose: 'standing-export', team, service: c.service }]);
+      return c;
+    });
+    if (!found) return null;
+    const value = await valueOf(tenant, found.id);
+    return value ? { name: found.name, service: found.service, value } : null;
   }
 
   /** The pull request closed without merging (or the person withdrew it): its pending systems are dropped. */

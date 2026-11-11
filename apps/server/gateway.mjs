@@ -16,6 +16,8 @@
 // allows one more attempt (the provider said nothing happened).
 import { Problem } from './store.mjs';
 import { redactPatterns } from './inspector.mjs';
+import { createHash } from 'node:crypto';
+import { EXPORT_CONNECTORS, EXPORT_SERVICES, allowedHost } from './export-targets.mjs';
 
 /** An effect's result with every string run through the inspector's credential patterns (L19), before it is kept. */
 function scrub(v, depth = 0) {
@@ -48,6 +50,10 @@ export const DEFAULT_LIMITS = Object.freeze({
   'tenant-model': { rate: 1, burst: 6 },
   // How often one tenant's runners may say "the provider slowed us down" (governor.report): 4 at once, then one in 30 s.
   report: { rate: 1 / 30, burst: 4 },
+  // L9e: a storage connection (Google Drive, S3) is its own account (the tenant brings it), with the tenant's share
+  // of all its storage writes behind it. A standing export writes at most one file per team a day or per publish.
+  storage: { rate: 2, burst: 5 },
+  'tenant-storage': { rate: 1, burst: 5 },
 });
 
 /** A runner's report holds keys for at most this long; a shared account key, only on two tenants' word, once in 30 minutes. */
@@ -58,9 +64,14 @@ const REPORT_ACCOUNT_EVERY_MS = 30 * 60_000;
 
 /** The keys a call goes through, in lock order: account, installation, tenant share. */
 export function keysFor({ provider, account = null, installation = null, tenant = null }) {
-  if (!['github', 'model'].includes(provider)) throw new Problem(400, 'provider is github or model');
+  if (!['github', 'model'].includes(provider) && !EXPORT_SERVICES.has(provider)) throw new Problem(400, 'provider is github or model, or a storage service (google-drive, s3)');
   const out = [];
-  if (provider === 'github') {
+  if (EXPORT_SERVICES.has(provider)) {
+    // The connection is the account: there is no shared one, so a call names it.
+    if (!account) throw new Problem(400, 'a storage call names its connection');
+    out.push({ key: `storage:${provider}:${account}`, kind: 'storage' });
+    if (tenant) out.push({ key: `tenant:${tenant}:storage`, kind: 'tenant-storage' });
+  } else if (provider === 'github') {
     out.push({ key: `github-app:${account ?? 'shared'}`, kind: 'github-app' });
     if (installation !== null && installation !== undefined) out.push({ key: `installation:${installation}`, kind: 'installation' });
     if (tenant) out.push({ key: `tenant:${tenant}:github`, kind: 'tenant-github' });
@@ -319,5 +330,60 @@ export function createGateway({ db, m3 = null, now = () => new Date(), limits = 
                          and decided_at > $5`, [approval, ctx.tenant, team, key, new Date(startedAt).toISOString()])).length > 0;
   }
 
-  return { take, stage, pace, block, reported, wrapFetch, begin, end, keysFor };
+  // ---- put-file (L9e) ---------------------------------------------------------------------------------------------
+
+  /**
+   * The put-file effect: writes one file (a standing export's zip) to a storage connection, as an effect keyed on
+   * team, connection, target, file name and commit, so a repeat of a written file is answered with the first result
+   * and never written twice, and one cut off midway is not sent again without a person (effect-resend). The secret is
+   * released by the vault (`release`, purpose standing-export) inside this call, handed to the connector's put, and
+   * dropped: the caller never sees it, and nothing here keeps or logs it. Calls are paced on the connection and the
+   * tenant's share; a 429 or 503 holds them for as long as the service asks. The connector may reach only its own
+   * hosts, over https. Answers { service, id, bytes, repeat? }; throws an Error whose message is safe to show.
+   */
+  async function putFile({ tenant, team, connection, service, target, name, bytes, sha = null }, { release, connectors = EXPORT_CONNECTORS, fetch: send = fetch, timeoutMs = 120_000 } = {}) {
+    if (!m3) throw new Error('put-file needs the gateway wired to the event store');
+    if (typeof release !== 'function') throw new Error('put-file needs the vault');
+    const conn = connectors[service];
+    if (!conn || !EXPORT_SERVICES.has(service)) throw new Error(`OrgCraft can't write files to ${String(service).slice(0, 40)}`);
+    if (!Buffer.isBuffer(bytes) && !(bytes instanceof Uint8Array)) throw new Error('put-file writes bytes');
+    const where = conn.where(target);
+    const key = `put-file:${createHash('sha256').update(JSON.stringify([team, connection, service, target, name, sha])).digest('hex').slice(0, 48)}`;
+    const callHash = createHash('sha256').update(bytes).digest('hex');
+    const tool = `put-file:${service}`;
+    const b = (await m3.tx(tenant, (ctx) => begin(ctx, { key, team, tool, callHash }))).result;
+    if (b.state === 'repeat') return { ...(b.result ?? {}), repeat: true };
+    if (b.state === 'unknown') throw new Error('the last copy may or may not have been written; a person decides before it is sent again (approval effect-resend)');
+    const call = { provider: service, account: connection, tenant, team };
+    let value = null;
+    try {
+      const secret = await release({ tenant, team, connection, purpose: 'standing-export' });
+      value = secret?.value ?? null;
+      if (!value) throw new Error('the vault did not release this connection for the team; check that it is still granted to the team');
+      await pace(call);
+      const paced = async (url, init = {}) => {
+        if (!allowedHost(conn, url)) throw new Error(`the ${service} connector tried to reach a host it may not`);
+        const res = await send(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+        if (res.status === 429 || res.status === 503) {
+          const after = Number(res.headers?.get?.('retry-after'));
+          await block(call, { retryAfterMs: Number.isFinite(after) && after > 0 ? after * 1000 : 60_000, reason: 'rate-limited', keys: keysFor(call) }).catch(() => {});
+        }
+        return res;
+      };
+      const out = await conn.put({ secret: value, where, name, bytes: Buffer.from(bytes), send: paced, now: now(), key });
+      const result = { service, id: out.id, ...(out.etag ? { etag: out.etag } : {}), bytes: bytes.length };
+      value = null;
+      await m3.tx(tenant, (ctx) => end(ctx, { key, ok: true, result }));
+      return result;
+    } catch (e) {
+      let text = String(e?.name === 'TimeoutError' ? `${service} did not answer in time` : e?.message ?? e).replace(/\s+/g, ' ');
+      // Belt and braces: whatever a service or connector said, the value itself never leaves in an error.
+      if (value) for (const part of [value, ...String(value).split(/["\s,:{}]+/).filter((x) => x.length >= 12)]) text = text.split(part).join('[secret]');
+      const why = redactPatterns(text).text.slice(0, 240);
+      await m3.tx(tenant, (ctx) => end(ctx, { key, ok: false, result: { service, error: why } })).catch(() => {});
+      throw new Error(why);
+    }
+  }
+
+  return { take, stage, pace, block, reported, wrapFetch, begin, end, keysFor, putFile };
 }

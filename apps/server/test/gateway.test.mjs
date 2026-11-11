@@ -26,6 +26,9 @@ test('keys: account, then installation, then the tenant share; nothing else', ()
   assert.deepEqual(keysFor({ provider: 'github', installation: '42', tenant: 'acme' }).map((k) => k.key), ['github-app:shared', 'installation:42', 'tenant:acme:github']);
   assert.deepEqual(keysFor({ provider: 'model', account: 'byo-acme', tenant: 'acme' }).map((k) => k.key), ['model:byo-acme', 'tenant:acme:model']);
   assert.throws(() => keysFor({ provider: 'smtp' }), /github or model/);
+  // L9e: a storage connection is its own account; there is no shared one to fall back on.
+  assert.deepEqual(keysFor({ provider: 's3', account: 'cred_abc12345', tenant: 'acme' }).map((k) => k.key), ['storage:s3:cred_abc12345', 'tenant:acme:storage']);
+  assert.throws(() => keysFor({ provider: 'google-drive', tenant: 'acme' }), /names its connection/);
 });
 
 test('acceptance: a burst is paced, not sent; every call gets its turn, in order', async () => {

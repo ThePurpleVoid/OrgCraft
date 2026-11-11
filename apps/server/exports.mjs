@@ -19,17 +19,25 @@
 import { Problem } from './store.mjs';
 import { atLeast } from './roles.mjs';
 import { mint } from './m3.mjs';
+import { EXPORT_GRANT } from './credentials.mjs';
+import { EXPORT_CONNECTORS, EXPORT_SERVICES } from './export-targets.mjs';
 
+export { EXPORT_SERVICES };
 export const standingScope = (team) => `standing-export:${team}`;
-/** Storage services a standing export can write to (the vault's service names). */
-export const EXPORT_SERVICES = new Set(['google-drive', 's3']);
+
+/** A person's name for a notice (never their id): their name, else their login, else null. */
+export async function nameOf(db, person) {
+  if (!/^per_/.test(String(person ?? ''))) return null;
+  const [p] = await db.system("select coalesce(nullif(name, ''), login) as name from people where id = $1", [person]);
+  return p?.name ?? null;
+}
 export const NEW_TARGET_WAIT_MS = 24 * 3600_000;
 const RETRY_MS = 3600_000;
 const CADENCES = new Set(['daily', 'on-publish']);
 const iso = (t) => (t ? new Date(t).toISOString() : null);
 const day = (t) => new Date(t).toISOString().slice(0, 10);
 
-/** No connector can write files yet: every try fails with this, recorded and announced, until one is wired. */
+/** With no gateway and vault wired (a bare handler in a test): every try fails with this, recorded and announced. */
 export async function noDeliver({ service }) {
   throw new Error(`OrgCraft can't write to ${service} yet; download the team from Settings meanwhile`);
 }
@@ -74,9 +82,13 @@ export function createStandingExports({ db, m3, exportOf, deliver = noDeliver, n
       if (!/^cred_[A-Za-z0-9_-]{8,40}$/.test(connection)) throw new Problem(400, 'connection is the id of a connected storage account (GET /v1/credentials)');
       if (!target || target.length > 300 || /[\u0000-\u001f\u007f]/.test(target)) throw new Problem(400, 'target is the folder or bucket path, at most 300 characters');
       if (!CADENCES.has(cadence)) throw new Problem(400, 'cadence is daily or on-publish');
-      const [cred] = await db.tenant(who.tenant, ({ q }) => q('select service from credentials where id = $1 and removed_at is null', [connection]));
+      const [cred] = await db.tenant(who.tenant, ({ q }) => q('select service, grants from credentials where id = $1 and removed_at is null', [connection]));
       if (!cred) throw new Problem(404, 'no such connection in this workspace');
       if (!EXPORT_SERVICES.has(cred.service)) throw new Problem(422, `a standing export writes to ${[...EXPORT_SERVICES].join(' or ')}; this connection is ${cred.service}`, { type: 'wrong-service' });
+      // L9e: the connector says whether it can write there (a Drive folder id or link, an S3 bucket and prefix).
+      try { EXPORT_CONNECTORS[cred.service].where(target); } catch (e) { throw new Problem(400, e.message, { type: 'bad-target' }); }
+      // L9e (CTO): the vault releases it only to a team it is granted to, so say so now rather than at the first write.
+      if (!(cred.grants ?? []).includes(`${team}/${EXPORT_GRANT}`)) throw new Problem(422, `this connection is not granted to this team's standing export; grant it to ${team} for ${EXPORT_GRANT} in Credentials first`, { type: 'not-granted' });
       const by = String(who.principal);
       const cur = await rowOf(who.tenant, team);
       const sameTarget = cur?.connection === connection && cur?.target === target;
@@ -93,7 +105,11 @@ export function createStandingExports({ db, m3, exportOf, deliver = noDeliver, n
         await q("insert into audit(tenant, team, actor_kind, actor_id, action, target, decision, detail) values ($1, $2, 'person', $3, 'standing-export.set', $4, 'allowed', $5)",
           [who.tenant, team, by, team, { connection, target, cadence, ...(sameTarget ? { cadence_only: true } : { effectiveAt: effectiveAt.toISOString() }) }]);
       });
-      if (!sameTarget) await notify(who.tenant, by, { team, target, effectiveAt: effectiveAt.toISOString(), change: 'new-target' });
+      if (!sameTarget) {
+        await notify(who.tenant, by, { team, target, effectiveAt: effectiveAt.toISOString(), change: 'new-target' });
+        // L9e: also a team event, so email and Slack carry it to every owner and admin as a security notice.
+        await emit(who.tenant, team, 'standing-export.changed', { change: 'new-target', target, effectiveAt: effectiveAt.toISOString(), by, byName: await nameOf(db, by) }, { kind: 'person', id: by });
+      }
       return view(await rowOf(who.tenant, team));
     },
 
@@ -108,6 +124,7 @@ export function createStandingExports({ db, m3, exportOf, deliver = noDeliver, n
         await q("insert into audit(tenant, team, actor_kind, actor_id, action, target, decision, detail) values ($1, $2, 'person', $3, 'standing-export.off', $4, 'allowed', $5)", [who.tenant, team, by, team, { was: cur.target, pending: cur.pending_target }]);
       });
       await notify(who.tenant, by, { team, target: cur.target ?? cur.pending_target, change: 'off' });
+      await emit(who.tenant, team, 'standing-export.changed', { change: 'off', target: cur.target ?? cur.pending_target, by, byName: await nameOf(db, by) }, { kind: 'person', id: by });
       return view(null);
     },
 
@@ -137,7 +154,9 @@ export function createStandingExports({ db, m3, exportOf, deliver = noDeliver, n
           const [cred] = await db.tenant(r.tenant, ({ q }) => q('select service from credentials where id = $1 and removed_at is null', [r.connection]));
           if (!cred) throw new Error('the connection was removed; choose another in Settings');
           const out = await exportOf(r.tenant, r.team);
-          await deliver({ tenant: r.tenant, team: r.team, connection: r.connection, service: cred.service, target: r.target, name: out.name, bytes: out.zip });
+          // The gateway's put-file effect (L9e): it has the vault release the connection, for this team, inside the call.
+          const wrote = await deliver({ tenant: r.tenant, team: r.team, connection: r.connection, service: cred.service, target: r.target, name: out.name, bytes: out.zip, sha: out.sha });
+          if (wrote?.repeat) { await db.tenant(r.tenant, ({ q }) => q('update standing_exports set last_sha = $2, last_at = $3, last_error = null where team = $1', [r.team, out.sha, at])); continue; }
           await db.tenant(r.tenant, async ({ q }) => {
             await q('update standing_exports set last_sha = $2, last_at = $3, last_error = null where team = $1', [r.team, out.sha, at]);
             await q("insert into audit(tenant, team, actor_kind, actor_id, action, target, decision, detail) values ($1, $2, 'system', 'control-plane', 'team.export.standing', $3, 'allowed', $4)", [r.tenant, r.team, r.team, { sha: out.sha, kind: 'standing', target: r.target, bytes: out.zip.length }]);

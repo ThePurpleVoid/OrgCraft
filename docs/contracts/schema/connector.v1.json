@@ -26,7 +26,8 @@
         "sink": { "type": "object" },
         "inbound": { "type": "object" },
         "discover": { "type": "object" },
-        "work": { "type": "object" }
+        "work": { "type": "object" },
+        "export": { "type": "object", "description": "Can receive a file (putFile), for a standing export; see connectors.md" }
       }
     },
     "permissions": {
