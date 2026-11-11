@@ -114,8 +114,11 @@ test('the control plane goes away, then the runner\'s link is cut: it reconnects
   h.cutRunner(false);
   const merged = await proposal((p) => p.ref === opened.ref && p.state === 'merged', 90_000);
   assert.equal(merged.mergedHead, c.data.headSha, 'merged once it was back, on the approved head');
-  const accepted = (await stored('proposal.accepted')).filter((e) => e.data.ref === opened.ref);
-  assert.equal(accepted.length, 1, 'one merge');
+  // The runner merges on the remote first and reports proposal.accepted after (apps/runner/session.mjs), so the
+  // stored event can land after the remote shows merged: wait for it, then check there is exactly one.
+  const acceptedFor = async () => (await stored('proposal.accepted')).filter((e) => e.data.ref === opened.ref);
+  await waitFor(async () => (await acceptedFor()).length > 0, 60_000);
+  assert.equal((await acceptedFor()).length, 1, 'one merge');
 });
 
 test('approved, then the run is stopped while the runner is cut off: once back it stops the session and merges nothing', { skip, timeout: 240_000 }, async () => {
