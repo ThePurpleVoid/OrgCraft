@@ -235,6 +235,8 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: mcr.microsoft.com/playwright:v1.56.1-noble
+      # Chromium needs more shared memory than a container's default /dev/shm.
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v4
       - name: Playwright (test only; the Studio itself has no dependencies). The browsers are already in the image
