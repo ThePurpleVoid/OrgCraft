@@ -54,6 +54,11 @@ test('a card, the budget, a role and a meeting, each from its link', { skip }, a
   await page.goto(`${base}/teams/sample-app/inbox?card=${encodeURIComponent(id)}`);
   await page.locator(`.card-msg.focused[data-card-id="${id}"]`).waitFor();
   assert.equal(new URL(page.url()).hash, '#chat', 'the query is dropped from the address');
+  // A live update redraws the chat while the card is marked: the mark stays (FLAKE-links: the next redraw used to wipe
+  // it, so under load the mark could be gone before anyone, or the test, saw it).
+  cp.say('A live update while the linked card is marked.');
+  await page.getByText('A live update while the linked card is marked.').waitFor();
+  assert.equal(await page.locator(`.card-msg.focused[data-card-id="${id}"]`).count(), 1, 'still marked after a redraw');
 
   // A card that is not there says so.
   await page.goto(`${base}/`);
@@ -90,6 +95,27 @@ test('a card, the budget, a role and a meeting, each from its link', { skip }, a
   // A meeting the team no longer has.
   await page.goto(`${base}/teams/sample-app/meetings/old-review`);
   await page.getByText('That meeting is not in this team any more.').waitFor();
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('a page picked before the team has loaded opens once it has (FLAKE-links)', { skip }, async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${base}/?t=${studio.launchToken}`);
+  // Hold the team's answer until Chat has been clicked: the click lands while nothing is wired yet, as under load.
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let asked;
+  const seen = new Promise((r) => { asked = r; });
+  await page.route('**/v1/team', async (route) => { asked(); await held; await route.continue(); });
+  await page.goto(`${base}/`);
+  await seen;
+  await page.getByRole('button', { name: 'Chat' }).click();
+  release();
+  await page.getByLabel('Message the chief of staff').waitFor();
+  assert.equal(new URL(page.url()).hash, '#chat');
   assert.deepEqual(errors, []);
   await page.close();
 });
