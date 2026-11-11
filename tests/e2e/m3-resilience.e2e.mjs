@@ -117,7 +117,10 @@ test('the control plane goes away, then the runner\'s link is cut: it reconnects
   // The runner merges on the remote first and reports proposal.accepted after (apps/runner/session.mjs), so the
   // stored event can land after the remote shows merged: wait for it, then check there is exactly one.
   const acceptedFor = async () => (await stored('proposal.accepted')).filter((e) => e.data.ref === opened.ref);
-  await waitFor(async () => (await acceptedFor()).length > 0, 60_000);
+  const [first] = await waitFor(async () => { const a = await acceptedFor(); return a.length ? a : null; }, 60_000);
+  // Counted again once the session has gone idle after that merge (a later stored event), so a duplicate stored a
+  // few ms after the first is caught too.
+  await waitFor(async () => (await h.db.system("select 1 from events where team = $1 and type = 'session.idle' and seq > (select seq from events where id = $2)", [h.team, first.id])).length > 0, 60_000);
   assert.equal((await acceptedFor()).length, 1, 'one merge');
 });
 
