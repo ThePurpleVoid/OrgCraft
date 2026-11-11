@@ -40,6 +40,7 @@ import { pgObjects, pgRefs } from './managed-db.mjs';
 import { managedBackend } from '../studio/managed.mjs';
 import { teamFrom, RunRefused } from '../studio/runs.mjs';
 import { createChanges } from './changes.mjs';
+import { createStandingExports } from './exports.mjs';
 import { CHECK_SECONDS, SERVER_VERSION, createReachability, deploymentView, describeRunner } from './deployment.mjs';
 
 /**
@@ -65,7 +66,7 @@ const { Problem } = store;
 const REPORTS_PER_MINUTE = 30;
 
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-const NOTICE_ACTIONS = ['passkey.added', 'passkey.removed', 'passkey.sign-count-flagged', 'step-up.locked', 'sessions.ended', 'member.role-changed', 'member.removed', 'recovery-owner.added', 'recovery-owner.removed'];
+const NOTICE_ACTIONS = ['passkey.added', 'passkey.removed', 'passkey.sign-count-flagged', 'step-up.locked', 'sessions.ended', 'member.role-changed', 'member.removed', 'recovery-owner.added', 'recovery-owner.removed', 'team.exported', 'standing-export.changed'];
 
 /** The JSON body for a Problem: { error }, plus RFC 9457 type, title and status when it has a type, plus any body
  *  it carries (a 409 for a changed card carries the current card itself, as api-v1.yaml says). */
@@ -149,7 +150,7 @@ export function createControlPlane(opts) {
   // The tick runs in-process every 15 s; a deployment can also call POST /v1/internal/tick from a cron.
   const tickMs = opts.tickMs ?? 15_000;
   let ticking = false;
-  const timer = tickMs > 0 ? setInterval(() => { if (ticking) return; ticking = true; bus.tick().then(() => opts.identity?.sweep()).then(() => handler.recheck()).catch((e) => console.error(`tick: ${e.message}`)).finally(() => { ticking = false; }); }, tickMs) : null;
+  const timer = tickMs > 0 ? setInterval(() => { if (ticking) return; ticking = true; bus.tick().then(() => opts.identity?.sweep()).then(() => handler.recheck()).then(() => handler.standingExports()).catch((e) => console.error(`tick: ${e.message}`)).finally(() => { ticking = false; }); }, tickMs) : null;
   timer?.unref?.();
   server.runners = runners;
   server.m3 = m3;
@@ -164,7 +165,7 @@ export function createControlPlane(opts) {
  * functions, a framework). createControlPlane wraps it in node:http. `pollMs`: how often an open stream also reads
  * the log, so it sees events appended by other instances (0 turns that off; one instance needs only the hub).
  */
-export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, triggers: givenTriggers = null, cronSecret = process.env.CRON_SECRET ?? null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION, gateway: givenGateway = null, gatewayLimits = null, vault: givenVault = null }) {
+export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sinks = null, now = () => new Date(), pollMs = 2000, runners = null, stepUpVerifier = null, m3: given = null, bus: givenBus = null, triggers: givenTriggers = null, cronSecret = process.env.CRON_SECRET ?? null, deliverExport = null, identity = null, email: emailOpts = {}, slack: slackOpts = {}, studio: studioOpts = null, streamCheckMs = 20_000, mode = process.env.AGENT_TEAM_MODE ?? null, reachability = null, region = process.env.FLY_REGION ?? null, serverVersion = SERVER_VERSION, gateway: givenGateway = null, gatewayLimits = null, vault: givenVault = null }) {
   if (cronSecret && String(cronSecret).length < 32) throw new Error('CRON_SECRET must be at least 32 characters');
   const live = hub();
   const m3 = given ?? createM3({ db, now, publicUrl });
@@ -206,6 +207,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     refs: (tn, tm) => pgRefs(db, tn, tm),
   };
   const changes = createChanges({ db, m3, now });
+  const standing = createStandingExports({ db, m3, now, exportOf: (tenant, team) => changes.exportOf(tenant, team), ...(deliverExport ? { deliver: deliverExport } : {}) });
 
   /**
    * The RunCreate team for a managed team (ADR 0012): { from: 'managed', repo } in, the roster of the accepted main out,
@@ -477,6 +479,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     if (a === 'internal' && team === 'tick' && !b && m === 'POST') {
       cron(req);
       await bus.tick();
+      await standing.runDue();
       return send(res, 200, { ok: true });
     }
     // For the deploy's smoke check: who the sign-in rate limits think is calling, and whether the request came
@@ -595,7 +598,7 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
     const notices = await db.system(`select action, at, detail from identity_audit where person = $1 and at > now() - interval '30 days'
       and action = any($2) order by at desc, id desc limit 20`, [who.principal, NOTICE_ACTIONS]);
     return { id: who.principal, login: who.session.login, name: who.session.name ?? who.session.login, workspaces: who.workspaces.map((w) => ({ tenant: w.tenant, role: w.role })), passkeys: Number(n), authTime: who.session.authTime,
-      notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}), ...(r.detail?.person ? { person: r.detail.person } : {}), ...(r.detail?.effectiveAt ? { effectiveAt: r.detail.effectiveAt } : {}) })) };
+      notices: notices.map((r) => ({ action: r.action, at: new Date(r.at).toISOString(), ...(r.detail?.passkey ? { passkey: r.detail.passkey } : {}), ...(r.detail?.name ? { name: r.detail.name } : {}), ...(r.detail?.tenant ? { tenant: r.detail.tenant } : {}), ...(r.detail?.to ? { role: r.detail.to } : {}), ...(r.detail?.person ? { person: r.detail.person } : {}), ...(r.detail?.effectiveAt ? { effectiveAt: r.detail.effectiveAt } : {}), ...(r.detail?.team ? { team: r.detail.team } : {}), ...(r.action === 'team.exported' && r.detail?.by ? { by: r.detail.by } : {}) })) };
   }
 
   const html = (res, status, body, headers = {}) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'", ...headers }); res.end(body); };
@@ -857,6 +860,14 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
         return send(res, 200, await changes.accept(who, team, c, { stepUp, words: typeof body.words === 'string' ? body.words : '' }));
       }
       if (b === 'changes' && c && parts[5] === 'close' && !parts[6] && m === 'POST') { await readJson(req, 4 * 1024); return send(res, 200, await changes.close(who, team, c)); }
+      if (b === 'export' && !c && m === 'GET') {
+        const out = await changes.exportTeam(who, team, { stepUp });
+        res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${out.name}"`, 'content-length': out.zip.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-team-version': out.sha });
+        return res.end(out.zip);
+      }
+      if (b === 'standing-export' && !c && m === 'GET') return send(res, 200, await standing.get(who, team));
+      if (b === 'standing-export' && !c && m === 'PUT') return send(res, 200, await standing.put(who, team, (await readJson(req, 4 * 1024)) ?? {}, stepUp));
+      if (b === 'standing-export' && !c && m === 'DELETE') return send(res, 200, await standing.remove(who, team, stepUp));
       if (b === 'rollback' && !c && m === 'POST') return send(res, 201, await changes.rollback(who, team, (await readJson(req, 4 * 1024)) ?? {}));
       if (b === 'rollout' && !c && m === 'GET') return send(res, 200, await store.rollout(db, t, team, { version: url.searchParams.get('version') ?? '', publishedAt: url.searchParams.get('publishedAt') ?? '', now: now() }));
       if (b === 'report-tokens' && !c && m === 'POST') {
@@ -941,5 +952,6 @@ export function createHandler({ db, key, tenant, adminToken, publicUrl = '', sin
   // Outage mode: Studio writes wait while the code host is unreachable, so nothing else would call it. The tick probes
   // it (at most every CHECK_SECONDS) until it answers, so publishing comes back on its own.
   handler.recheck = async () => { if (reach.state('code-host') === 'unreachable') await probeCodeHost(); };
+  handler.standingExports = () => standing.runDue();
   return handler;
 }

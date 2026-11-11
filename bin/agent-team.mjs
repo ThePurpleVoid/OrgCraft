@@ -11,6 +11,8 @@
 //   agent-team check         exit 1 when a generated file is missing, edited by hand or out of date
 //   agent-team roles         list the roles the project layer resolves to, and where each comes from
 //   agent-team import        print the project layer as a TeamSpec (JSON; see packages/team-model)
+//   agent-team import <export.zip>   check an OrgCraft team export and clone its history into a new folder here
+//                            (named after the zip; --dir picks the folder it goes in)
 //   agent-team compile <spec.json>   write a TeamSpec back to .agent-team/, then sync
 //   agent-team validate      check the team: reporting lines, tiers, ownership, systems and bindings, secrets
 //                            (--template <id|folder> checks a team template instead)
@@ -565,6 +567,44 @@ function importSpec(root) {
   return 0;
 }
 
+/**
+ * `agent-team import <export.zip>` (spec L9 section 5.3, self-hosted and moving back): every object in history.bundle is
+ * hashed again, the team at main must pass its checks (validate, and sync's output equals what is committed), then
+ * the history is cloned into a new folder. Nothing is written when any check fails.
+ */
+async function importExport(file, root) {
+  const { execFileSync } = await import('node:child_process');
+  const { basename } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const { mkdtempSync } = await import('node:fs');
+  const { importBundle, memoryStore } = await import('../packages/git-store/index.mjs');
+  const { importParts, managedBackend, memoryRefs } = await import('../apps/studio/managed.mjs');
+  const core = await import('../apps/studio/core.mjs');
+  if (!existsSync(file)) throw new UsageError(`${file} does not exist`);
+  const name = basename(file).replace(/\.zip$/i, '').replace(/[^A-Za-z0-9._-]/g, '-') || 'team';
+  const target = join(root, name);
+  if (existsSync(target)) throw new UsageError(`${target} already exists; move it or use --dir to import somewhere else`);
+  let bundle, head;
+  try {
+    ({ bundle } = importParts(readFileSync(file)));
+    const store = memoryStore();
+    const { refs } = await importBundle(store, bundle);
+    head = refs['refs/heads/main'];
+    if (!head) throw new Error('history.bundle has no refs/heads/main');
+    const b = managedBackend({ store, refs: { ...memoryRefs(), getRef: async () => ({ sha: head, version: 1 }) } });
+    const r = core.checkTeam(await b.readTeam(head));
+    if (!r.ok) throw new Error(`the team does not pass its checks: ${[...r.errors, ...r.drift.map((x) => `${x} is not what sync writes`)].slice(0, 3).join('; ')}`);
+  } catch (e) { console.error(`agent-team: ${file}: ${e.message}`); return 1; }
+  const tmp = mkdtempSync(join(tmpdir(), 'orgcraft-import-'));
+  try {
+    writeFileSync(join(tmp, 'history.bundle'), bundle);
+    execFileSync('git', ['clone', '--quiet', '--branch', 'main', join(tmp, 'history.bundle'), target], { stdio: ['ignore', 'ignore', 'inherit'] });
+    execFileSync('git', ['-C', target, 'remote', 'remove', 'origin'], { stdio: 'ignore' });
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+  console.log(`Imported ${basename(file)} into ${target} (main at ${head.slice(0, 12)}). Push it to any Git host: git remote add origin <url> && git push -u origin main`);
+  return 0;
+}
+
 function validateLayer(root) {
   if (!existsSync(join(root, LAYER, 'team.json'))) throw new UsageError(`No ${LAYER}/team.json here. Run "agent-team init" first.`);
   const issues = validateSpec(importLayer(readLayer(root), loadKit(KIT)), loadKit(KIT));
@@ -610,7 +650,7 @@ export function main(argv) {
       case 'sync': return sync(root);
       case 'check': return check(root);
       case 'roles': return listRoles(root);
-      case 'import': return importSpec(root);
+      case 'import': return opts.file ? importExport(opts.file, root).catch((e) => { if (e instanceof UsageError) { console.error(`agent-team: ${e.message}`); return 64; } throw e; }) : importSpec(root);
       case 'compile': return compileSpec(root, opts.file);
       case 'validate': return opts.template ? validateTemplate(opts.template) : validateLayer(root);
       case 'templates': return listTemplates();

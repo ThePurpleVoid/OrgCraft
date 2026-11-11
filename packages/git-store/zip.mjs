@@ -1,6 +1,6 @@
 // A small zip writer for the team export (spec L9 section 5.1): stored or deflated entries, no third-party code.
 // Entries: [{ name, data, mtime? }]. Names are forward-slash paths inside the archive, never absolute, never "..".
-import { deflateRawSync } from 'node:zlib';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -54,4 +54,57 @@ export function writeZip(entries) {
   end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(names.size, 8); end.writeUInt16LE(names.size, 10);
   end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);
   return Buffer.concat([...local, cd, end]);
+}
+
+/**
+ * Reads a zip archive (stored or deflated entries, no zip64, no encryption): [{ name, data, mode }]. For importing an
+ * export (spec L9 section 5.3), so it trusts nothing: names must be relative with no "..", sizes are capped before
+ * anything is inflated (maxEntry each, maxTotal in all), and every entry's CRC is checked.
+ */
+export function readZip(buf, { maxEntry = 100 * 1024 * 1024, maxTotal = 200 * 1024 * 1024, maxEntries = 5000 } = {}) {
+  const b = Buffer.from(buf);
+  const bad = (m) => { throw new Error(`not a zip OrgCraft can read: ${m}`); };
+  let end = -1;
+  for (let i = b.length - 22; i >= Math.max(0, b.length - 22 - 0xffff); i--) if (b.readUInt32LE(i) === 0x06054b50) { end = i; break; }
+  if (end < 0) bad('no end of central directory');
+  const count = b.readUInt16LE(end + 10);
+  const cdSize = b.readUInt32LE(end + 12);
+  let p = b.readUInt32LE(end + 16);
+  if (count > maxEntries) bad(`more than ${maxEntries} entries`);
+  if (p + cdSize > end) bad('the central directory runs past its end');
+  const out = [];
+  const names = new Set();
+  let total = 0;
+  for (let n = 0; n < count; n++) {
+    if (p + 46 > end || b.readUInt32LE(p) !== 0x02014b50) bad('a broken central directory entry');
+    const flags = b.readUInt16LE(p + 8);
+    const method = b.readUInt16LE(p + 10);
+    const crc = b.readUInt32LE(p + 16);
+    const csize = b.readUInt32LE(p + 20);
+    const size = b.readUInt32LE(p + 24);
+    const nlen = b.readUInt16LE(p + 28); const xlen = b.readUInt16LE(p + 30); const clen = b.readUInt16LE(p + 32);
+    const attr = b.readUInt32LE(p + 38) >>> 16;
+    const off = b.readUInt32LE(p + 42);
+    const name = b.subarray(p + 46, p + 46 + nlen).toString('utf8');
+    p += 46 + nlen + xlen + clen;
+    if (flags & 1) bad(`${name} is encrypted`);
+    if (csize === 0xffffffff || size === 0xffffffff || off === 0xffffffff) bad('zip64 is not supported');
+    if (name.endsWith('/')) continue; // a folder entry
+    if (!name || name.startsWith('/') || name.includes('\\') || name.split('/').some((x) => x === '..' || x === '' || x === '.') || names.has(name)) bad(`bad entry name ${JSON.stringify(name)}`);
+    names.add(name);
+    if (size > maxEntry) bad(`${name} is larger than ${maxEntry} bytes`);
+    total += size;
+    if (total > maxTotal) bad(`the files add up to more than ${maxTotal} bytes`);
+    if (off + 30 > b.length || b.readUInt32LE(off) !== 0x04034b50) bad(`${name}: a broken local header`);
+    const start = off + 30 + b.readUInt16LE(off + 26) + b.readUInt16LE(off + 28);
+    if (start + csize > b.length) bad(`${name} runs past the end`);
+    const raw = b.subarray(start, start + csize);
+    let data;
+    if (method === 0) data = Buffer.from(raw);
+    else if (method === 8) { try { data = inflateRawSync(raw, { maxOutputLength: Math.max(size, 1) }); } catch { bad(`${name} does not inflate to its stated size`); } }
+    else bad(`${name} uses compression method ${method}`);
+    if (data.length !== size || crc32(data) !== crc) bad(`${name} does not match its checksum`);
+    out.push({ name, data, mode: (attr & 0o111) ? '100755' : '100644' });
+  }
+  return out;
 }

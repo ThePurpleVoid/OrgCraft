@@ -102,6 +102,11 @@ export const ROUTES = [
   ['POST', '/teams/{team}/changes/{change}/accept', 'admin'],
   ['POST', '/teams/{team}/changes/{change}/close', 'editor'],
   ['POST', '/teams/{team}/rollback', 'admin'],
+  // The team's export (spec L9 section 5.1): an admin's, signed in on the web, with a passkey (changes.mjs).
+  ['GET', '/teams/{team}/export', 'admin'],
+  ['GET', '/teams/{team}/standing-export', 'admin'],
+  ['PUT', '/teams/{team}/standing-export', 'admin'],
+  ['DELETE', '/teams/{team}/standing-export', 'admin'],
   // The run inspector (N1, L19s-b): the list and the timeline show summaries only; a step's stored input or output is
   // for editors and every read is audited; deleting it early is an admin's, with step-up.
   ['GET', '/teams/{team}/tasks', 'viewer'],

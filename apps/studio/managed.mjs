@@ -11,9 +11,11 @@
 //             openChange(row) → number               numbers 1, 2, 3 per team, atomically
 //             getChange(number) → row | null         updateChange(number, patch, expectState) → row | null
 import { CoreError, inReadSet } from './core.mjs';
-import { applyChanges, listTree, readCommit, readObject, writeCommit, writeObject } from '../../packages/git-store/index.mjs';
+import { applyChanges, importBundle, listTree, memoryStore, readCommit, readObject, readObjects, writeBundle, writeCommit, writeObject } from '../../packages/git-store/index.mjs';
+import { readZip, writeZip } from '../../packages/git-store/zip.mjs';
 
 const MAX_FILES = 2000;
+const READ_BATCH = 200;
 const MAX_BYTES = 20 * 1024 * 1024;
 const SHA = /^[0-9a-f]{40}$/;
 const CR = /^cr\/([1-9][0-9]{0,8})$/;
@@ -83,11 +85,16 @@ export function managedBackend({ store, refs, now = () => new Date(), author = (
       if (list.length > MAX_FILES) throw new CoreError(413, `the team's files are too large to read (${list.length} files; at most ${MAX_FILES})`);
       const out = [];
       let size = 0;
-      for (const e of list) {
-        const content = await text(e.sha);
-        size += Buffer.byteLength(content);
-        if (size > MAX_BYTES) throw new CoreError(413, 'the team\'s files are too large to read (more than 20 MB)');
-        out.push({ path: e.path, content, mode: e.mode });
+      // A batch of blobs per round trip (code review L9b sev4: one read per object was one transaction per file).
+      for (let i = 0; i < list.length; i += READ_BATCH) {
+        const chunk = list.slice(i, i + READ_BATCH);
+        const got = await readObjects(store, chunk.map((e) => e.sha), 'blob');
+        for (const e of chunk) {
+          const content = got.get(e.sha).body.toString('utf8');
+          size += Buffer.byteLength(content);
+          if (size > MAX_BYTES) throw new CoreError(413, 'the team\'s files are too large to read (more than 20 MB)');
+          out.push({ path: e.path, content, mode: e.mode });
+        }
       }
       return { files: out, base };
     },
@@ -187,6 +194,54 @@ export function managedBackend({ store, refs, now = () => new Date(), author = (
       if (!row) throw new CoreError(409, `change ${number} is not open`);
       return row;
     },
+    /**
+     * The team's export (spec L9 section 5.1): a zip of main's files, history.bundle (refs/heads/main only: change-request
+     * refs are not exported, their accepted commits are on main) and README.txt. { name, sha, number, zip }. `number`
+     * counts the versions on main's first-parent line, so the name reads <team>-v<number>-<yyyy-mm-dd>.zip.
+     */
+    async exportZip({ team }) {
+      const main = await refs.getRef('main');
+      if (!main) throw new CoreError(409, 'the team has no published version yet, so there is nothing to export', { type: 'empty' });
+      const list = await files(main.sha);
+      if (list.length > MAX_FILES) throw new CoreError(413, `the team has more than ${MAX_FILES} files`);
+      const entries = [];
+      for (let i = 0; i < list.length; i += READ_BATCH) {
+        const chunk = list.slice(i, i + READ_BATCH);
+        const got = await readObjects(store, chunk.map((e) => e.sha), 'blob');
+        for (const e of chunk) if (e.mode === '100644' || e.mode === '100755') entries.push({ name: `files/${e.path}`, data: got.get(e.sha).body, mode: e.mode });
+      }
+      let number = 0;
+      for (let cur = main.sha; cur && number < 100000; number++) cur = (await commitOf(cur)).parents[0] ?? null;
+      const day = now().toISOString().slice(0, 10);
+      const slug = String(team ?? 'team').replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 60) || 'team';
+      const bundle = await writeBundle(store, { 'refs/heads/main': main.sha });
+      entries.push({ name: 'history.bundle', data: bundle });
+      entries.push({ name: 'README.txt', data: exportReadme(slug, main.sha, number) });
+      return { name: `${slug}-v${number}-${day}.zip`, sha: main.sha, number, zip: writeZip(entries.map((e) => ({ ...e, mtime: now() }))) };
+    },
+    /**
+     * Imports an export (spec L9 section 5.3, and 6.4's moving back): every object in history.bundle is hashed again and
+     * written, and main is set to the bundle's refs/heads/main, only on a team with no main yet (never a merge of two
+     * histories). `check(read)` → { ok, errors } refuses a team that does not validate. history.bundle is the truth;
+     * the zip's files/ are a convenience copy and are not read.
+     */
+    async importZip(zip, { check = null } = {}) {
+      if (await refs.getRef('main')) throw new CoreError(409, 'this team already has a history; import only into a new, empty team', { type: 'not-empty' });
+      const got = importParts(zip);
+      // Verify in memory first, so a refused import writes nothing to the team's store.
+      const scratch = memoryStore();
+      const { refs: bundled } = await importBundle(scratch, got.bundle).catch((e) => { throw new CoreError(422, `history.bundle is not a whole, valid history: ${clean(e.message, 200)}`, { type: 'bad-bundle' }); });
+      const head = bundled['refs/heads/main'];
+      if (!head) throw new CoreError(422, 'history.bundle has no refs/heads/main', { type: 'bad-bundle' });
+      if (check) {
+        const read = await managedBackend({ store: scratch, refs: { ...memoryRefs(), getRef: async () => ({ sha: head, version: 1 }) }, now }).readTeam(head);
+        const r = check(read);
+        if (!r.ok) throw new CoreError(422, `the team in this export does not pass its checks: ${[...(r.errors ?? []), ...(r.drift ?? []).map((x) => `${x} is not what sync writes`)].slice(0, 3).join('; ')}`, { type: 'checks' });
+      }
+      for (const sha of scratch.ids()) await store.put(sha, await scratch.get(sha));
+      if (!(await refs.setRef('main', head, null))) throw new CoreError(409, 'this team got a history while importing; nothing was changed', { type: 'not-empty' });
+      return { sha: head, objects: scratch.size };
+    },
     async prStatus(branch) {
       const m = CR.exec(String(branch ?? ''));
       const c = m ? await refs.getChange(Number(m[1])) : null;
@@ -195,4 +250,29 @@ export function managedBackend({ store, refs, now = () => new Date(), author = (
     },
   };
   return api;
+}
+
+/** history.bundle and the README from an export zip (readZip caps sizes and checks every entry). */
+export function importParts(zip) {
+  let entries;
+  try { entries = readZip(zip); } catch (e) { throw new CoreError(422, String(e.message).slice(0, 200), { type: 'bad-zip' }); }
+  const bundle = entries.find((e) => e.name === 'history.bundle');
+  if (!bundle) throw new CoreError(422, 'this zip has no history.bundle: it is not an OrgCraft export', { type: 'bad-zip' });
+  return { bundle: bundle.data, files: entries.filter((e) => e.name.startsWith('files/')) };
+}
+
+function exportReadme(team, sha, number) {
+  return `Your team "${team}", version ${number} (${sha.slice(0, 12)}), exported from OrgCraft.
+
+files/          every file of the team at this version
+history.bundle  the team's whole history, as Git
+
+To keep working with it anywhere:
+
+1. git clone history.bundle ${team}
+2. cd ${team} && npx github:ThePurpleVoid/OrgCraft sync
+3. Push it to any Git host: git remote add origin <url> && git push -u origin main
+
+To bring it back into a new OrgCraft team: agent-team import <this zip>.
+`;
 }

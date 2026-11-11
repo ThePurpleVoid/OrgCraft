@@ -25,6 +25,10 @@ const STATES = new Set(['open', 'accepted', 'closed']);
  * number, so a step-up made for another change, a resume or anything else is refused and stays unspent.
  */
 export const acceptScope = (team, number) => `accept-change:${team}_${number}`;
+/** The step-up scope for one download of a team's export (spec L9 section 5.1, S2-27 bulk export). */
+export const exportScope = (team) => `export:${team}`;
+/** Downloads per team per 24 hours (spec 5.1). */
+export const EXPORTS_PER_DAY = 10;
 const NUMBER = /^[1-9][0-9]{0,8}$/;
 const actor = (who) => ({ kind: 'person', id: String(who.principal) });
 
@@ -137,6 +141,39 @@ export function createChanges({ db, m3, now = () => new Date(), backendFor = nul
       // head (or the commit main moved to) switches on now, if its base is unmoved.
       await m3.tx(tenant, (ctx) => activatePending(ctx, team, { shas: [c.head, done.sha], via: 'managed' }));
       return { ...view(done.change), files: files.map((f) => ({ path: f.path, status: f.status })) };
+    },
+
+    /**
+     * GET /v1/teams/{team}/export (spec L9 section 5.1): the zip of main's files and history. An admin, signed in on the
+     * web (never a host, an app token or the admin token), with a step-up scoped export:<team>; at most 10 a day per
+     * team. Audited, appended as team.exported, and announced to every owner and admin of the workspace as a security
+     * notice ("Not you? Lock the account").
+     */
+    async exportTeam(who, team, { stepUp = null } = {}) {
+      const tenant = who.tenant;
+      if (who.via !== 'cookie') throw new Problem(403, 'download the team\'s files in the Studio, signed in on the web, with your passkey', { type: 'forbidden' });
+      if (!atLeast(who.role, 'admin')) throw new Problem(403, 'only an admin can download the team\'s files', { type: 'forbidden' });
+      const b = await backendOf(tenant, team);
+      const [{ n }] = await db.tenant(tenant, ({ q }) => q("select count(*)::int as n from audit where team = $1 and action = 'team.export' and decision = 'allowed' and detail->>'kind' = 'download' and at > now() - interval '1 day'", [team]));
+      if (n >= EXPORTS_PER_DAY) throw new Problem(429, `this team's files were downloaded ${n} times in the last day; try again tomorrow`, { type: 'rate-limited' });
+      await m3.requireStepUp(tenant, String(who.principal), stepUp, `Downloading all of ${team}'s files and history`, exportScope(team));
+      const out = await b.exportZip({ team }).catch((e) => { throw e?.status ? new Problem(e.status, e.message, e.type ? { type: e.type } : undefined) : e; });
+      await m3.tx(tenant, (ctx) => ctx.audit({ team, actorKind: 'person', actorId: String(who.principal), action: 'team.export', target: team, decision: 'allowed', detail: { sha: out.sha, kind: 'download', bytes: out.zip.length } }));
+      // identity_audit is not the app role's (migration 004): the notices are written as the system, like recovery's.
+      await db.systemTx(async ({ q }) => {
+        const people = await q("select person from members where tenant = $1 and role in ('owner', 'admin') and removed_at is null", [tenant]);
+        for (const p of new Set([...people.map((r) => r.person), String(who.principal)])) {
+          if (/^per_/.test(p)) await q('insert into identity_audit(person, action, detail) values ($1, $2, $3)', [p, 'team.exported', { by: String(who.principal), tenant, team, sha: out.sha, kind: 'download' }]);
+        }
+      });
+      await emit(tenant, team, 'team.exported', { by: String(who.principal), sha: out.sha, kind: 'download' }, who);
+      return out;
+    },
+
+    /** The export zip for the standing export's job (exports.mjs): no person, no step-up; the job is the system's. */
+    async exportOf(tenant, team) {
+      const b = await backendOf(tenant, team);
+      return b.exportZip({ team });
     },
 
     /** POST /v1/teams/{team}/changes/{n}/close */

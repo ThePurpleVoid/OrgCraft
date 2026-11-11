@@ -16,6 +16,17 @@ export function pgObjects(db, tenant, team) {
       const [row] = await db.tenant(tenant, ({ q }) => q('select body from managed_objects where team = $1 and sha = $2', [team, sha]));
       return row ? Buffer.from(row.body) : null;
     },
+    /** Many objects in one round trip (code review L9b sev4): Map sha → bytes, missing ones left out. */
+    async getMany(shas) {
+      const ids = [...new Set(shas)].filter((sha) => SHA.test(sha));
+      if (!ids.length) return new Map();
+      const out = new Map();
+      for (let i = 0; i < ids.length; i += 500) {
+        const rows = await db.tenant(tenant, ({ q }) => q('select sha, body from managed_objects where team = $1 and sha = any($2)', [team, ids.slice(i, i + 500)]));
+        for (const r of rows) out.set(r.sha, Buffer.from(r.body));
+      }
+      return out;
+    },
     async put(sha, framed) {
       if (!SHA.test(sha)) throw new TypeError('not an object id');
       await db.tenant(tenant, ({ q }) => q('insert into managed_objects(tenant, team, sha, body) values ($1, $2, $3, $4) on conflict do nothing', [tenant, team, sha, Buffer.from(framed)]));

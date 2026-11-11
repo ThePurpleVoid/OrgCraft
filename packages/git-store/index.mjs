@@ -65,6 +65,7 @@ export function memoryStore() {
     get: async (sha) => m.get(sha) ?? null,
     put: async (sha, framed) => { if (!m.has(sha)) m.set(sha, Buffer.from(framed)); },
     has: async (sha) => m.has(sha),
+    getMany: async (shas) => new Map(shas.filter((sha) => m.has(sha)).map((sha) => [sha, m.get(sha)])),
     get size() { return m.size; },
     ids: () => [...m.keys()],
   };
@@ -81,7 +82,27 @@ export async function writeObject(store, type, body) {
 /** Reads an object and hashes it again: a store that answers with the wrong bytes is caught here. */
 export async function readObject(store, sha, want) {
   if (!SHA.test(sha)) fail(`not an object id: ${sha}`);
-  const raw = await store.get(sha);
+  return checked(sha, await store.get(sha), want);
+}
+
+/**
+ * Reads many objects at once: Map sha → { type, body }, each hashed again. A store with getMany(shas) (one round trip,
+ * Map or object of sha → framed bytes) is asked once; any other is asked object by object. Throws on a missing one.
+ */
+export async function readObjects(store, shas, want) {
+  const ids = [...new Set(shas)];
+  for (const sha of ids) if (!SHA.test(sha)) fail(`not an object id: ${sha}`);
+  const out = new Map();
+  if (!ids.length) return out;
+  if (typeof store.getMany === 'function') {
+    const got = await store.getMany(ids);
+    const at = (sha) => (got instanceof Map ? got.get(sha) : got?.[sha]);
+    for (const sha of ids) out.set(sha, checked(sha, at(sha), want));
+  } else for (const sha of ids) out.set(sha, checked(sha, await store.get(sha), want));
+  return out;
+}
+
+function checked(sha, raw, want) {
   if (!raw) fail(`missing object ${sha}`, 'missing');
   const buf = bytes(raw);
   if (createHash('sha1').update(buf).digest('hex') !== sha) fail(`object ${sha} does not match its id`, 'corrupt');
@@ -218,29 +239,49 @@ export async function applyChanges(store, baseTree, changes) {
   return (await finish(root)) ?? writeObject(store, 'tree', Buffer.alloc(0));
 }
 
-/** Lists every file under a tree: [{ path, mode, sha }]. */
+/** Lists every file under a tree: [{ path, mode, sha }], in tree order. One read per tree level (readObjects). */
 export async function listTree(store, tree, prefix = '') {
-  const out = [];
-  for (const e of readTree((await readObject(store, tree, 'tree')).body)) {
-    const p = prefix ? `${prefix}/${e.name}` : e.name;
-    if (e.mode === DIR_MODE) out.push(...await listTree(store, e.sha, p));
-    else out.push({ path: p, mode: e.mode, sha: e.sha });
+  const trees = new Map();
+  let level = [tree];
+  while (level.length) {
+    const got = await readObjects(store, level.filter((sha) => !trees.has(sha)), 'tree');
+    const next = [];
+    for (const [sha, o] of got) {
+      const entries = readTree(o.body);
+      trees.set(sha, entries);
+      for (const e of entries) if (e.mode === DIR_MODE && !trees.has(e.sha)) next.push(e.sha);
+    }
+    level = [...new Set(next)];
   }
+  const out = [];
+  const walk = (sha, at) => {
+    for (const e of trees.get(sha)) {
+      const p = at ? `${at}/${e.name}` : e.name;
+      if (e.mode === DIR_MODE) walk(e.sha, p);
+      else out.push({ path: p, mode: e.mode, sha: e.sha });
+    }
+  };
+  walk(tree, prefix);
   return out;
 }
 
 /** Every object id reachable from `wants` (commits) and not from `haves`, parents first is not promised. */
 export async function reachable(store, wants, haves = []) {
   const skip = new Set();
+  // Breadth first, one readObjects per frontier: a store with getMany answers each level in one round trip.
   const walk = async (starts, into) => {
-    const stack = [...starts];
-    while (stack.length) {
-      const sha = stack.pop();
-      if (into.has(sha) || (into !== skip && skip.has(sha))) continue;
-      into.add(sha);
-      const o = await readObject(store, sha);
-      if (o.type === 'commit') { const c = readCommit(o.body); stack.push(c.tree, ...c.parents); }
-      else if (o.type === 'tree') for (const e of readTree(o.body)) { if (e.mode === '160000') fail('submodules are not supported'); stack.push(e.sha); }
+    let frontier = [...new Set(starts)];
+    while (frontier.length) {
+      const todo = frontier.filter((sha) => !into.has(sha) && !(into !== skip && skip.has(sha)));
+      for (const sha of todo) into.add(sha);
+      const got = await readObjects(store, todo);
+      const next = new Set();
+      for (const sha of todo) {
+        const o = got.get(sha);
+        if (o.type === 'commit') { const c = readCommit(o.body); next.add(c.tree); for (const p of c.parents) next.add(p); }
+        else if (o.type === 'tree') for (const e of readTree(o.body)) { if (e.mode === '160000') fail('submodules are not supported'); next.add(e.sha); }
+      }
+      frontier = [...next];
     }
   };
   if (haves.length) await walk(haves, skip);
