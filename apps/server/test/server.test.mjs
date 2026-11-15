@@ -65,11 +65,13 @@ test('takes the kit\'s reports byte for byte with a report token, and serves the
 
     assert.equal((await report({ role: 'backend-dev', kind: 'status', status: 'working' }, 'rt_x.nope')).status, 401);
     assert.equal((await report({ role: 'backend-dev', kind: 'status' })).status, 400, 'a status report needs a status');
-    const sent = { role: 'backend-dev', kind: 'status', status: 'working', task: 'Invoices API', issue: 42, source: 'team-status.sh', id: 'r1', at: '2026-11-06T10:00:00.000Z' };
+    // Recent times: the board's hand-off flow covers the last 7 days, so fixed dates expire.
+    const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
+    const sent = { role: 'backend-dev', kind: 'status', status: 'working', task: 'Invoices API', issue: 42, source: 'team-status.sh', id: 'r1', at: ago(10) };
     const ok = await report(sent);
     assert.deepEqual(ok.body, { ok: true, id: 'r1' });
     assert.deepEqual((await report(sent)).body, { ok: true, id: 'r1' }, 'a retry is accepted and stored once');
-    await report({ role: 'backend-dev', kind: 'handoff', status: 'waiting', to: 'backend-tester', pr: 57, id: 'r2', at: '2026-11-06T10:05:00.000Z' });
+    await report({ role: 'backend-dev', kind: 'handoff', status: 'waiting', to: 'backend-tester', pr: 57, id: 'r2', at: ago(5) });
     assert.ok(woke() >= 2, 'appends wake the sink worker');
 
     const log = (await call('GET', '/teams/shop/events')).body;
