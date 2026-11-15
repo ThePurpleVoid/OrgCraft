@@ -110,8 +110,8 @@ See [docs/running-the-team.md](running-the-team.md) for threads and subagents.
 
 ```
 bin/agent-team.mjs              the CLI: init, sync, check, roles, dashboard, doctor
-presets/                        role lists for minimal, engineering, company
-team/                           the framework: protocols, project instructions, ownership seed, 48 role briefs, team templates
+presets/                        role lists for minimal, engineering, marketing, company
+team/                           the framework: protocols, project instructions, ownership seed, 52 role briefs, team templates
 scripts/                        runtime scripts generated into scripts/agent-team/
 tools/                          roster checker, subagent export, the Node reporter and hooks, doctor and the dashboard (server + page)
 templates/                      config.sh, sync.sh, sync.mjs and the roles README for new projects
@@ -204,7 +204,7 @@ There are many projects for running teams of agents. Most of them overlap with o
 | Agent teams in Python, any model | [CrewAI](https://github.com/crewAIInc/crewAI), [AutoGen](https://github.com/microsoft/autogen), [MetaGPT](https://github.com/FoundationAgents/MetaGPT), [ChatDev](https://github.com/OpenBMB/ChatDev) | Those are SDKs you program against. The kit is for Claude Code working on a real repository. |
 | A live view of Claude Code sessions | Hook-based monitors such as Claude Code Agent Monitor or claude-team-dashboard | Those show raw tool calls. The kit's hooks report too, but its board is organised by role: what each one is doing, who it is waiting on, and its hand-offs, and it can be mounted on your own site. |
 
-What the kit has that we have not found together elsewhere: a whole company org (48 briefs, with model tiers and reporting lines checked by `roster.mjs`), presets, a pinned-version sync into your repository with a CI drift check, one writer per path, merge gates and hardware locks, hook-based reports with a `doctor` smoke test, and a dashboard that runs locally or on a hosted site.
+What the kit has that we have not found together elsewhere: a whole company org (52 briefs, with model tiers and reporting lines checked by `roster.mjs`), presets, a pinned-version sync into your repository with a CI drift check, one writer per path, merge gates and hardware locks, hook-based reports with a `doctor` smoke test, and a dashboard that runs locally or on a hosted site.
 
 Limits today: a thread's own session is reported by the hooks only when its checkout names its role (`AGENT_TEAM_ROLE` in `.agent-team/local.env` or the environment); subagents and teammates are always reported. The merge gate and locks run on Node alone for gates in `.agent-team/gates.json` (`merge-gate.mjs`, `with-lock.mjs`); gates written as bash functions, `team-board.sh` and `janitor.sh` still need bash (Git Bash or WSL on Windows); and it works with Claude Code only.
 

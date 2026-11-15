@@ -1,0 +1,10 @@
+# A marketing team for a product that already exists: positioning, copy, search, social and launches. Roles draft; the owner approves what goes public.
+# To add these roles to an existing team instead, list them under "include" in .agent-team/team.json.
+chief-of-staff
+marketing-lead
+copywriter
+growth-seo-lead
+social-media-manager
+launch-manager
+brand-designer
+analytics-lead

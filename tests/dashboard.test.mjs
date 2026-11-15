@@ -60,7 +60,7 @@ test('reports are validated like the hosted board', () => {
 test('the roster graph: every kit role is placed under a manager and hands off to known roles', () => {
   const g = buildGraph('team');
   const slugs = new Set(g.roles.map((r) => r.slug));
-  assert.equal(g.roles.length, 48);
+  assert.equal(g.roles.length, 52);
   assert.deepEqual(g.ownerReports, ['chief-of-staff']);
   for (const r of g.roles) assert.ok(r.reportsTo === 'owner' || slugs.has(r.reportsTo), r.slug);
   for (const e of g.edges) assert.ok(slugs.has(e.to) || e.to === 'owner', `${e.from}>${e.to}`);
@@ -75,8 +75,8 @@ test('the page code lays out the kit roster without a browser', () => {
   runInNewContext(readFileSync('tools/dashboard/app.js', 'utf8'), { module, URLSearchParams, Date, Math, JSON });
   const api = module.exports;
   const T = api.team(buildGraph('team'));
-  assert.equal(T.org.nodes.length, 49);
-  assert.equal(T.flow.nodes.length, 49);
+  assert.equal(T.org.nodes.length, 53);
+  assert.equal(T.flow.nodes.length, 53);
   const B = api.boardOf(T, [{ role: 'cto', status: 'working', age_s: 10, stale: false }]);
   assert.equal(B.lightOf(T.bySlug.get('cto')), 'working');
   assert.equal(api.rollup(T, B, T.bySlug.get('chief-of-staff')).light, 'working');
@@ -131,7 +131,7 @@ test('the server takes reports, keeps one copy of each, and serves the board', a
     assert.equal(board.current[0].task, 'Plan');
     assert.equal(board.role.length, 1);
     const roster = await (await fetch(`${base}/api/roster`)).json();
-    assert.equal(roster.roles.length, 48);
+    assert.equal(roster.roles.length, 52);
     assert.equal(roster.briefsPath, 'team/roles');
     const page = await fetch(`${base}/`);
     assert.match(await page.text(), /data-agent-team-dashboard/);

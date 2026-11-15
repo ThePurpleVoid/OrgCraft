@@ -36,19 +36,30 @@ Those go to the chief of staff as BLOCKED. An automatic deploy never runs a dest
 Everything else (a status value, a column on an existing table, a view or endpoint tweak, a bug fix inside one subsystem) the CTO scopes and hands straight to the engineer, and the hand-off says which path was chosen.
 
 <!-- fill:handoff -->
-| **HANDOFF** | issue, from, to, branch and commit, artifact (build path or preview URL), what changed, how to verify, done when |
+| **HANDOFF** | issue, from, to, branch and commit, artifact (build path or preview URL), what changed, how to verify, done when, unverified |
 
 <!-- fill:bug -->
 | **BUG** | issue, screen, steps, expected, actual, screenshot path, severity, build |
 
 <!-- fill:signoff -->
-| **SIGNOFF** | issue, tested on (device or browser, OS, commit), what was walked, result, screenshot or log paths (required) |
+| **SIGNOFF** | issue, tested on (device or browser, OS, commit), what was walked, result, screenshot or log paths (required), unverified |
 
 <!-- fill:blocked -->
 | **BLOCKED** | issue, what is needed, from whom, what happens meanwhile |
 
 <!-- fill:shapes-after -->
 A SIGNOFF without screenshot or log paths is invalid. Three BUG rounds between one QA role and one dev, then the product manager decides.
+
+<!-- fill:format-example -->
+```
+HANDOFF · #42 Invoices API · backend-dev → backend-tester
+branch and commit: backend-dev/invoices-api at 3f2c1ab
+artifact: PR #57
+what changed: GET and POST /invoices, with row-level security on the new table
+how to verify: scripts/agent-team/merge-gate.sh backend, then the cases in issue #42
+done when: every case in #42 passes against the preview database
+unverified: the PDF export path; the PDF service is down, BLOCKED sent to infra-secrets-oncall
+```
 
 <!-- fill:start -->
 **Report on start.** The first command of every task, before any reading or building, is a `status working` report with the task's name (and issue, when there is one). A task that changes shape gets a fresh `status working` with its new name, and a thread that resumes from its memory file reports again on resume. Work with no start report on the board has not started. After that, every HANDOFF, BUG, SIGNOFF or BLOCKED is reported with the same fields:

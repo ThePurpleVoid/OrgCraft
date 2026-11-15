@@ -69,6 +69,14 @@ In `.agent-team/team.json`:
 
 `include` adds kit roles outside the preset; `exclude` drops them. `exclude` also switches off one of your own roles (`.agent-team/roles/<slug>.md`) without deleting it: the file stays, the role is not installed, and taking it out of `exclude` brings it back as it was. The Studio does this when you switch a custom agent off. Reporting lines follow automatically: a role whose manager is not installed reports to the chief of staff, and direct-report lists show only installed roles.
 
+**Adding marketing to a product team.** The `marketing` preset is a marketing team on its own: the marketing lead with a copywriter, a growth and SEO lead, a social media manager and a launch manager, plus the brand designer and the analytics lead. To give an existing team the same roles, keep its preset and include them:
+
+```json
+"include": ["marketing-lead", "copywriter", "growth-seo-lead", "social-media-manager", "launch-manager", "brand-designer"]
+```
+
+Add `"cmo"` too if you want an executive over the lane; without one, the marketing lead reports to the chief of staff. The marketing roles draft. Anything public goes out when the owner sends it, or, on a team whose protocols let roles send, under the publishing policy the owner approved (`docs/marketing/publishing-policy.md`, which the marketing lead writes). The engineering pack, which every team gets unless `team.json` says otherwise, keeps all sending with the owner.
+
 `"dashboard": { "export": "<folder>", "repo": "<url>" }` also writes the team dashboard into your website's source; see [the dashboard guide](dashboard.md#3-on-your-website-readable-from-anywhere).
 
 `values` fills `{{PROJECT_NAME}}`-style placeholders in the generated docs. You can add your own keys and use them in your own role files.
