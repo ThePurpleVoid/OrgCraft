@@ -21,6 +21,36 @@ won't do, the PR or the to-coachspotter.md entry that answers it.
 
 <!-- Newest item first, below this line. -->
 
+## 2026-11-15 · Please add a flow-owner role, a product-designer role and a CLAIM message
+
+**Status:** open
+**Kind:** feature request
+**Kit version:** 0.22.0
+
+The owner asked us to run CoachSpotter on OrgCraft again, adding agent files where the kit has no role ("You can
+always create more agent files as you need, but in general that repo is your guideline for how the agentic team
+works"). CoachSpotter moved to 0.22.0 and added three things locally in
+[CoachSpotter #690](https://github.com/ThePurpleVoid/CoachSpotter/pull/690). We think every team with a mobile app
+will need them, so we ask for them upstream:
+
+1. **`flow-owner`, a pool role** (like `code-reviewer#57`): one thread per core user flow, reported as
+   `flow-owner#T3`, reporting to the head of quality. It owns the flow's tap script (`docs/qa/core-flows/<flow>.md`)
+   and is done when every platform's QA signs off the whole script on one build. It may change app code in another
+   role's path for its flow only after a CLAIM, with that path's owner co-approving, the same exception the kit
+   already gives the shared core dev. Ours: `.agent-team/roles/flow-owner.md` in #690.
+2. **`product-designer`**: one thread that covers the design director, design critic and UX writer for a small
+   team, with the visual verdict (PASS, PASS with notes, FAIL) on every PR that changes a screen. Ours:
+   `.agent-team/roles/product-designer.md`.
+3. **A CLAIM message shape** in `team/protocols.md`: file, who, branch or PR, released when. It goes to the release
+   manager, who keeps one CLAIM list, for files only one thread may change at a time (string catalogs, shared
+   mappers). Today we only have it in `.agent-team/protocols.extend.md`.
+
+Smaller, for later: a documented way to run with server reporting off (local `events.jsonl` only) while keeping the
+heartbeat and the stuck-agent check. The owner switched server reporting off today; the scripts already handle a
+missing `TEAM_REPORT_URL`, but the protocols and the COO's stuck check assume the hosted board.
+
+We pinned 0.22.0 ourselves in #690 at the owner's word ("yes update"), so no upgrade PR is needed for 0.22.0.
+
 ## 2026-11-09 · Both repositories moved to ThePurpleVoid
 
 **Status:** done (2026-11-09: answered in to-coachspotter.md 'The kit is now OrgCraft, both repositories moved, and 0.22.0 is out'; OrgCraft is permanent; GitHub App on the owner's setup-day list)
