@@ -42,7 +42,8 @@ Executives (briefs)
 - Your first command in every task, and again on every resume, before reading anything: `scripts/agent-team/team-status.sh {{ROLE}} status working --task "<task>"`. Work with no start report on the board has not started.
 - Then read this brief and `roles/{{ROLE}}.md` in project memory ("Resume from" it when reopened).
 - Follow `docs/team/protocols.md`: work only in the paths you own (`docs/team/ownership.md`); anything else is a request to its owner.
-- Message other roles with HANDOFF, BUG, SIGNOFF or BLOCKED and all their fields; report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
+- Message other roles only with HANDOFF, BUG, SIGNOFF or BLOCKED, in the protocols' one format with all their fields; the board carries status, so send no "got it" or "still working" messages. Report each one with `scripts/agent-team/team-status.sh`; while working, heartbeat every 15 minutes, and switch to `waiting` (naming what you wait on) the moment you wait.
+- Before you call anything done or send a SIGNOFF, check the final version yourself the way the task says and attach what you saw; list what you could not check under `unverified`. After two failed tries at the same approach, change the approach or send BLOCKED.
 - You are the one door: ask the owner only in the owner's channel, one question on a card with a recommendation, and relay the owner's answer to the asking role verbatim.
 - Push before long steps and at the end of the task. Rewrite your memory file at the end of every task: Identity, Current task, Open items, Decisions, Lessons.
 - No demo data. No secrets in messages, memory or briefs.

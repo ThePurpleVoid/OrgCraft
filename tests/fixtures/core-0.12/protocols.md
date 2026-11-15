@@ -45,16 +45,59 @@ Everything else (a status value, a column on an existing table, a view or endpoi
 
 ## Message shapes
 
-Every message between roles is one of four shapes, with all of its fields.
+Every message between roles is one of four shapes, with all of its fields, and nothing else: the board carries status, so nobody sends "got it", "on it", "still working" or "thanks". You acknowledge a HANDOFF by reporting `status working` with its task.
 
 | Shape | Fields |
 | --- | --- |
-| **HANDOFF** | issue, from, to, branch and commit, artifact (build path or preview URL), what changed, how to verify, done when |
+| **HANDOFF** | issue, from, to, branch and commit, artifact (build path or preview URL), what changed, how to verify, done when, unverified |
 | **BUG** | issue, screen, steps, expected, actual, screenshot path, severity, build |
-| **SIGNOFF** | issue, tested on (device or browser, OS, commit), what was walked, result, screenshot or log paths (required) |
+| **SIGNOFF** | issue, tested on (device or browser, OS, commit), what was walked, result, screenshot or log paths (required), unverified |
 | **BLOCKED** | issue, what is needed, from whom, what happens meanwhile |
 
 A SIGNOFF without screenshot or log paths is invalid. Three BUG rounds between one QA role and one dev, then the product manager decides.
+
+**One format.** Every message, whatever the shape, is written the same way, so any role can read it at a glance:
+
+```
+HANDOFF · #42 Invoices API · backend-dev → backend-tester
+branch and commit: backend-dev/invoices-api at 3f2c1ab
+artifact: PR #57
+what changed: GET and POST /invoices, with row-level security on the new table
+how to verify: scripts/agent-team/merge-gate.sh backend, then the cases in issue #42
+done when: every case in #42 passes against the preview database
+unverified: the PDF export path; the PDF service is down, BLOCKED sent to infra-secrets-oncall
+```
+
+- The first line is the shape, the task, the sender and the receiver. Then one line per field, in the table's order, with the field's name.
+- `unverified` lists what the sender did not check, and why; write `none` only when everything was checked. A HANDOFF or SIGNOFF without it is incomplete, and the receiver sends it back.
+- Link or name the file; never paste a long text, a log or a diff into the message. A message longer than about twelve lines belongs in a file that the message links.
+- One message per event. Collect your questions into one BLOCKED instead of sending them one at a time.
+- Answer a message with the shape it asks for (a HANDOFF with SIGNOFF or BUG, a BLOCKED with the answer the sender needs), not with chat.
+
+## Who answers what
+
+Each kind of question has one owner. Send it there first, and only there.
+
+| Question | Who answers |
+| --- | --- |
+| What to work on next, what is in or out of scope, which comes first | Your executive |
+| Whether a piece of work is good enough to use or send | The role that checks it, with a SIGNOFF or a BUG |
+| A change in an area you do not own | That area's owner (`docs/team/ownership.md`) |
+| What the sender meant, or a missing detail in a HANDOFF | The sender |
+| A disagreement between two roles that their executive has not settled | The chief of staff |
+| Anything for the owner | The chief of staff, and only the chief of staff |
+
+## Doing the work
+
+These rules hold for every role and every task. They are how the team stays trustworthy without the owner watching.
+
+- **Know what done is before you start.** Every task has a "done when". When the HANDOFF has none, write the one you will work to at the top of your memory file's Current task, work to it, and state it in your HANDOFF back. Do not stop to ask unless two readings would lead to different work.
+- **Stay in scope.** Do what the task asks, in the areas you own. Anything else you notice goes to its owner as a BUG, or as a one-line note in your HANDOFF; you do not fix it on the side.
+- **Check before you say done.** "Done", "fixed", "works", "ready" and every SIGNOFF mean you checked the final version yourself, the way the task or your brief says, and attached what you saw. A check you did not run is never reported as passed. Anything you could not check goes under `unverified`, with the reason.
+- **Say how sure you are.** Keep what you saw apart from what you infer. A guess is labelled as a guess. Numbers carry their source and how many people or records they are based on.
+- **When something fails.** After two failed tries at the same approach, stop: change the approach or send BLOCKED with what you tried and what happened. Never weaken, skip or remove a check to get a pass, and never make up a result, a number, a source, a quote or a review. When a tool or service you need is down, report `waiting` naming it, and work on something else meanwhile.
+- **Escalate in order, and early.** Stuck for more than about 30 minutes of real work: ask the sender of the task, then your executive. Only your executive takes it to the chief of staff, and only the chief of staff takes it to the owner. Every BLOCKED names the question, your recommendation, and what you do meanwhile.
+- **Hand over cleanly.** When you stop mid-task (the session ends, the task changes owner), your memory file and your last HANDOFF are enough for someone else to continue: what is done, what is not, where the files are and what is unverified.
 
 ## Reporting to the team board
 

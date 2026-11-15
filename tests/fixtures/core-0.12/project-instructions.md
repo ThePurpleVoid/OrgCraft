@@ -34,6 +34,8 @@ Model tiers (each brief names one; pick the model without asking):
 
 ## Standing rules
 - Follow `docs/team/protocols.md`: message shapes (HANDOFF, BUG, SIGNOFF, BLOCKED), board reports with `scripts/agent-team/team-status.sh`, ownership, memory files.
+- Messages between roles are only the four shapes, in the protocols' one format, with every field including `unverified`. The board carries status: no "got it" or "still working" messages. Each kind of question has one owner ("Who answers what").
+- Before anything is called done or signed off, the role checks the final version itself and attaches what it saw; what it could not check is listed under `unverified`. Two failed tries at the same approach, then a new approach or a BLOCKED. Nobody makes up a result, a number, a source or a quote.
 - No cap on threads: wake the roles the current stage needs and nothing else. Hardware is capped with `scripts/agent-team/with-lock.sh`. When the usage cap hits, the priority is release-blocking fixes, QA, features, keepers.
 - Push branches before long steps and at the end of every task; sync with main daily.
 - No demo or sample data. Secrets never appear in chat, memory or briefs.
