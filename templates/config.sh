@@ -51,6 +51,16 @@ gate_backend() {
 #   fi
 # }
 
+# The project's own tools for scripts/agent-team/setup.sh, which installs the kit's own (git, bash, jq, curl, gh, Node,
+# Claude Code). Helpers: setup_tool <command> <what needs it> <brew args…>, setup_missing <what> <how>,
+# setup_yours <what> <exact command> (a password, licence or sign-in), setup_ok <what>, setup_path <dir>.
+# SETUP_INSTALL is 1 when this run may install.
+# setup_extra() {
+#   setup_tool python3 "the gate's checks" python
+#   setup_tool java "./gradlew in the gate" openjdk@17
+#   setup_tool maestro "mobile UI flows" mobile-dev-inc/tap/maestro
+# }
+
 # Extra nightly cleanup for scripts/agent-team/janitor.sh.
 # janitor_extra() {
 #   ./gradlew --stop >/dev/null 2>&1 || true

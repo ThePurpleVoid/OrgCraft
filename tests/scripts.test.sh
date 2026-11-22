@@ -39,6 +39,22 @@ jq 'del(.dashboard)' "$repo/.agent-team/team.json" >"$tmp/tj" && mv "$tmp/tj" "$
 (cd "$repo" && $AT sync >/dev/null)
 expect "dropping dashboard.export removes the website copy" '[ ! -e "$repo/web/src/team-board/app.js" ]'
 expect "check passes right after init" '(cd "$repo" && $AT check >/dev/null)'
+
+# setup.sh: the project's tools come from setup_extra; --check reports and fails on what is missing, --auto never fails
+cp "$repo/.agent-team/config.sh" "$tmp/config.bak"
+cat >>"$repo/.agent-team/config.sh" <<'SH'
+setup_extra() { setup_missing "frobnicator" "brew install frobnicator"; setup_ok "widget"; }
+SH
+out="$(cd "$repo" && scripts/agent-team/setup.sh --check 2>&1)"; code=$?
+expect "setup.sh is generated" '[ -x "$repo/scripts/agent-team/setup.sh" ]'
+expect "setup.sh --check runs setup_extra and exits 1 for what is missing" '[ $code -eq 1 ] && grep -q "^MISS  frobnicator: brew install frobnicator" <<<"$out" && grep -q "^ok    widget" <<<"$out"'
+mkdir -p "$HOME/.agent-team/demo-app" && touch "$HOME/.agent-team/demo-app/setup.done"
+out="$(cd "$repo" && scripts/agent-team/setup.sh --auto 2>&1)"; code=$?
+expect "setup.sh --auto exits 0, prints only what is missing, never ok lines" '[ $code -eq 0 ] && grep -q "frobnicator" <<<"$out" && ! grep -q "^ok " <<<"$out"'
+rm -f "$HOME/.agent-team/demo-app/setup.done"
+(cd "$repo" && scripts/agent-team/setup.sh --nope >/dev/null 2>&1); code=$?
+expect "setup.sh refuses an unknown flag" '[ $code -eq 64 ]'
+mv "$tmp/config.bak" "$repo/.agent-team/config.sh"
 (cd "$repo" && $AT init >/dev/null 2>&1)
 expect "second init refuses" '[ $? -eq 64 ]'
 

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mergeSettings } from '../bin/agent-team.mjs';
+import { kitPlugins, mergeSettings, withModelMap } from '../bin/agent-team.mjs';
 import { readLog, summarize } from '../tools/board.mjs';
 import { checkSignoff, fromHook, kitVersion, makeEvent, parseArgs, shellVars } from '../tools/report.mjs';
 
@@ -98,6 +98,34 @@ test('settings: the kit replaces its own hooks and keeps everything else', () =>
   assert.deepEqual(off.hooks, mine.hooks, 'turning hooks off removes only the kit\'s');
   assert.equal(mergeSettings(null, { hooks: false }), null, 'no settings file is made for nothing');
   assert.throws(() => mergeSettings('{nope', { hooks: true }), /not valid JSON/);
+});
+
+test('settings: setup hook, plugins and connector approval are added once and never overwrite the project', () => {
+  const mine = { enabledPlugins: { 'octo@nyldn-plugins': false }, enableAllProjectMcpServers: false };
+  const opts = { setup: true, plugins: true, approveMcpServers: true, packs: ['engineering'] };
+  const once = mergeSettings(JSON.stringify(mine), opts);
+  assert.equal(mergeSettings(once, opts), once, 'merging again changes nothing');
+  const s = JSON.parse(once);
+  const setup = s.hooks.SessionStart.find((g) => g.hooks[0].command.includes('setup.sh'));
+  assert.equal(setup.matcher, 'startup');
+  assert.equal(setup.hooks[0].command, '"${CLAUDE_PROJECT_DIR}/scripts/agent-team/setup.sh" --auto');
+  assert.equal(s.enabledPlugins['octo@nyldn-plugins'], false, 'a plugin the project turned off stays off');
+  assert.equal(s.enabledPlugins['superpowers@claude-plugins-official'], true);
+  assert.equal(s.enableAllProjectMcpServers, false, 'approval the project switched off stays off');
+  for (const id of kitPlugins(['engineering'])) assert.ok(s.extraKnownMarketplaces[id.split('@')[1]], `${id} has its marketplace`);
+  assert.ok(!kitPlugins(['marketing']).some((id) => id.startsWith('andrej-karpathy-skills@')), 'karpathy is the engineering pack\'s');
+  const off = JSON.parse(mergeSettings(once, { packs: ['engineering'] }));
+  assert.equal(off.hooks, undefined, 'turning setup off removes its hook');
+  assert.deepEqual(off.enabledPlugins, s.enabledPlugins, 'turning plugins off leaves them as they are');
+  assert.equal(JSON.parse(mergeSettings('{}', { approveMcpServers: true })).enableAllProjectMcpServers, true);
+});
+
+test('instructions: with subagents on, the tier list says which model each tier runs on', () => {
+  const doc = 'Model tiers (each brief names one; pick the model without asking):\n- **routine**: a fast model.';
+  assert.equal(withModelMap(doc, {}), doc, 'no subagents, no line');
+  const out = withModelMap(doc, { subagents: true, models: { routine: 'opus' } });
+  assert.match(out, /\*\*routine\*\* opus/);
+  assert.match(out, /\*\*light\*\* haiku/, 'tiers the team did not map use the defaults');
 });
 
 // ------------------------------------------------------------------------------------------------ scenario
