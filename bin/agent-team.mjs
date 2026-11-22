@@ -32,7 +32,7 @@ import { parseBrief } from '../tools/briefs.mjs';
 import { check as checkRoster, tree } from '../tools/roster.mjs';
 import { DEFAULT_MODELS, toSubagent } from '../tools/export-subagents.mjs';
 import { graphFrom } from '../tools/roster-graph.mjs';
-import { AGENTS_END, TARGETS, neutralInstructions, spliceBlock, teamTargets, withoutBlock, applyBindings, applyMeetings, checkTemplate, fitToPacks, roleTemplateFor, teamDoc, teamPacks, renderMeetings, templateCard, templateLayer, toZone, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, basedOnOf, briefOfMember, fillRole, roleTitle, parseExtension, renderHandsTo, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
+import { AGENTS_END, DEFAULT_PACKS, TARGETS, neutralInstructions, spliceBlock, teamTargets, withoutBlock, applyBindings, applyMeetings, checkTemplate, fitToPacks, roleTemplateFor, teamDoc, teamPacks, renderMeetings, templateCard, templateLayer, toZone, validate as validateSpec, compileLayer, extendBriefText, fitToTeam, importLayer, basedOnOf, briefOfMember, fillRole, roleTitle, parseExtension, renderHandsTo, renderGates, renderOwnership, renderSystems } from '../packages/team-model/index.mjs';
 import { loadKit, loadTemplates, readLayer, readTemplateDir, writeLayer } from '../packages/team-model/node.mjs';
 
 export const KIT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -45,11 +45,12 @@ const DOCS = 'docs/team';
 const SCRIPTS = 'scripts/agent-team';
 const AGENTS = '.claude/agents';
 const LOCK = `${LAYER}/kit.lock.json`;
-const RUNTIME = ['lib.sh', 'team-status.sh', 'team-board.sh', 'merge-gate.sh', 'with-lock.sh', 'janitor.sh'];
+const RUNTIME = ['lib.sh', 'team-status.sh', 'team-board.sh', 'merge-gate.sh', 'with-lock.sh', 'janitor.sh', 'setup.sh'];
 const TOOLS = ['briefs.mjs', 'roster.mjs', 'export-subagents.mjs', 'roster-graph.mjs', 'board.mjs', 'dashboard.mjs', 'report.mjs', 'systems-hash.mjs', 'hosts.mjs', 'with-lock.mjs', 'merge-gate.mjs'];
 const SETTINGS = '.claude/settings.json';
 const AGENTS_MD = 'AGENTS.md';
 const HOOK_SCRIPT = `${SCRIPTS}/report.mjs`;
+const SETUP_SCRIPT = `${SCRIPTS}/setup.sh`;
 const DASHBOARD = ['index.html', 'app.js', 'app.css', 'config.js'];
 
 const read = (p) => readFileSync(p, 'utf8');
@@ -73,6 +74,9 @@ export function loadProject(root) {
     models: team.models ?? undefined,
     dashboard: team.dashboard ?? undefined,
     hooks: team.hooks ?? false,
+    setup: team.setup ?? false,
+    plugins: team.plugins ?? false,
+    approveMcpServers: team.approveMcpServers ?? false,
     agentTeams: team.agentTeams ?? false,
     replaces: team.replaces ?? [],
     packs: teamPacks(team),
@@ -188,7 +192,7 @@ export function build(root) {
   md(`${DOCS}/protocols.md`, withExtension(teamDoc(kit, 'protocols.md', project.packs), root, 'protocols.extend.md', `## ${values.PROJECT_NAME} rules`));
   const systems = resources ? renderSystems(resources) : '';
   const meetingsText = meetings ? renderMeetings(meetings, roles, { timezone: values.TIMEZONE }) : '';
-  const instructions = withExtension(teamDoc(kit, 'project-instructions.md', project.packs), root, 'instructions.extend.md', `## ${values.PROJECT_NAME} rules`) + (systems ? `\n${systems}` : '') + (meetingsText ? `\n${meetingsText}` : '');
+  const instructions = withExtension(withModelMap(teamDoc(kit, 'project-instructions.md', project.packs), project), root, 'instructions.extend.md', `## ${values.PROJECT_NAME} rules`) + (systems ? `\n${systems}` : '') + (meetingsText ? `\n${meetingsText}` : '');
   md(`${DOCS}/project-instructions.md`, instructions);
   // AGENTS.md for other coding agents (targets "agents-md"): the kit's block, kept between markers so that the
   // repository's own text in the same file survives every sync.
@@ -255,14 +259,40 @@ export function build(root) {
   return { files: out, project, roles, warnings };
 }
 
+/**
+ * The tier lines describe kinds of model ("a fast model"); the team's subagents run on what team.json "models" maps each
+ * tier to. With subagents on, the instructions say so under the tier list, so the two never disagree.
+ */
+export function withModelMap(text, project) {
+  if (!project.subagents && !project.agentTeams) return text;
+  const m = { ...DEFAULT_MODELS, ...project.models };
+  const line = `This team's subagents run on: ${['deep', 'standard', 'routine', 'light'].map((t) => `**${t}** ${m[t]}`).join(', ')} (\`models\` in \`.agent-team/team.json\`).`;
+  return text.replace(/^(Model tiers \([^\n]*\):)$/m, `${line}\n\n$1`);
+}
+
 // ------------------------------------------------------------------------------------------------ Claude Code settings
 
 const HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreCompact', 'Stop', 'SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted', 'SessionEnd'];
-const isKitHook = (h) => typeof h?.command === 'string' && h.command.includes(HOOK_SCRIPT);
+const isKitHook = (h) => typeof h?.command === 'string' && (h.command.includes(HOOK_SCRIPT) || h.command.includes(SETUP_SCRIPT));
+
+// The plugins the project instructions name ("Working style"), and the marketplaces they come from. karpathy-guidelines
+// is named by the engineering pack only.
+export const KIT_MARKETPLACES = {
+  'claude-plugins-official': { source: { source: 'github', repo: 'anthropics/claude-plugins-official' } },
+  'karpathy-skills': { source: { source: 'github', repo: 'multica-ai/andrej-karpathy-skills' } },
+  'nyldn-plugins': { source: { source: 'git', url: 'https://github.com/nyldn/claude-octopus.git' } },
+  'i-have-adhd': { source: { source: 'git', url: 'https://github.com/ayghri/i-have-adhd.git' } },
+};
+export function kitPlugins(packs = DEFAULT_PACKS) {
+  return ['superpowers@claude-plugins-official', ...(packs.includes('engineering') ? ['andrej-karpathy-skills@karpathy-skills'] : []),
+    'i-have-adhd@i-have-adhd', 'octo@nyldn-plugins'];
+}
 
 /**
  * .claude/settings.json is the project's own file, so sync merges into it instead of owning it: the kit's hook
- * handlers (the ones that run scripts/agent-team/report.mjs) are replaced, everything else is kept.
+ * handlers (the ones that run scripts/agent-team/report.mjs or setup.sh) are replaced, everything else is kept.
+ * "plugins" and "approveMcpServers" only add what is missing: a value the project set itself (a plugin turned off,
+ * approval switched off) is never changed, and turning the option off leaves the settings as they are.
  * Returns the new text, or null when there is nothing to write.
  */
 export function mergeSettings(text, project) {
@@ -284,8 +314,18 @@ export function mergeSettings(text, project) {
       (hooks[ev] ??= []).push({ hooks: [handler] });
     }
   }
+  // First run on a machine: installs in the background; afterwards: checks and speaks only when something is missing.
+  if (project.setup) (hooks.SessionStart ??= []).push({ matcher: 'startup', hooks: [{ type: 'command', command: `"\${CLAUDE_PROJECT_DIR}/${SETUP_SCRIPT}" --auto`, timeout: 60 }] });
   if (Object.keys(hooks).length) settings.hooks = hooks; else delete settings.hooks;
   if (project.agentTeams) settings.env = { ...settings.env, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' };
+  if (project.plugins) {
+    const ids = kitPlugins(project.packs);
+    settings.extraKnownMarketplaces = { ...settings.extraKnownMarketplaces };
+    for (const id of ids) { const m = id.split('@')[1]; settings.extraKnownMarketplaces[m] ??= KIT_MARKETPLACES[m]; }
+    settings.enabledPlugins = { ...settings.enabledPlugins };
+    for (const id of ids) settings.enabledPlugins[id] ??= true;
+  }
+  if (project.approveMcpServers) settings.enableAllProjectMcpServers ??= true;
   if (!text?.trim() && !Object.keys(settings).length) return null;
   return JSON.stringify(settings, null, 2) + '\n';
 }
@@ -414,7 +454,7 @@ export function sync(root, { quiet = false } = {}) {
   if (settings.changed) {
     mkdirSync(dirname(settings.path), { recursive: true });
     writeFileSync(settings.path, settings.after);
-    log(`updated ${SETTINGS} (agent-team hooks${project.agentTeams ? ' and agent teams' : ''})`);
+    log(`updated ${SETTINGS} (${['agent-team hooks', project.agentTeams && 'agent teams', project.plugins && 'plugins', project.approveMcpServers && 'connector approval'].filter(Boolean).join(', ')})`);
   }
   const next = { kit: project.kit, version: VERSION, kitRoles: kitRoleSlugs(), files: Object.fromEntries([...files].map(([k, v]) => [k, sha(v)]).sort()) };
   writeFileSync(join(root, LOCK), JSON.stringify(next, null, 2) + '\n');
@@ -447,7 +487,7 @@ export function findProblems(root) {
   if (lock.version && lock.version !== VERSION) problems.push(`lock was written by kit ${lock.version}, this is ${VERSION}`);
   const roster = checkRoster(roles.map((r) => parseBrief(r.slug, r.md)));
   for (const e of roster.errors) problems.push(`roster: ${e}`);
-  if (settingsChange(root, project).changed) problems.push(`out of date: ${SETTINGS} (the agent-team hooks)`);
+  if (settingsChange(root, project).changed) problems.push(`out of date: ${SETTINGS} (the agent-team hooks, plugins or connector approval)`);
   for (const s of shadowedRoles(root, project)) problems.push(`shadowed: ${shadowMessage(s)}`);
   return problems;
 }

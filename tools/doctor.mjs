@@ -30,6 +30,7 @@ export async function doctor(root, { ping = false, print = console.log } = {}) {
     say(has('jq') ? 'ok' : 'warn', has('jq') ? 'jq' : 'jq is not installed: team-status.sh hands over to report.mjs, but team-board.sh and merge-gate.sh need jq');
     say(has('curl') ? 'ok' : 'warn', has('curl') ? 'curl' : 'curl is not installed: team-status.sh hands over to report.mjs for posting');
   }
+  if (results.some((r) => r.level !== 'ok')) print('     scripts/agent-team/setup.sh installs the missing tools (and the project\'s own, from setup_extra in .agent-team/config.sh)');
 
   let project;
   try { project = loadProject(root); say('ok', `.agent-team/team.json (preset ${project.preset}, kit ${project.kit})`); } catch (e) {

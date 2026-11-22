@@ -23,6 +23,31 @@ The hooks never print anything (output from `SessionStart` would reach the model
 
 Turn them off with `"hooks": false` and sync removes the kit's handlers.
 
+## Setup: tools, plugins and connectors on a new machine
+
+`scripts/agent-team/setup.sh` installs what the team needs on one machine with Homebrew, and reports what it cannot install. It is safe to run again: it installs only what is missing.
+
+| Command | What it does |
+| --- | --- |
+| `scripts/agent-team/setup.sh` | Installs what is missing, then reports |
+| `scripts/agent-team/setup.sh --check` | Reports only; exits 1 when something is missing |
+| `scripts/agent-team/setup.sh --auto` | What the hook runs. The first time on a machine it installs in the background (log: `~/.agent-team/<project>/setup.log`); after that it checks and prints only what is missing. Always exits 0 |
+
+What it covers:
+
+- **The kit's own tools:** git, bash, jq, curl, gh, Node 18 or later, Claude Code.
+- **The project's tools:** a `setup_extra` function in `.agent-team/config.sh`, with helpers for a tool, something missing and a step only the owner can do. The template has an example. A tool installed outside `PATH` (an SDK's own folder, say) is put on the session's `PATH` through `CLAUDE_ENV_FILE`.
+- **Plugins:** every plugin `.claude/settings.json` turns on and this machine does not have, installed with `claude plugin install <id> --scope project`. Turning a plugin on in settings does not download it; each machine installs it once.
+- **Connectors:** a variable `.mcp.json` reads that is not set (one with no default, or a credential such as a `…_TOKEN` or `…_PAT`), and, outside the hook, each server waiting for a sign-in or approval, from `claude mcp list`.
+
+It never asks for a password, never accepts a licence and never writes a secret. Installing Homebrew, the Xcode Command Line Tools, a licence, a sign-in or a token is printed as the exact command, marked `YOU`, for the owner.
+
+Three options in `team.json` wire it into Claude Code. Each is off unless set, and `plugins` and `approveMcpServers` only add what `.claude/settings.json` lacks: a plugin you turned off, or approval you switched off, stays as you set it, and turning the option off leaves the settings alone.
+
+- `"setup": true`: a `SessionStart` hook (on startup) runs `setup.sh --auto`. Turn it off and sync removes it.
+- `"plugins": true`: `extraKnownMarketplaces` and `enabledPlugins` for the plugins the project instructions name (superpowers, i-have-adhd, Octopus, and karpathy-guidelines with the engineering pack).
+- `"approveMcpServers": true`: `enableAllProjectMcpServers`, so the servers in `.mcp.json` start without asking one by one. Claude Code honours it only after the owner trusts the folder.
+
 ## Claude Code agent teams
 
 Claude Code's [agent teams](https://code.claude.com/docs/en/agent-teams) (experimental) run a lead session and several teammates that share a task list and message each other. `"agentTeams": true` in `team.json` sets the team up for it:
