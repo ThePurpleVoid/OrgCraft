@@ -8,6 +8,7 @@
 // roles-dir defaults to docs/team/roles (an installed repo) or team/roles (the kit itself).
 import { pathToFileURL } from 'node:url';
 import { loadBriefs, rolesDir, TIERS } from './briefs.mjs';
+import { realpathSync } from 'node:fs';
 
 export function check(roles) {
   const errors = [];
@@ -73,7 +74,7 @@ export function tree(roles) {
   return out.join('\n');
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const args = process.argv.slice(2);
   const mode = args.find((a) => a.startsWith('--')) ?? '--json';
   const dir = rolesDir(args.find((a) => !a.startsWith('--')));

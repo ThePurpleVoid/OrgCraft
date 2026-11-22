@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { KIT } from '../bin/agent-team.mjs';
@@ -44,6 +44,18 @@ const gate = (r, path, args, env = r.env) => {
 };
 // The summary without the commit and branch, which both paths print the same way.
 const summary = (out) => out.replace(/@ \S+ on \S+/, '@ X on Y').replace(/-\d{8}-\d{6}\.log/g, '-STAMP.log');
+
+test('the Node gate and lock run when started through a symlinked path (they once exited 0 having run nothing)', () => {
+  const r = repo();
+  const link = join(dirname(realpathSync(r.root)), 'link');
+  symlinkSync(realpathSync(r.root), link);
+  const viaLink = join(link, 'scripts/agent-team');
+  const g = spawnSync(process.execPath, [join(viaLink, 'merge-gate.mjs'), 'good'], { cwd: r.root, env: r.env, encoding: 'utf8' });
+  assert.equal(g.status, 0, g.stderr);
+  assert.match(g.stdout, /PASS good: true/);
+  const l = spawnSync(process.execPath, [join(viaLink, 'with-lock.mjs'), 'one', '--', 'echo', 'hi'], { cwd: r.root, env: r.env, encoding: 'utf8' });
+  assert.equal(l.stdout, 'hi\n', l.stderr);
+});
 
 test('merge gate: both paths give the same summary and exit codes', () => {
   const r = repo();

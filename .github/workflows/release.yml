@@ -1,5 +1,8 @@
-# Tags every new version: when package.json on main has a version with no v<version> tag yet, this creates the tag
-# and a GitHub release. Projects pin to these tags in .agent-team/team.json ("kit": "github:...#v<version>").
+# Releases every new version: when package.json on main has a version with no v<version> tag yet, this creates the
+# tag and a GitHub release, then publishes that version to npm, which is what projects pin in .agent-team/team.json
+# ("kit": "orgcraft@<version>"). Publishing runs once the repository variable NPM_PUBLISH is "true", set after npm
+# trusted publishing is configured for this workflow (npmjs.com: the orgcraft package, Settings, Trusted Publisher).
+# Without it, a maintainer publishes by hand. A version already on npm is never published twice.
 name: Release
 
 on:
@@ -8,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # npm trusted publishing (no token stored anywhere) and provenance
 
 jobs:
   tag:
@@ -23,8 +27,23 @@ jobs:
           version="$(node -p 'require("./package.json").version')"
           tag="v$version"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "$tag already exists; nothing to release."
+            echo "$tag already exists; nothing to tag."
             exit 0
           fi
           notes="$(awk -v v="$version" '$0 ~ "^## "v {f=1; next} f && /^## / {exit} f' CHANGELOG.md)"
           gh release create "$tag" --target "$GITHUB_SHA" --title "OrgCraft $tag" --notes "${notes:-Release $tag}"
+      - uses: actions/setup-node@v4
+        if: vars.NPM_PUBLISH == 'true'
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish the version to npm
+        if: vars.NPM_PUBLISH == 'true'
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if npm view "orgcraft@$version" version >/dev/null 2>&1; then
+            echo "orgcraft@$version is already on npm; nothing to publish."
+            exit 0
+          fi
+          npm install -g npm@11   # trusted publishing needs npm 11.5 or later
+          npm publish --access public --provenance

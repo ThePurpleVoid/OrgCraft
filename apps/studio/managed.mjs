@@ -270,7 +270,7 @@ history.bundle  the team's whole history, as Git
 To keep working with it anywhere:
 
 1. git clone history.bundle ${team}
-2. cd ${team} && npx github:ThePurpleVoid/OrgCraft sync
+2. cd ${team} && npx --yes orgcraft@latest sync
 3. Push it to any Git host: git remote add origin <url> && git push -u origin main
 
 To bring it back into a new OrgCraft team: agent-team import <this zip>.

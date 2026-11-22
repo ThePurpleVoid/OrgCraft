@@ -8,12 +8,22 @@ You don't need the Studio, the control plane or the runner. The kit works as pla
 
 ```sh
 cd ~/code/my-app
-npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 init --preset engineering --project "My App" --owner "Sam" --subagents
+npx --yes orgcraft@0.23.0 init --preset engineering --project "My App" --owner "Sam" --subagents
 ```
 
-That writes the role briefs and protocols to `docs/team/`, the report and gate scripts to `scripts/agent-team/`, one subagent per active role to `.claude/agents/`, and your project layer to `.agent-team/`. Nothing runs in the background and nothing is sent anywhere. Paste `docs/team/project-instructions.md` (below its line) into `CLAUDE.md`, then open Claude Code in the repository and say:
+That writes the role briefs and protocols to `docs/team/`, the report, gate and setup scripts to `scripts/agent-team/`, one subagent per active role to `.claude/agents/`, the `/day-one` skill, the line that loads the team into `CLAUDE.md`, and your project layer to `.agent-team/`. Nothing runs in the background and nothing is sent anywhere. Then start a new Claude Code session in the repository, accept the trust prompt, and run:
 
-> You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me.
+> /day-one docs/requirements.md
+
+with your own requirements: files, folders, links or pasted text. It maps the repository, fills the ownership paths, the merge gate and the project's tools from the real code, runs the first gate, baselines the tests and drafts tickets. The team is ready when it finishes.
+
+**From any repository, without typing the command.** Once per machine:
+
+```sh
+npx --yes orgcraft@latest skill
+```
+
+That installs the `/orgcraft` skill for Claude Code. In any repository you clone, run `/orgcraft`, then `/day-one` in a new session.
 
 To use another coding agent that reads `AGENTS.md`, add `"targets": ["claude-code", "agents-md"]` to `.agent-team/team.json` and run `scripts/agent-team/sync.sh` (see [other coding agents](other-coding-agents.md)).
 
@@ -39,17 +49,17 @@ Requirements: git and Node 18+. The merge gate, locks and reporter also run with
 
 ```sh
 cd ~/code/my-app
-npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 init --preset engineering --project "My App" --owner "Sam" --timezone "America/Los_Angeles"
+npx --yes orgcraft@0.23.0 init --preset engineering --project "My App" --owner "Sam" --timezone "America/Los_Angeles"
 ```
 
 Or start from a team template: `agent-team templates` lists them (Startup product team, Customer support team, Content studio), and `init --template customer-support-team --project "My Shop"` makes that team, with its custom agents, areas, meeting and suggested systems. See [team templates](customizing.md#start-from-a-team-template).
 
 Then:
 
-1. Edit `docs/team/ownership.md` so the paths match your layout.
-2. Edit the gates and hardware pools in `.agent-team/config.sh`.
-3. Paste `docs/team/project-instructions.md` into your Claude project's instructions (or into `CLAUDE.md`).
-4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI ([the CI snippet](customizing.md#ci) also tells a hosted control plane when a team change reaches main). `npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 doctor` smoke-tests the whole setup.
+1. Start a new Claude Code session in the repository and run `/day-one <requirements>`. It fills `docs/team/ownership.md`, the gates and pools in `.agent-team/config.sh`, and the project's tools in `setup_extra` from the real repository. (Without Claude Code: edit those by hand, and paste `docs/team/project-instructions.md` into your agent's instructions.)
+2. Look over what it wrote.
+3. That's the setup.
+4. Commit `.agent-team/`, `docs/team/`, `scripts/agent-team/` and `.claude/settings.json` (the hooks that report for the roles), and add `scripts/agent-team/sync.sh check` to CI ([the CI snippet](customizing.md#ci) also tells a hosted control plane when a team change reaches main). `npx --yes orgcraft@0.23.0 doctor` smoke-tests the whole setup.
 5. Open the chief of staff: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."*
 6. Ask for something. Watch it live with `node scripts/agent-team/dashboard.mjs` (a web dashboard at http://localhost:4747) or `scripts/agent-team/team-board.sh` in the terminal.
 
@@ -147,7 +157,7 @@ tests/                          tests for the CLI, scripts and tools, smoke scen
 ## Build the team visually: OrgCraft Studio
 
 ```sh
-npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 studio --open   # opens http://localhost:4848/?t=<launch token>
+npx --yes orgcraft@0.23.0 studio --open   # opens http://localhost:4848/?t=<launch token>
 ```
 
 Switch roles on and off from the library, drag a card onto another to change who it reports to, and set each role's model tier, status and duties in the inspector. **Flow** shows who hands work to whom. In **Systems**, add your database, hosting or any MCP server and drag it onto the roles that may use it. **Owned areas** and **Checks** are suggested from your repository's folders and build files. The kit's rules run on every change. **Publish** shows every file that would change, then commits the team and its generated files on a new branch. It can also push that branch and open a pull request for review: with the GitHub CLI (`gh`) signed in on your machine, the Studio opens the pull request itself; without it, you get the branch and a link to open one. The pull request's body is the publish's change-safety plan. The Studio uses only your machine's own git and gh sign-in, and never force-pushes.
@@ -175,7 +185,7 @@ Open the dashboard and leave it open. It draws your team from the role briefs, a
 
 ```sh
 node scripts/agent-team/dashboard.mjs            # http://localhost:4747
-npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 dashboard --demo   # see it work with made-up reports first
+npx --yes orgcraft@0.23.0 dashboard --demo   # see it work with made-up reports first
 ```
 
 ![The team dashboard: org chart coloured by each thread's last report](images/dashboard-org.png)

@@ -38,10 +38,12 @@ You need git and Node 18 or later.
 
 ```sh
 cd ~/code/my-app
-npx --yes github:ThePurpleVoid/OrgCraft#v0.22.0 init --preset engineering --project "My App" --owner "Sam"
+npx --yes orgcraft@0.23.0 init --preset engineering --project "My App" --owner "Sam"
 ```
 
-That writes the role briefs, protocols and scripts into your repository. Nothing runs in the background, and nothing is sent anywhere. Then open your coding agent and say: *"You are the chief of staff. Read docs/team/roles/chief-of-staff.md and docs/team/protocols.md, then tell me what you need from me."* Install from npm comes later.
+That writes the role briefs, protocols and scripts into your repository, and the line that loads them into `CLAUDE.md`. Nothing runs in the background, and nothing is sent anywhere. Then start a new Claude Code session in the repository and run `/day-one` with your requirements: it fills the team's paths, merge gate and tools from the real code, runs the first gate and drafts tickets.
+
+**Every repository you clone, from Claude Code:** run `npx --yes orgcraft@latest skill` once per machine. After that, `/orgcraft` in any repository sets the team up, and `/day-one` in a new session finishes the job.
 
 The full setup is in [Getting started](docs/getting-started.md). It covers presets, templates, the dashboard, the Studio, the control plane and the runner.
 

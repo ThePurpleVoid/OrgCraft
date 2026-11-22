@@ -52,7 +52,8 @@ test('init --template writes exactly the layer the Studio makes from the same te
   for (const id of Object.keys(templates)) {
     const root = mkdtempSync(join(tmpdir(), `tpl-${id}-`));
     execFileSync('git', ['init', '-q'], { cwd: root });
-    const r = spawnSync(process.execPath, [cli, 'init', '--template', id, '--project', 'Acme', '--kit', 'file:' + KIT], { cwd: root, encoding: 'utf8' });
+    // An explicit zone: without one, init takes this machine's, and the Studio's default is UTC.
+    const r = spawnSync(process.execPath, [cli, 'init', '--template', id, '--project', 'Acme', '--timezone', 'UTC', '--kit', 'file:' + KIT], { cwd: root, encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr + r.stdout);
     const layer = templateLayer(templates[id], kit, { project: 'Acme', kitVersion: VERSION, kitSpec: 'file:' + KIT });
     for (const [file, text] of Object.entries(layer)) assert.equal(readFileSync(join(root, '.agent-team', file), 'utf8'), text, `${id}: ${file}`);

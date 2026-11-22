@@ -11,7 +11,9 @@ const KIT = new URL('../', import.meta.url).pathname;
 const products = () => readdirSync(join(KIT, 'handoffs'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name.toLowerCase());
 
 test('the package ships no handoffs/ and names no product the kit team has a mailbox with', () => {
-  const [pack] = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: KIT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
+  // npm 10 and 11 print a list of packs; npm 12 an object keyed by package name.
+  const out = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: KIT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
+  const pack = Array.isArray(out) ? out[0] : Object.values(out)[0];
   const paths = pack.files.map((f) => f.path);
   assert.ok(paths.length > 50, 'npm pack listed the package');
   assert.deepEqual(paths.filter((p) => p.startsWith('handoffs/')), []);

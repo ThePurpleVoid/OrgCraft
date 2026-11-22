@@ -25,7 +25,7 @@
 // .agent-team/config.sh or ~/.agent-team/<project>/team.env), with TEAM_REPORT_TOKEN as x-team-token, and
 // TEAM_REPORT_MIRROR_URL (with TEAM_REPORT_MIRROR_TOKEN) when set.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -412,4 +412,4 @@ async function cli(argv) {
   console.log(`team-status: ${fields.role} ${fields.kind}${fields.status ? ` ${fields.status}` : ''}${fields.task ? ` · ${fields.task}` : ''}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) cli(process.argv.slice(2)).finally(() => { process.exitCode = 0; });
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) cli(process.argv.slice(2)).finally(() => { process.exitCode = 0; });

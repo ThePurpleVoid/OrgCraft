@@ -15,7 +15,7 @@
     },
     "kit": {
       "type": "string",
-      "description": "The pinned kit, as team.json's \"kit\" (an npx spec such as github:ThePurpleVoid/OrgCraft#v0.4.0)."
+      "description": "The pinned kit, as team.json's \"kit\" (an npx spec such as orgcraft@0.23.0)."
     },
     "preset": {
       "type": "string",
