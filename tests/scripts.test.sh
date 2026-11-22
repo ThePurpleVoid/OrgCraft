@@ -22,7 +22,12 @@ expect "init succeeds" '[ $? -eq 0 ]'
 expect "minimal preset generates 11 briefs" '[ "$(ls "$repo/docs/team/roles" | grep -vc "^_")" -eq 11 ]'
 expect "placeholders are filled" '! grep -rq "{{" "$repo/docs/team" && grep -q "Sam is the owner" "$repo/docs/team/project-instructions.md"'
 expect "config written with project slug" 'grep -q "AGENT_TEAM_PROJECT=\"demo-app\"" "$repo/.agent-team/config.sh"'
-expect "kit pinned in team.json" 'jq -e ".kit | test(\"OrgCraft#v\")" "$repo/.agent-team/team.json" >/dev/null'
+expect "kit pinned in team.json to an npm version" 'jq -e ".kit | test(\"^orgcraft@[0-9]\")" "$repo/.agent-team/team.json" >/dev/null'
+expect "init sets the team up to set itself up" 'jq -e ".skills and .setup and .plugins and (has(\"approveMcpServers\") | not)" "$repo/.agent-team/team.json" >/dev/null'
+expect "init writes CLAUDE.md with the line that loads the team" 'grep -qx "@docs/team/project-instructions.md" "$repo/CLAUDE.md"'
+expect "init writes /day-one, filled for the project" 'grep -q "^name: day-one" "$repo/.claude/skills/day-one/SKILL.md" && grep -q "Demo App" "$repo/.claude/skills/day-one/SKILL.md" && ! grep -q "{{" "$repo/.claude/skills/day-one/SKILL.md"'
+expect "init adds the setup hook and the plugins" 'jq -e "[.hooks.SessionStart[].hooks[].command] | any(test(\"setup.sh\")) " "$repo/.claude/settings.json" >/dev/null && jq -e ".enabledPlugins | length >= 3" "$repo/.claude/settings.json" >/dev/null'
+expect "init ends by pointing at /day-one" 'grep -q "/day-one" <<<"$out"'
 expect ".merge-gate ignored" 'grep -qx ".merge-gate/" "$repo/.gitignore"'
 expect "minimal team has no roster warnings" '! grep -q "warning" <<<"$out"'
 expect "subagents exported for every active role" '[ "$(ls "$repo/.claude/agents" | wc -l)" -eq 11 ] && grep -q "^model: opus" "$repo/.claude/agents/cto.md"'
@@ -39,6 +44,26 @@ jq 'del(.dashboard)' "$repo/.agent-team/team.json" >"$tmp/tj" && mv "$tmp/tj" "$
 (cd "$repo" && $AT sync >/dev/null)
 expect "dropping dashboard.export removes the website copy" '[ ! -e "$repo/web/src/team-board/app.js" ]'
 expect "check passes right after init" '(cd "$repo" && $AT check >/dev/null)'
+
+# A repository's own /day-one is kept; the kit's comes back when the own one is removed.
+cp "$repo/.claude/skills/day-one/SKILL.md" "$tmp/day-one.kit"
+printf -- '---\nname: day-one\n---\nour own\n' >"$repo/.claude/skills/day-one/SKILL.md"
+jq 'del(.files[".claude/skills/day-one/SKILL.md"])' "$repo/.agent-team/kit.lock.json" >"$tmp/lock" && mv "$tmp/lock" "$repo/.agent-team/kit.lock.json"
+(cd "$repo" && $AT sync >/dev/null)
+expect "a repository's own /day-one survives sync and check" 'grep -q "our own" "$repo/.claude/skills/day-one/SKILL.md" && (cd "$repo" && $AT check >/dev/null)'
+rm "$repo/.claude/skills/day-one/SKILL.md"; (cd "$repo" && $AT sync >/dev/null)
+expect "without its own, the kit's /day-one comes back" 'cmp -s "$tmp/day-one.kit" "$repo/.claude/skills/day-one/SKILL.md"'
+
+# CLAUDE.md: an existing one keeps its text and gains the line once.
+mkdir -p "$tmp/own-md" && git -C "$tmp/own-md" init -q && printf '# Our rules\n' >"$tmp/own-md/CLAUDE.md"
+(cd "$tmp/own-md" && $AT init --preset minimal --project "Own" >/dev/null 2>&1)
+expect "an existing CLAUDE.md keeps its text and gains the line once" 'head -1 "$tmp/own-md/CLAUDE.md" | grep -q "# Our rules" && [ "$(grep -cx "@docs/team/project-instructions.md" "$tmp/own-md/CLAUDE.md")" -eq 1 ]'
+(cd "$tmp/own-md" && $AT init --preset minimal --project "Own" --force --approve-mcp >/dev/null 2>&1)
+expect "init --force does not add the line twice; --approve-mcp turns approval on" '[ "$(grep -cx "@docs/team/project-instructions.md" "$tmp/own-md/CLAUDE.md")" -eq 1 ] && jq -e ".approveMcpServers == true" "$tmp/own-md/.agent-team/team.json" >/dev/null && jq -e ".enableAllProjectMcpServers == true" "$tmp/own-md/.claude/settings.json" >/dev/null'
+
+# skill: installs /orgcraft for this machine's Claude Code
+out="$($AT skill 2>&1)"
+expect "skill installs /orgcraft in ~/.claude/skills" 'grep -q "^name: orgcraft" "$HOME/.claude/skills/orgcraft/SKILL.md" && grep -q "orgcraft@latest init" "$HOME/.claude/skills/orgcraft/SKILL.md" && grep -q "/orgcraft" <<<"$out"'
 
 # setup.sh: the project's tools come from setup_extra; --check reports and fails on what is missing, --auto never fails
 cp "$repo/.agent-team/config.sh" "$tmp/config.bak"

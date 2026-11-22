@@ -12,7 +12,7 @@
 // to merge-gate.sh; without it, it stops with exit 64 and says to move the target into gates.json.
 // Output goes to .merge-gate/<target>-<timestamp>.log; the summary ends with PASS or FAIL lines; exit 1 on any FAIL.
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { shellVars } from './report.mjs';
@@ -109,6 +109,6 @@ export async function main(argv, env = process.env, out = (s) => process.stdout.
   return results.some((r) => r.startsWith('FAIL')) ? 1 : 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }

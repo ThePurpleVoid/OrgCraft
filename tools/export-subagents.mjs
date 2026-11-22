@@ -7,7 +7,7 @@
 //
 // Each subagent keeps its whole brief as its system prompt and points at docs/team/protocols.md and ownership.md.
 // Re-run it after editing a brief; it overwrites only the files it generates (they carry a marker line).
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadBriefs, rolesDir } from './briefs.mjs';
@@ -38,7 +38,7 @@ export function toSubagent(role, models = DEFAULT_MODELS) {
   ].join('\n');
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const args = process.argv.slice(2);
   const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 2)[1] : undefined; };
   const out = opt('--out') ?? '.claude/agents';

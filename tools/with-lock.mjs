@@ -11,7 +11,7 @@
 // Waits up to WITH_LOCK_TIMEOUT seconds (default 1200, polling every WITH_LOCK_POLL, default 15), then exits 75 so
 // the thread can send BLOCKED instead of hanging. A bad pool or usage exits 64.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { context, shellVars } from './report.mjs';
@@ -112,6 +112,6 @@ export async function main(argv, env = process.env) {
   return code;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }

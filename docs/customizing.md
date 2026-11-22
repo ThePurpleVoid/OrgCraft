@@ -52,7 +52,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "github:ThePurpleVoid/OrgCraft#v0.22.0",
+  "kit": "orgcraft@0.23.0",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],
@@ -60,15 +60,16 @@ In `.agent-team/team.json`:
   "subagents": false,
   "hooks": true,
   "agentTeams": false,
-  "setup": false,
-  "plugins": false,
-  "approveMcpServers": false
+  "setup": true,
+  "plugins": true,
+  "approveMcpServers": false,
+  "skills": true
 }
 ```
 
 `TIMEZONE` is an IANA time zone (`America/Los_Angeles`, `Europe/London`, `UTC`): meetings and the scheduler read it. `init` turns common names such as `Pacific`, `Eastern` or `UK` into their zone and refuses one it does not know; `validate` warns about one already in `team.json` and names the zone to use.
 
-`hooks` merges the kit's reporting hooks into `.claude/settings.json`, and `agentTeams` sets the team up for Claude Code agent teams. `setup` runs `scripts/agent-team/setup.sh` when a session starts, `plugins` turns on the plugins the project instructions name, and `approveMcpServers` approves the servers in `.mcp.json`. See [hooks and agent teams](hooks-and-agent-teams.md).
+`hooks` merges the kit's reporting hooks into `.claude/settings.json`, and `agentTeams` sets the team up for Claude Code agent teams. `setup` runs `scripts/agent-team/setup.sh` when a session starts, `plugins` turns on the plugins the project instructions name, and `approveMcpServers` approves the servers in `.mcp.json`. `skills` writes the kit's `/day-one` to `.claude/skills/day-one/` (a repository with its own `/day-one` keeps it). `init` turns on `setup`, `plugins` and `skills` for a new team; `approveMcpServers` only with `--approve-mcp`. See [hooks and agent teams](hooks-and-agent-teams.md).
 
 `include` adds kit roles outside the preset; `exclude` drops them. `exclude` also switches off one of your own roles (`.agent-team/roles/<slug>.md`) without deleting it: the file stays, the role is not installed, and taking it out of `exclude` brings it back as it was. The Studio does this when you switch a custom agent off. Reporting lines follow automatically: a role whose manager is not installed reports to the chief of staff, and direct-report lists show only installed roles.
 
