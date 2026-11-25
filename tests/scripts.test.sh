@@ -26,6 +26,7 @@ expect "kit pinned in team.json to an npm version" 'jq -e ".kit | test(\"^orgcra
 expect "init sets the team up to set itself up" 'jq -e ".skills and .setup and .plugins and (has(\"approveMcpServers\") | not)" "$repo/.agent-team/team.json" >/dev/null'
 expect "init writes CLAUDE.md with the line that loads the team" 'grep -qx "@docs/team/project-instructions.md" "$repo/CLAUDE.md"'
 expect "init writes /day-one, filled for the project" 'grep -q "^name: day-one" "$repo/.claude/skills/day-one/SKILL.md" && grep -q "Demo App" "$repo/.claude/skills/day-one/SKILL.md" && ! grep -q "{{" "$repo/.claude/skills/day-one/SKILL.md"'
+expect "an agent told to run /day-one can start it" '! grep -q "^disable-model-invocation" "$repo/.claude/skills/day-one/SKILL.md"'
 expect "init adds the setup hook and the plugins" 'jq -e "[.hooks.SessionStart[].hooks[].command] | any(test(\"setup.sh\")) " "$repo/.claude/settings.json" >/dev/null && jq -e ".enabledPlugins | length >= 3" "$repo/.claude/settings.json" >/dev/null'
 expect "init ends by pointing at /day-one" 'grep -q "/day-one" <<<"$out"'
 expect ".merge-gate ignored" 'grep -qx ".merge-gate/" "$repo/.gitignore"'

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.23.1
+
+- **The chief of staff can start `/day-one`** (fix). The skill set `disable-model-invocation`, so an agent asked to run it was refused, and a session told to onboard the repository stopped at its first step until the owner typed the command as a message of its own. The flag is gone: the owner can still type it, and an agent told to run it now can. **What existing teams see:** the updated skill after they move the pin to `orgcraft@0.23.1` and run `scripts/agent-team/sync.sh`; a repository with its own `/day-one` keeps it.
+
 ## 0.23.0
 
 - **Install from npm, and set up any repository in two commands** (kit). OrgCraft is published to npm as `orgcraft`, and a project pins `"kit": "orgcraft@<version>"`. npm 12 refuses git dependencies by default, so the old `github:ThePurpleVoid/OrgCraft#v…` pins and install command fail there. The release workflow now also publishes each new version to npm, once the repository variable `NPM_PUBLISH` is `true` (after npm trusted publishing is configured; no token is stored). **What existing teams see:** nothing until they change the pin. To move, set `"kit": "orgcraft@0.23.0"` in `.agent-team/team.json` and run `scripts/agent-team/sync.sh`.

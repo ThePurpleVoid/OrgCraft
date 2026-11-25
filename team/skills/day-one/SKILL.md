@@ -2,7 +2,6 @@
 name: day-one
 description: "Onboards the agent team onto this repository and its requirements: maps the stack, fills the ownership paths, the merge gate and the project's tools from the real repository, checks each connected tool, baselines the build and tests, and drafts prioritized tickets. Use once, on the first day with the codebase."
 argument-hint: "[requirements: files, folders, links or pasted text]"
-disable-model-invocation: true
 ---
 
 # /day-one [requirements]

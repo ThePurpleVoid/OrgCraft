@@ -38,7 +38,7 @@ You need git and Node 18 or later.
 
 ```sh
 cd ~/code/my-app
-npx --yes orgcraft@0.23.0 init --preset engineering --project "My App" --owner "Sam"
+npx --yes orgcraft@0.23.1 init --preset engineering --project "My App" --owner "Sam"
 ```
 
 That writes the role briefs, protocols and scripts into your repository, and the line that loads them into `CLAUDE.md`. Nothing runs in the background, and nothing is sent anywhere. Then start a new Claude Code session in the repository and run `/day-one` with your requirements: it fills the team's paths, merge gate and tools from the real code, runs the first gate and drafts tickets.
