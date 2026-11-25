@@ -52,7 +52,7 @@ In `.agent-team/team.json`:
 
 ```json
 {
-  "kit": "orgcraft@0.23.0",
+  "kit": "orgcraft@0.23.1",
   "preset": "engineering",
   "include": ["analytics-lead"],
   "exclude": ["mobile-dev", "qa-mobile"],

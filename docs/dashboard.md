@@ -16,7 +16,7 @@ Threads on the same machine need nothing else. `team-status.sh` appends every re
 Want to see it work before your team reports anything? `--demo` plays made-up reports through a scratch log:
 
 ```sh
-npx --yes orgcraft@0.23.0 dashboard --demo
+npx --yes orgcraft@0.23.1 dashboard --demo
 ```
 
 ## 2. Threads on other machines or in the cloud
